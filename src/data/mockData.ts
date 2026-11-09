@@ -37,6 +37,10 @@ import {
   ArtisanTask,
   ReferredUser,
   ReferralProgram,
+  StoreSubscription,
+  CreatorDigitalFile,
+  AfriBook,
+  GroupReadSession,
 } from '../types';
 
 export const LOCALIZED_STRINGS: Record<LanguageCode, Record<string, string>> = {
@@ -808,6 +812,21 @@ export const MOCK_CHATS: ChatThread[] = [
     catalog: [],
     isOnline: true,
     phone: '+234 803 555 1928',
+  },
+  {
+    id: 'chat_burna_boy',
+    name: 'Burna Boy 🦍',
+    avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80',
+    verifiedStore: false,
+    location: 'Lagos & London',
+    unreadCount: 2,
+    lastMessage: 'Spaces session starting in 15 mins. Dropping unreleased Afro-fusion snippet!',
+    lastMessageTime: '08:45 AM',
+    catalog: [],
+    isOnline: true,
+    phone: '+234 800 287 6226',
+    isCelebrityVerified: true,
+    celebrityCategory: 'Grammy Winner & Afrobeats Giant',
   },
   {
     id: 'chat_jam',
@@ -2309,6 +2328,15 @@ export const MOCK_CREATORS: CreatorProfile[] = [
     badge: 'Afrobeats Star',
     totalEarnings: 3850000,
     isSubscribedByMe: true,
+    vipServices: {
+      voicePerMinute: 1500,
+      videoPerMinute: 3000,
+      bundle3MinVoice: 3500,
+      bundle5MinVoice: 5500,
+      bundle3MinVideo: 7500,
+      bundle5MinVideo: 12000,
+      vipDirectChat24h: 4000,
+    },
   },
   {
     id: 'cr_amina_skits',
@@ -2325,6 +2353,15 @@ export const MOCK_CREATORS: CreatorProfile[] = [
     badge: 'Top Creator',
     totalEarnings: 4200000,
     isSubscribedByMe: false,
+    vipServices: {
+      voicePerMinute: 1000,
+      videoPerMinute: 2000,
+      bundle3MinVoice: 2500,
+      bundle5MinVoice: 4000,
+      bundle3MinVideo: 5000,
+      bundle5MinVideo: 8000,
+      vipDirectChat24h: 2500,
+    },
   },
   {
     id: 'cr_dj_tunez',
@@ -2341,6 +2378,15 @@ export const MOCK_CREATORS: CreatorProfile[] = [
     badge: 'Certified DJ',
     totalEarnings: 5100000,
     isSubscribedByMe: false,
+    vipServices: {
+      voicePerMinute: 2000,
+      videoPerMinute: 4000,
+      bundle3MinVoice: 5000,
+      bundle5MinVoice: 8000,
+      bundle3MinVideo: 10000,
+      bundle5MinVideo: 16000,
+      vipDirectChat24h: 5000,
+    },
   },
 ];
 
@@ -2703,4 +2749,229 @@ export const MOCK_REFERRAL_PROGRAM: ReferralProgram = {
     },
   ],
 };
+
+// 24. Store Subscriptions (3k/mo for 30 items, 7k/mo for 100 items limit)
+export const MOCK_STORE_SUBSCRIPTION: StoreSubscription = {
+  tier: 'starter_30',
+  monthlyFee: 3000,
+  itemLimit: 30,
+  itemsCount: 12,
+  storeName: 'Adebayo Luxury Fabrics & Trade',
+  description: 'Verified Lagos importer of Swiss voile, Dutch Hollandais, and handmade Ankara prints.',
+  category: 'Textiles & Fashion',
+  active: true,
+  expiresAt: 'In 24 days',
+  paymentMethod: 'wallet',
+};
+
+// 25. Creator Digital Files Marketplace (Ebooks, Presets, Sample Packs, Code, etc.)
+export const MOCK_CREATOR_FILES: CreatorDigitalFile[] = [
+  {
+    id: 'file_afro_drumkit',
+    creatorId: 'cr_kelvin_vibe',
+    creatorName: 'Kelvin Afrobeat',
+    creatorAvatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80',
+    title: 'Afrobeats & Amapiano Master Drumkit (Vol. 3)',
+    description: '140+ royalty-free live talking drum loops, log drums, punchy kicks, shakers & Afro-percussion stems.',
+    category: 'music_audio',
+    fileName: 'Kelvin_Afrobeats_DrumKit_V3.zip',
+    fileSize: '185 MB',
+    fileType: 'application/zip',
+    price: 3500,
+    currency: 'NGN',
+    downloadsCount: 428,
+    isPurchasedByMe: false,
+    createdAt: '2 days ago',
+  },
+  {
+    id: 'file_startup_ebook',
+    creatorId: 'cr_amina_skits',
+    creatorName: 'Amina Danfo',
+    creatorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    title: 'The Lagos Hustler Playbook: Bootstrapping in Africa',
+    description: 'The definitive 180-page guide to navigating CAC, supplier negotiations in Alaba, and dollar FX survival.',
+    category: 'ebook',
+    fileName: 'Lagos_Hustler_Playbook_2026.pdf',
+    fileSize: '12.4 MB',
+    fileType: 'application/pdf',
+    price: 2000,
+    currency: 'NGN',
+    downloadsCount: 1250,
+    isPurchasedByMe: true,
+    createdAt: '1 week ago',
+  },
+  {
+    id: 'file_cinema_lut',
+    creatorId: 'cr_dj_tunez',
+    creatorName: 'DJ Neptune Pulse',
+    creatorAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
+    title: 'Lagos Golden Hour: Cinematic Mobile Video LUTs',
+    description: 'Pro color grading presets optimized for dark skin tones, sunset sunlight, and high contrast street scenes.',
+    category: 'preset_lut',
+    fileName: 'Lagos_Golden_LUTs_Pack.cube',
+    fileSize: '4.8 MB',
+    fileType: 'application/octet-stream',
+    price: 1500,
+    currency: 'NGN',
+    downloadsCount: 680,
+    isPurchasedByMe: false,
+    createdAt: '3 days ago',
+  },
+];
+
+// 26. African Writers Guild (Human-Written Chapters, Tips & Buddy Read)
+export const MOCK_AFRI_BOOKS: AfriBook[] = [
+  {
+    id: 'book_lagos_solstice',
+    title: 'The Lagos Solstice',
+    authorId: 'auth_tunde_f',
+    authorName: 'Tunde Folashade',
+    authorAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+    authorBio: 'African speculative fiction writer from Ibadan. Winner of the Caine Writers Fellowship.',
+    coverUrl: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&auto=format&fit=crop&q=80',
+    genre: 'Afro-Futurism & Mystery',
+    synopsis: 'When a blackout strikes third mainland bridge on the longest night of the year, an acoustic engineer discovers an ancient Yoruba soundwave buried beneath the lagoon.',
+    isHumanWrittenCertified: true,
+    pricingType: 'paid',
+    price: 1500,
+    currency: 'NGN',
+    totalReads: 1840,
+    tipsReceivedCount: 42,
+    tipsTotalAmount: 64000,
+    isPurchasedByMe: true,
+    publishedAt: 'Oct 2026',
+    chapters: [
+      {
+        id: 'chap_1_solstice',
+        chapterNumber: 1,
+        title: 'Prologue: The Third Mainland Grid',
+        content: `The humidity on the bridge was thick enough to taste. At precisely 11:42 PM, every streetlamp between Oworonshoki and Adeniji Adele flickered once, gasped, and extinguished.
+
+Korede pushed his glasses up the bridge of his nose. As the senior field acoustic engineer for the Lagos Megacity Grid, he had spent seven years listening to the subterranean hum of the metropolis. But this was not the familiar cadence of overloaded 33kVA transformers or stuttering diesel generators.
+
+This was a frequency. A resonant 432 Hz frequency vibrating through the salt-water pilings of the lagoon.
+
+"Oga Korede, you dey hear that thing?" his apprentice, Segun, whispered from the passenger seat of their battered yellow repair Hilux.
+
+"I hear it," Korede replied, sliding his headphones on. On the spectrum analyzer on his dashboard, the waveform wasn't random noise. It was moving in undulating geometric spirals—the exact fractal geometry etched into ancient Ife terracotta beads.
+
+"Look at the water," Segun gasped. The surface of the lagoon was no longer black; bioluminescent cyan ripples were spreading in perfect circles toward the marina. Something ancient, buried beneath three hundred years of colonial reclamation and urban concrete, had just answered the city's pulse.`,
+        readTimeMinutes: 5,
+        comments: [
+          {
+            id: 'c_1',
+            readerName: 'Amina Danfo',
+            readerAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
+            comment: 'The imagery of the lagoon vibrating at 432Hz gave me chills! Outstanding prose.',
+            timestamp: '2 days ago',
+          },
+          {
+            id: 'c_2',
+            readerName: 'Kofi Mensah',
+            readerAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=80',
+            comment: 'So glad this is 100% human written. Real African worldbuilding with authentic Lagos soul.',
+            timestamp: 'Yesterday',
+          },
+        ],
+      },
+      {
+        id: 'chap_2_solstice',
+        chapterNumber: 2,
+        title: 'Echoes in the Lagoon',
+        content: `By 1:00 AM, the traffic had congealed into a motionless serpent of metal and yellow paint. Drivers were leaning against their bonnets, trading theories in rapid-fire Pidgin, Yoruba, and English.
+
+Korede lowered the acoustic hydrophone twenty meters beneath the water's surface. The readout cleared. Beneath the silt and the ancient mangrove roots, something was waking up.
+
+"It is responding to the rhythm of the city," Korede murmured. "Every horn, every engine, every heartbeat of Lagos has been charging it for five hundred years."
+
+A sudden chime echoed directly inside their ear-cups—a harmonic tone so pure it silenced the roar of idling engines on the bridge above. Through the murk, the hydrophone camera caught sight of brass filaments uncoiling like living vine roots around the bridge foundations.`,
+        readTimeMinutes: 6,
+        comments: [
+          {
+            id: 'c_3',
+            readerName: 'Segun Wire',
+            readerAvatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=100&auto=format&fit=crop&q=80',
+            comment: 'Chapter 2 just dropped and I devoured it! Tipped the author ₦1,000 for coffee.',
+            timestamp: '6 hours ago',
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'book_market_queen',
+    title: 'The Balogun Market Queen',
+    authorId: 'auth_chioma_n',
+    authorName: 'Ngozi Chimamanda Eze',
+    authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    authorBio: 'Bestselling author of Lagos Commercial Chronicles. Former trade analyst.',
+    coverUrl: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=600&auto=format&fit=crop&q=80',
+    genre: 'Drama & African Commerce',
+    synopsis: 'A gripping tale of three generations of Igbo market matriarchs battling counterfeit textile syndicates, high import tariffs, and digital revolution in West Africa.',
+    isHumanWrittenCertified: true,
+    pricingType: 'free',
+    price: 0,
+    currency: 'NGN',
+    totalReads: 4210,
+    tipsReceivedCount: 118,
+    tipsTotalAmount: 185000,
+    isPurchasedByMe: true,
+    publishedAt: 'Nov 2026',
+    chapters: [
+      {
+        id: 'chap_1_market',
+        chapterNumber: 1,
+        title: 'Morning at the Cotton Wharf',
+        content: `Before the sun crept over Apapa port, Mama Ifeoma had already inspected forty bales of wax print. She didn't need a magnifying glass. Her fingertips, calloused from forty years of trade, knew the exact thread count of genuine Austrian brocade versus cheap polyester knockoffs.
+
+"Tell the clearing agent that if my container leaves the quay with one broken seal, he will answer to the Market Women's Union," she said into her phone without raising her voice.
+
+In Balogun, power wasn't measured in bank branches; it was measured in reputation, credit lines, and the unwavering word of the Iyaloja.`,
+        readTimeMinutes: 4,
+        comments: [
+          {
+            id: 'c_4',
+            readerName: 'Mama Chidinma',
+            readerAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=100&auto=format&fit=crop&q=80',
+            comment: 'This captures our daily market hustle perfectly! Beautiful writing!',
+            timestamp: '3 days ago',
+          },
+        ],
+      },
+    ],
+  },
+];
+
+// 27. Group Read Sessions (2 friends reading together if one pays)
+export const MOCK_GROUP_READ_SESSIONS: GroupReadSession[] = [
+  {
+    id: 'grp_read_01',
+    bookId: 'book_lagos_solstice',
+    bookTitle: 'The Lagos Solstice',
+    bookCover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&auto=format&fit=crop&q=80',
+    hostUserId: 'usr_chioma_adebayo',
+    hostUserName: 'Chioma Adebayo',
+    buddyUserId: 'cnt_jam',
+    buddyUserName: 'Jam 💫',
+    buddyAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    currentChapter: 1,
+    currentPage: 3,
+    isPaidByOne: true,
+    messages: [
+      {
+        id: 'grm_1',
+        senderName: 'Jam 💫',
+        text: 'Did you get to the part about the 432 Hz frequency under the lagoon yet?!',
+        timestamp: '10:14 AM',
+      },
+      {
+        id: 'grm_2',
+        senderName: 'Chioma Adebayo',
+        text: 'Yes! Reading page 3 right now with you. That terracotta bead connection is genius!',
+        timestamp: '10:16 AM',
+      },
+    ],
+  },
+];
+
 

@@ -17,6 +17,10 @@ import {
   Lock,
   Headphones,
   Ticket,
+  Wrench,
+  BookOpen,
+  Crown,
+  Store,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { TownCommunity } from '../types';
@@ -33,6 +37,10 @@ export const TownView: React.FC = () => {
     setActiveChatId,
     chats,
     setIsCreatorModalOpen,
+    setIsServicesModalOpen,
+    setIsWritersModalOpen,
+    setIsCelebrityModalOpen,
+    setIsStoreRegModalOpen,
   } = useApp();
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'channels' | 'groups' | 'spaces'>('all');
@@ -244,6 +252,89 @@ export const TownView: React.FC = () => {
             <Ticket className="w-4 h-4 text-amber-400" />
             <ExternalLink className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
           </div>
+        </div>
+
+        {/* 1. Artisan Stations & Service Workshop Hub */}
+        <div
+          onClick={() => setIsServicesModalOpen(true)}
+          className="p-3.5 rounded-2xl bg-gradient-to-r from-teal-900/40 via-emerald-950/40 to-slate-900/60 border border-emerald-500/30 hover:border-emerald-500/60 cursor-pointer flex items-center justify-between transition-all group shadow-sm"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white flex items-center justify-center shadow-xs">
+              <Wrench className="w-5 h-5 group-hover:rotate-12 transition-transform" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-white">Artisan Service Stations</span>
+                <span className="text-[9px] font-mono font-bold bg-emerald-500/20 text-emerald-300 px-1.5 py-0.2 rounded-full border border-emerald-500/30">
+                  ₦5k Reg • ₦500 Listing
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-300">
+                Register master workshop station, book appointments, hire staff & set operating hours
+              </p>
+            </div>
+          </div>
+          <ExternalLink className="w-4 h-4 text-emerald-400 shrink-0" />
+        </div>
+
+        {/* 2. African Writers Guild (AfriBooks) */}
+        <div
+          onClick={() => setIsWritersModalOpen(true)}
+          className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-950/40 via-orange-950/30 to-purple-950/40 border border-amber-500/30 hover:border-amber-500/60 cursor-pointer flex items-center justify-between transition-all group shadow-sm"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-600 to-orange-600 text-white flex items-center justify-center shadow-xs">
+              <BookOpen className="w-5 h-5 group-hover:scale-105 transition-transform" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-white">African Writers Guild</span>
+                <span className="text-[9px] font-mono font-bold bg-amber-500/20 text-amber-300 px-1.5 py-0.2 rounded-full border border-amber-500/30">
+                  100% Human • No AI
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-300">
+                Publish books in chapters, tip authors, comment & read together in 2-friend buddy rooms
+              </p>
+            </div>
+          </div>
+          <ExternalLink className="w-4 h-4 text-amber-400 shrink-0" />
+        </div>
+
+        {/* 3. Two-Column Row: Celebrity Verification & Store Tiers */}
+        <div className="grid grid-cols-2 gap-2.5">
+          <button
+            type="button"
+            onClick={() => setIsCelebrityModalOpen(true)}
+            className="p-3 rounded-2xl bg-white dark:bg-neutral-900 border border-amber-500/30 hover:border-amber-500/60 text-left transition-all group shadow-xs"
+          >
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 to-purple-600 text-white flex items-center justify-center mb-1.5">
+              <Crown className="w-4 h-4 text-amber-200" />
+            </div>
+            <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
+              Celebrity Check
+            </span>
+            <span className="text-[10px] text-amber-600 dark:text-amber-400 block mt-0.5">
+              Identity Verification
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsStoreRegModalOpen(true)}
+            className="p-3 rounded-2xl bg-white dark:bg-neutral-900 border border-blue-500/30 hover:border-blue-500/60 text-left transition-all group shadow-xs"
+          >
+            <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center mb-1.5">
+              <Store className="w-4 h-4" />
+            </div>
+            <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
+              Store Registration
+            </span>
+            <span className="text-[10px] text-blue-600 dark:text-blue-400 block mt-0.5">
+              ₦3k (30) / ₦7k (100)
+            </span>
+          </button>
         </div>
 
         {/* Live Street Radio Audio Spaces Section */}

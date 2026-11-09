@@ -18,6 +18,7 @@ import {
   Lock,
   Music,
   Ticket,
+  X,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { UserStatus } from '../types';
@@ -45,6 +46,7 @@ export const StatusView: React.FC = () => {
   } = useApp();
 
   const [modalMode, setModalMode] = useState<'none' | 'device_photo' | 'device_video' | 'thought'>('none');
+  const [showAddStoryMenu, setShowAddStoryMenu] = useState(false);
   const [deviceMediaPreview, setDeviceMediaPreview] = useState<string>('');
   const [mediaCaption, setMediaCaption] = useState('');
   const [thoughtText, setThoughtText] = useState('');
@@ -117,30 +119,15 @@ export const StatusView: React.FC = () => {
           </p>
         </div>
 
-        {/* Quick Creator Buttons */}
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => setModalMode('thought')}
-            className="p-2 rounded-xl bg-purple-50 dark:bg-neutral-900 text-purple-600 dark:text-purple-400 hover:bg-purple-100 transition-colors"
-            title="Post a Thought Bubble"
-          >
-            <Sparkles className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setModalMode('device_video')}
-            className="p-2 rounded-xl bg-purple-50 dark:bg-neutral-900 text-purple-600 dark:text-purple-400 hover:bg-purple-100 transition-colors"
-            title="Post Video Status"
-          >
-            <Video className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setModalMode('device_photo')}
-            className="p-2 rounded-xl bg-purple-600 text-white hover:bg-purple-700 shadow-xs transition-colors"
-            title="Post Photo Status"
-          >
-            <Camera className="w-4 h-4" />
-          </button>
-        </div>
+        {/* Unified Add Update Button */}
+        <button
+          onClick={() => setShowAddStoryMenu(true)}
+          className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors"
+          title="Add Status Story"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          <span>Add Story</span>
+        </button>
       </div>
 
       {/* My Status Section */}
@@ -150,7 +137,7 @@ export const StatusView: React.FC = () => {
             if (myStatus) {
               setActiveViewingStatus(myStatus);
             } else {
-              setModalMode('device_photo');
+              setShowAddStoryMenu(true);
             }
           }}
           className="flex items-center justify-between p-2 rounded-2xl hover:bg-slate-50 dark:hover:bg-neutral-900 cursor-pointer transition-colors"
@@ -169,9 +156,10 @@ export const StatusView: React.FC = () => {
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setModalMode('device_photo');
+                  setShowAddStoryMenu(true);
                 }}
-                className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-purple-600 text-white flex items-center justify-center border-2 border-white dark:border-black shadow-xs"
+                className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center border-2 border-white dark:border-black shadow-xs transition-transform active:scale-95"
+                title="Add Photo, Video or Thought"
               >
                 <Plus className="w-3.5 h-3.5" />
               </button>
@@ -213,7 +201,7 @@ export const StatusView: React.FC = () => {
                 </div>
               ) : (
                 <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
-                  Tap to add a Photo, Video or Thought Bubble
+                  Tap plus sign to add a Photo, Video or Thought Bubble
                 </p>
               )}
             </div>
@@ -225,37 +213,6 @@ export const StatusView: React.FC = () => {
               <span>{myStatus.expiresInHours}h left</span>
             </span>
           )}
-        </div>
-      </div>
-
-      {/* 24-Hour Expiry Explainer Strip with 3 Action Triggers */}
-      <div className="px-4 py-2 bg-purple-50/60 dark:bg-neutral-900 text-purple-900 dark:text-purple-300 text-xs flex items-center justify-between border-b border-purple-100 dark:border-neutral-800">
-        <span className="font-medium flex items-center gap-1.5">
-          <Clock className="w-3.5 h-3.5 text-purple-600" />
-          <span>Photos, Videos & Thoughts vanish after 24h</span>
-        </span>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setModalMode('device_photo')}
-            className="text-[11px] font-bold text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-0.5"
-          >
-            <Camera className="w-3 h-3" /> Photo
-          </button>
-          <span>·</span>
-          <button
-            onClick={() => setModalMode('device_video')}
-            className="text-[11px] font-bold text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-0.5"
-          >
-            <Video className="w-3 h-3" /> Video
-          </button>
-          <span>·</span>
-          <button
-            onClick={() => setModalMode('thought')}
-            className="text-[11px] font-bold text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-0.5"
-          >
-            <Sparkles className="w-3 h-3" /> Thought
-          </button>
         </div>
       </div>
 
@@ -766,6 +723,95 @@ export const StatusView: React.FC = () => {
                 Publish Thought Bubble
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Story Action Sheet: Photo, Video & Thought Bubble Chooser */}
+      {showAddStoryMenu && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in"
+          onClick={() => setShowAddStoryMenu(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm bg-white dark:bg-neutral-950 rounded-t-3xl sm:rounded-3xl p-5 border border-slate-200 dark:border-neutral-800 shadow-2xl space-y-4 animate-in slide-in-from-bottom-4"
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-neutral-800">
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                  Add 24h Status Story
+                </h4>
+                <p className="text-[11px] text-slate-500 dark:text-neutral-400">
+                  Visible to contacts for 24 hours
+                </p>
+              </div>
+              <button
+                onClick={() => setShowAddStoryMenu(false)}
+                className="p-1 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddStoryMenu(false);
+                  setModalMode('device_photo');
+                }}
+                className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/30 border border-slate-200 dark:border-neutral-800 hover:border-purple-500/50 transition-all text-center group"
+              >
+                <div className="w-11 h-11 rounded-2xl bg-purple-600/10 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition-colors">
+                  <Camera className="w-5 h-5" />
+                </div>
+                <span className="text-xs font-bold text-slate-800 dark:text-neutral-200">
+                  Photo / Camera
+                </span>
+                <span className="text-[9px] text-slate-400">
+                  From device
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddStoryMenu(false);
+                  setModalMode('device_video');
+                }}
+                className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/30 border border-slate-200 dark:border-neutral-800 hover:border-purple-500/50 transition-all text-center group"
+              >
+                <div className="w-11 h-11 rounded-2xl bg-purple-600/10 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition-colors">
+                  <Video className="w-5 h-5" />
+                </div>
+                <span className="text-xs font-bold text-slate-800 dark:text-neutral-200">
+                  Video Story
+                </span>
+                <span className="text-[9px] text-slate-400">
+                  Short video
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddStoryMenu(false);
+                  setModalMode('thought');
+                }}
+                className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/30 border border-slate-200 dark:border-neutral-800 hover:border-purple-500/50 transition-all text-center group"
+              >
+                <div className="w-11 h-11 rounded-2xl bg-purple-600/10 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition-colors">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <span className="text-xs font-bold text-slate-800 dark:text-neutral-200">
+                  Thought
+                </span>
+                <span className="text-[9px] text-slate-400">
+                  Color gradient
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       )}

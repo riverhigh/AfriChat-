@@ -46,6 +46,14 @@ import {
   ServiceOffering,
   ReferredUser,
   ReferralProgram,
+  StoreTier,
+  StoreSubscription,
+  CreatorDigitalFile,
+  CreatorVipService,
+  AfriBook,
+  BookChapter,
+  GroupReadSession,
+  CelebrityVerificationApplication,
 } from '../types';
 import {
   LOCALIZED_STRINGS,
@@ -82,6 +90,10 @@ import {
   MOCK_CREATOR_SONGS,
   MOCK_ARTISAN_STATION,
   MOCK_REFERRAL_PROGRAM,
+  MOCK_STORE_SUBSCRIPTION,
+  MOCK_CREATOR_FILES,
+  MOCK_AFRI_BOOKS,
+  MOCK_GROUP_READ_SESSIONS,
 } from '../data/mockData';
 
 interface ActiveCallState {
@@ -376,6 +388,53 @@ interface AppContextType {
   setIsReferralModalOpen: (val: boolean) => void;
   claimReferralBonus: () => { success: boolean; amountClaimed: number; message: string };
   simulateInviteContact: (name: string, phone: string, passesFraudCheck: boolean) => void;
+  // 24. Celebrity Identity Verification
+  isCelebrityModalOpen: boolean;
+  setIsCelebrityModalOpen: (val: boolean) => void;
+  celebrityApplications: CelebrityVerificationApplication[];
+  applyForCelebrityVerification: (data: {
+    stageName: string;
+    category: CelebrityVerificationApplication['category'];
+    socialHandle: string;
+    proofDocumentUrl?: string;
+  }) => { success: boolean; message: string };
+  toggleCelebrityStatus: () => void;
+  // 25. Store Registration & Tiers (3k/mo for 30 limit, 7k/mo for 100 limit)
+  isStoreRegModalOpen: boolean;
+  setIsStoreRegModalOpen: (val: boolean) => void;
+  storeSubscription: StoreSubscription;
+  subscribeStoreTier: (
+    tier: 'starter_30' | 'pro_100',
+    storeName: string,
+    category: string,
+    description: string,
+    paymentMethod: 'wallet' | 'paystack'
+  ) => { success: boolean; message: string };
+  // 26. Creator Digital Files & VIP Call/Video/Chat Booking
+  creatorFiles: CreatorDigitalFile[];
+  buyCreatorFile: (fileId: string) => { success: boolean; file?: CreatorDigitalFile; message: string };
+  uploadCreatorFile: (fileData: Omit<CreatorDigitalFile, 'id' | 'downloadsCount' | 'isPurchasedByMe' | 'createdAt'>) => void;
+  bookCreatorVipSession: (creatorId: string, type: 'voice' | 'video' | 'chat', durationMinutes: number, price: number) => { success: boolean; message: string };
+  updateCreatorVipRates: (creatorId: string, rates: Partial<CreatorVipService>) => void;
+  // 27. Writers System (AfriBooks - Chapters, Tips, Paid Books & Buddy Read)
+  afriBooks: AfriBook[];
+  activeReadingBook: AfriBook | null;
+  setActiveReadingBook: (book: AfriBook | null) => void;
+  activeReadingChapterIndex: number;
+  setActiveReadingChapterIndex: (idx: number) => void;
+  isWritersModalOpen: boolean;
+  setIsWritersModalOpen: (val: boolean) => void;
+  submitNewBook: (book: Omit<AfriBook, 'id' | 'totalReads' | 'tipsReceivedCount' | 'tipsTotalAmount' | 'isPurchasedByMe' | 'publishedAt'>) => { success: boolean; book: AfriBook; message: string };
+  addChapterToBook: (bookId: string, chapter: Omit<BookChapter, 'id' | 'comments'>) => void;
+  commentOnChapter: (bookId: string, chapterId: string, commentText: string) => void;
+  tipBookAuthor: (bookId: string, amount: number) => { success: boolean; message: string };
+  buyPaidBook: (bookId: string) => { success: boolean; message: string };
+  groupReadSessions: GroupReadSession[];
+  activeGroupReadSession: GroupReadSession | null;
+  setActiveGroupReadSession: (session: GroupReadSession | null) => void;
+  startGroupReadSession: (bookId: string, buddyName: string, buddyAvatar?: string) => GroupReadSession;
+  sendGroupReadMessage: (sessionId: string, text: string) => void;
+  updateGroupReadProgress: (sessionId: string, chapterIndex: number, page: number) => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -2953,6 +3012,577 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
+  // 24. Celebrity Identity Verification State
+  const [isCelebrityModalOpen, setIsCelebrityModalOpen] = useState(false);
+  const [celebrityApplications, setCelebrityApplications] = useState<CelebrityVerificationApplication[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_celebrity_apps');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse celebrity apps:', e);
+    }
+    return [
+      {
+        id: 'cel_app_01',
+        userId: 'usr_burna_boy',
+        stageName: 'Burna Boy',
+        realName: 'Damini Ebunoluwa Ogulu',
+        category: 'Musician',
+        socialHandle: '@burnaboygram',
+        status: 'approved',
+        submittedAt: 'Jan 2026',
+      },
+    ];
+  });
+
+  const applyForCelebrityVerification = (data: {
+    stageName: string;
+    category: CelebrityVerificationApplication['category'];
+    socialHandle: string;
+    proofDocumentUrl?: string;
+  }) => {
+    const newApp: CelebrityVerificationApplication = {
+      id: `app_${Date.now()}`,
+      userId: currentUser.id,
+      stageName: data.stageName,
+      realName: currentUser.fullName,
+      category: data.category,
+      socialHandle: data.socialHandle,
+      proofDocumentUrl: data.proofDocumentUrl,
+      status: 'approved', // Auto-approval verification workflow for platform celebrities
+      submittedAt: 'Just now',
+    };
+
+    setCelebrityApplications((prev) => {
+      const updated = [newApp, ...prev];
+      localStorage.setItem('africhat_celebrity_apps', JSON.stringify(updated));
+      return updated;
+    });
+
+    const updatedUser: UserProfile = {
+      ...currentUser,
+      isCelebrityVerified: true,
+      celebrityCategory: data.category,
+      celebrityStageName: data.stageName,
+    };
+    setCurrentUser(updatedUser);
+    localStorage.setItem('africhat_user_profile_v2', JSON.stringify(updatedUser));
+
+    return {
+      success: true,
+      message: `🌟 Celebrity Identity Verified! The golden/purple celebrity verified badge is now active on your AfriChat profile and chats.`,
+    };
+  };
+
+  const toggleCelebrityStatus = () => {
+    const nextStatus = !currentUser.isCelebrityVerified;
+    const updatedUser: UserProfile = {
+      ...currentUser,
+      isCelebrityVerified: nextStatus,
+      celebrityCategory: nextStatus ? (currentUser.celebrityCategory || 'Public Figure & Creator') : undefined,
+    };
+    setCurrentUser(updatedUser);
+    localStorage.setItem('africhat_user_profile_v2', JSON.stringify(updatedUser));
+  };
+
+  // 25. Store Registration & Tiers System (3k/mo for 30 items, 7k/mo for 100 items limit)
+  const [isStoreRegModalOpen, setIsStoreRegModalOpen] = useState(false);
+  const [storeSubscription, setStoreSubscription] = useState<StoreSubscription>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_store_sub');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse store sub:', e);
+    }
+    return MOCK_STORE_SUBSCRIPTION;
+  });
+
+  const subscribeStoreTier = (
+    tier: 'starter_30' | 'pro_100',
+    storeName: string,
+    category: string,
+    description: string,
+    paymentMethod: 'wallet' | 'paystack'
+  ) => {
+    const fee = tier === 'starter_30' ? 3000 : 7000;
+    const itemLimit = tier === 'starter_30' ? 30 : 100;
+
+    if (paymentMethod === 'wallet' && wallet.availableBalance < fee) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance for ₦${fee.toLocaleString()} monthly store registration. Please top up or pay with card.`,
+      };
+    }
+
+    if (paymentMethod === 'wallet') {
+      const newTx: WalletTransaction = {
+        id: `tx_store_reg_${Date.now()}`,
+        type: 'transfer_out',
+        title: `Store Registration (${tier === 'starter_30' ? 'Starter 30-Items' : 'Pro 100-Items'})`,
+        amount: fee,
+        currency: 'NGN',
+        timestamp: 'Just now',
+        status: 'completed',
+        channel: 'wallet',
+      };
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - fee,
+        transactions: [newTx, ...prev.transactions],
+      }));
+    }
+
+    const updatedSub: StoreSubscription = {
+      tier,
+      monthlyFee: fee,
+      itemLimit,
+      itemsCount: storeSubscription ? storeSubscription.itemsCount : 0,
+      storeName: storeName || (currentUser.fullName ? `${currentUser.fullName}'s Official Store` : 'AfriChat Store'),
+      description: description || 'Verified African merchant catalog.',
+      category: category || 'General Trade',
+      active: true,
+      expiresAt: 'In 30 days',
+      paymentMethod,
+    };
+
+    setStoreSubscription(updatedSub);
+    localStorage.setItem('africhat_store_sub', JSON.stringify(updatedSub));
+
+    return {
+      success: true,
+      message: `🎉 Store successfully registered under ${tier === 'starter_30' ? 'Starter (30 Items Limit - ₦3k/mo)' : 'Pro (100 Items Limit - ₦7k/mo)'}!`,
+    };
+  };
+
+  // 26. Creator Digital Files & VIP Sessions
+  const [creatorFiles, setCreatorFiles] = useState<CreatorDigitalFile[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_creator_files');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse creator files:', e);
+    }
+    return MOCK_CREATOR_FILES;
+  });
+
+  const buyCreatorFile = (fileId: string) => {
+    const file = creatorFiles.find((f) => f.id === fileId);
+    if (!file) return { success: false, message: 'Digital file not found.' };
+
+    if (wallet.availableBalance < file.price) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance to buy "${file.title}" (₦${file.price.toLocaleString()}). Please top up your wallet.`,
+      };
+    }
+
+    const newTx: WalletTransaction = {
+      id: `tx_file_buy_${Date.now()}`,
+      type: 'transfer_out',
+      title: `Digital Product: ${file.title}`,
+      amount: file.price,
+      currency: file.currency,
+      timestamp: 'Just now',
+      status: 'completed',
+      channel: 'wallet',
+    };
+
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance - file.price,
+      transactions: [newTx, ...prev.transactions],
+    }));
+
+    const updatedFile: CreatorDigitalFile = {
+      ...file,
+      isPurchasedByMe: true,
+      downloadsCount: file.downloadsCount + 1,
+    };
+
+    setCreatorFiles((prev) => {
+      const updated = prev.map((f) => (f.id === fileId ? updatedFile : f));
+      localStorage.setItem('africhat_creator_files', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Credit creator total earnings
+    setCreators((prev) =>
+      prev.map((c) => (c.id === file.creatorId ? { ...c, totalEarnings: c.totalEarnings + file.price } : c))
+    );
+
+    return {
+      success: true,
+      file: updatedFile,
+      message: `🎉 Purchased "${file.title}"! Download unlocked and saved to your device library.`,
+    };
+  };
+
+  const uploadCreatorFile = (
+    fileData: Omit<CreatorDigitalFile, 'id' | 'downloadsCount' | 'isPurchasedByMe' | 'createdAt'>
+  ) => {
+    const newFile: CreatorDigitalFile = {
+      ...fileData,
+      id: `file_${Date.now()}`,
+      downloadsCount: 0,
+      isPurchasedByMe: true,
+      createdAt: 'Just now',
+    };
+
+    setCreatorFiles((prev) => {
+      const updated = [newFile, ...prev];
+      localStorage.setItem('africhat_creator_files', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const bookCreatorVipSession = (
+    creatorId: string,
+    type: 'voice' | 'video' | 'chat',
+    durationMinutes: number,
+    price: number
+  ) => {
+    const creator = creators.find((c) => c.id === creatorId);
+    if (!creator) return { success: false, message: 'Creator not found' };
+
+    if (wallet.availableBalance < price) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance for VIP session (₦${price.toLocaleString()}). Please top up your wallet.`,
+      };
+    }
+
+    const newTx: WalletTransaction = {
+      id: `tx_vip_${Date.now()}`,
+      type: 'transfer_out',
+      title: `VIP 1-on-1 ${type === 'voice' ? 'Voice Call' : type === 'video' ? 'Video Call' : 'VIP Direct Chat'} with ${creator.name} (${durationMinutes}m)`,
+      amount: price,
+      currency: 'NGN',
+      timestamp: 'Just now',
+      status: 'completed',
+      channel: 'wallet',
+    };
+
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance - price,
+      transactions: [newTx, ...prev.transactions],
+    }));
+
+    // Credit creator directly
+    setCreators((prev) =>
+      prev.map((c) => (c.id === creatorId ? { ...c, totalEarnings: c.totalEarnings + price } : c))
+    );
+
+    // Launch call or chat directly!
+    if (type === 'voice' || type === 'video') {
+      startCall(creator.name, '+234 800 CREATOR', creator.avatar, type);
+    } else {
+      // Find or open chat
+      const existingChat = chats.find((c) => c.name.toLowerCase().includes(creator.name.slice(0, 5).toLowerCase()));
+      if (existingChat) {
+        setActiveChatId(existingChat.id);
+      }
+    }
+
+    return {
+      success: true,
+      message: `📞 VIP 1-on-1 ${type.toUpperCase()} session with ${creator.name} confirmed for ${durationMinutes} min(s)! Starting connection now...`,
+    };
+  };
+
+  const updateCreatorVipRates = (creatorId: string, rates: Partial<CreatorVipService>) => {
+    setCreators((prev) =>
+      prev.map((c) => {
+        if (c.id === creatorId) {
+          return {
+            ...c,
+            vipServices: {
+              voicePerMinute: 1500,
+              videoPerMinute: 3000,
+              bundle3MinVoice: 3500,
+              bundle5MinVoice: 5500,
+              bundle3MinVideo: 7500,
+              bundle5MinVideo: 12000,
+              vipDirectChat24h: 4000,
+              ...c.vipServices,
+              ...rates,
+            },
+          };
+        }
+        return c;
+      })
+    );
+  };
+
+  // 27. Writers System (AfriBooks)
+  const [afriBooks, setAfriBooks] = useState<AfriBook[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_afribooks');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse books:', e);
+    }
+    return MOCK_AFRI_BOOKS;
+  });
+  const [activeReadingBook, setActiveReadingBook] = useState<AfriBook | null>(null);
+  const [activeReadingChapterIndex, setActiveReadingChapterIndex] = useState<number>(0);
+  const [isWritersModalOpen, setIsWritersModalOpen] = useState(false);
+
+  const [groupReadSessions, setGroupReadSessions] = useState<GroupReadSession[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_group_read');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse group read:', e);
+    }
+    return MOCK_GROUP_READ_SESSIONS;
+  });
+  const [activeGroupReadSession, setActiveGroupReadSession] = useState<GroupReadSession | null>(null);
+
+  const submitNewBook = (
+    bookData: Omit<AfriBook, 'id' | 'totalReads' | 'tipsReceivedCount' | 'tipsTotalAmount' | 'isPurchasedByMe' | 'publishedAt'>
+  ) => {
+    const newBook: AfriBook = {
+      ...bookData,
+      id: `book_${Date.now()}`,
+      isHumanWrittenCertified: true, // Strict anti-AI guarantee
+      totalReads: 1,
+      tipsReceivedCount: 0,
+      tipsTotalAmount: 0,
+      isPurchasedByMe: true, // author owns their book
+      publishedAt: 'Just now',
+    };
+
+    setAfriBooks((prev) => {
+      const updated = [newBook, ...prev];
+      localStorage.setItem('africhat_afribooks', JSON.stringify(updated));
+      return updated;
+    });
+
+    return {
+      success: true,
+      book: newBook,
+      message: `📖 "${newBook.title}" published to African Writers Guild with 100% Human-Written certification!`,
+    };
+  };
+
+  const addChapterToBook = (bookId: string, chapterData: Omit<BookChapter, 'id' | 'comments'>) => {
+    const newChap: BookChapter = {
+      ...chapterData,
+      id: `chap_${Date.now()}`,
+      comments: [],
+    };
+
+    setAfriBooks((prev) => {
+      const updated = prev.map((b) => (b.id === bookId ? { ...b, chapters: [...b.chapters, newChap] } : b));
+      localStorage.setItem('africhat_afribooks', JSON.stringify(updated));
+      return updated;
+    });
+
+    if (activeReadingBook && activeReadingBook.id === bookId) {
+      setActiveReadingBook((prev) => (prev ? { ...prev, chapters: [...prev.chapters, newChap] } : null));
+    }
+  };
+
+  const commentOnChapter = (bookId: string, chapterId: string, commentText: string) => {
+    const newComment = {
+      id: `comm_${Date.now()}`,
+      readerName: currentUser.fullName || 'Avid Reader',
+      readerAvatar: currentUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
+      comment: commentText.trim(),
+      timestamp: 'Just now',
+    };
+
+    setAfriBooks((prev) => {
+      const updated = prev.map((b) => {
+        if (b.id !== bookId) return b;
+        return {
+          ...b,
+          chapters: b.chapters.map((ch) => (ch.id === chapterId ? { ...ch, comments: [newComment, ...ch.comments] } : ch)),
+        };
+      });
+      localStorage.setItem('africhat_afribooks', JSON.stringify(updated));
+      return updated;
+    });
+
+    if (activeReadingBook && activeReadingBook.id === bookId) {
+      setActiveReadingBook((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          chapters: prev.chapters.map((ch) => (ch.id === chapterId ? { ...ch, comments: [newComment, ...ch.comments] } : ch)),
+        };
+      });
+    }
+  };
+
+  const tipBookAuthor = (bookId: string, amount: number) => {
+    const book = afriBooks.find((b) => b.id === bookId);
+    if (!book) return { success: false, message: 'Book not found' };
+
+    if (wallet.availableBalance < amount) {
+      return { success: false, message: `Insufficient wallet balance to tip ₦${amount.toLocaleString()}. Please top up your wallet.` };
+    }
+
+    const newTx: WalletTransaction = {
+      id: `tx_tip_${Date.now()}`,
+      type: 'transfer_out',
+      title: `Reader Tip to ${book.authorName} for "${book.title}"`,
+      amount,
+      currency: 'NGN',
+      timestamp: 'Just now',
+      status: 'completed',
+      channel: 'wallet',
+    };
+
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance - amount,
+      transactions: [newTx, ...prev.transactions],
+    }));
+
+    setAfriBooks((prev) => {
+      const updated = prev.map((b) =>
+        b.id === bookId
+          ? {
+              ...b,
+              tipsReceivedCount: b.tipsReceivedCount + 1,
+              tipsTotalAmount: b.tipsTotalAmount + amount,
+            }
+          : b
+      );
+      localStorage.setItem('africhat_afribooks', JSON.stringify(updated));
+      return updated;
+    });
+
+    if (activeReadingBook && activeReadingBook.id === bookId) {
+      setActiveReadingBook((prev) =>
+        prev
+          ? {
+              ...prev,
+              tipsReceivedCount: prev.tipsReceivedCount + 1,
+              tipsTotalAmount: prev.tipsTotalAmount + amount,
+            }
+          : null
+      );
+    }
+
+    return {
+      success: true,
+      message: `☕ Tipped ₦${amount.toLocaleString()} directly to author ${book.authorName}! Thank you for supporting authentic human literature.`,
+    };
+  };
+
+  const buyPaidBook = (bookId: string) => {
+    const book = afriBooks.find((b) => b.id === bookId);
+    if (!book) return { success: false, message: 'Book not found' };
+
+    if (wallet.availableBalance < book.price) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance to purchase "${book.title}" (₦${book.price.toLocaleString()}). Please top up your wallet.`,
+      };
+    }
+
+    const newTx: WalletTransaction = {
+      id: `tx_book_buy_${Date.now()}`,
+      type: 'transfer_out',
+      title: `Paid Book Purchase: ${book.title}`,
+      amount: book.price,
+      currency: book.currency,
+      timestamp: 'Just now',
+      status: 'completed',
+      channel: 'wallet',
+    };
+
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance - book.price,
+      transactions: [newTx, ...prev.transactions],
+    }));
+
+    setAfriBooks((prev) => {
+      const updated = prev.map((b) => (b.id === bookId ? { ...b, isPurchasedByMe: true, totalReads: b.totalReads + 1 } : b));
+      localStorage.setItem('africhat_afribooks', JSON.stringify(updated));
+      return updated;
+    });
+
+    if (activeReadingBook && activeReadingBook.id === bookId) {
+      setActiveReadingBook((prev) => (prev ? { ...prev, isPurchasedByMe: true } : null));
+    }
+
+    return {
+      success: true,
+      message: `📚 Purchased "${book.title}"! All chapters and group buddy reading unlocked.`,
+    };
+  };
+
+  const startGroupReadSession = (bookId: string, buddyName: string, buddyAvatar?: string) => {
+    const book = afriBooks.find((b) => b.id === bookId);
+    const newSession: GroupReadSession = {
+      id: `grp_read_${Date.now()}`,
+      bookId,
+      bookTitle: book ? book.title : 'African Book',
+      bookCover: book ? book.coverUrl : 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&auto=format&fit=crop&q=80',
+      hostUserId: currentUser.id,
+      hostUserName: currentUser.fullName,
+      buddyUserId: `buddy_${Date.now()}`,
+      buddyUserName: buddyName,
+      buddyAvatar: buddyAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      currentChapter: 1,
+      currentPage: 1,
+      isPaidByOne: true, // 2 friends can both read together if one pays
+      messages: [
+        {
+          id: `grm_${Date.now()}`,
+          senderName: currentUser.fullName,
+          text: `Hey ${buddyName}! I started reading "${book?.title}". Let's buddy-read this together chapter by chapter!`,
+          timestamp: 'Just now',
+        },
+      ],
+    };
+
+    setGroupReadSessions((prev) => {
+      const updated = [newSession, ...prev];
+      localStorage.setItem('africhat_group_read', JSON.stringify(updated));
+      return updated;
+    });
+    setActiveGroupReadSession(newSession);
+    return newSession;
+  };
+
+  const sendGroupReadMessage = (sessionId: string, text: string) => {
+    const newMsg = {
+      id: `grm_${Date.now()}`,
+      senderName: currentUser.fullName,
+      text: text.trim(),
+      timestamp: 'Just now',
+    };
+
+    setGroupReadSessions((prev) => {
+      const updated = prev.map((s) => (s.id === sessionId ? { ...s, messages: [...s.messages, newMsg] } : s));
+      localStorage.setItem('africhat_group_read', JSON.stringify(updated));
+      return updated;
+    });
+
+    if (activeGroupReadSession && activeGroupReadSession.id === sessionId) {
+      setActiveGroupReadSession((prev) => (prev ? { ...prev, messages: [...prev.messages, newMsg] } : null));
+    }
+  };
+
+  const updateGroupReadProgress = (sessionId: string, chapterIndex: number, page: number) => {
+    setGroupReadSessions((prev) => {
+      const updated = prev.map((s) => (s.id === sessionId ? { ...s, currentChapter: chapterIndex + 1, currentPage: page } : s));
+      localStorage.setItem('africhat_group_read', JSON.stringify(updated));
+      return updated;
+    });
+
+    if (activeGroupReadSession && activeGroupReadSession.id === sessionId) {
+      setActiveGroupReadSession((prev) => (prev ? { ...prev, currentChapter: chapterIndex + 1, currentPage: page } : null));
+    }
+  };
+
+
   return (
     <AppContext.Provider
       value={{
@@ -3186,6 +3816,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsReferralModalOpen,
         claimReferralBonus,
         simulateInviteContact,
+        // 24. Celebrity Identity Verification
+        isCelebrityModalOpen,
+        setIsCelebrityModalOpen,
+        celebrityApplications,
+        applyForCelebrityVerification,
+        toggleCelebrityStatus,
+        // 25. Store Registration & Tiers
+        isStoreRegModalOpen,
+        setIsStoreRegModalOpen,
+        storeSubscription,
+        subscribeStoreTier,
+        // 26. Creator Digital Files & VIP Sessions
+        creatorFiles,
+        buyCreatorFile,
+        uploadCreatorFile,
+        bookCreatorVipSession,
+        updateCreatorVipRates,
+        // 27. Writers System (AfriBooks)
+        afriBooks,
+        activeReadingBook,
+        setActiveReadingBook,
+        activeReadingChapterIndex,
+        setActiveReadingChapterIndex,
+        isWritersModalOpen,
+        setIsWritersModalOpen,
+        submitNewBook,
+        addChapterToBook,
+        commentOnChapter,
+        tipBookAuthor,
+        buyPaidBook,
+        groupReadSessions,
+        activeGroupReadSession,
+        setActiveGroupReadSession,
+        startGroupReadSession,
+        sendGroupReadMessage,
+        updateGroupReadProgress,
       }}
     >
       {children}

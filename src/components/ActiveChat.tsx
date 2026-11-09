@@ -74,6 +74,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     setIsEmojiMemeDrawerOpen,
     setIsHealthModalOpen,
     setIsLegalModalOpen,
+    statuses,
+    setActiveViewingStatus,
   } = useApp();
 
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
@@ -181,52 +183,112 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             <ArrowLeft className="w-5 h-5" />
           </button>
 
-          {/* Avatar (Click opens Contact Profile) */}
-          <div
-            onClick={() => setIsContactProfileOpen(true)}
-            className="relative shrink-0 cursor-pointer group"
-            title="View contact info"
-          >
-            <img
-              src={currentChat.avatar}
-              alt={currentChat.name}
-              referrerPolicy="no-referrer"
-              className="w-11 h-11 rounded-full object-cover border border-white/20 group-hover:scale-105 transition-transform"
-            />
-            {currentChat.isOnline && !currentChat.isScamFlagged && (
-              <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-purple-950 dark:border-black rounded-full" />
-            )}
-            {currentChat.isScamFlagged && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white rounded-full flex items-center justify-center text-[10px] font-bold">
-                !
-              </span>
-            )}
-          </div>
+          {/* Avatar (Click opens Contact Profile, with status ring flow if recent update) */}
+          {(() => {
+            const contactStatus = statuses.find(
+              (s) =>
+                !s.isMe &&
+                (s.userId === currentChat.id ||
+                  s.userName.toLowerCase().trim() === currentChat.name.toLowerCase().trim() ||
+                  currentChat.name.toLowerCase().includes(s.userName.toLowerCase()) ||
+                  s.userName.toLowerCase().includes(currentChat.name.toLowerCase()))
+            );
+            const hasRecentStatus = Boolean(contactStatus);
 
-          {/* Contact Details (Click opens Contact Profile) */}
-          <div
-            onClick={() => setIsContactProfileOpen(true)}
-            className="min-w-0 cursor-pointer px-1 group"
-            title="View contact info"
-          >
-            <div className="font-bold text-sm leading-tight text-white group-hover:text-purple-300 truncate flex items-center gap-1.5 transition-colors">
-              <span>{currentChat.name}</span>
-              {currentChat.isGroup && (
-                <span className="text-[10px] font-mono bg-white/15 px-1.5 py-0.2 rounded font-normal">
-                  {currentChat.membersCount} members
-                </span>
-              )}
-            </div>
-            <div className="text-[11px] text-indigo-200/80 leading-tight truncate">
-              {currentChat.isScamFlagged ? (
-                <span className="text-rose-400 font-bold">⚠️ Flagged Scammer ({currentChat.scamReportsCount} reports)</span>
-              ) : currentChat.isOnline ? (
-                <span className="text-emerald-400 font-medium">online</span>
-              ) : (
-                'last seen recently'
-              )}
-            </div>
-          </div>
+            return (
+              <div className="flex items-center gap-2">
+                <div
+                  className="relative shrink-0 cursor-pointer group"
+                  onClick={() => {
+                    if (hasRecentStatus && contactStatus) {
+                      setActiveViewingStatus(contactStatus);
+                    } else {
+                      setIsContactProfileOpen(true);
+                    }
+                  }}
+                  title={hasRecentStatus ? `${currentChat.name} posted a status story (Tap to view)` : 'View contact info'}
+                >
+                  {hasRecentStatus ? (
+                    <div className="p-[2.5px] rounded-full bg-gradient-to-tr from-purple-500 via-pink-500 to-amber-400 shadow-md animate-pulse">
+                      <div className="p-0.5 bg-black rounded-full">
+                        <img
+                          src={currentChat.avatar}
+                          alt={currentChat.name}
+                          referrerPolicy="no-referrer"
+                          className="w-10 h-10 rounded-full object-cover group-hover:scale-105 transition-transform"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <img
+                      src={currentChat.avatar}
+                      alt={currentChat.name}
+                      referrerPolicy="no-referrer"
+                      className="w-11 h-11 rounded-full object-cover border border-white/20 group-hover:scale-105 transition-transform"
+                    />
+                  )}
+
+                  {hasRecentStatus && (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (contactStatus) setActiveViewingStatus(contactStatus);
+                      }}
+                      title="View 24h Story"
+                      className="absolute -top-1 -right-1 w-4 h-4 bg-gradient-to-tr from-purple-600 to-pink-500 text-white rounded-full flex items-center justify-center text-[9px] shadow-sm border border-black"
+                    >
+                      <Sparkles className="w-2.5 h-2.5" />
+                    </span>
+                  )}
+
+                  {currentChat.isOnline && !currentChat.isScamFlagged && !hasRecentStatus && (
+                    <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-purple-950 dark:border-black rounded-full" />
+                  )}
+                  {currentChat.isScamFlagged && (
+                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white rounded-full flex items-center justify-center text-[10px] font-bold">
+                      !
+                    </span>
+                  )}
+                </div>
+
+                {/* Contact Details (Click opens Contact Profile) */}
+                <div
+                  onClick={() => setIsContactProfileOpen(true)}
+                  className="min-w-0 cursor-pointer px-1 group"
+                  title="View contact info"
+                >
+                  <div className="font-bold text-sm leading-tight text-white group-hover:text-purple-300 truncate flex items-center gap-1.5 transition-colors">
+                    <span>{currentChat.name}</span>
+                    {currentChat.isCelebrityVerified && (
+                      <span
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-amber-500/25 to-purple-600/30 border border-amber-400/60 text-amber-300 text-[9px] font-extrabold shadow-2xs shrink-0"
+                        title={`Celebrity Verified: ${currentChat.celebrityStageName || currentChat.name} (${currentChat.celebrityCategory || 'VIP / Artist'})`}
+                      >
+                        <CheckCircle2 className="w-3 h-3 text-amber-400 fill-amber-400/20" />
+                        <span>Celebrity</span>
+                      </span>
+                    )}
+                    {currentChat.isGroup && (
+                      <span className="text-[10px] font-mono bg-white/15 px-1.5 py-0.2 rounded font-normal">
+                        {currentChat.membersCount} members
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-indigo-200/80 leading-tight truncate">
+                    {currentChat.isScamFlagged ? (
+                      <span className="text-rose-400 font-bold">⚠️ Flagged Scammer ({currentChat.scamReportsCount} reports)</span>
+                    ) : hasRecentStatus ? (
+                      <span className="text-pink-300 font-medium">✨ new story update</span>
+                    ) : currentChat.isOnline ? (
+                      <span className="text-emerald-400 font-medium">online</span>
+                    ) : (
+                      'last seen recently'
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Right Action Icons */}
@@ -980,7 +1042,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         onClose={() => setIsDisplayModalOpen(false)}
       />
 
-      {/* WhatsApp Style Contact Info Profile Modal */}
+      {/* AfriChat Contact Info Profile Modal */}
       <ContactProfileModal
         chat={currentChat}
         isOpen={isContactProfileOpen}

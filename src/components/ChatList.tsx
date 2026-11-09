@@ -10,6 +10,7 @@ import {
   Coins,
   Store,
   AlertTriangle,
+  CheckCircle2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatThread } from '../types';
@@ -223,6 +224,15 @@ export const ChatList: React.FC = () => {
                     <span className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">
                       {chat.name}
                     </span>
+                    {chat.isCelebrityVerified && (
+                      <span
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-amber-500/20 to-purple-600/20 border border-amber-400/50 text-amber-500 dark:text-amber-300 text-[9px] font-bold shrink-0"
+                        title="Celebrity Verified"
+                      >
+                        <CheckCircle2 className="w-2.5 h-2.5 fill-amber-400/20" />
+                        <span>VIP</span>
+                      </span>
+                    )}
                   {chat.isGroup && (
                     <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 font-medium shrink-0">
                       Group
@@ -290,7 +300,7 @@ export const ChatList: React.FC = () => {
         <MessageSquarePlus className="w-6 h-6" />
       </button>
 
-      {/* WhatsApp Style Contact Info Profile Modal */}
+      {/* AfriChat Contact Info Profile Modal */}
       <ContactProfileModal
         chat={selectedProfileChat}
         isOpen={Boolean(selectedProfileChat)}

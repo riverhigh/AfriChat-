@@ -50,11 +50,11 @@ export const ReferralModal: React.FC = () => {
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  const handleShareWhatsApp = () => {
+  const handleShareInvite = () => {
     const text = `Join me on AfriChat with zero-data chat, Escrow protection & artisan services! Use my invite code ${referralProgram.referralCode} to get started: ${referralProgram.referralLink}`;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text);
-      alert('Invite message copied! You can paste it into WhatsApp or SMS.');
+      alert('Invite message copied! You can share it via SMS or Social Chat.');
     }
   };
 
@@ -176,7 +176,7 @@ export const ReferralModal: React.FC = () => {
               </div>
 
               <button
-                onClick={handleShareWhatsApp}
+                onClick={handleShareInvite}
                 className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-colors"
               >
                 <Share2 className="w-3.5 h-3.5" />

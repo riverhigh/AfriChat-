@@ -119,7 +119,7 @@ export const AuthModal: React.FC = () => {
                 Phone Number Identity (OTP)
               </h3>
               <p className="text-[10px] text-slate-400">
-                WhatsApp-style verification & carrier routing
+                Carrier network verification & instant routing
               </p>
             </div>
           </div>

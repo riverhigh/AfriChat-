@@ -335,7 +335,7 @@ export const ScamReputationModal: React.FC = () => {
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none"
                 >
                   <option>Sent fake bank debit SMS alert and disappeared</option>
-                  <option>Took deposit for parcel and blocked contact on WhatsApp</option>
+                  <option>Took deposit for parcel and blocked contact on chat</option>
                   <option>Sent wrong/counterfeit goods and refused refund</option>
                   <option>Impersonated registered market store or vendor</option>
                   <option>Sent phishing link requesting debit card PIN</option>

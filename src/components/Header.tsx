@@ -28,6 +28,10 @@ import {
   Coins,
   LockKeyhole,
   Share2,
+  BookOpen,
+  Crown,
+  Store,
+  CheckCircle2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -63,6 +67,9 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
     setIsAjoModalOpen,
     setIsSecurityModalOpen,
     setIsReferralModalOpen,
+    setIsCelebrityModalOpen,
+    setIsStoreRegModalOpen,
+    setIsWritersModalOpen,
     joinAudioSpace,
     audioSpaces,
   } = useApp();
@@ -116,7 +123,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
 
                   {/* 2 by 2 Feature Grid */}
                   <div className="grid grid-cols-2 gap-2">
-                    {/* 1. AfriCreator Hub (NEW) */}
+                    {/* 1. AfriCreator Hub */}
                     <button
                       type="button"
                       onClick={() => {
@@ -132,7 +139,67 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                         Creator Hub
                       </span>
                       <span className="text-[10px] text-purple-600 dark:text-purple-400 block mt-0.5 leading-tight">
-                        VIP Fans, Shows & Songs
+                        VIP Calls, Files & Drops
+                      </span>
+                    </button>
+
+                    {/* Celebrity Verification Tile */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false);
+                        setIsCelebrityModalOpen(true);
+                      }}
+                      className="p-2.5 rounded-2xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-300 dark:border-amber-800/60 text-left transition-all group"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 to-purple-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
+                        <Crown className="w-4 h-4 text-amber-200" />
+                      </div>
+                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
+                        Celebrity Check
+                      </span>
+                      <span className="text-[10px] text-amber-600 dark:text-amber-400 block mt-0.5 leading-tight">
+                        Identity Verification
+                      </span>
+                    </button>
+
+                    {/* Store Registration Tiers (3k/7k) */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false);
+                        setIsStoreRegModalOpen(true);
+                      }}
+                      className="p-2.5 rounded-2xl bg-blue-500/10 hover:bg-blue-500/20 border border-blue-200 dark:border-blue-900/50 text-left transition-all group"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
+                        <Store className="w-4 h-4" />
+                      </div>
+                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
+                        Store Tiers
+                      </span>
+                      <span className="text-[10px] text-blue-600 dark:text-blue-400 block mt-0.5 leading-tight">
+                        ₦3k / ₦7k Monthly
+                      </span>
+                    </button>
+
+                    {/* African Writers Guild (AfriBooks) */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false);
+                        setIsWritersModalOpen(true);
+                      }}
+                      className="p-2.5 rounded-2xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-200 dark:border-emerald-900/50 text-left transition-all group"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
+                        <BookOpen className="w-4 h-4" />
+                      </div>
+                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
+                        Writers Guild
+                      </span>
+                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block mt-0.5 leading-tight">
+                        Chapters & Buddy Read
                       </span>
                     </button>
 

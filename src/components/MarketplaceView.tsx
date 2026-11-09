@@ -13,7 +13,14 @@ import { MOCK_PRODUCTS } from '../data/mockData';
 import { Product } from '../types';
 
 export const MarketplaceView: React.FC = () => {
-  const { openCheckout, openChatWithProduct, formatPrice, setIsServicesModalOpen } = useApp();
+  const {
+    openCheckout,
+    openChatWithProduct,
+    formatPrice,
+    setIsServicesModalOpen,
+    setIsStoreRegModalOpen,
+    storeSubscription,
+  } = useApp();
   const [search, setSearch] = useState('');
   const [selectedCat, setSelectedCat] = useState<'all' | 'textiles' | 'electronics' | 'beauty' | 'fashion'>('all');
 
@@ -76,7 +83,7 @@ export const MarketplaceView: React.FC = () => {
       </div>
 
       {/* Artisan Service Stations Hub Banner */}
-      <div className="px-3 pt-3">
+      <div className="px-3 pt-3 space-y-2">
         <div className="p-3.5 bg-gradient-to-r from-purple-900/30 via-indigo-950/40 to-slate-900/60 rounded-2xl border border-purple-500/30 flex items-center justify-between gap-3 shadow-xs">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 text-purple-400 font-bold text-xs">
@@ -92,6 +99,31 @@ export const MarketplaceView: React.FC = () => {
             className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shrink-0 shadow-md transition-all active:scale-95"
           >
             Open Station Hub
+          </button>
+        </div>
+
+        {/* Store Registration Tiers Banner (₦3k monthly / ₦7k monthly) */}
+        <div className="p-3.5 bg-gradient-to-r from-blue-950/40 via-indigo-950/30 to-purple-950/40 rounded-2xl border border-blue-500/30 flex items-center justify-between gap-3 shadow-xs">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-blue-400 font-bold text-xs">
+              <Store className="w-4 h-4" />
+              <span>Merchant Store Registration Tiers</span>
+            </div>
+            <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
+              {storeSubscription.isRegistered ? (
+                <span>
+                  Active: <strong className="text-white">{storeSubscription.storeName}</strong> ({storeSubscription.tier === 'starter_30' ? 'Starter · 30 items' : 'Pro · 100 items'}) · {storeSubscription.itemsUsed}/{storeSubscription.itemsLimit} items listed.
+                </span>
+              ) : (
+                'Register catalog store: ₦3,000/mo (30 items limit) or ₦7,000/mo (100 items limit).'
+              )}
+            </p>
+          </div>
+          <button
+            onClick={() => setIsStoreRegModalOpen(true)}
+            className="px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95 text-white rounded-xl text-xs font-bold shrink-0 shadow-md transition-all active:scale-95"
+          >
+            {storeSubscription.isRegistered ? 'Manage Store' : 'Register Store'}
           </button>
         </div>
       </div>

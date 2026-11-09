@@ -583,7 +583,7 @@ export const LegalModal: React.FC = () => {
                   </h4>
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-neutral-400 leading-tight">
-                  Track annual return deadlines, TIN compliance, and business name renewals for your WhatsApp & AfriChat catalog store.
+                  Track annual return deadlines, TIN compliance, and business name renewals for your AfriChat catalog store.
                 </p>
 
                 <div className="mt-3 space-y-2">

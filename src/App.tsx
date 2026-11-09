@@ -38,6 +38,9 @@ import { LegalModal } from './components/LegalModal';
 import { DisplayWallpaperModal } from './components/DisplayWallpaperModal';
 import { CreatorModal } from './components/CreatorModal';
 import { ReferralModal } from './components/ReferralModal';
+import { CelebrityVerificationModal } from './components/CelebrityVerificationModal';
+import { StoreRegistrationModal } from './components/StoreRegistrationModal';
+import { WritersGuildModal } from './components/WritersGuildModal';
 
 const AppContent: React.FC = () => {
   const { activeChatId, activeTab } = useApp();
@@ -99,7 +102,7 @@ const AppContent: React.FC = () => {
         <FinancialPollModal />
         <AjoLedgerModal />
 
-        {/* WhatsApp-Style Phone Auth, Contacts Discovery & Super-App Extensions */}
+        {/* AfriChat Carrier Phone Auth, Contacts Discovery & Super-App Extensions */}
         <AuthModal />
         <ContactsModal />
         <DispatchModal />
@@ -131,6 +134,15 @@ const AppContent: React.FC = () => {
 
         {/* Anti-Ghost Referral & Invite System */}
         <ReferralModal />
+
+        {/* Celebrity Identity Verification Badge Modal */}
+        <CelebrityVerificationModal />
+
+        {/* Merchant Store Registration & Tiers (₦3k / ₦7k) */}
+        <StoreRegistrationModal />
+
+        {/* African Writers Guild (Chapters, Buddy Read, Anti-AI Guarantee) */}
+        <WritersGuildModal />
       </div>
     </div>
   );

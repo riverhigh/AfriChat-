@@ -96,7 +96,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
       <div className="flex-1 overflow-y-auto bg-black text-white pb-12">
         {/* Hero Section with Pattern Banner & Big Centered Avatar */}
         <div className="relative pt-6 pb-4 px-4 flex flex-col items-center bg-gradient-to-b from-[#18181c] via-[#121214] to-black">
-          {/* Subtle WhatsApp doodle background effect */}
+          {/* Subtle patterned doodle background effect */}
           <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#9333ea_1px,transparent_1px)] [background-size:16px_16px] pointer-events-none" />
 
           {/* Big Profile Picture */}

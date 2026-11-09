@@ -29,6 +29,8 @@ import {
   Sparkles,
   Share2,
   Wrench,
+  Crown,
+  BookOpen,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { CurrencyCode, LanguageCode, AppFontSize } from '../types';
@@ -91,6 +93,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setChatWallpaper,
     setIsReferralModalOpen,
     setIsServicesModalOpen,
+    setIsCelebrityModalOpen,
+    setIsStoreRegModalOpen,
+    setIsWritersModalOpen,
+    storeSubscription,
     referralProgram,
   } = useApp();
 
@@ -596,6 +602,82 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <ChevronRight className="w-4 h-4 text-slate-400" />
             </button>
 
+            {/* Celebrity Identity Verification */}
+            <button
+              onClick={() => setIsCelebrityModalOpen(true)}
+              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 to-purple-600 text-white flex items-center justify-center">
+                  <Crown className="w-4 h-4 text-amber-200" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <span>Celebrity Identity Verification</span>
+                    {currentUser.isCelebrityVerified && (
+                      <span className="text-[10px] bg-amber-500/20 text-amber-500 font-bold px-1.5 py-0.2 rounded-full border border-amber-500/30">
+                        Celebrity Verified ✓
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    Apply for verified checkmark as a public figure, musician or creator
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400" />
+            </button>
+
+            {/* Merchant Store Registration & Tiers (₦3k / ₦7k) */}
+            <button
+              onClick={() => setIsStoreRegModalOpen(true)}
+              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center">
+                  <Store className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <span>Store Subscription Tiers</span>
+                    {storeSubscription.isRegistered && (
+                      <span className="text-[10px] bg-blue-500/20 text-blue-600 dark:text-blue-400 font-bold px-1.5 py-0.2 rounded-full">
+                        {storeSubscription.tier === 'starter_30' ? 'Starter · 30' : 'Pro · 100'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    ₦3k/mo for 30 items limit · ₦7k/mo for 100 items limit
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400" />
+            </button>
+
+            {/* African Writers Guild (AfriBooks) */}
+            <button
+              onClick={() => setIsWritersModalOpen(true)}
+              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+                  <BookOpen className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <span>African Writers Guild (AfriBooks)</span>
+                    <span className="text-[10px] bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold px-1.5 py-0.2 rounded-full">
+                      No AI
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    Serial chapters, author tips, paid books & 2-friend buddy reading
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400" />
+            </button>
+
             {/* Phone Authentication & Change Number */}
             <button
               onClick={() => setIsAuthModalOpen(true)}
@@ -604,7 +686,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="flex items-center gap-4">
                 <Smartphone className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                 <div>
-                  <div className="text-sm font-medium">WhatsApp-Style Phone OTP</div>
+                  <div className="text-sm font-medium">AfriChat Secure Phone OTP</div>
                   <div className="text-xs text-slate-500">
                     Logged in as {currentUser.phoneNumber} {currentUser.countryCode ? `(${currentUser.countryCode})` : ''}
                   </div>

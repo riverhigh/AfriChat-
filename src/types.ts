@@ -45,13 +45,13 @@ export interface EscrowOrder {
 
 export interface WalletTransaction {
   id: string;
-  type: 'topup' | 'escrow_lock' | 'escrow_release' | 'withdrawal' | 'transfer_delayed' | 'payroll_debit' | 'transfer_in';
+  type: 'topup' | 'escrow_lock' | 'escrow_release' | 'withdrawal' | 'transfer_delayed' | 'payroll_debit' | 'transfer_in' | 'transfer_out';
   title: string;
   amount: number;
   currency: CurrencyCode;
   timestamp: string;
   status: 'completed' | 'pending';
-  reference: string;
+  reference?: string;
   channel: 'paystack' | 'wallet' | 'bank_transfer';
 }
 
@@ -60,6 +60,7 @@ export interface UserWallet {
   escrowLockedBalance: number;
   currency: CurrencyCode;
   transactions: WalletTransaction[];
+  balance?: number;
 }
 
 export interface MemeSticker {
@@ -248,6 +249,9 @@ export interface ChatThread {
   scamReportsCount?: number;
   activeSpaceId?: string;
   ajoGroup?: AjoGroup;
+  isCelebrityVerified?: boolean;
+  celebrityCategory?: string;
+  celebrityStageName?: string;
 }
 
 export interface CallLogItem {
@@ -299,6 +303,9 @@ export interface UserProfile {
   lastSeen: string;
   verificationBadge?: 'blue' | 'gold' | 'creator_plus' | null;
   verificationExpiresAt?: string;
+  isCelebrityVerified?: boolean;
+  celebrityCategory?: string;
+  celebrityStageName?: string;
   isCreator?: boolean;
   creatorPlan?: 'none' | 'gold' | 'creator_plus';
   platformFeeRate?: number;
@@ -314,6 +321,7 @@ export interface DeviceContact {
   isRegisteredOnAfriChat: boolean;
   isRegistered?: boolean;
   registeredUser?: UserProfile;
+  isCelebrityVerified?: boolean;
 }
 
 export interface UserUploadedMeme {
@@ -638,6 +646,7 @@ export interface CreatorProfile {
   totalEarnings: number;
   isSubscribedByMe?: boolean;
   isFollowedByMe?: boolean;
+  vipServices?: CreatorVipService;
 }
 
 export interface CreatorPost {
@@ -776,6 +785,127 @@ export interface ReferralProgram {
   referredList: ReferredUser[];
 }
 
+// 24. Store Registration & Tiers System (3k/mo for 30 items, 7k/mo for 100 items)
+export type StoreTier = 'none' | 'starter_30' | 'pro_100';
 
+export interface StoreSubscription {
+  tier: StoreTier;
+  monthlyFee: number; // 3,000 for starter_30, 7,000 for pro_100
+  itemLimit: number; // 30 for starter_30, 100 for pro_100
+  itemsCount: number;
+  storeName: string;
+  description: string;
+  category: string;
+  active: boolean;
+  isRegistered?: boolean;
+  itemsUsed?: number;
+  itemsLimit?: number;
+  expiresAt: string;
+  paymentMethod: 'wallet' | 'paystack';
+}
 
+// 25. Creator VIP Sessions & Digital Files Marketplace
+export interface CreatorVipService {
+  voicePerMinute: number;
+  videoPerMinute: number;
+  bundle3MinVoice: number;
+  bundle5MinVoice: number;
+  bundle3MinVideo: number;
+  bundle5MinVideo: number;
+  vipDirectChat24h: number;
+}
 
+export interface CreatorDigitalFile {
+  id: string;
+  creatorId: string;
+  creatorName: string;
+  creatorAvatar?: string;
+  title: string;
+  description: string;
+  category: 'ebook' | 'music_audio' | 'video' | 'design_art' | 'preset_lut' | 'code_software' | 'pdf_guide' | 'other';
+  fileName: string;
+  fileSize: string;
+  fileType: string;
+  fileDataUrl?: string;
+  price: number;
+  currency: CurrencyCode;
+  downloadsCount: number;
+  isPurchasedByMe?: boolean;
+  createdAt: string;
+}
+
+// 26. African Writers System (AfriBooks - Chapters, Tips, Paid Books & Buddy Group Read)
+export interface BookChapterComment {
+  id: string;
+  readerName: string;
+  readerAvatar: string;
+  comment: string;
+  timestamp: string;
+}
+
+export interface BookChapter {
+  id: string;
+  chapterNumber: number;
+  title: string;
+  content: string;
+  readTimeMinutes: number;
+  comments: BookChapterComment[];
+}
+
+export interface AfriBook {
+  id: string;
+  title: string;
+  authorId: string;
+  authorName: string;
+  authorAvatar: string;
+  authorBio?: string;
+  coverUrl: string;
+  genre: string;
+  synopsis: string;
+  isHumanWrittenCertified: boolean; // Strictly true: No AI books allowed!
+  pricingType: 'free' | 'paid';
+  price: number; // e.g. ₦1,500
+  currency: CurrencyCode;
+  chapters: BookChapter[];
+  totalReads: number;
+  tipsReceivedCount: number;
+  tipsTotalAmount: number;
+  isPurchasedByMe?: boolean;
+  publishedAt: string;
+}
+
+export interface GroupReadMessage {
+  id: string;
+  senderName: string;
+  text: string;
+  timestamp: string;
+}
+
+export interface GroupReadSession {
+  id: string;
+  bookId: string;
+  bookTitle: string;
+  bookCover: string;
+  hostUserId: string;
+  hostUserName: string;
+  buddyUserId: string;
+  buddyUserName: string;
+  buddyAvatar: string;
+  currentChapter: number;
+  currentPage: number;
+  isPaidByOne: boolean; // eg 2 friends can both read a certain book together if one pays
+  messages: GroupReadMessage[];
+}
+
+// 27. Celebrity Identity Verification
+export interface CelebrityVerificationApplication {
+  id: string;
+  userId: string;
+  stageName: string;
+  realName: string;
+  category: 'Musician' | 'Actor / Film' | 'Comedian' | 'Athlete' | 'Creator & Influencer' | 'Public Figure';
+  socialHandle: string;
+  proofDocumentUrl?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  submittedAt: string;
+}
