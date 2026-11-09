@@ -296,6 +296,9 @@ export interface UserProfile {
   isPhoneVerified?: boolean;
   createdAt: string;
   lastSeen: string;
+  verificationBadge?: 'blue' | 'gold' | null;
+  verificationExpiresAt?: string;
+  isCreator?: boolean;
 }
 
 export interface DeviceContact {
@@ -613,6 +616,81 @@ export interface GeneratedLegalContract {
   signatureA: string;
   signatureB?: string;
   escrowOrderId?: string;
+}
+
+// 21. African Creator & Artist Direct Economy System
+export interface CreatorProfile {
+  id: string;
+  name: string;
+  handle: string;
+  avatar: string;
+  banner: string;
+  category: 'Music & Afrobeats' | 'Comedy & Skits' | 'Dance & Culture' | 'Lifestyle & Fashion' | 'Tech & Business';
+  subscribersCount: number;
+  monthlySubPrice: number;
+  currency: CurrencyCode;
+  bio: string;
+  isVerified: boolean;
+  badge: string;
+  totalEarnings: number;
+  isSubscribedByMe?: boolean;
+}
+
+export interface CreatorPost {
+  id: string;
+  creatorId: string;
+  creatorName: string;
+  creatorAvatar: string;
+  creatorHandle: string;
+  content: string;
+  mediaUrl?: string;
+  mediaType?: 'image' | 'video' | 'audio_leak' | 'text';
+  isLocked: boolean; // Only for paid fan subscribers
+  likesCount: number;
+  commentsCount: number;
+  createdAt: string;
+  hasLikedByMe?: boolean;
+  audioDurationSec?: number;
+}
+
+export interface CreatorShowTicket {
+  id: string;
+  creatorId: string;
+  creatorName: string;
+  creatorAvatar?: string;
+  title: string;
+  type: 'online_stream' | 'offline_concert';
+  date: string;
+  time: string;
+  venueOrStreamUrl: string;
+  price: number;
+  currency: CurrencyCode;
+  availableTickets: number;
+  totalSold: number;
+  coverImage: string;
+  description: string;
+  ticketPin?: string;
+  isPurchasedByMe?: boolean;
+  ticketQrCode?: string;
+}
+
+export interface CreatorSong {
+  id: string;
+  artistId: string;
+  artistName: string;
+  artistAvatar?: string;
+  title: string;
+  album?: string;
+  coverArt: string;
+  price: number; // Direct pay to artist wallet
+  currency: CurrencyCode;
+  duration: string;
+  genre: string;
+  sampleAudioUrl?: string;
+  playsCount: number;
+  salesCount: number;
+  isPurchasedByMe?: boolean;
+  releaseDate: string;
 }
 
 

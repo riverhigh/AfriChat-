@@ -13,6 +13,11 @@ import {
   Sparkles,
   Play,
   Film,
+  BadgeCheck,
+  Crown,
+  Lock,
+  Music,
+  Ticket,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { UserStatus } from '../types';
@@ -33,6 +38,9 @@ export const StatusView: React.FC = () => {
     addDeviceVideoStatus,
     addThoughtStatus,
     currentUser,
+    creators,
+    creatorPosts,
+    setIsCreatorModalOpen,
     t,
   } = useApp();
 
@@ -170,9 +178,23 @@ export const StatusView: React.FC = () => {
             </div>
 
             <div>
-              <h3 className="font-semibold text-sm text-slate-900 dark:text-white">
-                {t('myStatus')}
-              </h3>
+              <div className="flex items-center gap-1.5">
+                <h3 className="font-semibold text-sm text-slate-900 dark:text-white">
+                  {t('myStatus')}
+                </h3>
+                {currentUser.verificationBadge && (
+                  <span
+                    className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full ${
+                      currentUser.verificationBadge === 'gold'
+                        ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                        : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/30'
+                    }`}
+                  >
+                    <BadgeCheck className="w-3 h-3" />
+                    <span>{currentUser.verificationBadge === 'gold' ? 'Gold Creator' : 'Blue Host'}</span>
+                  </span>
+                )}
+              </div>
               {myStatus ? (
                 <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
                   <span className="flex items-center gap-1 text-purple-600 dark:text-purple-400 font-medium">
@@ -237,6 +259,50 @@ export const StatusView: React.FC = () => {
         </div>
       </div>
 
+      {/* Subscribed & Followed Creators Updates Tray */}
+      {creators.some((c) => c.isSubscribedByMe) && (
+        <div className="p-3 border-b border-slate-100 dark:border-neutral-800 bg-slate-50/50 dark:bg-neutral-950/60">
+          <div className="flex items-center justify-between mb-2 px-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-1.5">
+              <Crown className="w-3.5 h-3.5 text-amber-500" />
+              <span>Subscribed Creator Stories</span>
+            </span>
+            <button
+              onClick={() => setIsCreatorModalOpen(true)}
+              className="text-[10px] text-slate-500 hover:text-purple-600 font-semibold"
+            >
+              VIP Feed →
+            </button>
+          </div>
+
+          <div className="flex items-center gap-3 overflow-x-auto pb-1 no-scrollbar">
+            {creators
+              .filter((c) => c.isSubscribedByMe)
+              .map((creator) => (
+                <div
+                  key={creator.id}
+                  onClick={() => setIsCreatorModalOpen(true)}
+                  className="flex flex-col items-center gap-1 shrink-0 cursor-pointer group"
+                >
+                  <div className="relative p-0.5 rounded-full bg-gradient-to-tr from-amber-500 via-purple-600 to-pink-500 shadow-xs group-hover:scale-105 transition-transform">
+                    <img
+                      src={creator.avatar}
+                      alt={creator.name}
+                      className="w-13 h-13 rounded-full object-cover border-2 border-white dark:border-black"
+                    />
+                    <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-amber-500 text-white flex items-center justify-center ring-2 ring-white dark:ring-black">
+                      <Crown className="w-2.5 h-2.5" />
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-800 dark:text-white max-w-[68px] truncate text-center">
+                    {creator.name.split(' ')[0]}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
       {/* Statuses Feed */}
       <div className="p-3 space-y-3">
         <div className="px-2 py-1 text-xs font-semibold text-slate-400 uppercase tracking-wider">
@@ -244,6 +310,76 @@ export const StatusView: React.FC = () => {
         </div>
 
         <div className="space-y-3">
+          {/* Subscribed Creators VIP Feed Drops */}
+          {creatorPosts
+            .filter((p) => creators.find((c) => c.id === p.creatorId)?.isSubscribedByMe)
+            .map((post) => {
+              const creator = creators.find((c) => c.id === post.creatorId);
+              return (
+                <div
+                  key={post.id}
+                  onClick={() => setIsCreatorModalOpen(true)}
+                  className="p-3.5 rounded-3xl bg-gradient-to-br from-purple-950/20 via-slate-50 to-pink-950/10 dark:from-purple-950/40 dark:via-neutral-900 dark:to-neutral-950 border border-purple-500/30 cursor-pointer shadow-2xs hover:shadow-md transition-all space-y-2.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="relative">
+                        <img
+                          src={creator?.avatar || post.creatorAvatar}
+                          alt={post.creatorName}
+                          className="w-9 h-9 rounded-full object-cover border border-purple-500/40"
+                        />
+                        <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-amber-500 text-white flex items-center justify-center">
+                          <Crown className="w-2 h-2" />
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-slate-900 dark:text-white">
+                            {post.creatorName}
+                          </span>
+                          <span className="text-[9px] font-mono font-bold bg-amber-500/20 text-amber-600 dark:text-amber-400 px-1 py-0.2 rounded-full">
+                            VIP Story
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {post.timestamp} · Verified African Creator
+                        </span>
+                      </div>
+                    </div>
+
+                    <span className="text-[10px] font-mono font-bold text-purple-600 dark:text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full">
+                      {post.mediaType === 'audio_leak' ? '🎵 Studio Leak' : '🌟 VIP Drop'}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed font-medium">
+                    {post.content}
+                  </p>
+
+                  {post.mediaUrl && (
+                    <div className="rounded-2xl overflow-hidden max-h-48 border border-purple-500/20">
+                      <img
+                        src={post.mediaUrl}
+                        alt="VIP Post Media"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono pt-1 border-t border-slate-100 dark:border-neutral-800">
+                    <span className="text-purple-600 dark:text-purple-400 font-semibold">
+                      Tap to open VIP Hub & Leaks
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <span className="flex items-center gap-1 text-rose-500">
+                        <Heart className="w-3 h-3 fill-rose-500" /> {post.likes}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           {otherStatuses.map((status: UserStatus) => {
             const isThought = status.statusType === 'thought';
             const isVideo = status.statusType === 'video' || Boolean(status.videoUrl);

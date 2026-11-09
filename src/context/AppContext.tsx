@@ -36,6 +36,10 @@ import {
   LawyerProfile,
   LegalContractTemplate,
   GeneratedLegalContract,
+  CreatorProfile,
+  CreatorPost,
+  CreatorShowTicket,
+  CreatorSong,
 } from '../types';
 import {
   LOCALIZED_STRINGS,
@@ -66,6 +70,10 @@ import {
   MOCK_LAWYERS,
   MOCK_CONTRACT_TEMPLATES,
   MOCK_GENERATED_CONTRACTS,
+  MOCK_CREATORS,
+  MOCK_CREATOR_POSTS,
+  MOCK_CREATOR_SHOWS,
+  MOCK_CREATOR_SONGS,
 } from '../data/mockData';
 
 interface ActiveCallState {
@@ -197,6 +205,14 @@ interface AppContextType {
   isAjoModalOpen: boolean;
   setIsAjoModalOpen: (val: boolean) => void;
   contributeToAjo: (chatId: string, ajoId: string, amount: number) => { success: boolean; message: string };
+  createAjoGroup: (ajoData: {
+    name: string;
+    cycleContributionAmount: number;
+    frequency: 'weekly' | 'monthly';
+    totalRounds: number;
+    rules?: string;
+  }) => { success: boolean; requiresVerification?: boolean; message: string };
+  upgradeVerificationBadge: (badge: 'blue' | 'gold') => { success: boolean; message: string };
   // 8. Phone Number OTP Authentication & Identity
   currentUser: UserProfile;
   setCurrentUser: (user: UserProfile) => void;
@@ -311,6 +327,20 @@ interface AppContextType {
   generateLegalContract: (data: Omit<GeneratedLegalContract, 'id' | 'createdAt' | 'status' | 'signatureA'>) => GeneratedLegalContract;
   signLegalContract: (contractId: string, partyBSignature: string) => void;
   triggerEmergencyLegalSos: () => { success: boolean; message: string };
+  // 21. African Creator & Artist Direct Economy System
+  creators: CreatorProfile[];
+  creatorPosts: CreatorPost[];
+  creatorShows: CreatorShowTicket[];
+  creatorSongs: CreatorSong[];
+  isCreatorModalOpen: boolean;
+  setIsCreatorModalOpen: (val: boolean) => void;
+  subscribeToCreator: (creatorId: string) => { success: boolean; message: string };
+  toggleFollowCreator: (creatorId: string) => { success: boolean; isFollowed: boolean };
+  buyShowTicket: (showId: string) => { success: boolean; ticket?: CreatorShowTicket; message: string };
+  buyCreatorSong: (songId: string) => { success: boolean; song?: CreatorSong; message: string };
+  createCreatorPost: (content: string, isLocked: boolean, mediaType?: 'image' | 'video' | 'audio_leak' | 'text', mediaUrl?: string) => void;
+  createCreatorShow: (show: Omit<CreatorShowTicket, 'id' | 'totalSold' | 'isPurchasedByMe'>) => void;
+  createCreatorSong: (song: Omit<CreatorSong, 'id' | 'playsCount' | 'salesCount' | 'isPurchasedByMe'>) => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -474,6 +504,159 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       message: '⚖️ LEGAL SOS ACTIVE: Rapid Response Human Rights Defense Lawyers have been alerted with your coordinates!',
     };
   };
+
+  // 21. African Creator & Direct Music Economy State
+  const [creators, setCreators] = useState<CreatorProfile[]>(MOCK_CREATORS);
+  const [creatorPosts, setCreatorPosts] = useState<CreatorPost[]>(MOCK_CREATOR_POSTS);
+  const [creatorShows, setCreatorShows] = useState<CreatorShowTicket[]>(MOCK_CREATOR_SHOWS);
+  const [creatorSongs, setCreatorSongs] = useState<CreatorSong[]>(MOCK_CREATOR_SONGS);
+  const [isCreatorModalOpen, setIsCreatorModalOpen] = useState(false);
+
+  const subscribeToCreator = (creatorId: string) => {
+    const creator = creators.find((c) => c.id === creatorId);
+    if (!creator) return { success: false, message: 'Creator not found' };
+
+    setCreators((prev) =>
+      prev.map((c) =>
+        c.id === creatorId
+          ? {
+              ...c,
+              isSubscribedByMe: true,
+              subscribersCount: c.subscribersCount + 1,
+              totalEarnings: c.totalEarnings + c.monthlySubPrice,
+            }
+          : c
+      )
+    );
+
+    // Unlock all subscriber-only posts for this creator
+    setCreatorPosts((prev) =>
+      prev.map((p) => (p.creatorId === creatorId ? { ...p, isLocked: false } : p))
+    );
+
+    return {
+      success: true,
+      message: `🎉 Subscribed to ${creator.name}! Exclusive VIP posts, music leaks, and backstage stories unlocked.`,
+    };
+  };
+
+  const toggleFollowCreator = (creatorId: string) => {
+    let nowFollowed = false;
+    setCreators((prev) =>
+      prev.map((c) => {
+        if (c.id === creatorId) {
+          nowFollowed = !c.isSubscribedByMe;
+          return {
+            ...c,
+            isSubscribedByMe: nowFollowed,
+            subscribersCount: nowFollowed ? c.subscribersCount + 1 : Math.max(0, c.subscribersCount - 1),
+          };
+        }
+        return c;
+      })
+    );
+    return { success: true, isFollowed: nowFollowed };
+  };
+
+  const buyShowTicket = (showId: string) => {
+    const show = creatorShows.find((s) => s.id === showId);
+    if (!show) return { success: false, message: 'Show not found' };
+
+    const generatedPin = `TICK-AFRI-${Math.floor(1000 + Math.random() * 9000)}`;
+    const generatedQr = `AFRI-SHOW-${show.id.toUpperCase()}-${generatedPin}`;
+
+    let updatedShow: CreatorShowTicket = {
+      ...show,
+      isPurchasedByMe: true,
+      totalSold: show.totalSold + 1,
+      availableTickets: Math.max(0, show.availableTickets - 1),
+      ticketPin: generatedPin,
+      ticketQrCode: generatedQr,
+    };
+
+    setCreatorShows((prev) => prev.map((s) => (s.id === showId ? updatedShow : s)));
+
+    // Credit creator's total earnings
+    setCreators((prev) =>
+      prev.map((c) => (c.id === show.creatorId ? { ...c, totalEarnings: c.totalEarnings + show.price } : c))
+    );
+
+    return {
+      success: true,
+      ticket: updatedShow,
+      message: `🎟️ Ticket purchased for "${show.title}"! Scannable QR pass and entry PIN issued.`,
+    };
+  };
+
+  const buyCreatorSong = (songId: string) => {
+    const song = creatorSongs.find((s) => s.id === songId);
+    if (!song) return { success: false, message: 'Song not found' };
+
+    let updatedSong: CreatorSong = {
+      ...song,
+      isPurchasedByMe: true,
+      salesCount: song.salesCount + 1,
+      playsCount: song.playsCount + 1,
+    };
+
+    setCreatorSongs((prev) => prev.map((s) => (s.id === songId ? updatedSong : s)));
+
+    // Credit artist directly to their wallet
+    setCreators((prev) =>
+      prev.map((c) => (c.id === song.artistId ? { ...c, totalEarnings: c.totalEarnings + song.price } : c))
+    );
+
+    return {
+      success: true,
+      song: updatedSong,
+      message: `🎵 Purchased "${song.title}"! 100% payout credited directly to ${song.artistName}'s AfriChat Wallet. Stream & download unlocked.`,
+    };
+  };
+
+  const createCreatorPost = (
+    content: string,
+    isLocked: boolean,
+    mediaType?: 'image' | 'video' | 'audio_leak' | 'text',
+    mediaUrl?: string
+  ) => {
+    const newPost: CreatorPost = {
+      id: `post_${Date.now()}`,
+      creatorId: 'cr_kelvin_vibe',
+      creatorName: 'You (Creator)',
+      creatorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      creatorHandle: '@you_creator',
+      content,
+      mediaType: mediaType || 'text',
+      mediaUrl,
+      isLocked,
+      likesCount: 0,
+      commentsCount: 0,
+      createdAt: 'Just now',
+    };
+    setCreatorPosts((prev) => [newPost, ...prev]);
+  };
+
+  const createCreatorShow = (showData: Omit<CreatorShowTicket, 'id' | 'totalSold' | 'isPurchasedByMe'>) => {
+    const newShow: CreatorShowTicket = {
+      ...showData,
+      id: `show_${Date.now()}`,
+      totalSold: 0,
+      isPurchasedByMe: false,
+    };
+    setCreatorShows((prev) => [newShow, ...prev]);
+  };
+
+  const createCreatorSong = (songData: Omit<CreatorSong, 'id' | 'playsCount' | 'salesCount' | 'isPurchasedByMe'>) => {
+    const newSong: CreatorSong = {
+      ...songData,
+      id: `song_${Date.now()}`,
+      playsCount: 0,
+      salesCount: 0,
+      isPurchasedByMe: true, // creator owns their song
+    };
+    setCreatorSongs((prev) => [newSong, ...prev]);
+  };
+
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chats, setChats] = useState<ChatThread[]>(MOCK_CHATS);
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>(INITIAL_MESSAGES);
@@ -1607,6 +1790,133 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true, message: `Successfully contributed ₦${amount.toLocaleString()} to Ajo pot!` };
   };
 
+  const upgradeVerificationBadge = (badge: 'blue' | 'gold') => {
+    const cost = badge === 'gold' ? 11000 : 6000;
+    if (wallet.availableBalance < cost) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance for ${
+          badge === 'gold' ? 'Gold Creator Checkmark (₦11,000/mo)' : 'Blue Host Checkmark (₦6,000/mo)'
+        }. Please top up your wallet.`,
+      };
+    }
+
+    const newTx: WalletTransaction = {
+      id: `tx_${Date.now()}`,
+      type: 'topup',
+      title: `${badge === 'gold' ? 'Gold Creator Checkmark (₦11k/mo)' : 'Blue Ajo Host Checkmark (₦6k/mo)'}`,
+      amount: cost,
+      currency: 'NGN',
+      timestamp: 'Just now',
+      status: 'completed',
+      reference: `VERIFY_${badge.toUpperCase()}_${Date.now()}`,
+      channel: 'wallet',
+    };
+
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance - cost,
+      transactions: [newTx, ...prev.transactions],
+    }));
+
+    const updatedUser: UserProfile = {
+      ...currentUser,
+      verificationBadge: badge,
+      isCreator: badge === 'gold' ? true : currentUser.isCreator,
+      verificationExpiresAt: '30 days remaining',
+    };
+
+    setCurrentUser(updatedUser);
+    localStorage.setItem('africhat_user_profile_v2', JSON.stringify(updatedUser));
+
+    return {
+      success: true,
+      message: `🎉 Success! You are now verified with a ${badge.toUpperCase()} Checkmark (${
+        badge === 'gold' ? 'Creator Tier ₦11,000/mo' : 'Ajo Host Tier ₦6,000/mo'
+      }). You can now host Ajo clubs and access full creator features!`,
+    };
+  };
+
+  const createAjoGroup = (ajoData: {
+    name: string;
+    cycleContributionAmount: number;
+    frequency: 'weekly' | 'monthly';
+    totalRounds: number;
+    rules?: string;
+  }) => {
+    if (!currentUser.verificationBadge) {
+      return {
+        success: false,
+        requiresVerification: true,
+        message: 'Hosting an Ajo / Esusu group requires an active Blue (₦6k/mo) or Gold (₦11k/mo) checkmark to guarantee trust.',
+      };
+    }
+
+    const newAjo: AjoGroup = {
+      id: `ajo_${Date.now()}`,
+      name: ajoData.name,
+      description: `Verified Ajo Club hosted by ${currentUser.fullName}`,
+      cycleContributionAmount: ajoData.cycleContributionAmount,
+      currency: 'NGN',
+      frequency: ajoData.frequency,
+      totalRounds: ajoData.totalRounds,
+      currentRound: 1,
+      nextPayoutDate: ajoData.frequency === 'weekly' ? 'Next Friday, 4:00 PM' : 'End of Month',
+      currentRecipientName: `${currentUser.fullName} (Host)`,
+      totalPoolPerRound: ajoData.cycleContributionAmount * ajoData.totalRounds,
+      rules:
+        ajoData.rules ||
+        'Smart Escrow rules enforced: missed cycles will result in automatic debit freeze and bad debt flag.',
+      members: [
+        {
+          id: 'm_host',
+          name: `${currentUser.fullName} (Host)`,
+          avatar:
+            currentUser.avatarUrl ||
+            'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          payoutPosition: 1,
+          payoutDate: 'Round 1 (Current)',
+          hasPaidCurrentCycle: true,
+          isReceivedPayout: false,
+        },
+        {
+          id: 'm_2',
+          name: 'Ibrahim Danladi',
+          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+          payoutPosition: 2,
+          payoutDate: 'Round 2',
+          hasPaidCurrentCycle: true,
+          isReceivedPayout: false,
+        },
+        {
+          id: 'm_3',
+          name: 'Folake Adeleke',
+          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          payoutPosition: 3,
+          payoutDate: 'Round 3',
+          hasPaidCurrentCycle: false,
+          isReceivedPayout: false,
+        },
+        {
+          id: 'm_4',
+          name: 'Emeka Okafor',
+          avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
+          payoutPosition: 4,
+          payoutDate: 'Round 4',
+          hasPaidCurrentCycle: false,
+          isReceivedPayout: false,
+        },
+      ],
+    };
+
+    setActiveAjoGroup(newAjo);
+    return {
+      success: true,
+      requiresVerification: false,
+      message: `🎉 "${ajoData.name}" has been created! Total pool of ₦${newAjo.totalPoolPerRound.toLocaleString()} per round is now active under smart escrow.`,
+    };
+  };
+
   // 8. Phone OTP Auth Handlers
   const loginWithPhone = (
     phoneNumber: string,
@@ -1794,7 +2104,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 12. Job Handlers
   const postNewJob = (jobData: Omit<JobPosting, 'id' | 'postedAt' | 'isPaid'>) => {
-    const postFee = 15000;
+    const postFee = 400;
     if (wallet.availableBalance < postFee) {
       return {
         success: false,
@@ -2355,6 +2665,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isAjoModalOpen,
         setIsAjoModalOpen,
         contributeToAjo,
+        createAjoGroup,
+        upgradeVerificationBadge,
         // 8. Phone Number OTP Authentication & Identity
         currentUser,
         setCurrentUser,
@@ -2424,6 +2736,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleEmployeePayrollStatus,
         deletePayrollEmployee,
         runPayrollNow,
+        // 17. Display & Appearance
+        fontSize,
+        setFontSize,
+        chatWallpaper,
+        setChatWallpaper,
+        // QR Scanner
+        isScanQrModalOpen,
+        setIsScanQrModalOpen,
+        // 18. Town Communities
+        townCommunities,
+        hidePhoneNumberInTown,
+        toggleHidePhoneNumberInTown,
+        toggleJoinTownCommunity,
+        // 19. Healthcare
+        doctors,
+        queueTokens,
+        medicationReminders,
+        healthVault,
+        isHealthModalOpen,
+        setIsHealthModalOpen,
+        bookDoctorAppointment,
+        takeQueueToken,
+        addMedicationReminder,
+        updateHealthVault,
+        triggerEmergencySos,
+        // 20. Legal & Smart Contracts
+        lawyers,
+        contractTemplates,
+        generatedContracts,
+        isLegalModalOpen,
+        setIsLegalModalOpen,
+        generateLegalContract,
+        signLegalContract,
+        triggerEmergencyLegalSos,
+        // 21. African Creator & Direct Music Economy
+        creators,
+        creatorPosts,
+        creatorShows,
+        creatorSongs,
+        isCreatorModalOpen,
+        setIsCreatorModalOpen,
+        subscribeToCreator,
+        toggleFollowCreator,
+        buyShowTicket,
+        buyCreatorSong,
+        createCreatorPost,
+        createCreatorShow,
+        createCreatorSong,
       }}
     >
       {children}

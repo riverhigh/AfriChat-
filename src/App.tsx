@@ -10,6 +10,7 @@ import { MarketplaceView } from './components/MarketplaceView';
 import { CallsView } from './components/CallsView';
 import { ActiveCallModal } from './components/ActiveCallModal';
 import { SettingsView } from './components/SettingsView';
+import { TownView } from './components/TownView';
 import { CheckoutDrawer } from './components/CheckoutDrawer';
 import { EscrowModal } from './components/EscrowModal';
 import { VoiceRecorderModal } from './components/VoiceRecorderModal';
@@ -31,32 +32,42 @@ import { SecurityModal } from './components/SecurityModal';
 import { ServicesBookingModal } from './components/ServicesBookingModal';
 import { DelayedTransferModal } from './components/DelayedTransferModal';
 import { PayrollModal } from './components/PayrollModal';
+import { ScanQrModal } from './components/ScanQrModal';
+import { HealthcareModal } from './components/HealthcareModal';
+import { LegalModal } from './components/LegalModal';
+import { DisplayWallpaperModal } from './components/DisplayWallpaperModal';
+import { CreatorModal } from './components/CreatorModal';
 
 const AppContent: React.FC = () => {
   const { activeChatId, activeTab } = useApp();
   const [isVoiceRecorderOpen, setIsVoiceRecorderOpen] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
+  const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-white dark:bg-black flex justify-center text-slate-900 dark:text-white font-sans transition-colors">
-      <div className="w-full max-w-md bg-white dark:bg-black min-h-screen shadow-xl flex flex-col relative border-x border-slate-200/50 dark:border-neutral-800">
+    <div className="fixed inset-0 w-full h-full bg-slate-900/10 dark:bg-black flex justify-center overflow-hidden text-slate-900 dark:text-white font-sans transition-colors select-none">
+      <div className="w-full max-w-md h-full bg-white dark:bg-black shadow-2xl flex flex-col relative overflow-hidden border-x border-slate-200/50 dark:border-neutral-800">
         {/* Floating Street Radio bar when active in background */}
         <AudioSpaceBar />
 
         {activeChatId ? (
           <ActiveChat onOpenVoiceRecorder={() => setIsVoiceRecorderOpen(true)} />
         ) : (
-          <div className="flex flex-col flex-1">
+          <div className="flex flex-col flex-1 h-full overflow-hidden">
             <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
 
-            <main className="flex-1 overflow-y-auto">
+            <main className="flex-1 overflow-y-auto overflow-x-hidden">
               {activeTab === 'status' && <StatusView />}
               {activeTab === 'calls' && <CallsView />}
-              {activeTab === 'market' && <MarketplaceView />}
+              {activeTab === 'town' && <TownView />}
               {activeTab === 'chats' && <ChatList />}
               {activeTab === 'settings' && (
-                <SettingsView onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
+                <SettingsView
+                  onOpenLanguageModal={() => setIsLanguageModalOpen(true)}
+                  onOpenDisplayModal={() => setIsDisplayModalOpen(true)}
+                />
               )}
+              {activeTab === 'market' && <MarketplaceView />}
             </main>
 
             <BottomNav />
@@ -98,6 +109,24 @@ const AppContent: React.FC = () => {
         <ServicesBookingModal />
         <DelayedTransferModal />
         <PayrollModal />
+
+        {/* Scan QR & Unique UID Modal */}
+        <ScanQrModal />
+
+        {/* AfriHealth: Hospital Queuing, Telehealth & EHR Vault */}
+        <HealthcareModal />
+
+        {/* AfriLaw: Smart Contracts, Legal SOS & CAC Tracker */}
+        <LegalModal />
+
+        {/* Text Size Scale & Device Background Upload Modal */}
+        <DisplayWallpaperModal
+          isOpen={isDisplayModalOpen}
+          onClose={() => setIsDisplayModalOpen(false)}
+        />
+
+        {/* AfriCreator: Subscriptions, Show Tickets & Direct Music Drops */}
+        <CreatorModal />
       </div>
     </div>
   );

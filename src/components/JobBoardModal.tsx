@@ -161,7 +161,7 @@ export const JobBoardModal: React.FC = () => {
                 Hiring Staff or Dispatch Riders?
               </span>
               <span className="text-[10px] text-blue-200">
-                Employers pay ₦15,000 per featured job listing.
+                Employers pay ₦400 per featured job listing.
               </span>
             </div>
             <button
@@ -222,7 +222,7 @@ export const JobBoardModal: React.FC = () => {
               </div>
 
               <div className="p-2.5 bg-amber-50 dark:bg-amber-950/40 rounded-xl text-[11px] text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900">
-                Fee: <strong>₦15,000</strong> auto-deducted from your AfriChat Wallet balance upon publishing.
+                Fee: <strong>₦400</strong> auto-deducted from your AfriChat Wallet balance upon publishing.
               </div>
 
               <form onSubmit={handleCreateJob} className="space-y-2.5">
@@ -331,7 +331,7 @@ export const JobBoardModal: React.FC = () => {
                   type="submit"
                   className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md"
                 >
-                  Pay ₦15,000 & Publish Featured Job
+                  Pay ₦400 & Publish Featured Job
                 </button>
               </form>
             </div>

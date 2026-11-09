@@ -1,12 +1,9 @@
 import React, { useState } from 'react';
 import {
   User,
-  Key,
-  Lock,
   Globe,
   Coins,
   Database,
-  HelpCircle,
   QrCode,
   ShieldCheck,
   ChevronRight,
@@ -15,32 +12,57 @@ import {
   Wallet,
   ArrowDownLeft,
   ArrowUpRight,
-  Radio,
-  Sparkles,
-  ShieldAlert,
   EyeOff,
   Eye,
-  Truck,
-  Briefcase,
   Store,
-  Users,
   Phone,
   CheckCircle2,
-  LockKeyhole,
   Smartphone,
   Clock,
   Repeat,
-  Wrench,
+  Type,
+  Image as ImageIcon,
+  Upload,
+  RotateCcw,
+  Check,
+  Sliders,
+  Sparkles,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { CurrencyCode, LanguageCode } from '../types';
+import { CurrencyCode, LanguageCode, AppFontSize } from '../types';
 import { MarketplaceView } from './MarketplaceView';
 
 interface SettingsViewProps {
   onOpenLanguageModal: () => void;
+  onOpenDisplayModal?: () => void;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal }) => {
+const PRESET_WALLPAPERS = [
+  {
+    id: 'ankara',
+    title: 'Ankara Heritage',
+    url: 'https://images.unsplash.com/photo-1544441893-675973e31985?w=600&auto=format&fit=crop&q=80',
+  },
+  {
+    id: 'lagos_night',
+    title: 'Lagos Neon Skyline',
+    url: 'https://images.unsplash.com/photo-1514565131-fce0801e5785?w=600&auto=format&fit=crop&q=80',
+  },
+  {
+    id: 'kente',
+    title: 'Kente Weave Texture',
+    url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=600&auto=format&fit=crop&q=80',
+  },
+  {
+    id: 'charcoal',
+    title: 'Charcoal Minimalist',
+    url: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=600&auto=format&fit=crop&q=80',
+  },
+];
+
+export const SettingsView: React.FC<SettingsViewProps> = ({
+  onOpenLanguageModal,
+}) => {
   const {
     language,
     currency,
@@ -54,33 +76,51 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
     formatPrice,
     wallet,
     setIsWalletModalOpen,
-    setIsMemeStudioOpen,
-    setIsScamCheckerOpen,
-    joinAudioSpace,
-    audioSpaces,
     currentUser,
-    isAuthenticated,
     setIsAuthModalOpen,
-    logoutUser,
     hideBalanceOnNav,
     toggleHideBalance,
-    dispatchOrders,
-    setIsDispatchModalOpen,
-    jobPostings,
-    setIsJobBoardModalOpen,
-    securitySettings,
-    setIsSecurityModalOpen,
-    deviceContacts,
-    setIsContactsModalOpen,
-    setIsServicesModalOpen,
-    serviceBookings,
     setIsTransferModalOpen,
-    delayedTransfers,
     setIsPayrollModalOpen,
-    payrollEmployees,
+    setIsScanQrModalOpen,
+    fontSize,
+    setFontSize,
+    chatWallpaper,
+    setChatWallpaper,
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores'>('services');
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setUploadError('Please select a valid image file (JPG, PNG, WebP).');
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      setUploadError('Image size exceeds 8MB. Please choose a smaller photo.');
+      return;
+    }
+
+    setUploadError(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      setChatWallpaper(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const fontOptions: { id: AppFontSize; label: string; desc: string; sizePx: string }[] = [
+    { id: 'small', label: 'Small', desc: '14px compact', sizePx: '14px' },
+    { id: 'normal', label: 'Normal', desc: '16px default', sizePx: '16px' },
+    { id: 'large', label: 'Large', desc: '18px comfortable', sizePx: '18px' },
+    { id: 'huge', label: 'Huge', desc: '20px high visibility', sizePx: '20px' },
+  ];
 
   const getLanguageName = (code: LanguageCode) => {
     switch (code) {
@@ -105,15 +145,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
       <div className="px-4 pt-3 pb-2 border-b border-slate-100 dark:border-neutral-800 bg-white dark:bg-black">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h2 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white font-display">
-              You
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white font-display">
+                Fyp
+              </h2>
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-purple-600/10 text-purple-600 dark:text-purple-400">
+                Personal & Stores
+              </span>
+            </div>
             <p className="text-xs text-slate-500 dark:text-neutral-400">
-              Personal Profile, African Hub & Stores
+              Wallet, African Stores, Appearance & Identity
             </p>
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsScanQrModalOpen(true)}
+              className="p-2 rounded-xl bg-purple-50 dark:bg-purple-950/40 hover:bg-purple-100 dark:hover:bg-purple-900/40 text-purple-600 dark:text-purple-400 transition-colors flex items-center gap-1.5 text-xs font-bold"
+              title="View Unique QR Code & UID"
+            >
+              <QrCode className="w-4 h-4" />
+              <span className="text-[11px] font-mono">My QR</span>
+            </button>
+
             <button
               onClick={toggleHideBalance}
               className="p-2 rounded-xl bg-slate-100 dark:bg-neutral-900 hover:bg-slate-200 dark:hover:bg-neutral-800 text-slate-600 dark:text-neutral-300 transition-colors flex items-center gap-1.5 text-xs font-medium"
@@ -134,7 +189,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
           </div>
         </div>
 
-        {/* Segmented Navigation Switcher: Services vs Stores */}
+        {/* Segmented Navigation Switcher: Profile vs Stores */}
         <div className="grid grid-cols-2 p-1 bg-slate-100 dark:bg-neutral-950 rounded-xl text-xs font-semibold">
           <button
             onClick={() => setActiveSubTab('services')}
@@ -145,7 +200,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
             }`}
           >
             <User className="w-4 h-4" />
-            <span>Profile & Services</span>
+            <span>Profile & Wallet</span>
           </button>
 
           <button
@@ -166,9 +221,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
       {activeSubTab === 'stores' ? (
         <MarketplaceView />
       ) : (
-        <div>
+        <div className="space-y-4">
           {/* User Profile Identity Row */}
-          <div className="flex items-center justify-between px-4 py-4 border-b border-slate-100 dark:border-slate-800/80 bg-white dark:bg-[#18152e]">
+          <div className="flex items-center justify-between px-4 py-4 border-b border-slate-100 dark:border-neutral-800 bg-white dark:bg-[#18152e]">
             <div className="flex items-center gap-3.5">
               <div className="relative">
                 <div className="w-16 h-16 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden flex items-center justify-center p-0.5 border-2 border-indigo-600">
@@ -221,7 +276,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
                 <Smartphone className="w-5 h-5" />
               </button>
               <button
-                onClick={() => alert(`AfriChat Identity QR for ${currentUser.phoneNumber}`)}
+                onClick={() => setIsScanQrModalOpen(true)}
                 className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
                 title="View AfriChat QR Code"
               >
@@ -231,7 +286,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
           </div>
 
           {/* AfriChat Wallet Card with Privacy Masking */}
-          <div className="p-4 bg-slate-50 dark:bg-[#18152e] border-b border-slate-100 dark:border-slate-800">
+          <div className="px-4">
             <div className="p-4 rounded-2xl bg-gradient-to-tr from-[#1e1b4b] via-[#312e81] to-[#4338ca] text-white space-y-3 shadow-md relative overflow-hidden">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -305,188 +360,192 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
             </div>
           </div>
 
-          {/* High Priority Super-App Integrations Banner Cards */}
-          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 bg-white dark:bg-black border-b border-slate-100 dark:border-neutral-800">
-            {/* 1. African Services & Appointment Booking */}
-            <div
-              onClick={() => setIsServicesModalOpen(true)}
-              className="p-3.5 rounded-2xl bg-gradient-to-br from-purple-500/10 via-indigo-500/5 to-transparent border border-purple-500/30 hover:border-purple-500/60 cursor-pointer transition-all shadow-2xs group"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center shadow-xs">
-                  <Wrench className="w-5 h-5" />
+          {/* 1. Custom Text Size Scale Adjuster (Preserved in Fyp) */}
+          <div className="px-4">
+            <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-purple-600/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                    <Type className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                      Text Size & Typography
+                    </h4>
+                    <p className="text-[11px] text-slate-500 dark:text-neutral-400">
+                      Scale app font across chats, feeds & messages
+                    </p>
+                  </div>
                 </div>
-                <span className="text-[10px] font-mono font-bold bg-purple-500/20 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded-full">
-                  No Limits African Jobs
+                <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded-full bg-purple-600/15 text-purple-600 dark:text-purple-300">
+                  {fontSize}
                 </span>
               </div>
-              <h4 className="font-bold text-sm text-slate-900 dark:text-white flex items-center justify-between">
-                <span>Services & Appointments</span>
-                <ChevronRight className="w-4 h-4 text-purple-600 transition-transform group-hover:translate-x-1" />
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-neutral-400 mt-1 leading-relaxed">
-                Book mechanics, barbers, nail techs, bouncers, event planners, DJs & specialists with Escrow release PINs.
-              </p>
-              <div className="mt-2 text-[10px] font-mono text-purple-600 dark:text-purple-400 font-bold">
-                ● {serviceBookings.length} appointments booked
-              </div>
-            </div>
 
-            {/* 2. 1-2 Days Delayed Money Transfer */}
-            <div
-              onClick={() => setIsTransferModalOpen(true)}
-              className="p-3.5 rounded-2xl bg-gradient-to-br from-amber-500/10 via-orange-500/5 to-transparent border border-amber-500/30 hover:border-amber-500/60 cursor-pointer transition-all shadow-2xs group"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-amber-600 text-white flex items-center justify-center shadow-xs">
-                  <Clock className="w-5 h-5" />
-                </div>
-                <span className="text-[10px] font-mono font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-full">
-                  Anti-Fraud Delay
-                </span>
+              {/* 4 Interactive Size Pills */}
+              <div className="grid grid-cols-4 gap-2">
+                {fontOptions.map((opt) => {
+                  const isSelected = fontSize === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setFontSize(opt.id)}
+                      className={`py-2 px-1.5 rounded-xl text-center border transition-all ${
+                        isSelected
+                          ? 'bg-purple-600 text-white border-purple-600 shadow-xs ring-2 ring-purple-600/20'
+                          : 'bg-slate-50 dark:bg-neutral-800 border-slate-200 dark:border-neutral-700 text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-750'
+                      }`}
+                    >
+                      <span className="block text-xs font-bold leading-tight">
+                        {opt.label}
+                      </span>
+                      <span className={`block text-[10px] mt-0.5 opacity-80 ${isSelected ? 'text-purple-100' : 'text-slate-400'}`}>
+                        {opt.sizePx}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
-              <h4 className="font-bold text-sm text-slate-900 dark:text-white flex items-center justify-between">
-                <span>Send with 1-2 Days Delay</span>
-                <ChevronRight className="w-4 h-4 text-amber-600 transition-transform group-hover:translate-x-1" />
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-neutral-400 mt-1 leading-relaxed">
-                Send funds under 24-48h escrow delay. Easily cancel and reclaim funds if scam or issue is found.
-              </p>
-              <div className="mt-2 text-[10px] font-mono text-amber-600 dark:text-amber-400 font-bold">
-                ● {delayedTransfers.filter((t) => t.status === 'pending_clearance').length} in clearance
-              </div>
-            </div>
 
-            {/* 3. Payroll & Recurring Auto-Debit */}
-            <div
-              onClick={() => setIsPayrollModalOpen(true)}
-              className="p-3.5 rounded-2xl bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-transparent border border-emerald-500/30 hover:border-emerald-500/60 cursor-pointer transition-all shadow-2xs group"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
-                  <Repeat className="w-5 h-5" />
+              {/* Live Preview Sample */}
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-neutral-950 border border-slate-100 dark:border-neutral-800/80">
+                <div className="text-[10px] uppercase font-mono font-bold text-slate-400 mb-1.5">
+                  Live Chat Preview:
                 </div>
-                <span className="text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full">
-                  Auto-Disburse
-                </span>
-              </div>
-              <h4 className="font-bold text-sm text-slate-900 dark:text-white flex items-center justify-between">
-                <span>Payroll & Staff Auto-Debit</span>
-                <ChevronRight className="w-4 h-4 text-emerald-600 transition-transform group-hover:translate-x-1" />
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-neutral-400 mt-1 leading-relaxed">
-                Automated recurring payouts for drivers, shop attendants, security, tailors & domestic staff.
-              </p>
-              <div className="mt-2 text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">
-                ● {payrollEmployees.filter((e) => e.status === 'active').length} active staff on auto-debit
-              </div>
-            </div>
-
-            {/* 4. Gokada & PickkR Courier Dispatch Button */}
-            <div
-              onClick={() => setIsDispatchModalOpen(true)}
-              className="p-3.5 rounded-2xl bg-gradient-to-br from-blue-500/10 via-sky-500/5 to-transparent border border-blue-500/30 hover:border-blue-500/60 cursor-pointer transition-all shadow-2xs group"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
-                  <Truck className="w-5 h-5" />
+                <div className="p-3 rounded-2xl bg-purple-600 text-white max-w-[85%] rounded-br-xs shadow-xs">
+                  <p className="font-medium leading-relaxed">
+                    AfriChat: Fast & secure chats across Africa 🌍
+                  </p>
+                  <span className="text-[10px] opacity-75 block text-right mt-1">
+                    10:45 AM · ✓✓
+                  </span>
                 </div>
-                <span className="text-[10px] font-mono font-bold bg-blue-500/20 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full">
-                  Gokada & PickkR
-                </span>
-              </div>
-              <h4 className="font-bold text-sm text-slate-900 dark:text-white flex items-center justify-between">
-                <span>Courier Dispatch</span>
-                <ChevronRight className="w-4 h-4 text-blue-600 transition-transform group-hover:translate-x-1" />
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-neutral-400 mt-1 leading-relaxed">
-                Book bikes, kekes & vans. Calculate fees and track delivery riders live.
-              </p>
-              {dispatchOrders.length > 0 && (
-                <div className="mt-2 text-[10px] font-mono text-blue-600 dark:text-blue-400 font-bold">
-                  ● {dispatchOrders.length} active delivery orders
-                </div>
-              )}
-            </div>
-
-            {/* 5. African Job Board & Opportunities */}
-            <div
-              onClick={() => setIsJobBoardModalOpen(true)}
-              className="p-3.5 rounded-2xl bg-gradient-to-br from-purple-500/10 via-pink-500/5 to-transparent border border-purple-500/30 hover:border-purple-500/60 cursor-pointer transition-all shadow-2xs group"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center shadow-xs">
-                  <Briefcase className="w-5 h-5" />
-                </div>
-                <span className="text-[10px] font-mono font-bold bg-purple-500/20 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded-full">
-                  ₦15,000 Post Fee
-                </span>
-              </div>
-              <h4 className="font-bold text-sm text-slate-900 dark:text-white flex items-center justify-between">
-                <span>Job Board & Hiring</span>
-                <ChevronRight className="w-4 h-4 text-purple-600 transition-transform group-hover:translate-x-1" />
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-neutral-400 mt-1 leading-relaxed">
-                Post tech & trade jobs or apply directly via AfriChat encrypted messenger.
-              </p>
-              <div className="mt-2 text-[10px] font-mono text-purple-600 dark:text-purple-400 font-bold">
-                ● {jobPostings.length} active African listings
-              </div>
-            </div>
-
-            {/* 6. Payment PIN & Security Settings */}
-            <div
-              onClick={() => setIsSecurityModalOpen(true)}
-              className="p-3.5 rounded-2xl bg-gradient-to-br from-slate-500/10 via-neutral-500/5 to-transparent border border-slate-500/30 hover:border-slate-500/60 cursor-pointer transition-all shadow-2xs group"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-neutral-800 text-white flex items-center justify-center shadow-xs">
-                  <LockKeyhole className="w-5 h-5 text-purple-400" />
-                </div>
-                <span className="text-[10px] font-mono font-bold bg-neutral-500/20 text-neutral-700 dark:text-neutral-300 px-2 py-0.5 rounded-full">
-                  4-Digit PIN
-                </span>
-              </div>
-              <h4 className="font-bold text-sm text-slate-900 dark:text-white flex items-center justify-between">
-                <span>Payment PIN & Security</span>
-                <ChevronRight className="w-4 h-4 text-neutral-400 transition-transform group-hover:translate-x-1" />
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-neutral-400 mt-1 leading-relaxed">
-                Configure wallet authorizations and security questions for instant account recovery.
-              </p>
-              <div className="mt-2 text-[10px] font-mono text-purple-600 dark:text-purple-400 font-bold">
-                {securitySettings.hasPaymentPin ? '✓ PIN Configured' : '⚠️ Setup PIN now'}
-              </div>
-            </div>
-
-            {/* 4. Synced Contacts & Address Book */}
-            <div
-              onClick={() => setIsContactsModalOpen(true)}
-              className="p-3.5 rounded-2xl bg-gradient-to-br from-sky-500/10 via-blue-500/5 to-transparent border border-sky-500/30 hover:border-sky-500/60 cursor-pointer transition-all shadow-2xs group"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-xs">
-                  <Users className="w-5 h-5" />
-                </div>
-                <span className="text-[10px] font-mono font-bold bg-sky-500/20 text-sky-700 dark:text-sky-300 px-2 py-0.5 rounded-full">
-                  E.164 Sync
-                </span>
-              </div>
-              <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center justify-between">
-                <span>Address Book Contacts</span>
-                <ChevronRight className="w-4 h-4 text-sky-600 transition-transform group-hover:translate-x-1" />
-              </h4>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-                Scan device phone book and discover who is registered on AfriChat to message instantly.
-              </p>
-              <div className="mt-2 text-[10px] font-mono text-sky-600 dark:text-sky-400 font-bold">
-                ● {deviceContacts.filter((c) => c.isRegisteredOnAfriChat).length} friends on AfriChat
               </div>
             </div>
           </div>
 
-          {/* Quick Hub Settings List */}
-          <div className="divide-y divide-slate-100 dark:divide-slate-800/80 bg-white dark:bg-[#18152e]">
+          {/* 2. Custom Chat Background Wallpaper & Device Upload (Preserved in Fyp) */}
+          <div className="px-4">
+            <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                    <ImageIcon className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                      Chat Background Wallpaper
+                    </h4>
+                    <p className="text-[11px] text-slate-500 dark:text-neutral-400">
+                      Upload from phone or pick cultural textures
+                    </p>
+                  </div>
+                </div>
+
+                {chatWallpaper && (
+                  <button
+                    type="button"
+                    onClick={() => setChatWallpaper(null)}
+                    className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-500/10 text-xs font-semibold flex items-center gap-1 transition-colors"
+                    title="Reset to default background"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span className="text-[11px]">Reset</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Upload Button */}
+              <div>
+                <label className="flex items-center justify-center gap-2 py-2.5 px-4 bg-purple-600 hover:bg-purple-700 active:scale-98 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-xs">
+                  <Upload className="w-4 h-4" />
+                  <span>Upload Image from Device</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
+                {uploadError && (
+                  <p className="text-xs text-rose-500 mt-1.5 font-medium">
+                    {uploadError}
+                  </p>
+                )}
+              </div>
+
+              {/* Preset Background Swatches */}
+              <div>
+                <div className="text-[10px] uppercase font-mono font-bold text-slate-400 mb-2">
+                  African Cultural Wallpaper Presets:
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {PRESET_WALLPAPERS.map((preset) => {
+                    const isSelected = chatWallpaper === preset.url;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => setChatWallpaper(preset.url)}
+                        className={`relative rounded-xl overflow-hidden h-20 border-2 transition-all group text-left ${
+                          isSelected
+                            ? 'border-purple-600 ring-2 ring-purple-600/30 scale-[1.02]'
+                            : 'border-slate-200 dark:border-neutral-800 hover:border-slate-400'
+                        }`}
+                      >
+                        <img
+                          src={preset.url}
+                          alt={preset.title}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent flex flex-col justify-end p-1.5">
+                          <span className="text-[10px] font-bold text-white leading-tight truncate">
+                            {preset.title}
+                          </span>
+                        </div>
+                        {isSelected && (
+                          <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-purple-600 text-white flex items-center justify-center shadow-xs">
+                            <Check className="w-3 h-3" />
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Wallpaper Active Preview */}
+              <div className="flex items-center gap-3 p-2.5 rounded-xl bg-slate-50 dark:bg-neutral-950 border border-slate-100 dark:border-neutral-800">
+                <div className="w-12 h-12 rounded-lg border border-slate-200 dark:border-neutral-800 overflow-hidden shrink-0 bg-slate-200 dark:bg-neutral-800">
+                  {chatWallpaper ? (
+                    <img
+                      src={chatWallpaper}
+                      alt="Active Wallpaper"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-400 font-mono text-center p-1 leading-tight">
+                      Standard Theme
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                    {chatWallpaper ? 'Custom Wallpaper Active' : 'Default Charcoal Mesh'}
+                  </div>
+                  <p className="text-[10px] text-slate-500 dark:text-neutral-400 truncate">
+                    {chatWallpaper
+                      ? 'Applied to active chats with full opacity compression'
+                      : 'Clean contrast pattern for low battery & data saving'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Hub App Preferences (Language, Currency, Low Data, Theme) */}
+          <div className="divide-y divide-slate-100 dark:divide-neutral-800/80 bg-white dark:bg-[#18152e] border-y border-slate-100 dark:border-neutral-800">
             {/* Phone Authentication & Change Number */}
             <button
               onClick={() => setIsAuthModalOpen(true)}
@@ -603,110 +662,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
             </div>
           </div>
 
-          {/* African Super-App Suite Section */}
-          <div className="mt-4">
-            <div className="px-4 py-2 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              African Market Features
-            </div>
-
-            <div className="bg-white dark:bg-[#18152e] divide-y divide-slate-100 dark:divide-slate-800/80">
-              {/* Street Radio */}
-              <button
-                onClick={() => {
-                  const liveSpace = audioSpaces.find((s) => s.isLive) || audioSpaces[0];
-                  if (liveSpace) joinAudioSpace(liveSpace);
-                }}
-                className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-9 h-9 rounded-xl bg-rose-500/10 text-rose-500 flex items-center justify-center shrink-0">
-                    <Radio className="w-5 h-5 animate-pulse" />
-                  </div>
-                  <div>
-                    <div className="text-sm font-semibold flex items-center gap-2">
-                      <span>Street Radio Spaces</span>
-                      <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-mono font-bold">
-                        12kbps
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      Ultra-low bandwidth live football banter & audio town halls
-                    </div>
-                  </div>
-                </div>
-                <ChevronRight className="w-4 h-4 text-slate-400" />
-              </button>
-
-              {/* Scam Database */}
-              <button
-                onClick={() => setIsScamCheckerOpen(true)}
-                className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center shrink-0">
-                    <ShieldAlert className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="text-sm font-semibold flex items-center gap-2">
-                      <span>Scam Alert & Reputation Checker</span>
-                      <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 font-mono font-bold">
-                        Verified
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      Search & crowdsource phone numbers and bank account risks
-                    </div>
-                  </div>
-                </div>
-                <ChevronRight className="w-4 h-4 text-slate-400" />
-              </button>
-
-              {/* Nollywood Meme & Sticker Studio */}
-              <button
-                onClick={() => setIsMemeStudioOpen(true)}
-                className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-9 h-9 rounded-xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center shrink-0">
-                    <Sparkles className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="text-sm font-semibold flex items-center gap-2">
-                      <span>Meme & Local Sticker Studio</span>
-                      <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 font-bold">
-                        Nollywood
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      Create stickers with viral African slangs & pop moments
-                    </div>
-                  </div>
-                </div>
-                <ChevronRight className="w-4 h-4 text-slate-400" />
-              </button>
-
-              {/* Screenshot Blocker Privacy Info */}
-              <div className="flex items-center gap-4 px-4 py-3.5">
-                <div className="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-500 flex items-center justify-center shrink-0">
-                  <EyeOff className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="text-sm font-semibold">Screenshot & Screen Record Shield</div>
-                  <div className="text-xs text-slate-500">
-                    Watermarks & blocks unauthorized captures of financial chats & receipts
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
           {/* Escrow Orders History Section */}
-          <div className="mt-4">
-            <div className="px-4 py-2 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+          <div className="px-4">
+            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
               Paystack Escrow Purchases
             </div>
 
-            <div className="bg-white dark:bg-[#18152e] divide-y divide-slate-100 dark:divide-slate-800/80">
+            <div className="bg-white dark:bg-[#18152e] rounded-2xl border border-slate-200/80 dark:border-neutral-800 divide-y divide-slate-100 dark:divide-slate-800/80 overflow-hidden shadow-xs">
               {escrowOrders.length === 0 ? (
                 <div className="p-4 text-xs text-slate-500 text-center">
                   No orders placed yet. Products bought from chat catalogs appear here with escrow release PINs.
@@ -716,7 +678,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
                   <div
                     key={order.id}
                     onClick={() => setActiveEscrowModalOrder(order)}
-                    className="px-4 py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer"
+                    className="px-4 py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors"
                   >
                     <div>
                       <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
@@ -750,13 +712,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
           </div>
 
           {/* Security & Escrow Protection Footer */}
-          <div className="mt-4 bg-white dark:bg-[#18152e] divide-y divide-slate-100 dark:divide-slate-800/80">
-            <div className="flex items-center gap-4 px-4 py-3.5">
-              <ShieldCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+          <div className="px-4">
+            <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/60 dark:border-neutral-800 flex items-center gap-3">
+              <ShieldCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0" />
               <div>
-                <div className="text-sm font-medium">AfriChat Escrow Protection</div>
-                <div className="text-xs text-slate-500">
-                  Powered exclusively by Paystack & AfriChat Vault
+                <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  AfriChat Escrow & Buyer Protection
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-neutral-400">
+                  Funds held securely in vault until 4-digit release PIN is verified upon delivery
                 </div>
               </div>
             </div>
@@ -770,3 +734,4 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenLanguageModal 
     </div>
   );
 };
+

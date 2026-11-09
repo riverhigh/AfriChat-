@@ -28,10 +28,13 @@ import {
   AlertTriangle,
   Camera,
   Users,
+  Image,
+  Sliders,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
 import { EmojiMemeDrawer } from './EmojiMemeDrawer';
+import { DisplayWallpaperModal } from './DisplayWallpaperModal';
 
 interface ActiveChatProps {
   onOpenVoiceRecorder: () => void;
@@ -49,6 +52,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     formatPrice,
     language,
     startCall,
+    chatWallpaper,
     // Super-app features
     isScreenshotBlockerActive,
     toggleScreenshotBlocker,
@@ -67,7 +71,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     checkEntityReputation,
     isEmojiMemeDrawerOpen,
     setIsEmojiMemeDrawerOpen,
+    setIsHealthModalOpen,
+    setIsLegalModalOpen,
   } = useApp();
+
+  const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
 
   const [inputText, setInputText] = useState('');
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
@@ -124,15 +132,29 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   };
 
   return (
-    <div className="flex flex-col h-screen max-h-screen bg-white dark:bg-black transition-colors relative select-none">
-      {/* Screenshot & Screen Recording Blocker Watermark Overlay */}
+    <div className="flex flex-col h-full w-full max-w-md mx-auto bg-white dark:bg-black transition-colors relative select-none overflow-hidden">
+      {/* Custom Chat Wallpaper Layer (Uploaded from device or preset) */}
+      {chatWallpaper && (
+        <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden">
+          <img
+            src={chatWallpaper}
+            alt="Chat Wallpaper"
+            className="w-full h-full object-cover opacity-20 dark:opacity-25"
+          />
+          <div className="absolute inset-0 bg-white/70 dark:bg-black/75 backdrop-blur-[0.5px]" />
+        </div>
+      )}
+
+      {/* Screenshot & Screen Recording Blocker Watermark Overlay (Clipped to prevent side drift) */}
       {isScreenshotBlockerActive && (
-        <div className="absolute inset-0 pointer-events-none z-10 opacity-[0.035] dark:opacity-[0.05] flex flex-wrap items-center justify-center gap-12 overflow-hidden rotate-[-15deg]">
-          {Array.from({ length: 24 }).map((_, i) => (
-            <div key={i} className="text-xs font-mono font-bold tracking-widest text-slate-800 dark:text-white whitespace-nowrap">
-              PROTECTED • AFRICHAT PRIVACY SHIELD • CONFIDENTIAL ESCROW
-            </div>
-          ))}
+        <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden">
+          <div className="absolute -inset-10 opacity-[0.035] dark:opacity-[0.05] flex flex-wrap items-center justify-center gap-10 rotate-[-15deg] select-none">
+            {Array.from({ length: 30 }).map((_, i) => (
+              <div key={i} className="text-xs font-mono font-bold tracking-widest text-slate-800 dark:text-white whitespace-nowrap">
+                PROTECTED • AFRICHAT PRIVACY SHIELD • CONFIDENTIAL ESCROW
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -268,6 +290,15 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             aria-label="Voice Call"
           >
             <Phone className="w-5 h-5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsDisplayModalOpen(true)}
+            className="p-2 hover:bg-white/10 rounded-full transition-colors text-purple-300 hover:text-white"
+            title="Chat Wallpaper & Text Size Adjuster"
+          >
+            <Sliders className="w-5 h-5" />
           </button>
 
           <button
@@ -860,6 +891,21 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </div>
             <span className="text-[10px] leading-tight">Escrow Deal</span>
           </button>
+
+          {/* 9. Wallpaper & Text Scale */}
+          <button
+            type="button"
+            onClick={() => {
+              setShowAttachMenu(false);
+              setIsDisplayModalOpen(true);
+            }}
+            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+          >
+            <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-1">
+              <Image className="w-4 h-4" />
+            </div>
+            <span className="text-[10px] leading-tight">Wallpaper</span>
+          </button>
         </div>
       )}
 
@@ -917,6 +963,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           </button>
         )}
       </div>
+
+      {/* Display & Chat Wallpaper Modal */}
+      <DisplayWallpaperModal
+        isOpen={isDisplayModalOpen}
+        onClose={() => setIsDisplayModalOpen(false)}
+      />
     </div>
   );
 };
