@@ -5,90 +5,193 @@ import {
   Heart,
   Clock,
   Camera,
+  Video,
   Edit3,
   CheckCircle2,
+  Upload,
+  MessageCircle,
+  Sparkles,
+  Play,
+  Film,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { UserStatus } from '../types';
 
+const THOUGHT_THEMES = [
+  { name: 'Indigo Dusk', bg: 'from-indigo-600 via-purple-600 to-pink-600' },
+  { name: 'Emerald Palm', bg: 'from-emerald-600 to-teal-800' },
+  { name: 'Sunset Lagos', bg: 'from-amber-600 via-orange-600 to-rose-700' },
+  { name: 'Royal Violet', bg: 'from-purple-700 via-indigo-800 to-slate-900' },
+  { name: 'Electric Cyan', bg: 'from-cyan-600 to-blue-800' },
+];
+
 export const StatusView: React.FC = () => {
-  const { statuses, setActiveViewingStatus, addStatus, t } = useApp();
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [newCaption, setNewCaption] = useState('');
-  const [selectedImage, setSelectedImage] = useState<string>(
-    '/src/assets/images/african_streetwear_sneakers_1794210826845.jpg'
-  );
+  const {
+    statuses,
+    setActiveViewingStatus,
+    addDeviceMediaStatus,
+    addDeviceVideoStatus,
+    addThoughtStatus,
+    currentUser,
+    t,
+  } = useApp();
+
+  const [modalMode, setModalMode] = useState<'none' | 'device_photo' | 'device_video' | 'thought'>('none');
+  const [deviceMediaPreview, setDeviceMediaPreview] = useState<string>('');
+  const [mediaCaption, setMediaCaption] = useState('');
+  const [thoughtText, setThoughtText] = useState('');
+  const [selectedTheme, setSelectedTheme] = useState(THOUGHT_THEMES[0]);
 
   const myStatus = statuses.find((s) => s.isMe);
   const otherStatuses = statuses.filter((s) => !s.isMe);
 
-  const handlePost = (e: React.FormEvent) => {
+  const handleDeviceFileUpload = (e: React.ChangeEvent<HTMLInputElement>, isVideo: boolean = false) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (typeof event.target?.result === 'string') {
+        setDeviceMediaPreview(event.target.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handlePostDevicePhoto = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCaption.trim()) return;
-    addStatus(newCaption, selectedImage);
-    setNewCaption('');
-    setShowAddModal(false);
+    if (!deviceMediaPreview) {
+      alert('Please choose a photo from your device');
+      return;
+    }
+
+    addDeviceMediaStatus(mediaCaption.trim() || 'Photo Status 📸', deviceMediaPreview, 'image');
+    setDeviceMediaPreview('');
+    setMediaCaption('');
+    setModalMode('none');
+  };
+
+  const handlePostDeviceVideo = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deviceMediaPreview) {
+      alert('Please choose a video from your device');
+      return;
+    }
+
+    addDeviceVideoStatus(mediaCaption.trim() || 'Video Status 🎥', deviceMediaPreview);
+    setDeviceMediaPreview('');
+    setMediaCaption('');
+    setModalMode('none');
+  };
+
+  const handlePostThought = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!thoughtText.trim()) {
+      alert('Please type your thought yarn');
+      return;
+    }
+
+    addThoughtStatus(thoughtText.trim(), selectedTheme.bg);
+    setThoughtText('');
+    setModalMode('none');
   };
 
   return (
-    <div className="flex flex-col pb-24 bg-white dark:bg-[#11101e] min-h-[calc(100vh-130px)]">
+    <div className="flex flex-col pb-24 bg-white dark:bg-black text-slate-900 dark:text-white min-h-[calc(100vh-130px)]">
       {/* Prominent Page Title */}
-      <div className="px-4 pt-2 pb-1">
-        <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100 font-display">
-          Updates
-        </h2>
+      <div className="px-4 pt-3 pb-2 flex items-center justify-between border-b border-slate-100 dark:border-neutral-800">
+        <div>
+          <h2 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white font-display">
+            Updates
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-neutral-400">
+            24h Status Stories: Photo, Video & Thought Bubbles
+          </p>
+        </div>
+
+        {/* Quick Creator Buttons */}
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setModalMode('thought')}
+            className="p-2 rounded-xl bg-purple-50 dark:bg-neutral-900 text-purple-600 dark:text-purple-400 hover:bg-purple-100 transition-colors"
+            title="Post a Thought Bubble"
+          >
+            <Sparkles className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setModalMode('device_video')}
+            className="p-2 rounded-xl bg-purple-50 dark:bg-neutral-900 text-purple-600 dark:text-purple-400 hover:bg-purple-100 transition-colors"
+            title="Post Video Status"
+          >
+            <Video className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setModalMode('device_photo')}
+            className="p-2 rounded-xl bg-purple-600 text-white hover:bg-purple-700 shadow-xs transition-colors"
+            title="Post Photo Status"
+          >
+            <Camera className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* My Status Section */}
-      <div className="p-3 border-b border-slate-100 dark:border-slate-800/80">
+      <div className="p-3 border-b border-slate-100 dark:border-neutral-800">
         <div
           onClick={() => {
             if (myStatus) {
               setActiveViewingStatus(myStatus);
             } else {
-              setShowAddModal(true);
+              setModalMode('device_photo');
             }
           }}
-          className="flex items-center justify-between p-2 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors"
+          className="flex items-center justify-between p-2 rounded-2xl hover:bg-slate-50 dark:hover:bg-neutral-900 cursor-pointer transition-colors"
         >
           <div className="flex items-center gap-3.5">
             <div className="relative">
-              <div className="w-14 h-14 rounded-full p-0.5 border-2 border-indigo-600 dark:border-indigo-400">
+              <div className="w-14 h-14 rounded-full p-0.5 border-2 border-purple-600">
                 <img
-                  src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"
+                  src={currentUser.avatarUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"}
                   alt="My status"
                   referrerPolicy="no-referrer"
                   className="w-full h-full rounded-full object-cover"
                 />
               </div>
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setShowAddModal(true);
+                  setModalMode('device_photo');
                 }}
-                className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center border-2 border-white dark:border-[#11101e] shadow-xs"
+                className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-purple-600 text-white flex items-center justify-center border-2 border-white dark:border-black shadow-xs"
               >
                 <Plus className="w-3.5 h-3.5" />
               </button>
             </div>
 
             <div>
-              <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">
+              <h3 className="font-semibold text-sm text-slate-900 dark:text-white">
                 {t('myStatus')}
               </h3>
               {myStatus ? (
-                <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
-                  <span className="flex items-center gap-1 text-indigo-600 dark:text-indigo-400 font-medium">
+                <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
+                  <span className="flex items-center gap-1 text-purple-600 dark:text-purple-400 font-medium">
                     <Eye className="w-3.5 h-3.5" /> {myStatus.viewsCount} views
                   </span>
                   <span>·</span>
                   <span className="flex items-center gap-1 text-rose-500 font-medium">
                     <Heart className="w-3.5 h-3.5 fill-rose-500" /> {myStatus.likesCount} likes
                   </span>
+                  {myStatus.videoUrl && (
+                    <>
+                      <span>·</span>
+                      <span className="text-[10px] font-mono text-purple-600 font-bold">VIDEO</span>
+                    </>
+                  )}
                 </div>
               ) : (
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {t('tapToAddStatus')}
+                <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
+                  Tap to add a Photo, Video or Thought Bubble
                 </p>
               )}
             </div>
@@ -103,167 +206,409 @@ export const StatusView: React.FC = () => {
         </div>
       </div>
 
-      {/* 24-Hour Expiry Explainer Strip */}
-      <div className="px-4 py-2 bg-indigo-50/60 dark:bg-indigo-950/30 text-indigo-900 dark:text-indigo-300 text-xs flex items-center justify-between border-b border-indigo-100 dark:border-indigo-900/40">
+      {/* 24-Hour Expiry Explainer Strip with 3 Action Triggers */}
+      <div className="px-4 py-2 bg-purple-50/60 dark:bg-neutral-900 text-purple-900 dark:text-purple-300 text-xs flex items-center justify-between border-b border-purple-100 dark:border-neutral-800">
         <span className="font-medium flex items-center gap-1.5">
-          <Clock className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-          <span>Status updates automatically disappear after 24 hours.</span>
+          <Clock className="w-3.5 h-3.5 text-purple-600" />
+          <span>Photos, Videos & Thoughts vanish after 24h</span>
         </span>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setModalMode('device_photo')}
+            className="text-[11px] font-bold text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-0.5"
+          >
+            <Camera className="w-3 h-3" /> Photo
+          </button>
+          <span>·</span>
+          <button
+            onClick={() => setModalMode('device_video')}
+            className="text-[11px] font-bold text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-0.5"
+          >
+            <Video className="w-3 h-3" /> Video
+          </button>
+          <span>·</span>
+          <button
+            onClick={() => setModalMode('thought')}
+            className="text-[11px] font-bold text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-0.5"
+          >
+            <Sparkles className="w-3 h-3" /> Thought
+          </button>
+        </div>
       </div>
 
-      {/* Recent Updates from African Contacts / Vendors */}
-      <div className="p-3 space-y-1">
+      {/* Statuses Feed */}
+      <div className="p-3 space-y-3">
         <div className="px-2 py-1 text-xs font-semibold text-slate-400 uppercase tracking-wider">
           {t('recentUpdates')}
         </div>
 
-        <div className="divide-y divide-slate-100 dark:divide-slate-800/60">
-          {otherStatuses.map((status: UserStatus) => (
-            <div
-              key={status.id}
-              onClick={() => setActiveViewingStatus(status)}
-              className="flex items-center justify-between px-2 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/40 rounded-xl cursor-pointer transition-colors"
-            >
-              <div className="flex items-center gap-3.5 min-w-0">
-                {/* Status Avatar Ring */}
-                <div className="w-13 h-13 rounded-full p-0.5 border-2 border-indigo-600 dark:border-indigo-400 shrink-0">
-                  <img
-                    src={status.userAvatar}
-                    alt={status.userName}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full rounded-full object-cover"
-                  />
-                </div>
+        <div className="space-y-3">
+          {otherStatuses.map((status: UserStatus) => {
+            const isThought = status.statusType === 'thought';
+            const isVideo = status.statusType === 'video' || Boolean(status.videoUrl);
 
-                <div className="min-w-0">
-                  <h4 className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">
-                    {status.userName}
-                  </h4>
-                  <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
-                    <span>{status.createdAt}</span>
-                    <span>·</span>
-                    <span className="text-amber-600 dark:text-amber-400 font-mono text-[11px]">
-                      Expires in {status.expiresInHours}h
+            if (isThought) {
+              return (
+                /* Thought Bubble Card in Feed */
+                <div
+                  key={status.id}
+                  onClick={() => setActiveViewingStatus(status)}
+                  className="p-4 rounded-3xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 cursor-pointer shadow-2xs hover:shadow-md transition-all relative overflow-hidden group"
+                >
+                  <div className="flex items-center justify-between mb-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <img
+                        src={status.userAvatar}
+                        alt={status.userName}
+                        className="w-8 h-8 rounded-full object-cover border border-slate-300 dark:border-neutral-700"
+                      />
+                      <div>
+                        <div className="text-xs font-bold text-slate-900 dark:text-white">
+                          {status.userName}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          {status.createdAt} · {status.expiresInHours}h left
+                        </div>
+                      </div>
+                    </div>
+
+                    <span className="text-[10px] uppercase font-mono font-bold tracking-wider px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" />
+                      <span>Thought</span>
                     </span>
                   </div>
-                  <p className="text-xs text-slate-600 dark:text-slate-400 truncate mt-0.5 italic">
-                    &ldquo;{status.caption}&rdquo;
-                  </p>
-                </div>
-              </div>
 
-              {/* Likes count */}
-              <div className="flex items-center gap-1 text-xs text-slate-400 font-mono shrink-0 pl-2">
-                <Heart
-                  className={`w-4 h-4 ${
-                    status.hasLikedByMe ? 'text-rose-500 fill-rose-500' : 'text-slate-400'
-                  }`}
-                />
-                <span>{status.likesCount}</span>
+                  {/* Visual Thought Bubble */}
+                  <div
+                    className={`p-4 rounded-2xl bg-gradient-to-br ${
+                      status.thoughtBg || 'from-indigo-600 via-purple-600 to-pink-600'
+                    } text-white shadow-sm relative`}
+                  >
+                    <p className="text-sm font-semibold leading-relaxed">
+                      &ldquo;{status.caption}&rdquo;
+                    </p>
+
+                    {/* Small Thought Bubble Tail Dots */}
+                    <div className="flex items-center gap-1 mt-2.5">
+                      <div className="w-2.5 h-2.5 rounded-full bg-white/70" />
+                      <div className="w-1.5 h-1.5 rounded-full bg-white/50" />
+                    </div>
+                  </div>
+
+                  {/* Likes counter */}
+                  <div className="flex items-center justify-between mt-2 pt-1 text-xs text-slate-400 font-mono">
+                    <span className="text-[11px] text-slate-400">Tap to open full story</span>
+                    <span className="flex items-center gap-1">
+                      <Heart
+                        className={`w-3.5 h-3.5 ${
+                          status.hasLikedByMe ? 'text-rose-500 fill-rose-500' : 'text-slate-400'
+                        }`}
+                      />
+                      <span>{status.likesCount}</span>
+                    </span>
+                  </div>
+                </div>
+              );
+            }
+
+            /* Video or Photo Media Status */
+            return (
+              <div
+                key={status.id}
+                onClick={() => setActiveViewingStatus(status)}
+                className="flex items-center justify-between p-3 bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100/70 dark:hover:bg-neutral-800/60 rounded-2xl cursor-pointer transition-colors border border-slate-200/60 dark:border-neutral-800"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="relative">
+                    <div className="w-13 h-13 rounded-full p-0.5 border-2 border-purple-600 shrink-0">
+                      <img
+                        src={status.userAvatar}
+                        alt={status.userName}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full rounded-full object-cover"
+                      />
+                    </div>
+                    {isVideo && (
+                      <span className="absolute bottom-0 right-0 w-4 h-4 rounded-full bg-purple-600 text-white flex items-center justify-center ring-2 ring-white dark:ring-black">
+                        <Play className="w-2 h-2 fill-current ml-0.5" />
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <h4 className="font-semibold text-sm text-slate-900 dark:text-white truncate">
+                        {status.userName}
+                      </h4>
+                      {isVideo && (
+                        <span className="text-[9px] font-mono font-bold bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 px-1.5 py-0.2 rounded">
+                          VIDEO
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-neutral-400 truncate mt-0.5">
+                      {status.caption}
+                    </p>
+                    <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono mt-0.5">
+                      <span>{status.createdAt}</span>
+                      <span>·</span>
+                      <span>{status.expiresInHours}h left</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Media thumbnail */}
+                {status.mediaUrl && (
+                  <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-slate-200 dark:bg-neutral-800 shrink-0 ml-2">
+                    <img
+                      src={status.mediaUrl}
+                      alt="Thumbnail"
+                      className="w-full h-full object-cover"
+                    />
+                    {isVideo && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center text-white">
+                        <Play className="w-4 h-4 fill-current" />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
-      {/* Floating Buttons: Add Status / Text Status */}
-      <div className="fixed bottom-20 right-5 flex flex-col gap-2.5 z-20">
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="w-11 h-11 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 flex items-center justify-center shadow-md hover:bg-slate-300 transition-transform active:scale-95"
-          aria-label="Add text status"
-          title="Add Text Story"
-        >
-          <Edit3 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-        </button>
-
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="w-14 h-14 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shadow-lg transition-transform active:scale-95"
-          aria-label="Add photo status"
-          title="Add Photo Story"
-        >
-          <Camera className="w-6 h-6" />
-        </button>
-      </div>
-
-      {/* Add Status Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-2xs flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white dark:bg-[#1a172e] rounded-2xl p-5 shadow-2xl space-y-4 border border-slate-200 dark:border-slate-800">
+      {/* MODAL 1: PHOTO STATUS (DEVICE UPLOAD) */}
+      {modalMode === 'device_photo' && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-2xl space-y-4 border border-slate-200 dark:border-neutral-800">
             <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">
-                New 24-Hour Status Update
-              </h3>
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <Camera className="w-4 h-4 text-purple-600" />
+                  <span>Upload Photo Status</span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Select a photo from your camera or device gallery
+                </p>
+              </div>
               <button
-                onClick={() => setShowAddModal(false)}
+                type="button"
+                onClick={() => setModalMode('none')}
                 className="text-xs text-slate-400 hover:text-slate-600"
               >
                 Cancel
               </button>
             </div>
 
-            <form onSubmit={handlePost} className="space-y-3">
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">
-                  Choose Photo Attachment
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { label: 'Ankara Textiles', url: '/src/assets/images/african_textiles_wax_1794210824926.jpg' },
-                    { label: 'Urban Sneakers', url: '/src/assets/images/african_streetwear_sneakers_1794210826845.jpg' },
-                    { label: 'Raw Shea Butter', url: '/src/assets/images/african_shea_butter_skincare_1794210826948.jpg' },
-                    { label: 'Alaba Gadgets', url: '/src/assets/images/lagos_tech_smartphones_1794210826603.jpg' },
-                  ].map((img) => (
-                    <div
-                      key={img.url}
-                      onClick={() => setSelectedImage(img.url)}
-                      className={`relative rounded-xl overflow-hidden cursor-pointer h-20 border-2 transition-all ${
-                        selectedImage === img.url
-                          ? 'border-indigo-600 scale-[1.02]'
-                          : 'border-transparent opacity-70 hover:opacity-100'
-                      }`}
-                    >
-                      <img
-                        src={img.url}
-                        alt={img.label}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
-                      />
-                      {selectedImage === img.url && (
-                        <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">
-                  Caption or Status Yarn
-                </label>
-                <textarea
-                  rows={2}
-                  value={newCaption}
-                  onChange={(e) => setNewCaption(e.target.value)}
-                  placeholder="What's happening in your market or campus today?"
-                  required
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            <form onSubmit={handlePostDevicePhoto} className="space-y-3.5">
+              <label className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-300 dark:border-neutral-700 rounded-2xl cursor-pointer hover:border-purple-600 transition-colors">
+                {deviceMediaPreview ? (
+                  <img
+                    src={deviceMediaPreview}
+                    alt="Preview"
+                    className="max-h-48 rounded-xl object-contain shadow-xs"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center text-center">
+                    <Upload className="w-8 h-8 text-purple-600 mb-2" />
+                    <span className="text-xs font-semibold text-slate-700 dark:text-neutral-200">
+                      Tap to Choose Photo
+                    </span>
+                    <span className="text-[10px] text-slate-400 mt-0.5">
+                      JPG, PNG, WEBP (Camera or Gallery)
+                    </span>
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleDeviceFileUpload(e, false)}
+                  className="hidden"
                 />
-              </div>
+              </label>
 
-              <div className="text-[11px] text-slate-400 flex items-center gap-1 font-mono">
-                <Clock className="w-3.5 h-3.5 text-amber-500" />
-                <span>Will automatically expire in 24 hours.</span>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-neutral-300 mb-1">
+                  Photo Caption
+                </label>
+                <input
+                  type="text"
+                  value={mediaCaption}
+                  onChange={(e) => setMediaCaption(e.target.value)}
+                  placeholder="e.g. Balogun market fresh bale unpacking! 📸"
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
+                />
               </div>
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md transition-colors"
+                disabled={!deviceMediaPreview}
+                className="w-full py-2.5 bg-purple-600 disabled:opacity-50 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md transition-colors"
               >
-                Post Status Update
+                Publish Photo Status
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: VIDEO STATUS (DEVICE VIDEO UPLOAD) */}
+      {modalMode === 'device_video' && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-2xl space-y-4 border border-slate-200 dark:border-neutral-800">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <Film className="w-4 h-4 text-purple-600" />
+                  <span>Upload Video Status</span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Select a video clip from camera or storage
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalMode('none')}
+                className="text-xs text-slate-400 hover:text-slate-600"
+              >
+                Cancel
+              </button>
+            </div>
+
+            <form onSubmit={handlePostDeviceVideo} className="space-y-3.5">
+              <label className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-slate-300 dark:border-neutral-700 rounded-2xl cursor-pointer hover:border-purple-600 transition-colors">
+                {deviceMediaPreview ? (
+                  <video
+                    src={deviceMediaPreview}
+                    controls
+                    autoPlay
+                    loop
+                    className="max-h-48 rounded-xl object-contain shadow-xs"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center text-center py-4">
+                    <Video className="w-8 h-8 text-purple-600 mb-2" />
+                    <span className="text-xs font-semibold text-slate-700 dark:text-neutral-200">
+                      Tap to Choose Video Clip
+                    </span>
+                    <span className="text-[10px] text-slate-400 mt-0.5">
+                      MP4, MOV, WEBM (Short video reels)
+                    </span>
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="video/*"
+                  onChange={(e) => handleDeviceFileUpload(e, true)}
+                  className="hidden"
+                />
+              </label>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-neutral-300 mb-1">
+                  Video Caption
+                </label>
+                <input
+                  type="text"
+                  value={mediaCaption}
+                  onChange={(e) => setMediaCaption(e.target.value)}
+                  placeholder="e.g. Live at the mechanic workshop! Engine sounding brand new 🎥"
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={!deviceMediaPreview}
+                className="w-full py-2.5 bg-purple-600 disabled:opacity-50 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md transition-colors"
+              >
+                Publish Video Status
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: SHARE A THOUGHT (THOUGHT BUBBLE) */}
+      {modalMode === 'thought' && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-2xl space-y-4 border border-slate-200 dark:border-neutral-800">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-amber-500" />
+                  <span>Post a Thought Bubble</span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Displays as an authentic cloud thought bubble in updates
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalMode('none')}
+                className="text-xs text-slate-400 hover:text-slate-600"
+              >
+                Cancel
+              </button>
+            </div>
+
+            <form onSubmit={handlePostThought} className="space-y-3.5">
+              {/* Live Preview Thought Bubble */}
+              <div
+                className={`p-5 rounded-3xl bg-gradient-to-br ${selectedTheme.bg} text-white shadow-lg text-center space-y-2`}
+              >
+                <div className="text-[9px] uppercase tracking-widest font-mono text-white/70">
+                  💭 Bubble Preview
+                </div>
+                <p className="text-base font-bold min-h-[48px] flex items-center justify-center leading-snug">
+                  {thoughtText.trim() ? `"${thoughtText}"` : 'Type your thoughts below...'}
+                </p>
+              </div>
+
+              {/* Theme Selector */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-neutral-300 mb-1.5">
+                  Choose Bubble Gradient
+                </label>
+                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                  {THOUGHT_THEMES.map((theme) => (
+                    <button
+                      key={theme.name}
+                      type="button"
+                      onClick={() => setSelectedTheme(theme)}
+                      className={`h-7 px-2.5 rounded-full text-[10px] font-bold text-white bg-gradient-to-r ${theme.bg} shrink-0 border-2 transition-transform ${
+                        selectedTheme.name === theme.name ? 'border-white scale-105 shadow-xs' : 'border-transparent opacity-75'
+                      }`}
+                    >
+                      {theme.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Thought Textarea */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-neutral-300 mb-1">
+                  Your Thought
+                </label>
+                <textarea
+                  rows={3}
+                  value={thoughtText}
+                  onChange={(e) => setThoughtText(e.target.value)}
+                  placeholder="e.g. Lagos traffic today is something else 😩🚗 or Market restocked!"
+                  required
+                  autoFocus
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md transition-colors"
+              >
+                Publish Thought Bubble
               </button>
             </form>
           </div>

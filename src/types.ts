@@ -45,7 +45,7 @@ export interface EscrowOrder {
 
 export interface WalletTransaction {
   id: string;
-  type: 'topup' | 'escrow_lock' | 'escrow_release' | 'withdrawal';
+  type: 'topup' | 'escrow_lock' | 'escrow_release' | 'withdrawal' | 'transfer_delayed' | 'payroll_debit' | 'transfer_in';
   title: string;
   amount: number;
   currency: CurrencyCode;
@@ -273,7 +273,10 @@ export interface UserStatus {
   userName: string;
   userAvatar: string;
   isMe?: boolean;
+  statusType?: 'image' | 'video' | 'thought' | 'media';
+  thoughtBg?: string;
   mediaUrl?: string;
+  videoUrl?: string;
   caption: string;
   createdAt: string;
   expiresInHours: number;
@@ -286,9 +289,11 @@ export interface UserStatus {
 export interface UserProfile {
   id: string;
   phoneNumber: string;
+  countryCode?: string;
   fullName: string;
   avatarUrl: string;
   about: string;
+  isPhoneVerified?: boolean;
   createdAt: string;
   lastSeen: string;
 }
@@ -301,6 +306,7 @@ export interface DeviceContact {
   avatar?: string;
   about?: string;
   isRegisteredOnAfriChat: boolean;
+  isRegistered?: boolean;
   registeredUser?: UserProfile;
 }
 
@@ -312,4 +318,302 @@ export interface UserUploadedMeme {
   createdAt: string;
   tag?: string;
 }
+
+export type DispatchProvider = 'gokada' | 'pickkr';
+
+export interface DispatchDeliveryOrder {
+  id: string;
+  trackingCode: string;
+  provider: DispatchProvider;
+  senderAddress: string;
+  senderPhone: string;
+  recipientName: string;
+  recipientPhone: string;
+  recipientAddress: string;
+  packageDescription: string;
+  vehicleType: 'bike' | 'keke' | 'van';
+  estimatedFee: number;
+  currency: CurrencyCode;
+  status: 'finding_rider' | 'rider_assigned' | 'in_transit' | 'delivered';
+  riderName?: string;
+  riderPhone?: string;
+  riderPlate?: string;
+  createdAt: string;
+}
+
+export interface JobPosting {
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  type: 'Full-time' | 'Remote' | 'Contract' | 'Part-time';
+  salaryRange: string;
+  currency: CurrencyCode;
+  description: string;
+  requirements: string[];
+  contactPhone: string;
+  employerId: string;
+  isFeatured: boolean;
+  isPaid: boolean;
+  postedAt: string;
+}
+
+export interface SecuritySettings {
+  hasPaymentPin: boolean;
+  isPaymentPinSet?: boolean;
+  paymentPin?: string;
+  securityQuestion?: string;
+  securityAnswer?: string;
+}
+
+// 14. Service Booking & Appointment System Types (No limits African jobs)
+export type ServiceCategory =
+  | 'mechanic'
+  | 'barber'
+  | 'nail_tech'
+  | 'bouncer'
+  | 'event_planner'
+  | 'tailor'
+  | 'makeup'
+  | 'generator_tech'
+  | 'dj'
+  | 'caterer'
+  | 'plumber'
+  | 'electrician'
+  | 'cleaner'
+  | 'tutor'
+  | 'other';
+
+export interface ServiceOffering {
+  id: string;
+  title: string;
+  price: number;
+  durationMinutes: number;
+  description?: string;
+}
+
+export interface ServiceProvider {
+  id: string;
+  name: string;
+  businessName: string;
+  avatar: string;
+  category: ServiceCategory;
+  categoryLabel: string;
+  rating: number;
+  reviewCount: number;
+  hourlyRate: number;
+  currency: CurrencyCode;
+  location: string;
+  about: string;
+  experienceYears: number;
+  availability: {
+    days: string[];
+    timeSlots: string[];
+  };
+  servicesOffered: ServiceOffering[];
+  portfolioImages: string[];
+  phone: string;
+  isVerified: boolean;
+  badge?: string;
+}
+
+export interface ServiceBooking {
+  id: string;
+  serviceProviderId: string;
+  providerName: string;
+  providerAvatar: string;
+  clientName: string;
+  clientPhone: string;
+  serviceTitle: string;
+  category: ServiceCategory;
+  date: string;
+  timeSlot: string;
+  location: string;
+  totalPrice: number;
+  currency: CurrencyCode;
+  notes?: string;
+  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
+  paymentMode: 'escrow' | 'direct';
+  isPaid: boolean;
+  createdAt: string;
+  bookingPin: string;
+}
+
+// 15. Money Transfer with 1-2 Days Delay (Anti-Fraud & Escrow Delay)
+export interface DelayedTransfer {
+  id: string;
+  senderId: string;
+  senderName: string;
+  recipientPhone: string;
+  recipientName: string;
+  amount: number;
+  currency: CurrencyCode;
+  note: string;
+  delayHours: number; // 24 or 48 hours
+  scheduledReleaseTime: string;
+  releaseTimestampMs: number;
+  status: 'pending_clearance' | 'cleared' | 'cancelled_by_sender';
+  createdAt: string;
+  securityReason: string;
+}
+
+// 16. Payroll & Recurring Auto-Debit System
+export interface PayrollEmployee {
+  id: string;
+  fullName: string;
+  role: string;
+  phone: string;
+  salary: number;
+  currency: CurrencyCode;
+  frequency: 'weekly' | 'bi_weekly' | 'monthly';
+  nextPaymentDate: string;
+  status: 'active' | 'paused';
+  bankOrWallet: string;
+  accountNumber: string;
+  lastPaidDate?: string;
+}
+
+export interface PayrollRunLog {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  role: string;
+  amount: number;
+  currency: CurrencyCode;
+  date: string;
+  status: 'successful' | 'failed';
+  reference: string;
+}
+
+// 17. Visual Display & Customization
+export type AppFontSize = 'small' | 'normal' | 'large' | 'huge';
+
+// 18. Town Community Hub (Groups, Channels, Spaces, Privacy)
+export interface TownCommunity {
+  id: string;
+  name: string;
+  type: 'group' | 'channel';
+  category: 'Tech & Hustle' | 'Market & Trade' | 'Campus & Youth' | 'Lifestyle & Faith' | 'Music & Creative';
+  membersCount: number;
+  avatar: string;
+  description: string;
+  isVerified: boolean;
+  isJoined: boolean;
+  recentActivity: string;
+  adminName: string;
+}
+
+// 19. Healthcare & Telehealth System
+export type DoctorSpecialty = 
+  | 'General Practitioner'
+  | 'Consultant Pediatrician'
+  | 'Obstetrics & Gynaecology'
+  | 'Cardiologist'
+  | 'Clinical Pharmacist'
+  | 'Mental Wellness';
+
+export interface DoctorProfile {
+  id: string;
+  name: string;
+  title: string;
+  specialty: DoctorSpecialty;
+  hospitalAffiliation: string;
+  avatar: string;
+  rating: number;
+  reviewCount: number;
+  consultationFee: number;
+  currency: CurrencyCode;
+  isAvailable: boolean;
+  languages: string[];
+  bio: string;
+}
+
+export interface HospitalQueueToken {
+  id: string;
+  hospitalName: string;
+  department: string;
+  tokenNumber: string;
+  currentlyServing: string;
+  positionInLine: number;
+  estimatedWaitMins: number;
+  bookedTime: string;
+  status: 'waiting' | 'in_consultation' | 'completed' | 'cancelled';
+  location: string;
+}
+
+export interface MedicationReminder {
+  id: string;
+  medicationName: string;
+  dosage: string;
+  frequency: string;
+  scheduledTimes: string[];
+  remainingDays: number;
+  pharmacyPartner: string;
+  canReorder: boolean;
+  notes?: string;
+}
+
+export interface HealthVaultRecord {
+  bloodGroup: 'O+' | 'O-' | 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-';
+  genotype: 'AA' | 'AS' | 'SS' | 'AC';
+  allergies: string[];
+  chronicConditions: string[];
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+  emergencyNotes: string;
+  qrCodeId: string;
+  lastUpdated: string;
+}
+
+// 20. Legal Services & Smart Contract Generator
+export type LawyerSpecialty = 
+  | 'CAC Business & Corporate'
+  | 'Human Rights & Police SOS'
+  | 'Tenancy & Property Disputes'
+  | 'Debt Recovery & Contracts'
+  | 'Intellectual Property & Media';
+
+export interface LawyerProfile {
+  id: string;
+  name: string;
+  title: string;
+  firm: string;
+  specialty: LawyerSpecialty;
+  avatar: string;
+  barNumber: string;
+  yearsExperience: number;
+  consultationFee: number;
+  currency: CurrencyCode;
+  isAvailable: boolean;
+  location: string;
+  verifiedLicense: boolean;
+  bio: string;
+}
+
+export interface LegalContractTemplate {
+  id: string;
+  title: string;
+  category: 'Freelance & Services' | 'Tenancy & Rent' | 'Sales & Escrow Supply' | 'Non-Disclosure (NDA)';
+  description: string;
+  applicableLaw: string;
+  badge: string;
+}
+
+export interface GeneratedLegalContract {
+  id: string;
+  templateTitle: string;
+  partyAName: string;
+  partyBName: string;
+  amountOrValue: string;
+  durationOrDate: string;
+  governingLaw: string;
+  specificTerms: string;
+  createdAt: string;
+  status: 'draft' | 'signed_binding' | 'disputed';
+  signatureA: string;
+  signatureB?: string;
+  escrowOrderId?: string;
+}
+
+
 

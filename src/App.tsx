@@ -23,6 +23,14 @@ import { InvoiceGeneratorModal } from './components/InvoiceGeneratorModal';
 import { InvoiceViewerModal } from './components/InvoiceViewerModal';
 import { FinancialPollModal } from './components/FinancialPollModal';
 import { AjoLedgerModal } from './components/AjoLedgerModal';
+import { AuthModal } from './components/AuthModal';
+import { ContactsModal } from './components/ContactsModal';
+import { DispatchModal } from './components/DispatchModal';
+import { JobBoardModal } from './components/JobBoardModal';
+import { SecurityModal } from './components/SecurityModal';
+import { ServicesBookingModal } from './components/ServicesBookingModal';
+import { DelayedTransferModal } from './components/DelayedTransferModal';
+import { PayrollModal } from './components/PayrollModal';
 
 const AppContent: React.FC = () => {
   const { activeChatId, activeTab } = useApp();
@@ -30,8 +38,8 @@ const AppContent: React.FC = () => {
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-[#0c0b16] flex justify-center text-slate-900 dark:text-slate-100 font-sans">
-      <div className="w-full max-w-md bg-white dark:bg-[#11101e] min-h-screen shadow-xl flex flex-col relative">
+    <div className="min-h-screen bg-white dark:bg-black flex justify-center text-slate-900 dark:text-white font-sans transition-colors">
+      <div className="w-full max-w-md bg-white dark:bg-black min-h-screen shadow-xl flex flex-col relative border-x border-slate-200/50 dark:border-neutral-800">
         {/* Floating Street Radio bar when active in background */}
         <AudioSpaceBar />
 
@@ -78,6 +86,18 @@ const AppContent: React.FC = () => {
         <InvoiceViewerModal />
         <FinancialPollModal />
         <AjoLedgerModal />
+
+        {/* WhatsApp-Style Phone Auth, Contacts Discovery & Super-App Extensions */}
+        <AuthModal />
+        <ContactsModal />
+        <DispatchModal />
+        <JobBoardModal />
+        <SecurityModal />
+
+        {/* Services Booking, 1-2 Days Delayed Transfers & Payroll Auto-Debit */}
+        <ServicesBookingModal />
+        <DelayedTransferModal />
+        <PayrollModal />
       </div>
     </div>
   );

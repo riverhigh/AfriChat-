@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
+import { EmojiMemeDrawer } from './EmojiMemeDrawer';
 
 interface ActiveChatProps {
   onOpenVoiceRecorder: () => void;
@@ -64,6 +65,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     audioSpaces,
     setIsScamCheckerModalOpen,
     checkEntityReputation,
+    isEmojiMemeDrawerOpen,
+    setIsEmojiMemeDrawerOpen,
   } = useApp();
 
   const [inputText, setInputText] = useState('');
@@ -121,7 +124,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   };
 
   return (
-    <div className="flex flex-col h-screen max-h-screen bg-[#f1f3f9] dark:bg-[#0c0b16] transition-colors relative select-none">
+    <div className="flex flex-col h-screen max-h-screen bg-white dark:bg-black transition-colors relative select-none">
       {/* Screenshot & Screen Recording Blocker Watermark Overlay */}
       {isScreenshotBlockerActive && (
         <div className="absolute inset-0 pointer-events-none z-10 opacity-[0.035] dark:opacity-[0.05] flex flex-wrap items-center justify-center gap-12 overflow-hidden rotate-[-15deg]">
@@ -144,7 +147,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       )}
 
       {/* Top Header */}
-      <div className="flex items-center justify-between px-2 py-2 bg-[#1e1b4b] dark:bg-[#131124] text-white shrink-0 z-20 shadow-xs border-b border-indigo-950">
+      <div className="flex items-center justify-between px-2 py-2 bg-purple-950 dark:bg-black text-white shrink-0 z-20 shadow-xs border-b border-purple-900/60 dark:border-neutral-900">
         <div className="flex items-center gap-1.5 min-w-0">
           <button
             onClick={() => setActiveChatId(null)}
@@ -860,12 +863,21 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         </div>
       )}
 
+      {/* Emojis, Memes & Custom GIFs Drawer */}
+      <EmojiMemeDrawer />
+
       {/* Input Bar */}
       <div className="px-2 py-2 bg-transparent shrink-0 flex items-center gap-1.5 z-20">
-        <div className="flex-1 flex items-center bg-white dark:bg-[#1a172e] rounded-full px-3 py-1.5 shadow-2xs border border-slate-200/60 dark:border-slate-800">
+        <div className="flex-1 flex items-center bg-slate-100 dark:bg-neutral-900 rounded-full px-3 py-1.5 shadow-2xs border border-slate-200/60 dark:border-neutral-800">
           <button
-            onClick={() => alert('Emoji picker')}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
+            type="button"
+            onClick={() => setIsEmojiMemeDrawerOpen(!isEmojiMemeDrawerOpen)}
+            className={`p-1 transition-colors ${
+              isEmojiMemeDrawerOpen
+                ? 'text-purple-600 dark:text-purple-400'
+                : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+            }`}
+            title="African Emojis, Memes & Stickers"
           >
             <Smile className="w-5 h-5" />
           </button>
@@ -890,7 +902,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         {inputText.trim() ? (
           <button
             onClick={handleSend}
-            className="w-11 h-11 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shadow-md transition-colors shrink-0"
+            className="w-11 h-11 rounded-full bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center shadow-md shadow-purple-600/30 transition-colors shrink-0"
             aria-label="Send"
           >
             <Send className="w-5 h-5 ml-0.5" />
@@ -898,7 +910,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         ) : (
           <button
             onClick={onOpenVoiceRecorder}
-            className="w-11 h-11 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shadow-md transition-colors shrink-0"
+            className="w-11 h-11 rounded-full bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center shadow-md shadow-purple-600/30 transition-colors shrink-0"
             aria-label="Record voice note"
           >
             <Mic className="w-5 h-5" />

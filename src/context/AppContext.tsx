@@ -19,6 +19,23 @@ import {
   UserProfile,
   DeviceContact,
   UserUploadedMeme,
+  DispatchDeliveryOrder,
+  JobPosting,
+  SecuritySettings,
+  ServiceProvider,
+  ServiceBooking,
+  DelayedTransfer,
+  PayrollEmployee,
+  PayrollRunLog,
+  AppFontSize,
+  TownCommunity,
+  DoctorProfile,
+  HospitalQueueToken,
+  MedicationReminder,
+  HealthVaultRecord,
+  LawyerProfile,
+  LegalContractTemplate,
+  GeneratedLegalContract,
 } from '../types';
 import {
   LOCALIZED_STRINGS,
@@ -34,6 +51,21 @@ import {
   INITIAL_CURRENT_USER,
   MOCK_DEVICE_CONTACTS,
   INITIAL_USER_MEMES,
+  MOCK_DISPATCH_ORDERS,
+  MOCK_JOB_POSTINGS,
+  MOCK_SERVICE_PROVIDERS,
+  MOCK_SERVICE_BOOKINGS,
+  MOCK_DELAYED_TRANSFERS,
+  MOCK_PAYROLL_EMPLOYEES,
+  MOCK_PAYROLL_LOGS,
+  MOCK_TOWN_COMMUNITIES,
+  MOCK_DOCTORS,
+  MOCK_QUEUE_TOKENS,
+  MOCK_MEDICATION_REMINDERS,
+  MOCK_HEALTH_VAULT,
+  MOCK_LAWYERS,
+  MOCK_CONTRACT_TEMPLATES,
+  MOCK_GENERATED_CONTRACTS,
 } from '../data/mockData';
 
 interface ActiveCallState {
@@ -56,8 +88,16 @@ interface AppContextType {
   lowDataMode: boolean;
   setLowDataMode: (val: boolean) => void;
   toggleLowDataMode: () => void;
-  activeTab: 'status' | 'calls' | 'market' | 'chats' | 'settings';
-  setActiveTab: (tab: 'status' | 'calls' | 'market' | 'chats' | 'settings') => void;
+  activeTab: 'status' | 'calls' | 'town' | 'chats' | 'settings' | 'market';
+  setActiveTab: (tab: 'status' | 'calls' | 'town' | 'chats' | 'settings' | 'market') => void;
+  // Display & Appearance
+  fontSize: AppFontSize;
+  setFontSize: (size: AppFontSize) => void;
+  chatWallpaper: string | null;
+  setChatWallpaper: (wallpaper: string | null) => void;
+  // QR Scan Modal
+  isScanQrModalOpen: boolean;
+  setIsScanQrModalOpen: (val: boolean) => void;
   activeChatId: string | null;
   setActiveChatId: (id: string | null) => void;
   chats: ChatThread[];
@@ -68,6 +108,9 @@ interface AppContextType {
   setActiveViewingStatus: (status: UserStatus | null) => void;
   likeStatus: (statusId: string) => void;
   addStatus: (caption: string, mediaUrl?: string) => void;
+  addThoughtStatus: (thoughtText: string, themeBg: string) => void;
+  addDeviceMediaStatus: (caption: string, mediaUrl: string, mediaType?: 'image' | 'video') => void;
+  addDeviceVideoStatus: (caption: string, videoUrl: string, thumbnail?: string) => void;
   wallet: UserWallet;
   isWalletModalOpen: boolean;
   setIsWalletModalOpen: (val: boolean) => void;
@@ -78,6 +121,8 @@ interface AppContextType {
     accountNumber: string,
     accountName: string
   ) => { success: boolean; message: string };
+  hideBalanceOnNav: boolean;
+  toggleHideBalance: () => void;
   activeCheckoutProduct: Product | null;
   openCheckout: (prod: Product) => void;
   closeCheckout: () => void;
@@ -172,6 +217,7 @@ interface AppContextType {
   setIsContactsModalOpen: (val: boolean) => void;
   syncDeviceContacts: () => void;
   startChatWithContact: (contact: DeviceContact) => void;
+  addNewDeviceContact: (name: string, phone: string, about?: string) => void;
   // 10. User Uploaded Memes & GIFs + In-Chat Drawer
   userMemes: UserUploadedMeme[];
   addUserMeme: (meme: Omit<UserUploadedMeme, 'id' | 'createdAt'>) => void;
@@ -179,6 +225,92 @@ interface AppContextType {
   sendMemeFromDrawer: (chatId: string, meme: UserUploadedMeme) => void;
   isEmojiMemeDrawerOpen: boolean;
   setIsEmojiMemeDrawerOpen: (val: boolean) => void;
+  // 11. Gokada / PickkR Dispatch Integration
+  dispatchOrders: DispatchDeliveryOrder[];
+  isDispatchModalOpen: boolean;
+  setIsDispatchModalOpen: (val: boolean) => void;
+  createDispatchOrder: (
+    order: Omit<DispatchDeliveryOrder, 'id' | 'trackingCode' | 'createdAt' | 'status'>
+  ) => DispatchDeliveryOrder;
+  // 12. Job Board with Employer Pay-to-Post
+  jobPostings: JobPosting[];
+  isJobBoardModalOpen: boolean;
+  setIsJobBoardModalOpen: (val: boolean) => void;
+  isPostJobModalOpen: boolean;
+  setIsPostJobModalOpen: (val: boolean) => void;
+  postNewJob: (
+    job: Omit<JobPosting, 'id' | 'postedAt' | 'isPaid'>
+  ) => { success: boolean; job?: JobPosting; message?: string };
+  // 13. Security Settings (Payment PIN & Security Questions)
+  securitySettings: SecuritySettings;
+  setPaymentPin: (pin: string) => void;
+  setSecurityQuestion: (question: string, answer: string) => void;
+  verifyPaymentPin: (pin: string) => boolean;
+  isSecurityModalOpen: boolean;
+  setIsSecurityModalOpen: (val: boolean) => void;
+  // 14. African Services & Appointment Booking (No Limit)
+  serviceProviders: ServiceProvider[];
+  serviceBookings: ServiceBooking[];
+  isServicesModalOpen: boolean;
+  setIsServicesModalOpen: (val: boolean) => void;
+  selectedServiceProvider: ServiceProvider | null;
+  setSelectedServiceProvider: (p: ServiceProvider | null) => void;
+  createServiceBooking: (
+    booking: Omit<ServiceBooking, 'id' | 'createdAt' | 'bookingPin'>
+  ) => { success: boolean; booking: ServiceBooking };
+  cancelServiceBooking: (bookingId: string) => void;
+  completeServiceBooking: (bookingId: string) => void;
+  registerAsServiceProvider: (
+    provider: Omit<ServiceProvider, 'id' | 'rating' | 'reviewCount' | 'isVerified'>
+  ) => void;
+  // 15. Money Transfer with 1-2 Days Security Delay
+  delayedTransfers: DelayedTransfer[];
+  isTransferModalOpen: boolean;
+  setIsTransferModalOpen: (val: boolean) => void;
+  sendDelayedTransfer: (
+    recipientPhone: string,
+    recipientName: string,
+    amount: number,
+    note: string,
+    delayHours?: number
+  ) => { success: boolean; transfer?: DelayedTransfer; message?: string };
+  cancelDelayedTransfer: (transferId: string) => { success: boolean; message: string };
+  fastForwardTransferRelease: (transferId: string) => { success: boolean; message: string };
+  // 16. Payroll & Recurring Auto-Debit
+  payrollEmployees: PayrollEmployee[];
+  payrollLogs: PayrollRunLog[];
+  isPayrollModalOpen: boolean;
+  setIsPayrollModalOpen: (val: boolean) => void;
+  addPayrollEmployee: (emp: Omit<PayrollEmployee, 'id' | 'status'>) => void;
+  toggleEmployeePayrollStatus: (id: string) => void;
+  deletePayrollEmployee: (id: string) => void;
+  runPayrollNow: (employeeId?: string) => { success: boolean; totalDebited: number; message: string };
+  // 17. Town Communities & Anonymous Privacy
+  townCommunities: TownCommunity[];
+  hidePhoneNumberInTown: boolean;
+  toggleHidePhoneNumberInTown: () => void;
+  toggleJoinTownCommunity: (id: string) => void;
+  // 18. Healthcare & Hospital Telehealth
+  doctors: DoctorProfile[];
+  queueTokens: HospitalQueueToken[];
+  medicationReminders: MedicationReminder[];
+  healthVault: HealthVaultRecord;
+  isHealthModalOpen: boolean;
+  setIsHealthModalOpen: (val: boolean) => void;
+  bookDoctorAppointment: (doctorId: string, notes: string) => { success: boolean; message: string };
+  takeQueueToken: (hospitalName: string, department: string) => { success: boolean; token: HospitalQueueToken };
+  addMedicationReminder: (reminder: Omit<MedicationReminder, 'id'>) => void;
+  updateHealthVault: (record: Partial<HealthVaultRecord>) => void;
+  triggerEmergencySos: () => { success: boolean; message: string };
+  // 19. Legal Services & Smart Contract Generator
+  lawyers: LawyerProfile[];
+  contractTemplates: LegalContractTemplate[];
+  generatedContracts: GeneratedLegalContract[];
+  isLegalModalOpen: boolean;
+  setIsLegalModalOpen: (val: boolean) => void;
+  generateLegalContract: (data: Omit<GeneratedLegalContract, 'id' | 'createdAt' | 'status' | 'signatureA'>) => GeneratedLegalContract;
+  signLegalContract: (contractId: string, partyBSignature: string) => void;
+  triggerEmergencyLegalSos: () => { success: boolean; message: string };
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -201,7 +333,147 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [language, setLanguage] = useState<LanguageCode>('en');
   const [currency, setCurrency] = useState<CurrencyCode>('NGN');
   const [lowDataMode, setLowDataMode] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'status' | 'calls' | 'market' | 'chats' | 'settings'>('status');
+  const [activeTab, setActiveTab] = useState<'status' | 'calls' | 'town' | 'chats' | 'settings' | 'market'>('status');
+
+  // Display & Appearance
+  const [fontSize, setFontSizeState] = useState<AppFontSize>(() => {
+    return (localStorage.getItem('africhat_font_size') as AppFontSize) || 'normal';
+  });
+
+  const setFontSize = (size: AppFontSize) => {
+    setFontSizeState(size);
+    localStorage.setItem('africhat_font_size', size);
+    document.documentElement.classList.remove('text-size-small', 'text-size-normal', 'text-size-large', 'text-size-huge');
+    document.documentElement.classList.add(`text-size-${size}`);
+  };
+
+  useEffect(() => {
+    document.documentElement.classList.remove('text-size-small', 'text-size-normal', 'text-size-large', 'text-size-huge');
+    document.documentElement.classList.add(`text-size-${fontSize}`);
+  }, [fontSize]);
+
+  const [chatWallpaper, setChatWallpaperState] = useState<string | null>(() => {
+    return localStorage.getItem('africhat_wallpaper') || null;
+  });
+
+  const setChatWallpaper = (wallpaper: string | null) => {
+    setChatWallpaperState(wallpaper);
+    if (wallpaper) {
+      localStorage.setItem('africhat_wallpaper', wallpaper);
+    } else {
+      localStorage.removeItem('africhat_wallpaper');
+    }
+  };
+
+  // QR Code Scanner Modal
+  const [isScanQrModalOpen, setIsScanQrModalOpen] = useState(false);
+
+  // Town Communities & Anonymous Privacy
+  const [townCommunities, setTownCommunities] = useState<TownCommunity[]>(MOCK_TOWN_COMMUNITIES);
+  const [hidePhoneNumberInTown, setHidePhoneNumberInTown] = useState<boolean>(() => {
+    return localStorage.getItem('africhat_hide_phone_town') === 'true';
+  });
+  const toggleHidePhoneNumberInTown = () => {
+    setHidePhoneNumberInTown((prev) => {
+      const next = !prev;
+      localStorage.setItem('africhat_hide_phone_town', String(next));
+      return next;
+    });
+  };
+  const toggleJoinTownCommunity = (id: string) => {
+    setTownCommunities((prev) =>
+      prev.map((c) =>
+        c.id === id ? { ...c, isJoined: !c.isJoined, membersCount: c.isJoined ? c.membersCount - 1 : c.membersCount + 1 } : c
+      )
+    );
+  };
+
+  // Healthcare
+  const [doctors] = useState<DoctorProfile[]>(MOCK_DOCTORS);
+  const [queueTokens, setQueueTokens] = useState<HospitalQueueToken[]>(MOCK_QUEUE_TOKENS);
+  const [medicationReminders, setMedicationReminders] = useState<MedicationReminder[]>(MOCK_MEDICATION_REMINDERS);
+  const [healthVault, setHealthVault] = useState<HealthVaultRecord>(MOCK_HEALTH_VAULT);
+  const [isHealthModalOpen, setIsHealthModalOpen] = useState(false);
+
+  const bookDoctorAppointment = (doctorId: string, notes: string) => {
+    const doc = doctors.find((d) => d.id === doctorId);
+    return {
+      success: true,
+      message: `Telehealth consult booked with ${doc ? doc.name : 'doctor'}. Encrypted triage chat opened!`,
+    };
+  };
+
+  const takeQueueToken = (hospitalName: string, department: string) => {
+    const randNum = Math.floor(Math.random() * 20) + 8;
+    const newToken: HospitalQueueToken = {
+      id: `tok_${Date.now()}`,
+      hospitalName,
+      department,
+      tokenNumber: `Q-${randNum}`,
+      currentlyServing: `Q-${Math.max(1, randNum - 3)}`,
+      positionInLine: 3,
+      estimatedWaitMins: 18,
+      bookedTime: 'Just now',
+      status: 'waiting',
+      location: 'Main Hospital Wing',
+    };
+    setQueueTokens((prev) => [newToken, ...prev]);
+    return { success: true, token: newToken };
+  };
+
+  const addMedicationReminder = (reminder: Omit<MedicationReminder, 'id'>) => {
+    const newRem: MedicationReminder = {
+      ...reminder,
+      id: `med_${Date.now()}`,
+    };
+    setMedicationReminders((prev) => [newRem, ...prev]);
+  };
+
+  const updateHealthVault = (record: Partial<HealthVaultRecord>) => {
+    setHealthVault((prev) => ({
+      ...prev,
+      ...record,
+      lastUpdated: 'Just now',
+    }));
+  };
+
+  const triggerEmergencySos = () => {
+    return {
+      success: true,
+      message: '🚨 EMERGENCY SOS DISPATCHED: Live GPS coordinates broadcasted to LASAMBUS & Family Emergency Contact via SMS/Mesh network!',
+    };
+  };
+
+  // Legal & Smart Contracts
+  const [lawyers] = useState<LawyerProfile[]>(MOCK_LAWYERS);
+  const [contractTemplates] = useState<LegalContractTemplate[]>(MOCK_CONTRACT_TEMPLATES);
+  const [generatedContracts, setGeneratedContracts] = useState<GeneratedLegalContract[]>(MOCK_GENERATED_CONTRACTS);
+  const [isLegalModalOpen, setIsLegalModalOpen] = useState(false);
+
+  const generateLegalContract = (data: Omit<GeneratedLegalContract, 'id' | 'createdAt' | 'status' | 'signatureA'>): GeneratedLegalContract => {
+    const newContract: GeneratedLegalContract = {
+      ...data,
+      id: `cntr_${Date.now()}`,
+      createdAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      status: 'signed_binding',
+      signatureA: `${data.partyAName} [Digital E-Sign: 0x${Math.random().toString(16).slice(2, 7).toUpperCase()}]`,
+    };
+    setGeneratedContracts((prev) => [newContract, ...prev]);
+    return newContract;
+  };
+
+  const signLegalContract = (contractId: string, partyBSignature: string) => {
+    setGeneratedContracts((prev) =>
+      prev.map((c) => (c.id === contractId ? { ...c, signatureB: partyBSignature, status: 'signed_binding' } : c))
+    );
+  };
+
+  const triggerEmergencyLegalSos = () => {
+    return {
+      success: true,
+      message: '⚖️ LEGAL SOS ACTIVE: Rapid Response Human Rights Defense Lawyers have been alerted with your coordinates!',
+    };
+  };
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chats, setChats] = useState<ChatThread[]>(MOCK_CHATS);
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>(INITIAL_MESSAGES);
@@ -243,6 +515,147 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 7. Ajo / Esusu Group Savings State
   const [activeAjoGroup, setActiveAjoGroup] = useState<AjoGroup | null>(MOCK_AJO_BALOGUN);
   const [isAjoModalOpen, setIsAjoModalOpen] = useState(false);
+
+  // 8. Phone Number OTP Authentication & Identity State
+  const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_user_profile_v2');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse user profile:', e);
+    }
+    return INITIAL_CURRENT_USER;
+  });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return localStorage.getItem('africhat_is_authenticated') !== 'false';
+  });
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+
+  // 9. Contact Synchronization & Discovery State
+  const [deviceContacts, setDeviceContacts] = useState<DeviceContact[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_device_contacts');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse device contacts:', e);
+    }
+    return MOCK_DEVICE_CONTACTS;
+  });
+  const [isContactsModalOpen, setIsContactsModalOpen] = useState(false);
+
+  // 10. User Uploaded Memes & GIFs + In-Chat Drawer State
+  const [userMemes, setUserMemes] = useState<UserUploadedMeme[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_user_memes');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse user memes:', e);
+    }
+    return INITIAL_USER_MEMES;
+  });
+  const [isEmojiMemeDrawerOpen, setIsEmojiMemeDrawerOpen] = useState(false);
+
+  // Hide balance figure on Nav for public privacy
+  const [hideBalanceOnNav, setHideBalanceOnNav] = useState<boolean>(() => {
+    return localStorage.getItem('africhat_hide_balance') === 'true';
+  });
+
+  // 11. Gokada / PickkR Dispatch Integration State
+  const [dispatchOrders, setDispatchOrders] = useState<DispatchDeliveryOrder[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_dispatch_orders');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse dispatch orders:', e);
+    }
+    return MOCK_DISPATCH_ORDERS;
+  });
+  const [isDispatchModalOpen, setIsDispatchModalOpen] = useState(false);
+
+  // 12. Job Board with Employer Pay-to-Post State
+  const [jobPostings, setJobPostings] = useState<JobPosting[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_job_postings');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse jobs:', e);
+    }
+    return MOCK_JOB_POSTINGS;
+  });
+  const [isJobBoardModalOpen, setIsJobBoardModalOpen] = useState(false);
+  const [isPostJobModalOpen, setIsPostJobModalOpen] = useState(false);
+
+  // 13. Security Settings (Payment PIN & Security Questions)
+  const [securitySettings, setSecuritySettings] = useState<SecuritySettings>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_security_settings');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse security settings:', e);
+    }
+    return {
+      hasPaymentPin: true,
+      paymentPin: '1234',
+      securityQuestion: "What is your mother's maiden name?",
+      securityAnswer: 'Adebayo',
+    };
+  });
+  const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
+
+  // 14. African Services & Appointment Booking State
+  const [serviceProviders, setServiceProviders] = useState<ServiceProvider[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_service_providers');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse service providers:', e);
+    }
+    return MOCK_SERVICE_PROVIDERS;
+  });
+  const [serviceBookings, setServiceBookings] = useState<ServiceBooking[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_service_bookings');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse service bookings:', e);
+    }
+    return MOCK_SERVICE_BOOKINGS;
+  });
+  const [isServicesModalOpen, setIsServicesModalOpen] = useState(false);
+  const [selectedServiceProvider, setSelectedServiceProvider] = useState<ServiceProvider | null>(null);
+
+  // 15. Money Transfer with 1-2 Days Security Delay State
+  const [delayedTransfers, setDelayedTransfers] = useState<DelayedTransfer[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_delayed_transfers');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse delayed transfers:', e);
+    }
+    return MOCK_DELAYED_TRANSFERS;
+  });
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+
+  // 16. Payroll & Recurring Auto-Debit State
+  const [payrollEmployees, setPayrollEmployees] = useState<PayrollEmployee[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_payroll_employees');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse payroll employees:', e);
+    }
+    return MOCK_PAYROLL_EMPLOYEES;
+  });
+  const [payrollLogs, setPayrollLogs] = useState<PayrollRunLog[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_payroll_logs');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse payroll logs:', e);
+    }
+    return MOCK_PAYROLL_LOGS;
+  });
+  const [isPayrollModalOpen, setIsPayrollModalOpen] = useState(false);
 
   // Persistent User Wallet State
   const [wallet, setWallet] = useState<UserWallet>(() => {
@@ -445,13 +858,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const toggleHideBalance = () => {
+    setHideBalanceOnNav((prev) => {
+      const next = !prev;
+      localStorage.setItem('africhat_hide_balance', String(next));
+      return next;
+    });
+  };
+
   const addStatus = (caption: string, mediaUrl?: string) => {
     const newStatus: UserStatus = {
       id: `status_${Date.now()}`,
-      userId: 'user_me',
-      userName: 'My Status',
-      userAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      userId: currentUser.id,
+      userName: currentUser.fullName,
+      userAvatar: currentUser.avatarUrl,
       isMe: true,
+      statusType: mediaUrl ? 'media' : 'thought',
       mediaUrl: mediaUrl || '/src/assets/images/african_textiles_wax_1794210824926.jpg',
       caption: caption || 'New post on AfriChat 24h Status!',
       createdAt: 'Just now',
@@ -462,6 +884,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       viewers: [],
     };
 
+    setStatuses((prev) => [newStatus, ...prev.filter((s) => !s.isMe)]);
+  };
+
+  const addThoughtStatus = (thoughtText: string, themeBg: string) => {
+    const newStatus: UserStatus = {
+      id: `status_thought_${Date.now()}`,
+      userId: currentUser.id,
+      userName: currentUser.fullName,
+      userAvatar: currentUser.avatarUrl,
+      isMe: true,
+      statusType: 'thought',
+      thoughtBg: themeBg || 'from-indigo-600 via-purple-600 to-pink-600',
+      caption: thoughtText,
+      createdAt: 'Just now',
+      expiresInHours: 24,
+      viewsCount: 0,
+      likesCount: 0,
+      hasLikedByMe: false,
+      viewers: [],
+    };
+    setStatuses((prev) => [newStatus, ...prev.filter((s) => !s.isMe)]);
+  };
+
+  const addDeviceMediaStatus = (caption: string, mediaUrl: string, mediaType: 'image' | 'video' = 'image') => {
+    const newStatus: UserStatus = {
+      id: `status_media_${Date.now()}`,
+      userId: currentUser.id,
+      userName: currentUser.fullName,
+      userAvatar: currentUser.avatarUrl,
+      isMe: true,
+      statusType: mediaType,
+      mediaUrl,
+      videoUrl: mediaType === 'video' ? mediaUrl : undefined,
+      caption: caption || (mediaType === 'video' ? 'Video Status 🎥' : 'Photo Status 📸'),
+      createdAt: 'Just now',
+      expiresInHours: 24,
+      viewsCount: 0,
+      likesCount: 0,
+      hasLikedByMe: false,
+      viewers: [],
+    };
+    setStatuses((prev) => [newStatus, ...prev.filter((s) => !s.isMe)]);
+  };
+
+  const addDeviceVideoStatus = (caption: string, videoUrl: string, thumbnail?: string) => {
+    const newStatus: UserStatus = {
+      id: `status_vid_${Date.now()}`,
+      userId: currentUser.id,
+      userName: currentUser.fullName,
+      userAvatar: currentUser.avatarUrl,
+      isMe: true,
+      statusType: 'video',
+      videoUrl,
+      mediaUrl: thumbnail || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=500&auto=format&fit=crop&q=80',
+      caption: caption || 'Video Status 🎥',
+      createdAt: 'Just now',
+      expiresInHours: 24,
+      viewsCount: 0,
+      likesCount: 0,
+      hasLikedByMe: false,
+      viewers: [],
+    };
     setStatuses((prev) => [newStatus, ...prev.filter((s) => !s.isMe)]);
   };
 
@@ -1123,6 +1607,657 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true, message: `Successfully contributed ₦${amount.toLocaleString()} to Ajo pot!` };
   };
 
+  // 8. Phone OTP Auth Handlers
+  const loginWithPhone = (
+    phoneNumber: string,
+    fullName: string,
+    avatarUrl?: string,
+    about?: string
+  ) => {
+    const updatedUser: UserProfile = {
+      id: `usr_${Date.now()}`,
+      phoneNumber,
+      fullName: fullName || 'AfriChat User',
+      avatarUrl: avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      about: about || 'Hey there! I am using AfriChat.',
+      createdAt: new Date().toISOString(),
+      lastSeen: 'online',
+    };
+    setCurrentUser(updatedUser);
+    setIsAuthenticated(true);
+    localStorage.setItem('africhat_user_profile_v2', JSON.stringify(updatedUser));
+    localStorage.setItem('africhat_is_authenticated', 'true');
+    setIsAuthModalOpen(false);
+  };
+
+  const logoutUser = () => {
+    setIsAuthenticated(false);
+    localStorage.setItem('africhat_is_authenticated', 'false');
+    setIsAuthModalOpen(true);
+  };
+
+  const updateUserProfile = (updates: Partial<UserProfile>) => {
+    setCurrentUser((prev) => {
+      const updated = { ...prev, ...updates };
+      localStorage.setItem('africhat_user_profile_v2', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  // 9. Contacts Handlers
+  const syncDeviceContacts = () => {
+    setDeviceContacts((prev) => [...prev]);
+  };
+
+  const addNewDeviceContact = (name: string, phone: string, about?: string) => {
+    const cleaned = phone.replace(/[\s-]/g, '');
+    const normalized = cleaned.startsWith('0') ? `+234${cleaned.slice(1)}` : cleaned.startsWith('+') ? cleaned : `+234${cleaned}`;
+    const newContact: DeviceContact = {
+      id: `cnt_${Date.now()}`,
+      name,
+      rawPhoneNumber: phone,
+      normalizedPhoneNumber: normalized,
+      about: about || 'Hey there! I am using AfriChat.',
+      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+      isRegisteredOnAfriChat: true,
+      registeredUser: {
+        id: `usr_${Date.now()}`,
+        phoneNumber: normalized,
+        fullName: name,
+        avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+        about: about || 'Hey there! I am using AfriChat.',
+        createdAt: new Date().toISOString(),
+        lastSeen: 'Just now',
+      },
+    };
+    setDeviceContacts((prev) => {
+      const updated = [newContact, ...prev];
+      localStorage.setItem('africhat_device_contacts', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const startChatWithContact = (contact: DeviceContact) => {
+    let existingChat = chats.find(
+      (c) =>
+        c.phone === contact.normalizedPhoneNumber ||
+        c.phone === contact.rawPhoneNumber ||
+        c.name.toLowerCase() === contact.name.toLowerCase()
+    );
+
+    if (!existingChat) {
+      const newChatId = `chat_${Date.now()}`;
+      const newThread: ChatThread = {
+        id: newChatId,
+        name: contact.name,
+        avatar:
+          contact.avatar ||
+          'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+        verifiedStore: false,
+        location: 'Contact Book',
+        unreadCount: 0,
+        lastMessage: 'Tap to start conversation',
+        lastMessageTime: 'Just now',
+        catalog: [],
+        isOnline: true,
+        phone: contact.normalizedPhoneNumber,
+      };
+      setChats((prev) => [newThread, ...prev]);
+      existingChat = newThread;
+    }
+
+    setActiveTab('chats');
+    setActiveChatId(existingChat.id);
+    setIsContactsModalOpen(false);
+  };
+
+  // 10. Meme Handlers
+  const addUserMeme = (meme: Omit<UserUploadedMeme, 'id' | 'createdAt'>) => {
+    const newMeme: UserUploadedMeme = {
+      ...meme,
+      id: `umeme_${Date.now()}`,
+      createdAt: new Date().toISOString().split('T')[0],
+    };
+    setUserMemes((prev) => {
+      const updated = [newMeme, ...prev];
+      localStorage.setItem('africhat_user_memes', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const deleteUserMeme = (memeId: string) => {
+    setUserMemes((prev) => {
+      const updated = prev.filter((m) => m.id !== memeId);
+      localStorage.setItem('africhat_user_memes', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const sendMemeFromDrawer = (chatId: string, meme: UserUploadedMeme) => {
+    const newMsg: ChatMessage = {
+      id: `msg_umeme_${Date.now()}`,
+      chatId,
+      sender: 'user',
+      type: 'image',
+      imageUrl: meme.mediaUrl,
+      text: meme.title ? `[Meme: ${meme.title}]` : 'Shared a custom meme',
+      imageLoaded: true,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'sent',
+    };
+
+    setMessages((prev) => ({
+      ...prev,
+      [chatId]: [...(prev[chatId] || []), newMsg],
+    }));
+
+    setChats((prev) =>
+      prev.map((c) =>
+        c.id === chatId
+          ? {
+              ...c,
+              lastMessage: `🖼️ Meme: ${meme.title || 'Custom Upload'}`,
+              lastMessageTime: newMsg.timestamp,
+            }
+          : c
+      )
+    );
+
+    setIsEmojiMemeDrawerOpen(false);
+  };
+
+  // 11. Dispatch Handlers
+  const createDispatchOrder = (
+    orderData: Omit<DispatchDeliveryOrder, 'id' | 'trackingCode' | 'createdAt' | 'status'>
+  ): DispatchDeliveryOrder => {
+    const prefix = orderData.provider === 'gokada' ? 'GKD' : 'PCK';
+    const code = `${prefix}-${Math.floor(10000 + Math.random() * 90000)}`;
+    const newOrder: DispatchDeliveryOrder = {
+      ...orderData,
+      id: `disp_${Date.now()}`,
+      trackingCode: code,
+      status: 'rider_assigned',
+      riderName: orderData.provider === 'gokada' ? 'Tunde Balogun (Gokada Express)' : 'Chijioke PickkR Hub #8',
+      riderPhone: '+2348039988112',
+      riderPlate: orderData.provider === 'gokada' ? 'GKD-481-APP' : 'PCK-102-LAG',
+      createdAt: 'Just now',
+    };
+
+    setDispatchOrders((prev) => {
+      const updated = [newOrder, ...prev];
+      localStorage.setItem('africhat_dispatch_orders', JSON.stringify(updated));
+      return updated;
+    });
+
+    return newOrder;
+  };
+
+  // 12. Job Handlers
+  const postNewJob = (jobData: Omit<JobPosting, 'id' | 'postedAt' | 'isPaid'>) => {
+    const postFee = 15000;
+    if (wallet.availableBalance < postFee) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance for featured job posting fee (${CURRENCY_SYMBOLS.NGN}${postFee.toLocaleString()}). Please top up wallet.`,
+      };
+    }
+
+    const newTx: WalletTransaction = {
+      id: `tx_${Date.now()}`,
+      type: 'topup',
+      title: `Job Board Posting: ${jobData.title.slice(0, 25)}`,
+      amount: postFee,
+      currency: 'NGN',
+      timestamp: 'Just now',
+      status: 'completed',
+      reference: `JOB_${Date.now()}`,
+      channel: 'wallet',
+    };
+
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance - postFee,
+      transactions: [newTx, ...prev.transactions],
+    }));
+
+    const newJob: JobPosting = {
+      ...jobData,
+      id: `job_${Date.now()}`,
+      postedAt: 'Just now',
+      isPaid: true,
+      isFeatured: true,
+    };
+
+    setJobPostings((prev) => {
+      const updated = [newJob, ...prev];
+      localStorage.setItem('africhat_job_postings', JSON.stringify(updated));
+      return updated;
+    });
+
+    setIsPostJobModalOpen(false);
+    return {
+      success: true,
+      job: newJob,
+      message: 'Job posting published successfully on AfriChat Opportunities Board!',
+    };
+  };
+
+  // 13. Security Handlers
+  const setPaymentPin = (pin: string) => {
+    setSecuritySettings((prev) => {
+      const updated = { ...prev, hasPaymentPin: true, paymentPin: pin };
+      localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const setSecurityQuestion = (question: string, answer: string) => {
+    setSecuritySettings((prev) => {
+      const updated = { ...prev, securityQuestion: question, securityAnswer: answer };
+      localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const verifyPaymentPin = (pin: string): boolean => {
+    if (!securitySettings.paymentPin) return true;
+    return securitySettings.paymentPin.trim() === pin.trim();
+  };
+
+  // 14. African Services & Appointment Booking Handlers
+  const createServiceBooking = (
+    booking: Omit<ServiceBooking, 'id' | 'createdAt' | 'bookingPin'>
+  ) => {
+    const pin = `${Math.floor(1000 + Math.random() * 9000)}`;
+    const newBooking: ServiceBooking = {
+      ...booking,
+      id: `bk_${Date.now()}`,
+      createdAt: 'Just now',
+      bookingPin: pin,
+      isPaid: true,
+      status: 'confirmed',
+    };
+
+    // If payment mode is escrow or wallet, log and deduct if sufficient
+    if (booking.paymentMode === 'escrow') {
+      const tx: WalletTransaction = {
+        id: `tx_${Date.now()}`,
+        type: 'escrow_lock',
+        title: `Service Escrow: ${booking.serviceTitle} with ${booking.providerName}`,
+        amount: booking.totalPrice,
+        currency: booking.currency,
+        timestamp: 'Just now',
+        status: 'completed',
+        reference: `SRV_ESC_${newBooking.id}`,
+        channel: 'wallet',
+      };
+
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: Math.max(0, prev.availableBalance - booking.totalPrice),
+        escrowLockedBalance: prev.escrowLockedBalance + booking.totalPrice,
+        transactions: [tx, ...prev.transactions],
+      }));
+    }
+
+    setServiceBookings((prev) => {
+      const updated = [newBooking, ...prev];
+      localStorage.setItem('africhat_service_bookings', JSON.stringify(updated));
+      return updated;
+    });
+
+    return { success: true, booking: newBooking };
+  };
+
+  const cancelServiceBooking = (bookingId: string) => {
+    setServiceBookings((prev) => {
+      const target = prev.find((b) => b.id === bookingId);
+      if (target && target.paymentMode === 'escrow') {
+        // Refund escrow locked balance
+        setWallet((w) => ({
+          ...w,
+          availableBalance: w.availableBalance + target.totalPrice,
+          escrowLockedBalance: Math.max(0, w.escrowLockedBalance - target.totalPrice),
+          transactions: [
+            {
+              id: `tx_${Date.now()}`,
+              type: 'escrow_release',
+              title: `Refund: Cancelled ${target.serviceTitle}`,
+              amount: target.totalPrice,
+              currency: target.currency,
+              timestamp: 'Just now',
+              status: 'completed',
+              reference: `REF_${bookingId}`,
+              channel: 'wallet',
+            },
+            ...w.transactions,
+          ],
+        }));
+      }
+
+      const updated = prev.map((b) =>
+        b.id === bookingId ? { ...b, status: 'cancelled' as const } : b
+      );
+      localStorage.setItem('africhat_service_bookings', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const completeServiceBooking = (bookingId: string) => {
+    setServiceBookings((prev) => {
+      const target = prev.find((b) => b.id === bookingId);
+      if (target && target.paymentMode === 'escrow') {
+        setWallet((w) => ({
+          ...w,
+          escrowLockedBalance: Math.max(0, w.escrowLockedBalance - target.totalPrice),
+          transactions: [
+            {
+              id: `tx_${Date.now()}`,
+              type: 'escrow_release',
+              title: `Service Escrow Released: ${target.serviceTitle} to ${target.providerName}`,
+              amount: target.totalPrice,
+              currency: target.currency,
+              timestamp: 'Just now',
+              status: 'completed',
+              reference: `REL_SRV_${bookingId}`,
+              channel: 'wallet',
+            },
+            ...w.transactions,
+          ],
+        }));
+      }
+
+      const updated = prev.map((b) =>
+        b.id === bookingId ? { ...b, status: 'completed' as const } : b
+      );
+      localStorage.setItem('africhat_service_bookings', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const registerAsServiceProvider = (
+    provider: Omit<ServiceProvider, 'id' | 'rating' | 'reviewCount' | 'isVerified'>
+  ) => {
+    const newProvider: ServiceProvider = {
+      ...provider,
+      id: `serv_${Date.now()}`,
+      rating: 5.0,
+      reviewCount: 1,
+      isVerified: true,
+      badge: 'Verified African Pro',
+    };
+
+    setServiceProviders((prev) => {
+      const updated = [newProvider, ...prev];
+      localStorage.setItem('africhat_service_providers', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  // 15. Money Transfer with 1-2 Days Security Delay Handlers
+  const sendDelayedTransfer = (
+    recipientPhone: string,
+    recipientName: string,
+    amount: number,
+    note: string,
+    delayHours: number = 36 // Default 1.5 days (1-2 days)
+  ) => {
+    if (wallet.availableBalance < amount) {
+      return {
+        success: false,
+        message: `Insufficient funds. Your available balance is ${CURRENCY_SYMBOLS.NGN}${wallet.availableBalance.toLocaleString()}.`,
+      };
+    }
+
+    const releaseMs = Date.now() + delayHours * 3600 * 1000;
+    const scheduledDate = new Date(releaseMs).toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const newTransfer: DelayedTransfer = {
+      id: `dtx_${Math.floor(100000 + Math.random() * 900000)}`,
+      senderId: currentUser.id,
+      senderName: currentUser.fullName,
+      recipientPhone,
+      recipientName,
+      amount,
+      currency: 'NGN',
+      note: note || 'Transfer via AfriChat Delayed Escrow',
+      delayHours,
+      scheduledReleaseTime: `${scheduledDate} (${delayHours}h security delay)`,
+      releaseTimestampMs: releaseMs,
+      status: 'pending_clearance',
+      createdAt: 'Just now',
+      securityReason: 'Mandatory 1-2 Days Security Delay Buffer: Protects against unauthorized transfers, scam vendors & phishing before funds settle.',
+    };
+
+    // Deduct from available balance, add to locked and record transaction
+    const tx: WalletTransaction = {
+      id: `tx_${Date.now()}`,
+      type: 'transfer_delayed',
+      title: `Transfer to ${recipientName} (1-2 Days Delay)`,
+      amount,
+      currency: 'NGN',
+      timestamp: 'Just now',
+      status: 'pending',
+      reference: newTransfer.id,
+      channel: 'wallet',
+    };
+
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance - amount,
+      escrowLockedBalance: prev.escrowLockedBalance + amount,
+      transactions: [tx, ...prev.transactions],
+    }));
+
+    setDelayedTransfers((prev) => {
+      const updated = [newTransfer, ...prev];
+      localStorage.setItem('africhat_delayed_transfers', JSON.stringify(updated));
+      return updated;
+    });
+
+    return {
+      success: true,
+      transfer: newTransfer,
+      message: `₦${amount.toLocaleString()} scheduled to ${recipientName}. Funds will clear in ${delayHours} hours under anti-fraud delay. You can cancel at any time before settlement.`,
+    };
+  };
+
+  const cancelDelayedTransfer = (transferId: string) => {
+    const target = delayedTransfers.find((t) => t.id === transferId);
+    if (!target) return { success: false, message: 'Transfer not found.' };
+    if (target.status !== 'pending_clearance') {
+      return { success: false, message: 'Only transfers pending clearance can be cancelled.' };
+    }
+
+    // Refund locked balance back to available
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance + target.amount,
+      escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - target.amount),
+      transactions: [
+        {
+          id: `tx_${Date.now()}`,
+          type: 'escrow_release',
+          title: `Cancelled Transfer Refund: ${target.recipientName}`,
+          amount: target.amount,
+          currency: target.currency,
+          timestamp: 'Just now',
+          status: 'completed',
+          reference: `CAN_${transferId}`,
+          channel: 'wallet',
+        },
+        ...prev.transactions,
+      ],
+    }));
+
+    setDelayedTransfers((prev) => {
+      const updated = prev.map((t) =>
+        t.id === transferId ? { ...t, status: 'cancelled_by_sender' as const } : t
+      );
+      localStorage.setItem('africhat_delayed_transfers', JSON.stringify(updated));
+      return updated;
+    });
+
+    return {
+      success: true,
+      message: `Transfer of ₦${target.amount.toLocaleString()} cancelled. Funds returned to your available wallet immediately.`,
+    };
+  };
+
+  const fastForwardTransferRelease = (transferId: string) => {
+    const target = delayedTransfers.find((t) => t.id === transferId);
+    if (!target) return { success: false, message: 'Transfer not found.' };
+
+    setWallet((prev) => ({
+      ...prev,
+      escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - target.amount),
+      transactions: [
+        {
+          id: `tx_${Date.now()}`,
+          type: 'escrow_release',
+          title: `Cleared 1-2 Days Delay Payout to ${target.recipientName}`,
+          amount: target.amount,
+          currency: target.currency,
+          timestamp: 'Just now',
+          status: 'completed',
+          reference: `CLR_${transferId}`,
+          channel: 'wallet',
+        },
+        ...prev.transactions,
+      ],
+    }));
+
+    setDelayedTransfers((prev) => {
+      const updated = prev.map((t) =>
+        t.id === transferId ? { ...t, status: 'cleared' as const } : t
+      );
+      localStorage.setItem('africhat_delayed_transfers', JSON.stringify(updated));
+      return updated;
+    });
+
+    return {
+      success: true,
+      message: `Delay cleared! ₦${target.amount.toLocaleString()} settled to ${target.recipientName}.`,
+    };
+  };
+
+  // 16. Payroll & Recurring Auto-Debit Handlers
+  const addPayrollEmployee = (emp: Omit<PayrollEmployee, 'id' | 'status'>) => {
+    const newEmp: PayrollEmployee = {
+      ...emp,
+      id: `emp_${Date.now()}`,
+      status: 'active',
+    };
+
+    setPayrollEmployees((prev) => {
+      const updated = [newEmp, ...prev];
+      localStorage.setItem('africhat_payroll_employees', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const toggleEmployeePayrollStatus = (id: string) => {
+    setPayrollEmployees((prev) => {
+      const updated = prev.map((e) =>
+        e.id === id ? { ...e, status: e.status === 'active' ? ('paused' as const) : ('active' as const) } : e
+      );
+      localStorage.setItem('africhat_payroll_employees', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const deletePayrollEmployee = (id: string) => {
+    setPayrollEmployees((prev) => {
+      const updated = prev.filter((e) => e.id !== id);
+      localStorage.setItem('africhat_payroll_employees', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const runPayrollNow = (employeeId?: string) => {
+    const targets = employeeId
+      ? payrollEmployees.filter((e) => e.id === employeeId)
+      : payrollEmployees.filter((e) => e.status === 'active');
+
+    if (targets.length === 0) {
+      return { success: false, totalDebited: 0, message: 'No active staff on payroll to run.' };
+    }
+
+    const totalNeeded = targets.reduce((acc, e) => acc + e.salary, 0);
+    if (wallet.availableBalance < totalNeeded) {
+      return {
+        success: false,
+        totalDebited: 0,
+        message: `Insufficient wallet balance for payroll (₦${totalNeeded.toLocaleString()} needed, ₦${wallet.availableBalance.toLocaleString()} available). Please top up via Paystack first.`,
+      };
+    }
+
+    // Deduct from wallet and generate payroll run logs
+    const newLogs: PayrollRunLog[] = [];
+    const newTxList: WalletTransaction[] = [];
+
+    targets.forEach((e) => {
+      const ref = `PAY_${Math.floor(100000 + Math.random() * 900000)}`;
+      newLogs.push({
+        id: `prun_${Date.now()}_${e.id}`,
+        employeeId: e.id,
+        employeeName: e.fullName,
+        role: e.role,
+        amount: e.salary,
+        currency: e.currency,
+        date: 'Today, Auto-Debit Clearance',
+        status: 'successful',
+        reference: ref,
+      });
+
+      newTxList.push({
+        id: `tx_${Date.now()}_${e.id}`,
+        type: 'payroll_debit',
+        title: `Auto-Debit Salary: ${e.fullName} (${e.role})`,
+        amount: e.salary,
+        currency: e.currency,
+        timestamp: 'Just now',
+        status: 'completed',
+        reference: ref,
+        channel: 'wallet',
+      });
+    });
+
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance - totalNeeded,
+      transactions: [...newTxList, ...prev.transactions],
+    }));
+
+    setPayrollLogs((prev) => {
+      const updated = [...newLogs, ...prev];
+      localStorage.setItem('africhat_payroll_logs', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Update lastPaidDate for employees
+    setPayrollEmployees((prev) => {
+      const updated = prev.map((e) =>
+        targets.some((t) => t.id === e.id)
+          ? { ...e, lastPaidDate: 'Today, Just now' }
+          : e
+      );
+      localStorage.setItem('africhat_payroll_employees', JSON.stringify(updated));
+      return updated;
+    });
+
+    return {
+      success: true,
+      totalDebited: totalNeeded,
+      message: `Payroll auto-debit executed successfully! ₦${totalNeeded.toLocaleString()} disbursed to ${targets.length} staff member(s).`,
+    };
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -1147,11 +2282,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveViewingStatus,
         likeStatus,
         addStatus,
+        addThoughtStatus,
+        addDeviceMediaStatus,
+        addDeviceVideoStatus,
         wallet,
         isWalletModalOpen,
         setIsWalletModalOpen,
         topUpWallet,
         withdrawWallet,
+        hideBalanceOnNav,
+        toggleHideBalance,
         activeCheckoutProduct,
         openCheckout,
         closeCheckout,
@@ -1215,6 +2355,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isAjoModalOpen,
         setIsAjoModalOpen,
         contributeToAjo,
+        // 8. Phone Number OTP Authentication & Identity
+        currentUser,
+        setCurrentUser,
+        isAuthenticated,
+        isAuthModalOpen,
+        setIsAuthModalOpen,
+        loginWithPhone,
+        logoutUser,
+        updateUserProfile,
+        // 9. Contact Synchronization & Discovery
+        deviceContacts,
+        isContactsModalOpen,
+        setIsContactsModalOpen,
+        syncDeviceContacts,
+        startChatWithContact,
+        addNewDeviceContact,
+        // 10. User Uploaded Memes & GIFs + In-Chat Drawer
+        userMemes,
+        addUserMeme,
+        deleteUserMeme,
+        sendMemeFromDrawer,
+        isEmojiMemeDrawerOpen,
+        setIsEmojiMemeDrawerOpen,
+        // 11. Gokada / PickkR Dispatch Integration
+        dispatchOrders,
+        isDispatchModalOpen,
+        setIsDispatchModalOpen,
+        createDispatchOrder,
+        // 12. Job Board with Employer Pay-to-Post
+        jobPostings,
+        isJobBoardModalOpen,
+        setIsJobBoardModalOpen,
+        isPostJobModalOpen,
+        setIsPostJobModalOpen,
+        postNewJob,
+        // 13. Security Settings (Payment PIN & Security Questions)
+        securitySettings,
+        setPaymentPin,
+        setSecurityQuestion,
+        verifyPaymentPin,
+        isSecurityModalOpen,
+        setIsSecurityModalOpen,
+        // 14. African Services & Appointment Booking (No Limit)
+        serviceProviders,
+        serviceBookings,
+        isServicesModalOpen,
+        setIsServicesModalOpen,
+        selectedServiceProvider,
+        setSelectedServiceProvider,
+        createServiceBooking,
+        cancelServiceBooking,
+        completeServiceBooking,
+        registerAsServiceProvider,
+        // 15. Money Transfer with 1-2 Days Security Delay
+        delayedTransfers,
+        isTransferModalOpen,
+        setIsTransferModalOpen,
+        sendDelayedTransfer,
+        cancelDelayedTransfer,
+        fastForwardTransferRelease,
+        // 16. Payroll & Recurring Auto-Debit
+        payrollEmployees,
+        payrollLogs,
+        isPayrollModalOpen,
+        setIsPayrollModalOpen,
+        addPayrollEmployee,
+        toggleEmployeePayrollStatus,
+        deletePayrollEmployee,
+        runPayrollNow,
       }}
     >
       {children}

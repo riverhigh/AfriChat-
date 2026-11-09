@@ -7,10 +7,62 @@
   --font-mono: 'JetBrains Mono', monospace;
 }
 
+html {
+  background-color: #ffffff;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  position: fixed;
+  overscroll-behavior: none;
+  touch-action: pan-y;
+}
+
+html.dark {
+  background-color: #000000;
+}
+
 body {
   font-family: var(--font-sans);
+  background-color: #ffffff;
+  color: #0f172a;
   -webkit-tap-highlight-color: transparent;
-  overscroll-behavior-y: none;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  position: fixed;
+  overscroll-behavior: none;
+  touch-action: pan-y;
+  user-select: none;
+}
+
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+html.dark body {
+  background-color: #000000;
+  color: #ffffff;
+}
+
+/* Dynamic Text Size Adjustments */
+html.text-size-small {
+  font-size: 14px;
+}
+html.text-size-normal {
+  font-size: 16px;
+}
+html.text-size-large {
+  font-size: 18px;
+}
+html.text-size-huge {
+  font-size: 20px;
 }
 
 /* Custom subtle scrollbar */

@@ -88,18 +88,61 @@ export const StatusViewerModal: React.FC = () => {
 
       {/* Main Status Media & Caption Area */}
       <div className="flex-1 flex flex-col items-center justify-center p-4 relative">
-        {status.mediaUrl && (
-          <img
-            src={status.mediaUrl}
-            alt={status.caption}
-            referrerPolicy="no-referrer"
-            className="max-h-[65vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
-          />
-        )}
+        {status.statusType === 'thought' ? (
+          <div className="w-full max-w-sm flex flex-col items-center justify-center animate-in zoom-in-95 duration-200">
+            {/* Thought Cloud Bubble */}
+            <div
+              className={`w-full p-8 rounded-3xl bg-gradient-to-br ${
+                status.thoughtBg || 'from-indigo-600 via-purple-600 to-pink-600'
+              } text-white shadow-2xl relative border-2 border-white/20`}
+            >
+              <div className="text-[10px] uppercase font-bold tracking-widest text-white/70 mb-2 font-mono flex items-center gap-1.5">
+                <span>💭 AFRICHAT THOUGHT</span>
+              </div>
+              <p className="text-xl sm:text-2xl font-bold leading-relaxed font-display text-center drop-shadow-sm">
+                &ldquo;{status.caption}&rdquo;
+              </p>
+              <div className="mt-4 pt-3 border-t border-white/20 text-center text-xs text-white/80 font-mono">
+                Shared by {status.userName} · {status.createdAt}
+              </div>
+            </div>
 
-        <div className="mt-4 px-4 py-3 bg-black/60 backdrop-blur-md text-white rounded-2xl max-w-sm text-center text-sm leading-relaxed">
-          {status.caption}
-        </div>
+            {/* Bubble Tail Dots */}
+            <div className="flex flex-col items-center gap-1.5 mt-2 self-start ml-16">
+              <div className="w-4 h-4 rounded-full bg-indigo-500/80 shadow-md" />
+              <div className="w-2.5 h-2.5 rounded-full bg-purple-500/70 shadow-sm" />
+              <div className="w-1.5 h-1.5 rounded-full bg-pink-500/60" />
+            </div>
+          </div>
+        ) : (
+          <div className="w-full max-w-sm flex flex-col items-center justify-center">
+            {status.videoUrl || status.statusType === 'video' ? (
+              <div className="relative w-full max-h-[65vh] flex items-center justify-center rounded-2xl overflow-hidden bg-black shadow-2xl">
+                <video
+                  src={status.videoUrl || status.mediaUrl}
+                  poster={status.mediaUrl}
+                  controls
+                  autoPlay
+                  playsInline
+                  loop
+                  className="max-h-[65vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
+                />
+              </div>
+            ) : (
+              status.mediaUrl && (
+                <img
+                  src={status.mediaUrl}
+                  alt={status.caption}
+                  referrerPolicy="no-referrer"
+                  className="max-h-[65vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
+                />
+              )
+            )}
+            <div className="mt-4 px-4 py-3 bg-black/60 backdrop-blur-md text-white rounded-2xl max-w-sm text-center text-sm leading-relaxed border border-white/10">
+              {status.caption}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Bottom Bar: If Me, show views/likes sheet trigger; if Other, show Like + Reply */}

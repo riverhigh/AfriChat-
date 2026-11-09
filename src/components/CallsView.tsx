@@ -49,7 +49,7 @@ export const CallsView: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col pb-24 relative bg-white dark:bg-[#11101e] min-h-[calc(100vh-130px)]">
+    <div className="flex flex-col pb-24 relative bg-white dark:bg-black min-h-[calc(100vh-130px)]">
       {/* Prominent Page Title */}
       <div className="px-4 pt-2 pb-1">
         <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100 font-display">
@@ -58,8 +58,8 @@ export const CallsView: React.FC = () => {
       </div>
 
       {/* Create call link */}
-      <div className="flex items-center gap-4 px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer">
-        <div className="w-11 h-11 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0">
+      <div className="flex items-center gap-4 px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-neutral-900/60 cursor-pointer">
+        <div className="w-11 h-11 rounded-full bg-purple-600 text-white flex items-center justify-center shrink-0">
           <UserPlus className="w-5 h-5" />
         </div>
         <div>
@@ -76,7 +76,7 @@ export const CallsView: React.FC = () => {
         <span>Recent Calls</span>
         <button
           onClick={() => setShowKeypad(!showKeypad)}
-          className="text-indigo-600 dark:text-indigo-400 normal-case font-semibold flex items-center gap-1 hover:underline"
+          className="text-purple-600 dark:text-purple-400 normal-case font-semibold flex items-center gap-1 hover:underline"
         >
           <Phone className="w-3.5 h-3.5" />
           <span>{showKeypad ? 'Hide Dialpad' : 'Open Dialpad'}</span>
@@ -120,14 +120,14 @@ export const CallsView: React.FC = () => {
             <div className="flex items-center gap-1">
               <button
                 onClick={() => startCall(call.name, call.phone, call.avatar, 'voice')}
-                className="text-indigo-600 dark:text-indigo-400 p-2 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-full transition-colors"
+                className="text-purple-600 dark:text-purple-400 p-2 hover:bg-purple-50 dark:hover:bg-purple-950/40 rounded-full transition-colors"
                 title="Voice Call"
               >
                 <Phone className="w-5 h-5" />
               </button>
               <button
                 onClick={() => startCall(call.name, call.phone, call.avatar, 'video')}
-                className="text-indigo-600 dark:text-indigo-400 p-2 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-full transition-colors"
+                className="text-purple-600 dark:text-purple-400 p-2 hover:bg-purple-50 dark:hover:bg-purple-950/40 rounded-full transition-colors"
                 title="Video Call"
               >
                 <Video className="w-5 h-5" />
@@ -141,7 +141,7 @@ export const CallsView: React.FC = () => {
       {!showKeypad && (
         <button
           onClick={() => setShowKeypad(true)}
-          className="fixed bottom-20 right-5 w-14 h-14 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shadow-lg transition-transform active:scale-95 z-20"
+          className="fixed bottom-20 right-5 w-14 h-14 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center shadow-lg shadow-purple-600/30 transition-transform active:scale-95 z-20"
           aria-label="Open Keypad"
           title="Dial phone number"
         >
@@ -151,11 +151,11 @@ export const CallsView: React.FC = () => {
 
       {/* Slide-Up Phone Dialpad Sheet */}
       {showKeypad && (
-        <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-2xs flex items-end justify-center animate-in fade-in">
-          <div className="w-full max-w-md bg-white dark:bg-[#18152e] rounded-t-3xl p-5 pb-8 shadow-2xl border-t border-slate-200 dark:border-slate-800 animate-in slide-in-from-bottom duration-200">
+        <div className="fixed inset-0 z-40 bg-black/70 backdrop-blur-2xs flex items-end justify-center animate-in fade-in">
+          <div className="w-full max-w-md bg-white dark:bg-black rounded-t-3xl p-5 pb-8 shadow-2xl border-t border-slate-200 dark:border-neutral-800 animate-in slide-in-from-bottom duration-200">
             {/* Grab handle & close */}
             <div className="flex items-center justify-between mb-2">
-              <div className="w-10 h-1 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto" />
+              <div className="w-10 h-1 bg-slate-300 dark:bg-neutral-800 rounded-full mx-auto" />
               <button
                 onClick={() => setShowKeypad(false)}
                 className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
@@ -165,7 +165,7 @@ export const CallsView: React.FC = () => {
             </div>
 
             {/* Dialed Number Display */}
-            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100 dark:border-slate-800 mb-3 min-h-[50px]">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100 dark:border-neutral-800 mb-3 min-h-[50px]">
               <span className="font-mono text-2xl font-bold tracking-wider text-slate-900 dark:text-slate-100 truncate">
                 {dialedNumber || (
                   <span className="text-slate-400 text-base font-normal">
@@ -195,7 +195,7 @@ export const CallsView: React.FC = () => {
                 <button
                   key={p.code}
                   onClick={() => setDialedNumber((prev) => (prev ? prev : p.code))}
-                  className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition-colors text-[11px]"
+                  className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-neutral-900 text-slate-600 dark:text-slate-300 hover:bg-purple-50 dark:hover:bg-purple-950/40 transition-colors text-[11px] border border-transparent dark:border-neutral-800"
                 >
                   {p.label}
                 </button>
@@ -208,7 +208,7 @@ export const CallsView: React.FC = () => {
                 <button
                   key={k.num}
                   onClick={() => handleKeyPress(k.num)}
-                  className="h-14 rounded-2xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 transition-all flex flex-col items-center justify-center shadow-2xs"
+                  className="h-14 rounded-2xl bg-slate-100 dark:bg-neutral-900 hover:bg-slate-200 dark:hover:bg-neutral-800 active:scale-95 transition-all flex flex-col items-center justify-center shadow-2xs border border-transparent dark:border-neutral-800"
                 >
                   <span className="text-xl font-bold font-mono text-slate-900 dark:text-slate-100 leading-tight">
                     {k.num}
@@ -236,7 +236,7 @@ export const CallsView: React.FC = () => {
               <button
                 onClick={() => handleCall('video')}
                 disabled={!dialedNumber.trim()}
-                className="py-3.5 px-5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 active:scale-95 transition-all"
+                className="py-3.5 px-5 bg-purple-600 hover:bg-purple-700 disabled:opacity-40 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-purple-600/20 active:scale-95 transition-all"
                 title="Video Call"
               >
                 <Video className="w-5 h-5" />
