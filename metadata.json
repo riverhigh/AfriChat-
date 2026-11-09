@@ -1,0 +1,6 @@
+{
+  "name": "AfriChat - African Super-Messaging & Social Commerce",
+  "description": "Mobile-first African messaging app with ultra-low data compression, in-chat commerce catalogs, local escrow safeguards (M-Pesa, MoMo, USSD), and offline mesh resilience.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
