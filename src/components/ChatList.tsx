@@ -13,17 +13,21 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatThread } from '../types';
+import { ContactProfileModal } from './ContactProfileModal';
 
 export const ChatList: React.FC = () => {
   const {
     chats,
     setActiveChatId,
     setIsContactsModalOpen,
+    statuses,
+    setActiveViewingStatus,
   } = useApp();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<
     'all' | 'unread' | 'groups' | 'channels' | 'stores'
   >('all');
+  const [selectedProfileChat, setSelectedProfileChat] = useState<ChatThread | null>(null);
 
   const filteredChats = chats.filter((chat) => {
     const matchesSearch =
@@ -135,41 +139,90 @@ export const ChatList: React.FC = () => {
 
       {/* Chat Thread List */}
       <div className="divide-y divide-slate-100 dark:divide-neutral-900">
-        {filteredChats.map((chat: ChatThread) => (
-          <div
-            key={chat.id}
-            onClick={() => setActiveChatId(chat.id)}
-            className={`flex items-center gap-3.5 px-4 py-3 hover:bg-slate-50 dark:hover:bg-neutral-900/60 cursor-pointer transition-colors active:bg-slate-100 dark:active:bg-neutral-900 ${
-              chat.isScamFlagged ? 'bg-rose-50/50 dark:bg-rose-950/20' : ''
-            }`}
-          >
-            {/* Avatar */}
-            <div className="relative shrink-0">
-              <img
-                src={chat.avatar}
-                alt={chat.name}
-                referrerPolicy="no-referrer"
-                className={`w-12 h-12 rounded-full object-cover ${
-                  chat.isScamFlagged ? 'ring-2 ring-rose-500' : ''
-                }`}
-              />
-              {chat.isOnline && !chat.isScamFlagged && (
-                <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-white dark:border-black rounded-full" />
-              )}
-              {chat.isScamFlagged && (
-                <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-rose-600 text-white rounded-full flex items-center justify-center">
-                  <AlertTriangle className="w-2.5 h-2.5" />
-                </span>
-              )}
-            </div>
+        {filteredChats.map((chat: ChatThread) => {
+          // Check if contact has recently updated their 24h status
+          const contactStatus = statuses.find(
+            (s) =>
+              !s.isMe &&
+              (s.userId === chat.id ||
+                s.userName.toLowerCase().trim() === chat.name.toLowerCase().trim() ||
+                chat.name.toLowerCase().includes(s.userName.toLowerCase()) ||
+                s.userName.toLowerCase().includes(chat.name.toLowerCase()))
+          );
+          const hasRecentStatus = Boolean(contactStatus);
 
-            {/* Chat info */}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">
-                    {chat.name}
+          return (
+            <div
+              key={chat.id}
+              onClick={() => setActiveChatId(chat.id)}
+              className={`flex items-center gap-3.5 px-4 py-3 hover:bg-slate-50 dark:hover:bg-neutral-900/60 cursor-pointer transition-colors active:bg-slate-100 dark:active:bg-neutral-900 ${
+                chat.isScamFlagged ? 'bg-rose-50/50 dark:bg-rose-950/20' : ''
+              }`}
+            >
+              {/* Avatar - larger size w-14 h-14 with status ring flow for recent status updates */}
+              <div
+                className="relative shrink-0 group cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedProfileChat(chat);
+                }}
+                title={hasRecentStatus ? `${chat.name} posted a new status - tap to view` : 'View contact info'}
+              >
+                {hasRecentStatus ? (
+                  <div className="p-[2.5px] rounded-full bg-gradient-to-tr from-emerald-500 via-teal-400 to-indigo-500 shadow-xs animate-pulse">
+                    <div className="p-0.5 bg-white dark:bg-black rounded-full">
+                      <img
+                        src={chat.avatar}
+                        alt={chat.name}
+                        referrerPolicy="no-referrer"
+                        className="w-13 h-13 rounded-full object-cover group-hover:opacity-90 transition-opacity"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <img
+                    src={chat.avatar}
+                    alt={chat.name}
+                    referrerPolicy="no-referrer"
+                    className={`w-14 h-14 rounded-full object-cover group-hover:opacity-90 transition-opacity ${
+                      chat.isScamFlagged ? 'ring-2 ring-rose-500' : 'ring-1 ring-black/5 dark:ring-white/10'
+                    }`}
+                  />
+                )}
+
+                {/* Status Story flow icon */}
+                {hasRecentStatus && !chat.isScamFlagged && (
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (contactStatus) {
+                        setActiveViewingStatus(contactStatus);
+                      }
+                    }}
+                    title="View 24h Story"
+                    className="absolute -top-1 -right-1 w-5 h-5 bg-gradient-to-tr from-emerald-500 to-teal-400 text-white rounded-full flex items-center justify-center text-[10px] shadow-md border-2 border-white dark:border-black hover:scale-110 transition-transform"
+                  >
+                    <Sparkles className="w-2.5 h-2.5" />
                   </span>
+                )}
+
+                {chat.isOnline && !chat.isScamFlagged && !hasRecentStatus && (
+                  <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white dark:border-black rounded-full" />
+                )}
+                {chat.isScamFlagged && (
+                  <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-rose-600 text-white rounded-full flex items-center justify-center">
+                    <AlertTriangle className="w-2.5 h-2.5" />
+                  </span>
+                )}
+              </div>
+
+              {/* Chat info */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">
+                      {chat.name}
+                    </span>
                   {chat.isGroup && (
                     <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 font-medium shrink-0">
                       Group
@@ -217,7 +270,8 @@ export const ChatList: React.FC = () => {
               </div>
             </div>
           </div>
-        ))}
+        );
+      })}
 
         {filteredChats.length === 0 && (
           <div className="p-8 text-center text-slate-400 text-xs">
@@ -235,6 +289,13 @@ export const ChatList: React.FC = () => {
       >
         <MessageSquarePlus className="w-6 h-6" />
       </button>
+
+      {/* WhatsApp Style Contact Info Profile Modal */}
+      <ContactProfileModal
+        chat={selectedProfileChat}
+        isOpen={Boolean(selectedProfileChat)}
+        onClose={() => setSelectedProfileChat(null)}
+      />
     </div>
   );
 };

@@ -21,6 +21,7 @@ export const EmojiMemeDrawer: React.FC = () => {
     sendMemeSticker,
     activeChatId,
     sendMessage,
+    setIsMemeStudioOpen,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'memes' | 'emojis' | 'stickers'>('memes');
@@ -287,28 +288,64 @@ export const EmojiMemeDrawer: React.FC = () => {
           </div>
         )}
 
-        {/* TAB 3: Nollywood Stickers */}
+        {/* TAB 3: Custom Stickers Pack */}
         {activeTab === 'stickers' && (
-          <div className="flex-1 overflow-y-auto p-3">
-            <div className="grid grid-cols-3 gap-2">
-              {MOCK_MEME_TEMPLATES.map((tmpl) => (
-                <div
-                  key={tmpl.id}
-                  onClick={() => {
-                    sendMemeSticker(activeChatId, tmpl);
-                    setIsEmojiMemeDrawerOpen(false);
-                  }}
-                  className="rounded-xl overflow-hidden aspect-square bg-slate-900 border border-slate-200 dark:border-slate-800 cursor-pointer shadow-2xs hover:scale-[1.02] transition-transform relative"
-                >
-                  <img src={tmpl.imageUrl} alt={tmpl.title} className="w-full h-full object-cover" />
-                  <div className="absolute inset-x-0 bottom-0 bg-black/70 p-1 text-center">
-                    <span className="text-[9px] font-bold text-white truncate block">
-                      {tmpl.topText || tmpl.title}
-                    </span>
-                  </div>
-                </div>
-              ))}
+          <div className="flex-1 overflow-y-auto p-3 space-y-3">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-xs text-slate-400 font-medium">My Device Stickers & Cutouts</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEmojiMemeDrawerOpen(false);
+                  setIsMemeStudioOpen(true);
+                }}
+                className="text-xs text-indigo-600 dark:text-indigo-400 font-bold hover:underline"
+              >
+                + Create Sticker (Remove BG)
+              </button>
             </div>
+
+            {userMemes.length > 0 ? (
+              <div className="grid grid-cols-3 gap-2">
+                {userMemes.map((tmpl) => (
+                  <div
+                    key={tmpl.id}
+                    onClick={() => {
+                      sendMemeSticker(activeChatId, {
+                        id: `sticker_${tmpl.id}`,
+                        title: tmpl.title,
+                        imageUrl: tmpl.mediaUrl,
+                        category: 'Sticker',
+                        cultureOrigin: 'User Custom',
+                      });
+                      setIsEmojiMemeDrawerOpen(false);
+                    }}
+                    className="rounded-2xl overflow-hidden aspect-square bg-slate-900 border border-slate-200 dark:border-slate-800 cursor-pointer shadow-2xs hover:scale-[1.02] transition-transform relative p-1 flex items-center justify-center group"
+                  >
+                    <img src={tmpl.mediaUrl} alt={tmpl.title} className="max-h-full max-w-full object-contain" />
+                    <div className="absolute inset-x-0 bottom-0 bg-black/70 p-1 text-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <span className="text-[9px] font-bold text-white truncate block">
+                        {tmpl.title}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-6 text-center text-xs text-slate-400 space-y-2">
+                <p>No custom stickers created yet.</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEmojiMemeDrawerOpen(false);
+                    setIsMemeStudioOpen(true);
+                  }}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-xs"
+                >
+                  Open Sticker Studio
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

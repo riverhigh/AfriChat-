@@ -68,7 +68,7 @@ export const AjoLedgerModal: React.FC = () => {
     }, 600);
   };
 
-  const handleUpgradeVerification = (badge: 'blue' | 'gold') => {
+  const handleUpgradeVerification = (badge: 'blue' | 'gold' | 'creator_plus') => {
     setIsProcessing(true);
     const res = upgradeVerificationBadge(badge);
     setIsProcessing(false);
@@ -103,7 +103,7 @@ export const AjoLedgerModal: React.FC = () => {
     }
   };
 
-  const isVerifiedHost = currentUser.verificationBadge === 'blue' || currentUser.verificationBadge === 'gold';
+  const isVerifiedHost = currentUser.verificationBadge === 'blue' || currentUser.verificationBadge === 'gold' || currentUser.verificationBadge === 'creator_plus';
 
   return (
     <div
@@ -205,12 +205,12 @@ export const AjoLedgerModal: React.FC = () => {
                       <span>Host Verification Checkmark Required</span>
                     </div>
                     <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
-                      To host an Ajo / Esusu group and hold rotational community funds, hosts must have an active <strong>Blue Checkmark (₦6,000/mo)</strong> or <strong>Gold Creator Checkmark (₦11,000/mo)</strong> to guarantee anti-default security.
+                      To host an Ajo / Esusu group and hold rotational community funds, hosts must have an active <strong>Blue Checkmark (₦4,000/mo · 2% platform fee)</strong> or <strong>Gold Creator Checkmark (₦11,000/mo)</strong> or <strong>Creator Plus (₦25,000/mo · 2% fee)</strong> to guarantee anti-default security.
                     </p>
                   </div>
 
                   <div className="space-y-2.5">
-                    {/* Blue Checkmark Option (₦6,000 / month) */}
+                    {/* Blue Checkmark Option (₦4,000 / month - 2% fee) */}
                     <div className="p-4 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-blue-200 dark:border-blue-900/40 relative overflow-hidden space-y-2.5">
                       <div className="flex items-start justify-between">
                         <div className="flex items-center gap-2.5">
@@ -223,11 +223,11 @@ export const AjoLedgerModal: React.FC = () => {
                                 Blue Checkmark Host
                               </h4>
                               <span className="text-[10px] font-mono font-bold bg-blue-500/10 text-blue-600 dark:text-blue-400 px-1.5 py-0.2 rounded-full">
-                                Standard Host
+                                2% Platform Fee
                               </span>
                             </div>
                             <span className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">
-                              ₦6,000 / month
+                              ₦4,000 / month
                             </span>
                           </div>
                         </div>
@@ -236,11 +236,11 @@ export const AjoLedgerModal: React.FC = () => {
                       <ul className="text-[11px] text-slate-600 dark:text-neutral-400 space-y-1 pl-1">
                         <li className="flex items-center gap-1.5">
                           <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                          <span>Verified Ajo Host badge on profile and group chat</span>
+                          <span>Blue Host badge on profile and group chat</span>
                         </li>
                         <li className="flex items-center gap-1.5">
                           <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                          <span>Host community rotational cycles up to ₦500,000 per pot</span>
+                          <span>Host community rotational cycles (platform takes 2% on pot)</span>
                         </li>
                         <li className="flex items-center gap-1.5">
                           <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
@@ -255,11 +255,11 @@ export const AjoLedgerModal: React.FC = () => {
                         className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-98 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1.5"
                       >
                         <BadgeCheck className="w-4 h-4" />
-                        <span>Pay ₦6,000 & Get Blue Verified</span>
+                        <span>Pay ₦4,000 & Get Blue Verified (2% fee)</span>
                       </button>
                     </div>
 
-                    {/* Gold Checkmark Creator Option (₦11,000 / month) */}
+                    {/* Gold Checkmark Creator Option (₦11,000 / month - 5% fee) */}
                     <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-500/10 via-purple-500/5 to-transparent border border-amber-300 dark:border-amber-900/50 relative overflow-hidden space-y-2.5">
                       <div className="flex items-start justify-between">
                         <div className="flex items-center gap-2.5">
@@ -272,7 +272,7 @@ export const AjoLedgerModal: React.FC = () => {
                                 Gold Creator Checkmark
                               </h4>
                               <span className="text-[10px] font-mono font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 px-1.5 py-0.2 rounded-full">
-                                Creators & VIP
+                                5% Fee on Earnings
                               </span>
                             </div>
                             <span className="text-xs font-mono font-bold text-amber-600 dark:text-amber-400">
@@ -289,11 +289,11 @@ export const AjoLedgerModal: React.FC = () => {
                         </li>
                         <li className="flex items-center gap-1.5">
                           <CheckCircle2 className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                          <span>Host unlimited Ajo pots & Creator Fan Savings Circles</span>
+                          <span>Host unlimited Ajo pots (platform takes 2%) + Creator Studio</span>
                         </li>
                         <li className="flex items-center gap-1.5">
                           <CheckCircle2 className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                          <span>Unlocks African Creator Studio: sell concert tickets & songs</span>
+                          <span>Platform charges 5% on all ticket, song & subscription earnings</span>
                         </li>
                       </ul>
 
@@ -307,16 +307,61 @@ export const AjoLedgerModal: React.FC = () => {
                         <span>Pay ₦11,000 & Get Gold Creator Badge</span>
                       </button>
                     </div>
+
+                    {/* Creator Plus Option (₦25,000 / month - 2% fee) */}
+                    <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-500/10 via-pink-500/10 to-transparent border border-purple-300 dark:border-purple-800 relative overflow-hidden space-y-2.5">
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-600 to-pink-600 text-white flex items-center justify-center shadow-xs">
+                            <Sparkles className="w-5 h-5 text-white" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <h4 className="font-bold text-sm text-slate-900 dark:text-white">
+                                Creator Plus Plan
+                              </h4>
+                              <span className="text-[10px] font-mono font-bold bg-purple-500/20 text-purple-700 dark:text-purple-300 px-1.5 py-0.2 rounded-full">
+                                Only 2% Fee!
+                              </span>
+                            </div>
+                            <span className="text-xs font-mono font-bold text-purple-600 dark:text-purple-400">
+                              ₦25,000 / month
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <ul className="text-[11px] text-slate-600 dark:text-neutral-400 space-y-1 pl-1">
+                        <li className="flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+                          <span>Lowest platform fee: only 2% on all earnings + 2% on Ajo pots</span>
+                        </li>
+                        <li className="flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+                          <span>Host unlimited high-limit Ajo pots with verified priority</span>
+                        </li>
+                      </ul>
+
+                      <button
+                        type="button"
+                        onClick={() => handleUpgradeVerification('creator_plus')}
+                        disabled={isProcessing}
+                        className="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 via-pink-600 to-purple-700 hover:opacity-95 active:scale-98 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1.5"
+                      >
+                        <Sparkles className="w-4 h-4 text-purple-200" />
+                        <span>Pay ₦25,000 & Get Creator Plus (2% Fee)</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : (
                 /* Verified Host - Create Form */
                 <form onSubmit={handleCreateAjo} className="space-y-3">
                   <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-2xl border border-emerald-200/80 dark:border-emerald-900/50 flex items-center gap-2.5">
-                    <BadgeCheck className={`w-5 h-5 ${currentUser.verificationBadge === 'gold' ? 'text-amber-500' : 'text-blue-500'}`} />
+                    <BadgeCheck className={`w-5 h-5 ${currentUser.verificationBadge === 'gold' || currentUser.verificationBadge === 'creator_plus' ? 'text-amber-500' : 'text-blue-500'}`} />
                     <div>
                       <div className="font-bold text-xs text-emerald-900 dark:text-emerald-200">
-                        Verified {currentUser.verificationBadge === 'gold' ? 'Gold Creator Host' : 'Blue Ajo Host'}
+                        Verified {currentUser.verificationBadge === 'creator_plus' ? 'Creator Plus Host (2% fee)' : currentUser.verificationBadge === 'gold' ? 'Gold Creator Host (5% fee)' : 'Blue Ajo Host (2% fee)'}
                       </div>
                       <div className="text-[10px] text-emerald-700 dark:text-emerald-400">
                         Authorized to host community smart escrow pots

@@ -22,6 +22,7 @@ export const JobBoardModal: React.FC = () => {
     setIsJobBoardModalOpen,
     jobPostings,
     postNewJob,
+    applyForJob,
     wallet,
     formatPrice,
     setActiveTab,
@@ -56,19 +57,25 @@ export const JobBoardModal: React.FC = () => {
   });
 
   const handleApply = (job: JobPosting) => {
+    const res = applyForJob(job);
+    if (!res.success) {
+      alert(res.message);
+      return;
+    }
+
     // Look for chat with employer or create one
     let targetChat = chats.find((c) => c.phone === job.contactPhone || c.name.includes(job.company));
     if (!targetChat && chats.length > 0) {
       targetChat = chats[0];
     }
 
-    setAppliedJobToast(`Application sent for "${job.title}"! Employer chat opened.`);
+    setAppliedJobToast(res.message);
     setTimeout(() => {
       setAppliedJobToast(null);
       setIsJobBoardModalOpen(false);
       setActiveTab('chats');
       if (targetChat) setActiveChatId(targetChat.id);
-    }, 1500);
+    }, 1800);
   };
 
   const handleCreateJob = (e: React.FormEvent) => {
@@ -395,7 +402,7 @@ export const JobBoardModal: React.FC = () => {
                   className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs active:scale-95 transition-transform"
                 >
                   <Send className="w-3 h-3" />
-                  <span>Apply via AfriChat</span>
+                  <span>Apply (₦50 fee)</span>
                 </button>
               </div>
             </div>

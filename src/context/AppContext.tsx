@@ -40,6 +40,12 @@ import {
   CreatorPost,
   CreatorShowTicket,
   CreatorSong,
+  ArtisanStation,
+  ArtisanStaff,
+  ArtisanTask,
+  ServiceOffering,
+  ReferredUser,
+  ReferralProgram,
 } from '../types';
 import {
   LOCALIZED_STRINGS,
@@ -74,6 +80,8 @@ import {
   MOCK_CREATOR_POSTS,
   MOCK_CREATOR_SHOWS,
   MOCK_CREATOR_SONGS,
+  MOCK_ARTISAN_STATION,
+  MOCK_REFERRAL_PROGRAM,
 } from '../data/mockData';
 
 interface ActiveCallState {
@@ -122,7 +130,7 @@ interface AppContextType {
   wallet: UserWallet;
   isWalletModalOpen: boolean;
   setIsWalletModalOpen: (val: boolean) => void;
-  topUpWallet: (amount: number) => { success: boolean; reference: string };
+  topUpWallet: (amount: number) => { success: boolean; reference: string; fee: number; totalPaid: number };
   withdrawWallet: (
     amount: number,
     bankName: string,
@@ -212,7 +220,7 @@ interface AppContextType {
     totalRounds: number;
     rules?: string;
   }) => { success: boolean; requiresVerification?: boolean; message: string };
-  upgradeVerificationBadge: (badge: 'blue' | 'gold') => { success: boolean; message: string };
+  upgradeVerificationBadge: (badge: 'blue' | 'gold' | 'creator_plus') => { success: boolean; message: string };
   // 8. Phone Number OTP Authentication & Identity
   currentUser: UserProfile;
   setCurrentUser: (user: UserProfile) => void;
@@ -257,6 +265,7 @@ interface AppContextType {
   postNewJob: (
     job: Omit<JobPosting, 'id' | 'postedAt' | 'isPaid'>
   ) => { success: boolean; job?: JobPosting; message?: string };
+  applyForJob: (job: JobPosting) => { success: boolean; message: string };
   // 13. Security Settings (Payment PIN & Security Questions)
   securitySettings: SecuritySettings;
   setPaymentPin: (pin: string) => void;
@@ -341,6 +350,32 @@ interface AppContextType {
   createCreatorPost: (content: string, isLocked: boolean, mediaType?: 'image' | 'video' | 'audio_leak' | 'text', mediaUrl?: string) => void;
   createCreatorShow: (show: Omit<CreatorShowTicket, 'id' | 'totalSold' | 'isPurchasedByMe'>) => void;
   createCreatorSong: (song: Omit<CreatorSong, 'id' | 'playsCount' | 'salesCount' | 'isPurchasedByMe'>) => void;
+  // 22. Artisan Service Station & Workspace Management
+  artisanStation: ArtisanStation | null;
+  registerArtisanStation: (
+    stationData: Partial<ArtisanStation>,
+    paymentMethod: 'wallet' | 'paystack'
+  ) => { success: boolean; message: string; station?: ArtisanStation };
+  addArtisanListing: (
+    listing: Omit<ServiceOffering, 'id'>,
+    paymentMethod?: 'wallet' | 'paystack'
+  ) => { success: boolean; message: string; listing?: ServiceOffering };
+  updateStationHours: (hours: ArtisanStation['operatingHours']) => void;
+  hireArtisanStaff: (
+    staff: Omit<ArtisanStaff, 'id' | 'hiredAt' | 'status'>
+  ) => { success: boolean; staffMember: ArtisanStaff };
+  assignArtisanTask: (
+    task: Omit<ArtisanTask, 'id' | 'createdAt' | 'status'>
+  ) => { success: boolean; task: ArtisanTask };
+  updateArtisanTaskStatus: (taskId: string, status: ArtisanTask['status']) => void;
+  isArtisanModalOpen: boolean;
+  setIsArtisanModalOpen: (val: boolean) => void;
+  // 23. Anti-Fraud Referral & Invite System
+  referralProgram: ReferralProgram;
+  isReferralModalOpen: boolean;
+  setIsReferralModalOpen: (val: boolean) => void;
+  claimReferralBonus: () => { success: boolean; amountClaimed: number; message: string };
+  simulateInviteContact: (name: string, phone: string, passesFraudCheck: boolean) => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -545,10 +580,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCreators((prev) =>
       prev.map((c) => {
         if (c.id === creatorId) {
-          nowFollowed = !c.isSubscribedByMe;
+          nowFollowed = !c.isFollowedByMe;
           return {
             ...c,
-            isSubscribedByMe: nowFollowed,
+            isFollowedByMe: nowFollowed,
             subscribersCount: nowFollowed ? c.subscribersCount + 1 : Math.max(0, c.subscribersCount - 1),
           };
         }
@@ -655,6 +690,306 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isPurchasedByMe: true, // creator owns their song
     };
     setCreatorSongs((prev) => [newSong, ...prev]);
+  };
+
+  // 22. Artisan Service Station & Workspace Management
+  const [artisanStation, setArtisanStation] = useState<ArtisanStation | null>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_artisan_station');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse artisan station:', e);
+    }
+    return MOCK_ARTISAN_STATION;
+  });
+  const [isArtisanModalOpen, setIsArtisanModalOpen] = useState(false);
+
+  const registerArtisanStation = (
+    stationData: Partial<ArtisanStation>,
+    paymentMethod: 'wallet' | 'paystack'
+  ) => {
+    const regFee = 5000;
+    if (paymentMethod === 'wallet' && wallet.availableBalance < regFee) {
+      return {
+        success: false,
+        message: 'Insufficient wallet balance for ₦5,000 station registration. Please top up your wallet or select Paystack.',
+      };
+    }
+
+    if (paymentMethod === 'wallet') {
+      const newTx: WalletTransaction = {
+        id: `tx_artisan_reg_${Date.now()}`,
+        type: 'transfer_out',
+        title: 'Artisan Station Registration Fee (₦5,000)',
+        amount: regFee,
+        currency: 'NGN',
+        timestamp: 'Just now',
+        status: 'completed',
+        channel: 'wallet',
+      };
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - regFee,
+        transactions: [newTx, ...prev.transactions],
+      }));
+    }
+
+    const newStation: ArtisanStation = {
+      id: `station_${Date.now()}`,
+      ownerId: currentUser.id,
+      ownerName: currentUser.fullName,
+      ownerPhone: currentUser.phoneNumber,
+      stationName: stationData.stationName || `${currentUser.fullName}'s Master Station`,
+      category: stationData.category || 'mechanic',
+      categoryLabel: stationData.categoryLabel || 'Auto & Engineering Specialist',
+      location: stationData.location || 'Surulere Artisan Complex, Lagos',
+      workshopAddress: stationData.workshopAddress || 'Block 5, Commercial Avenue, Lagos',
+      about: stationData.about || 'Verified high-precision African workshop station with Escrow guarantees.',
+      avatar: stationData.avatar || currentUser.avatarUrl,
+      isApproved: true,
+      registrationFeePaid: true,
+      registrationFeeAmount: regFee,
+      registrationPaymentMethod: paymentMethod,
+      registeredAt: 'Just now',
+      operatingHours: stationData.operatingHours || {
+        days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+        startTime: '08:00 AM',
+        endTime: '07:00 PM',
+        breakTime: '01:00 PM - 02:00 PM',
+      },
+      listings: stationData.listings || [],
+      staff: stationData.staff || [
+        {
+          id: `staff_owner_${Date.now()}`,
+          name: currentUser.fullName,
+          role: 'Senior Artisan',
+          phone: currentUser.phoneNumber,
+          hiredAt: 'Today',
+          wage: 'Lead Partner',
+          status: 'active',
+        },
+      ],
+      tasks: stationData.tasks || [],
+    };
+
+    setArtisanStation(newStation);
+    localStorage.setItem('africhat_artisan_station', JSON.stringify(newStation));
+    return { success: true, message: 'Artisan Station successfully registered and approved for ₦5,000!', station: newStation };
+  };
+
+  const addArtisanListing = (
+    listing: Omit<ServiceOffering, 'id'>,
+    paymentMethod: 'wallet' | 'paystack' = 'wallet'
+  ) => {
+    const listingFee = 500;
+    if (paymentMethod === 'wallet' && wallet.availableBalance < listingFee) {
+      return {
+        success: false,
+        message: 'Insufficient wallet balance for ₦500 listing fee. Please top up your wallet.',
+      };
+    }
+
+    if (paymentMethod === 'wallet') {
+      const newTx: WalletTransaction = {
+        id: `tx_lst_fee_${Date.now()}`,
+        type: 'transfer_out',
+        title: `Service Listing Fee (₦500): ${listing.title}`,
+        amount: listingFee,
+        currency: 'NGN',
+        timestamp: 'Just now',
+        status: 'completed',
+        channel: 'wallet',
+      };
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - listingFee,
+        transactions: [newTx, ...prev.transactions],
+      }));
+    }
+
+    const newOffering: ServiceOffering = {
+      ...listing,
+      id: `lst_${Date.now()}`,
+    };
+
+    if (artisanStation) {
+      const updatedStation: ArtisanStation = {
+        ...artisanStation,
+        listings: [...artisanStation.listings, newOffering],
+      };
+      setArtisanStation(updatedStation);
+      localStorage.setItem('africhat_artisan_station', JSON.stringify(updatedStation));
+    }
+
+    // Also sync to global serviceProviders so any client in AfriChat can discover and book it
+    setServiceProviders((prev) => {
+      const existing = prev.find((p) => p.phone === currentUser.phoneNumber || (artisanStation && p.id === artisanStation.id));
+      if (existing) {
+        const updated = prev.map((p) => (p.id === existing.id ? { ...p, servicesOffered: [newOffering, ...p.servicesOffered] } : p));
+        localStorage.setItem('africhat_service_providers', JSON.stringify(updated));
+        return updated;
+      } else {
+        const brandNewProvider: ServiceProvider = {
+          id: artisanStation?.id || `serv_${Date.now()}`,
+          name: currentUser.fullName,
+          businessName: artisanStation?.stationName || 'Verified Artisan Station',
+          avatar: currentUser.avatarUrl,
+          category: artisanStation?.category || 'mechanic',
+          categoryLabel: artisanStation?.categoryLabel || 'Master Artisan',
+          rating: 5.0,
+          reviewCount: 1,
+          hourlyRate: newOffering.price,
+          currency: 'NGN',
+          location: artisanStation?.location || 'Lagos, Nigeria',
+          about: artisanStation?.about || 'Verified artisan workshop.',
+          experienceYears: 6,
+          phone: currentUser.phoneNumber,
+          isVerified: true,
+          badge: 'Master Artisan Station',
+          availability: {
+            days: artisanStation?.operatingHours.days || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+            timeSlots: ['09:00 AM', '12:00 PM', '03:00 PM', '05:30 PM'],
+          },
+          servicesOffered: [newOffering],
+          portfolioImages: [
+            'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=400&auto=format&fit=crop&q=80',
+          ],
+        };
+        const updated = [brandNewProvider, ...prev];
+        localStorage.setItem('africhat_service_providers', JSON.stringify(updated));
+        return updated;
+      }
+    });
+
+    return {
+      success: true,
+      message: `New service listing "${newOffering.title}" published! (₦500 fee paid)`,
+      listing: newOffering,
+    };
+  };
+
+  const updateStationHours = (hours: ArtisanStation['operatingHours']) => {
+    if (!artisanStation) return;
+    const updated = { ...artisanStation, operatingHours: hours };
+    setArtisanStation(updated);
+    localStorage.setItem('africhat_artisan_station', JSON.stringify(updated));
+  };
+
+  const hireArtisanStaff = (staff: Omit<ArtisanStaff, 'id' | 'hiredAt' | 'status'>) => {
+    const newStaff: ArtisanStaff = {
+      ...staff,
+      id: `staff_${Date.now()}`,
+      hiredAt: 'Today',
+      status: 'active',
+    };
+    if (artisanStation) {
+      const updated = { ...artisanStation, staff: [...artisanStation.staff, newStaff] };
+      setArtisanStation(updated);
+      localStorage.setItem('africhat_artisan_station', JSON.stringify(updated));
+    }
+    return { success: true, staffMember: newStaff };
+  };
+
+  const assignArtisanTask = (task: Omit<ArtisanTask, 'id' | 'createdAt' | 'status'>) => {
+    const newTask: ArtisanTask = {
+      ...task,
+      id: `task_${Date.now()}`,
+      status: 'pending',
+      createdAt: 'Just now',
+    };
+    if (artisanStation) {
+      const updated = { ...artisanStation, tasks: [newTask, ...artisanStation.tasks] };
+      setArtisanStation(updated);
+      localStorage.setItem('africhat_artisan_station', JSON.stringify(updated));
+    }
+    return { success: true, task: newTask };
+  };
+
+  const updateArtisanTaskStatus = (taskId: string, status: ArtisanTask['status']) => {
+    if (!artisanStation) return;
+    const updatedTasks = artisanStation.tasks.map((t) => (t.id === taskId ? { ...t, status } : t));
+    const updated = { ...artisanStation, tasks: updatedTasks };
+    setArtisanStation(updated);
+    localStorage.setItem('africhat_artisan_station', JSON.stringify(updated));
+  };
+
+  // 23. Anti-Fraud Referral & Invite System
+  const [referralProgram, setReferralProgram] = useState<ReferralProgram>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_referral_program');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse referral program:', e);
+    }
+    return MOCK_REFERRAL_PROGRAM;
+  });
+  const [isReferralModalOpen, setIsReferralModalOpen] = useState(false);
+
+  const claimReferralBonus = () => {
+    if (referralProgram.availableBonus <= 0) {
+      return { success: false, amountClaimed: 0, message: 'No unlocked referral bonuses ready to claim right now.' };
+    }
+    const bonusToClaim = referralProgram.availableBonus;
+    const newTx: WalletTransaction = {
+      id: `tx_ref_bonus_${Date.now()}`,
+      type: 'topup',
+      title: 'Anti-Fraud Referral Reward Bonus Claim',
+      amount: bonusToClaim,
+      currency: 'NGN',
+      timestamp: 'Just now',
+      status: 'completed',
+      channel: 'wallet',
+    };
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance + bonusToClaim,
+      transactions: [newTx, ...prev.transactions],
+    }));
+    setReferralProgram((prev) => {
+      const updated = {
+        ...prev,
+        availableBonus: 0,
+      };
+      localStorage.setItem('africhat_referral_program', JSON.stringify(updated));
+      return updated;
+    });
+    return {
+      success: true,
+      amountClaimed: bonusToClaim,
+      message: `🎉 ₦${bonusToClaim.toLocaleString()} referral reward credited to your AfriChat wallet!`,
+    };
+  };
+
+  const simulateInviteContact = (name: string, phone: string, passesFraudCheck: boolean) => {
+    const newInvited: ReferredUser = {
+      id: `ref_${Date.now()}`,
+      name,
+      phone,
+      joinedAt: 'Just now',
+      otpVerified: passesFraudCheck,
+      walletFundedOrTransacted: passesFraudCheck,
+      transactionAmount: passesFraudCheck ? 5000 : 0,
+      activityCompleted: passesFraudCheck,
+      status: passesFraudCheck ? 'verified_active' : 'pending',
+      rewardEarned: passesFraudCheck ? 500 : 0,
+    };
+    setReferralProgram((prev) => {
+      const newReferredList = [newInvited, ...prev.referredList];
+      const verified = newReferredList.filter((r) => r.status === 'verified_active').length;
+      const pending = newReferredList.filter((r) => r.status === 'pending').length;
+      const additionalBonus = passesFraudCheck ? 500 : 0;
+      const updated: ReferralProgram = {
+        ...prev,
+        totalInvited: prev.totalInvited + 1,
+        activeVerifiedCount: verified,
+        pendingCount: pending,
+        totalEarned: prev.totalEarned + additionalBonus,
+        availableBonus: prev.availableBonus + additionalBonus,
+        referredList: newReferredList,
+      };
+      localStorage.setItem('africhat_referral_program', JSON.stringify(updated));
+      return updated;
+    });
   };
 
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -956,13 +1291,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Wallet Funding via Paystack
+  // Wallet Funding via Paystack (1% fee capped at ₦2,000)
   const topUpWallet = (amount: number) => {
+    const fee = Math.min(Math.round(amount * 0.01), 2000);
+    const totalPaid = amount + fee;
     const ref = `PSK_${Math.floor(10000000 + Math.random() * 90000000)}`;
     const newTx: WalletTransaction = {
       id: `tx_${Date.now()}`,
       type: 'topup',
-      title: 'Wallet Top-up via Paystack',
+      title: `Wallet Top-up via Paystack (Fee: ₦${fee.toLocaleString()})`,
       amount,
       currency: 'NGN',
       timestamp: 'Just now',
@@ -977,7 +1314,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       transactions: [newTx, ...prev.transactions],
     }));
 
-    return { success: true, reference: ref };
+    return { success: true, reference: ref, fee, totalPaid };
   };
 
   // Wallet Withdrawal to Bank
@@ -1790,21 +2127,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true, message: `Successfully contributed ₦${amount.toLocaleString()} to Ajo pot!` };
   };
 
-  const upgradeVerificationBadge = (badge: 'blue' | 'gold') => {
-    const cost = badge === 'gold' ? 11000 : 6000;
+  const upgradeVerificationBadge = (badge: 'blue' | 'gold' | 'creator_plus') => {
+    let cost = 4000;
+    let feeRate = 0.02;
+    let badgeTitle = 'Blue Checkmark (₦4,000/mo · 2% platform fee)';
+
+    if (badge === 'gold') {
+      cost = 11000;
+      feeRate = 0.05;
+      badgeTitle = 'Gold Creator Checkmark (₦11,000/mo · 5% platform fee)';
+    } else if (badge === 'creator_plus') {
+      cost = 25000;
+      feeRate = 0.02;
+      badgeTitle = 'Creator Plus Plan (₦25,000/mo · 2% platform fee)';
+    }
+
     if (wallet.availableBalance < cost) {
       return {
         success: false,
-        message: `Insufficient wallet balance for ${
-          badge === 'gold' ? 'Gold Creator Checkmark (₦11,000/mo)' : 'Blue Host Checkmark (₦6,000/mo)'
-        }. Please top up your wallet.`,
+        message: `Insufficient wallet balance for ${badgeTitle}. Please top up your wallet.`,
       };
     }
 
     const newTx: WalletTransaction = {
       id: `tx_${Date.now()}`,
       type: 'topup',
-      title: `${badge === 'gold' ? 'Gold Creator Checkmark (₦11k/mo)' : 'Blue Ajo Host Checkmark (₦6k/mo)'}`,
+      title: badgeTitle,
       amount: cost,
       currency: 'NGN',
       timestamp: 'Just now',
@@ -1822,7 +2170,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedUser: UserProfile = {
       ...currentUser,
       verificationBadge: badge,
-      isCreator: badge === 'gold' ? true : currentUser.isCreator,
+      isCreator: badge === 'gold' || badge === 'creator_plus' ? true : currentUser.isCreator,
+      creatorPlan: badge === 'creator_plus' ? 'creator_plus' : badge === 'gold' ? 'gold' : currentUser.creatorPlan,
+      platformFeeRate: feeRate,
       verificationExpiresAt: '30 days remaining',
     };
 
@@ -1831,9 +2181,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `🎉 Success! You are now verified with a ${badge.toUpperCase()} Checkmark (${
-        badge === 'gold' ? 'Creator Tier ₦11,000/mo' : 'Ajo Host Tier ₦6,000/mo'
-      }). You can now host Ajo clubs and access full creator features!`,
+      message: `🎉 Success! You are now verified on ${badgeTitle}! You can now host Ajo clubs and enjoy your verified benefits.`,
     };
   };
 
@@ -1848,7 +2196,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         success: false,
         requiresVerification: true,
-        message: 'Hosting an Ajo / Esusu group requires an active Blue (₦6k/mo) or Gold (₦11k/mo) checkmark to guarantee trust.',
+        message: 'Hosting an Ajo / Esusu group requires an active Blue Checkmark (₦4,000/mo, 2% fee) or Gold Creator Checkmark (₦11,000/mo) to guarantee anti-default trust.',
       };
     }
 
@@ -1874,6 +2222,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           avatar:
             currentUser.avatarUrl ||
             'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          phone: currentUser.phoneNumber || '+2348030001122',
           payoutPosition: 1,
           payoutDate: 'Round 1 (Current)',
           hasPaidCurrentCycle: true,
@@ -1883,6 +2232,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           id: 'm_2',
           name: 'Ibrahim Danladi',
           avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+          phone: '+2348021112233',
           payoutPosition: 2,
           payoutDate: 'Round 2',
           hasPaidCurrentCycle: true,
@@ -1892,6 +2242,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           id: 'm_3',
           name: 'Folake Adeleke',
           avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          phone: '+2348054445566',
           payoutPosition: 3,
           payoutDate: 'Round 3',
           hasPaidCurrentCycle: false,
@@ -1901,6 +2252,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           id: 'm_4',
           name: 'Emeka Okafor',
           avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
+          phone: '+2348097778899',
           payoutPosition: 4,
           payoutDate: 'Round 4',
           hasPaidCurrentCycle: false,
@@ -2148,7 +2500,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       job: newJob,
-      message: 'Job posting published successfully on AfriChat Opportunities Board!',
+      message: 'Job posting published successfully on AfriChat Opportunities Board (₦400 fee deducted)!',
+    };
+  };
+
+  const applyForJob = (job: JobPosting) => {
+    const applyFee = 50;
+    if (wallet.availableBalance < applyFee) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance for application fee (₦${applyFee}). Please fund your AfriChat wallet first.`,
+      };
+    }
+
+    const newTx: WalletTransaction = {
+      id: `tx_${Date.now()}`,
+      type: 'topup',
+      title: `Job Application Fee: ${job.title.slice(0, 24)}`,
+      amount: applyFee,
+      currency: 'NGN',
+      timestamp: 'Just now',
+      status: 'completed',
+      reference: `JOB_APP_${Date.now()}`,
+      channel: 'wallet',
+    };
+
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance - applyFee,
+      transactions: [newTx, ...prev.transactions],
+    }));
+
+    return {
+      success: true,
+      message: `Application submitted for "${job.title}"! ₦50 application fee paid from your wallet. Employer chat opened.`,
     };
   };
 
@@ -2702,6 +3087,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isPostJobModalOpen,
         setIsPostJobModalOpen,
         postNewJob,
+        applyForJob,
         // 13. Security Settings (Payment PIN & Security Questions)
         securitySettings,
         setPaymentPin,
@@ -2784,6 +3170,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createCreatorPost,
         createCreatorShow,
         createCreatorSong,
+        // 22. Artisan Service Station & Workspace Management
+        artisanStation,
+        registerArtisanStation,
+        addArtisanListing,
+        updateStationHours,
+        hireArtisanStaff,
+        assignArtisanTask,
+        updateArtisanTaskStatus,
+        isArtisanModalOpen,
+        setIsArtisanModalOpen,
+        // 23. Anti-Fraud Referral & Invite System
+        referralProgram,
+        isReferralModalOpen,
+        setIsReferralModalOpen,
+        claimReferralBonus,
+        simulateInviteContact,
       }}
     >
       {children}

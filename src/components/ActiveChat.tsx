@@ -35,6 +35,7 @@ import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
 import { EmojiMemeDrawer } from './EmojiMemeDrawer';
 import { DisplayWallpaperModal } from './DisplayWallpaperModal';
+import { ContactProfileModal } from './ContactProfileModal';
 
 interface ActiveChatProps {
   onOpenVoiceRecorder: () => void;
@@ -76,6 +77,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   } = useApp();
 
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
+  const [isContactProfileOpen, setIsContactProfileOpen] = useState(false);
 
   const [inputText, setInputText] = useState('');
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
@@ -170,7 +172,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
       {/* Top Header */}
       <div className="flex items-center justify-between px-2 py-2 bg-purple-950 dark:bg-black text-white shrink-0 z-20 shadow-xs border-b border-purple-900/60 dark:border-neutral-900">
-        <div className="flex items-center gap-1.5 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={() => setActiveChatId(null)}
             className="p-1 text-white hover:bg-white/10 rounded-full transition-colors"
@@ -179,14 +181,21 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             <ArrowLeft className="w-5 h-5" />
           </button>
 
-          {/* Avatar */}
-          <div className="relative shrink-0 cursor-pointer">
+          {/* Avatar (Click opens Contact Profile) */}
+          <div
+            onClick={() => setIsContactProfileOpen(true)}
+            className="relative shrink-0 cursor-pointer group"
+            title="View contact info"
+          >
             <img
               src={currentChat.avatar}
               alt={currentChat.name}
               referrerPolicy="no-referrer"
-              className="w-9 h-9 rounded-full object-cover"
+              className="w-11 h-11 rounded-full object-cover border border-white/20 group-hover:scale-105 transition-transform"
             />
+            {currentChat.isOnline && !currentChat.isScamFlagged && (
+              <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-purple-950 dark:border-black rounded-full" />
+            )}
             {currentChat.isScamFlagged && (
               <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white rounded-full flex items-center justify-center text-[10px] font-bold">
                 !
@@ -194,12 +203,13 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             )}
           </div>
 
-          {/* Contact Details */}
+          {/* Contact Details (Click opens Contact Profile) */}
           <div
-            onClick={() => currentChat.catalog?.length && setShowCatalogDrawer(!showCatalogDrawer)}
-            className="min-w-0 cursor-pointer px-1"
+            onClick={() => setIsContactProfileOpen(true)}
+            className="min-w-0 cursor-pointer px-1 group"
+            title="View contact info"
           >
-            <div className="font-semibold text-sm leading-tight text-white truncate flex items-center gap-1.5">
+            <div className="font-bold text-sm leading-tight text-white group-hover:text-purple-300 truncate flex items-center gap-1.5 transition-colors">
               <span>{currentChat.name}</span>
               {currentChat.isGroup && (
                 <span className="text-[10px] font-mono bg-white/15 px-1.5 py-0.2 rounded font-normal">
@@ -211,7 +221,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
               {currentChat.isScamFlagged ? (
                 <span className="text-rose-400 font-bold">⚠️ Flagged Scammer ({currentChat.scamReportsCount} reports)</span>
               ) : currentChat.isOnline ? (
-                'online'
+                <span className="text-emerald-400 font-medium">online</span>
               ) : (
                 'last seen recently'
               )}
@@ -968,6 +978,14 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       <DisplayWallpaperModal
         isOpen={isDisplayModalOpen}
         onClose={() => setIsDisplayModalOpen(false)}
+      />
+
+      {/* WhatsApp Style Contact Info Profile Modal */}
+      <ContactProfileModal
+        chat={currentChat}
+        isOpen={isContactProfileOpen}
+        onClose={() => setIsContactProfileOpen(false)}
+        onOpenThemeModal={() => setIsDisplayModalOpen(true)}
       />
     </div>
   );

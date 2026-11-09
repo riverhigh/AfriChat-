@@ -27,6 +27,7 @@ import {
   X,
   Coins,
   LockKeyhole,
+  Share2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -61,6 +62,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
     setIsCreatorModalOpen,
     setIsAjoModalOpen,
     setIsSecurityModalOpen,
+    setIsReferralModalOpen,
     joinAudioSpace,
     audioSpaces,
   } = useApp();
@@ -215,23 +217,43 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                       </span>
                     </button>
 
-                    {/* 6. African Services */}
+                    {/* 6. African Artisan Stations & Services */}
                     <button
                       type="button"
                       onClick={() => {
                         setShowMenu(false);
                         setIsServicesModalOpen(true);
                       }}
-                      className="p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-200 dark:border-neutral-800 text-left transition-all group"
+                      className="p-2.5 rounded-2xl bg-purple-500/10 dark:bg-purple-950/30 hover:bg-purple-500/20 dark:hover:bg-purple-900/40 border border-purple-200 dark:border-purple-800 text-left transition-all group"
                     >
-                      <div className="w-8 h-8 rounded-xl bg-purple-500/20 text-purple-600 flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
+                      <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
                         <Wrench className="w-4 h-4" />
                       </div>
                       <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Services
+                        Artisan Stations
                       </span>
-                      <span className="text-[10px] text-slate-500 dark:text-neutral-400 block mt-0.5 leading-tight">
-                        Mechanic, DJ, Barber
+                      <span className="text-[10px] text-purple-600 dark:text-purple-300 font-semibold block mt-0.5 leading-tight">
+                        ₦5k Reg • ₦500 List
+                      </span>
+                    </button>
+
+                    {/* Invite & Earn ₦500 Anti-Ghost Referral */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false);
+                        setIsReferralModalOpen(true);
+                      }}
+                      className="p-2.5 rounded-2xl bg-emerald-500/10 dark:bg-emerald-950/30 hover:bg-emerald-500/20 dark:hover:bg-emerald-900/40 border border-emerald-200 dark:border-emerald-800 text-left transition-all group"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
+                        <Share2 className="w-4 h-4" />
+                      </div>
+                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
+                        Invite & Earn
+                      </span>
+                      <span className="text-[10px] text-emerald-600 dark:text-emerald-300 font-semibold block mt-0.5 leading-tight">
+                        ₦500/Friend (Anti-Ghost)
                       </span>
                     </button>
 

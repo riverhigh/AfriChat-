@@ -66,10 +66,11 @@ export interface MemeSticker {
   id: string;
   title: string;
   imageUrl: string;
-  tags: string[];
+  tags?: string[];
   topText?: string;
   bottomText?: string;
-  cultureOrigin: 'Nollywood' | 'Afrobeats' | 'Pidgin Slang' | 'Street Banter';
+  category?: string;
+  cultureOrigin?: 'Nollywood' | 'Afrobeats' | 'Pidgin Slang' | 'Street Banter' | 'User Created' | 'User Custom' | string;
 }
 
 export interface AudioSpaceSpeaker {
@@ -296,9 +297,11 @@ export interface UserProfile {
   isPhoneVerified?: boolean;
   createdAt: string;
   lastSeen: string;
-  verificationBadge?: 'blue' | 'gold' | null;
+  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | null;
   verificationExpiresAt?: string;
   isCreator?: boolean;
+  creatorPlan?: 'none' | 'gold' | 'creator_plus';
+  platformFeeRate?: number;
 }
 
 export interface DeviceContact {
@@ -634,6 +637,7 @@ export interface CreatorProfile {
   badge: string;
   totalEarnings: number;
   isSubscribedByMe?: boolean;
+  isFollowedByMe?: boolean;
 }
 
 export interface CreatorPost {
@@ -692,6 +696,86 @@ export interface CreatorSong {
   isPurchasedByMe?: boolean;
   releaseDate: string;
 }
+
+// 22. Artisan Service Station & Workspace Management
+export interface ArtisanStaff {
+  id: string;
+  name: string;
+  role: 'Senior Artisan' | 'Apprentice' | 'Assistant' | 'Technician' | 'Store Manager';
+  phone: string;
+  hiredAt: string;
+  wage: string;
+  status: 'active' | 'on_leave';
+}
+
+export interface ArtisanTask {
+  id: string;
+  title: string;
+  description: string;
+  assignedToStaffId: string;
+  assignedToStaffName: string;
+  clientName?: string;
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  status: 'pending' | 'in_progress' | 'completed';
+  dueDate: string;
+  createdAt: string;
+}
+
+export interface ArtisanStation {
+  id: string;
+  ownerId: string;
+  ownerName: string;
+  ownerPhone: string;
+  stationName: string;
+  category: ServiceCategory;
+  categoryLabel: string;
+  location: string;
+  workshopAddress: string;
+  about: string;
+  avatar: string;
+  isApproved: boolean;
+  registrationFeePaid: boolean;
+  registrationFeeAmount: number; // ₦5,000
+  registrationPaymentMethod: 'wallet' | 'paystack';
+  registeredAt: string;
+  operatingHours: {
+    days: string[];
+    startTime: string;
+    endTime: string;
+    breakTime?: string;
+  };
+  listings: ServiceOffering[]; // ₦500 per listing
+  staff: ArtisanStaff[];
+  tasks: ArtisanTask[];
+}
+
+// 23. Anti-Fraud Referral & Invite System
+export interface ReferredUser {
+  id: string;
+  name: string;
+  phone: string;
+  joinedAt: string;
+  avatar?: string;
+  otpVerified: boolean;
+  walletFundedOrTransacted: boolean;
+  transactionAmount?: number;
+  activityCompleted: boolean;
+  status: 'pending' | 'verified_active' | 'flagged_ghost';
+  rewardEarned: number; // ₦500
+}
+
+export interface ReferralProgram {
+  referralCode: string;
+  referralLink: string;
+  rewardPerActiveUser: number; // 500 NGN
+  totalEarned: number;
+  availableBonus: number;
+  totalInvited: number;
+  activeVerifiedCount: number;
+  pendingCount: number;
+  referredList: ReferredUser[];
+}
+
 
 
 

@@ -40,6 +40,7 @@ export const CreatorModal: React.FC = () => {
     creatorShows,
     creatorSongs,
     subscribeToCreator,
+    toggleFollowCreator,
     buyShowTicket,
     buyCreatorSong,
     createCreatorPost,
@@ -319,17 +320,35 @@ export const CreatorModal: React.FC = () => {
                             alt={creator.name}
                             className="w-14 h-14 rounded-full object-cover border-2 border-white dark:border-black shadow-md"
                           />
-                          <button
-                            type="button"
-                            onClick={() => handleSubscribe(creator)}
-                            className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-transform active:scale-95 shadow-sm ${
-                              creator.isSubscribedByMe
-                                ? 'bg-emerald-600 text-white'
-                                : 'bg-gradient-to-r from-purple-600 to-pink-600 text-white'
-                            }`}
-                          >
-                            {creator.isSubscribedByMe ? '✓ Subscribed VIP' : `Subscribe ${formatPrice(creator.monthlySubPrice, creator.currency)}/mo`}
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const res = toggleFollowCreator(creator.id);
+                                setSuccessToast(res.isFollowed ? `✓ Followed ${creator.name}! Their stories now appear in your Updates tab.` : `Unfollowed ${creator.name}`);
+                                setTimeout(() => setSuccessToast(null), 3000);
+                              }}
+                              className={`px-2.5 py-1.5 rounded-xl font-bold text-xs transition-transform active:scale-95 border ${
+                                creator.isFollowedByMe
+                                  ? 'bg-neutral-800 text-white border-neutral-700'
+                                  : 'bg-white/10 hover:bg-white/20 text-white border-white/20'
+                              }`}
+                            >
+                              {creator.isFollowedByMe ? '✓ Following' : '+ Follow'}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleSubscribe(creator)}
+                              className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-transform active:scale-95 shadow-sm ${
+                                creator.isSubscribedByMe
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-gradient-to-r from-purple-600 to-pink-600 text-white'
+                              }`}
+                            >
+                              {creator.isSubscribedByMe ? '✓ Subscribed VIP' : `Subscribe ${formatPrice(creator.monthlySubPrice, creator.currency)}/mo`}
+                            </button>
+                          </div>
                         </div>
                         <h4 className="text-sm font-bold text-slate-900 dark:text-white mt-1.5">
                           {creator.name}
@@ -710,51 +729,98 @@ export const CreatorModal: React.FC = () => {
                   </p>
                 </div>
 
-                <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2.5">
-                  <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                    <div>
-                      <span className="text-xs font-bold text-amber-400 block">Gold Creator Checkmark</span>
-                      <span className="text-[10px] text-slate-400">Direct wallet payout & VIP status</span>
+                <div className="space-y-3">
+                  {/* Option 1: Gold Creator Plan (₦11,000 / mo · 5% Platform Fee) */}
+                  <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2.5">
+                    <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                      <div>
+                        <span className="text-xs font-bold text-amber-400 block">Gold Creator Checkmark</span>
+                        <span className="text-[10px] text-slate-400">5% platform fee on all earnings</span>
+                      </div>
+                      <span className="text-sm font-black font-mono text-white">₦11,000 / mo</span>
                     </div>
-                    <span className="text-sm font-black font-mono text-white">₦11,000 / mo</span>
+
+                    <ul className="text-xs text-slate-300 space-y-1.5">
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>Platform charges 5% on music drops, concert tickets & monthly VIP subs</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>Gold Creator Verified badge on your profile and story updates</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>Host Ajo / Esusu community savings circles at 2% platform fee</span>
+                      </li>
+                    </ul>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const res = upgradeVerificationBadge('gold');
+                        if (res.success) {
+                          setSuccessToast('🎉 Welcome to AfriCreator! Gold Creator Studio is now active.');
+                          setTimeout(() => setSuccessToast(null), 4000);
+                        } else {
+                          alert(res.message);
+                        }
+                      }}
+                      className="w-full py-2.5 bg-gradient-to-r from-amber-500 via-amber-600 to-amber-700 hover:opacity-95 active:scale-98 text-white rounded-xl font-bold text-xs shadow-md transition-all flex items-center justify-center gap-1.5"
+                    >
+                      <Crown className="w-4 h-4 text-amber-200" />
+                      <span>Pay ₦11,000/mo & Unlock Gold Creator (5% fee)</span>
+                    </button>
                   </div>
 
-                  <ul className="text-xs text-slate-300 space-y-2">
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>Keep 100% of song downloads & concert ticket sales directly in your AfriChat Wallet</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>Gold Creator Verified badge on your profile and story updates</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>Issue fraud-proof scannable QR ticket passes with secure PIN check-ins</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>Host VIP subscriber feeds, studio leak previews, and high-limit Ajo clubs</span>
-                    </li>
-                  </ul>
-                </div>
+                  {/* Option 2: Creator Plus Plan (₦25,000 / mo · only 2% Platform Fee) */}
+                  <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-500/20 via-pink-500/10 to-transparent border border-purple-400/40 space-y-2.5 relative overflow-hidden">
+                    <div className="flex items-center justify-between pb-2 border-b border-purple-500/20">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-purple-300 block">Creator Plus Plan</span>
+                          <span className="text-[9px] font-mono font-bold bg-purple-500/30 text-purple-200 px-1.5 py-0.2 rounded-full">
+                            Best Value
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-300">Platform charges only 2% on earnings!</span>
+                      </div>
+                      <span className="text-sm font-black font-mono text-white">₦25,000 / mo</span>
+                    </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    const res = upgradeVerificationBadge('gold');
-                    if (res.success) {
-                      setSuccessToast('🎉 Welcome to AfriCreator! Your Creator Studio is now active.');
-                      setTimeout(() => setSuccessToast(null), 4000);
-                    } else {
-                      alert(res.message);
-                    }
-                  }}
-                  className="w-full py-3 bg-gradient-to-r from-amber-500 via-purple-600 to-pink-600 hover:from-amber-600 hover:to-pink-700 active:scale-98 text-white rounded-2xl font-black text-xs shadow-lg transition-all flex items-center justify-center gap-2"
-                >
-                  <Crown className="w-4 h-4 text-amber-200" />
-                  <span>Pay ₦11,000/mo & Unlock Creator Studio</span>
-                </button>
+                    <ul className="text-xs text-slate-300 space-y-1.5">
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-purple-300 shrink-0" />
+                        <span>Keep 98% of your revenue: platform takes only 2% on all creator earnings!</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-purple-300 shrink-0" />
+                        <span>Host unlimited high-limit Ajo pots at 2% platform fee</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-purple-300 shrink-0" />
+                        <span>Priority featured placement across Updates tab & Town View</span>
+                      </li>
+                    </ul>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const res = upgradeVerificationBadge('creator_plus');
+                        if (res.success) {
+                          setSuccessToast('🌟 Welcome to Creator Plus! Lowest 2% platform fee enabled.');
+                          setTimeout(() => setSuccessToast(null), 4000);
+                        } else {
+                          alert(res.message);
+                        }
+                      }}
+                      className="w-full py-2.5 bg-gradient-to-r from-purple-600 via-pink-600 to-purple-700 hover:opacity-95 active:scale-98 text-white rounded-xl font-black text-xs shadow-lg transition-all flex items-center justify-center gap-1.5"
+                    >
+                      <Sparkles className="w-4 h-4 text-purple-200" />
+                      <span>Pay ₦25,000/mo & Unlock Creator Plus (2% fee)</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : (
             <div className="space-y-4">
@@ -944,9 +1010,10 @@ export const CreatorModal: React.FC = () => {
                 </div>
               )}
             </div>
-          )}
-        </div>
+          )
+        )}
       </div>
+    </div>
 
       {/* Scannable Ticket QR Pass Modal Overlay */}
       {activeTicketQrModal && (

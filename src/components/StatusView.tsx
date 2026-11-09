@@ -260,24 +260,24 @@ export const StatusView: React.FC = () => {
       </div>
 
       {/* Subscribed & Followed Creators Updates Tray */}
-      {creators.some((c) => c.isSubscribedByMe) && (
-        <div className="p-3 border-b border-slate-100 dark:border-neutral-800 bg-slate-50/50 dark:bg-neutral-950/60">
-          <div className="flex items-center justify-between mb-2 px-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-1.5">
-              <Crown className="w-3.5 h-3.5 text-amber-500" />
-              <span>Subscribed Creator Stories</span>
-            </span>
-            <button
-              onClick={() => setIsCreatorModalOpen(true)}
-              className="text-[10px] text-slate-500 hover:text-purple-600 font-semibold"
-            >
-              VIP Feed →
-            </button>
-          </div>
+      <div className="p-3 border-b border-slate-100 dark:border-neutral-800 bg-slate-50/50 dark:bg-neutral-950/60">
+        <div className="flex items-center justify-between mb-2 px-1">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-1.5">
+            <Crown className="w-3.5 h-3.5 text-amber-500" />
+            <span>Followed & Subscribed Creators</span>
+          </span>
+          <button
+            onClick={() => setIsCreatorModalOpen(true)}
+            className="text-[10px] text-purple-600 dark:text-purple-400 font-bold hover:underline"
+          >
+            Explore Hub →
+          </button>
+        </div>
 
+        {creators.some((c) => c.isSubscribedByMe || c.isFollowedByMe) ? (
           <div className="flex items-center gap-3 overflow-x-auto pb-1 no-scrollbar">
             {creators
-              .filter((c) => c.isSubscribedByMe)
+              .filter((c) => c.isSubscribedByMe || c.isFollowedByMe)
               .map((creator) => (
                 <div
                   key={creator.id}
@@ -297,11 +297,27 @@ export const StatusView: React.FC = () => {
                   <span className="text-[10px] font-bold text-slate-800 dark:text-white max-w-[68px] truncate text-center">
                     {creator.name.split(' ')[0]}
                   </span>
+                  <span className="text-[8px] font-mono font-bold text-purple-600 dark:text-purple-400">
+                    {creator.isSubscribedByMe ? 'VIP' : 'Following'}
+                  </span>
                 </div>
               ))}
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="flex items-center justify-between p-2.5 bg-purple-50/70 dark:bg-purple-950/20 rounded-2xl border border-purple-200 dark:border-purple-900/30">
+            <div className="text-[11px] text-slate-600 dark:text-neutral-300">
+              Follow top African creators to see their 24h stories and VIP drops here.
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsCreatorModalOpen(true)}
+              className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shrink-0 ml-2 shadow-xs"
+            >
+              Follow Creators
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Statuses Feed */}
       <div className="p-3 space-y-3">
@@ -310,9 +326,12 @@ export const StatusView: React.FC = () => {
         </div>
 
         <div className="space-y-3">
-          {/* Subscribed Creators VIP Feed Drops */}
+          {/* Subscribed & Followed Creators Feed Drops */}
           {creatorPosts
-            .filter((p) => creators.find((c) => c.id === p.creatorId)?.isSubscribedByMe)
+            .filter((p) => {
+              const c = creators.find((cr) => cr.id === p.creatorId);
+              return c?.isSubscribedByMe || c?.isFollowedByMe;
+            })
             .map((post) => {
               const creator = creators.find((c) => c.id === post.creatorId);
               return (
@@ -339,11 +358,11 @@ export const StatusView: React.FC = () => {
                             {post.creatorName}
                           </span>
                           <span className="text-[9px] font-mono font-bold bg-amber-500/20 text-amber-600 dark:text-amber-400 px-1 py-0.2 rounded-full">
-                            VIP Story
+                            {creator?.isSubscribedByMe ? 'VIP Story' : 'Creator Story'}
                           </span>
                         </div>
                         <span className="text-[10px] text-slate-400 font-mono">
-                          {post.timestamp} · Verified African Creator
+                          {post.createdAt} · Verified African Creator
                         </span>
                       </div>
                     </div>
@@ -373,7 +392,7 @@ export const StatusView: React.FC = () => {
                     </span>
                     <span className="flex items-center gap-2">
                       <span className="flex items-center gap-1 text-rose-500">
-                        <Heart className="w-3 h-3 fill-rose-500" /> {post.likes}
+                        <Heart className="w-3 h-3 fill-rose-500" /> {post.likesCount}
                       </span>
                     </span>
                   </div>

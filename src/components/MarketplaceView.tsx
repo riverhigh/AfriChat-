@@ -5,13 +5,15 @@ import {
   MapPin,
   MessageSquare,
   Lock,
+  Wrench,
+  Sparkles,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { MOCK_PRODUCTS } from '../data/mockData';
 import { Product } from '../types';
 
 export const MarketplaceView: React.FC = () => {
-  const { openCheckout, openChatWithProduct, formatPrice } = useApp();
+  const { openCheckout, openChatWithProduct, formatPrice, setIsServicesModalOpen } = useApp();
   const [search, setSearch] = useState('');
   const [selectedCat, setSelectedCat] = useState<'all' | 'textiles' | 'electronics' | 'beauty' | 'fashion'>('all');
 
@@ -70,6 +72,27 @@ export const MarketplaceView: React.FC = () => {
               {cat.label}
             </button>
           ))}
+        </div>
+      </div>
+
+      {/* Artisan Service Stations Hub Banner */}
+      <div className="px-3 pt-3">
+        <div className="p-3.5 bg-gradient-to-r from-purple-900/30 via-indigo-950/40 to-slate-900/60 rounded-2xl border border-purple-500/30 flex items-center justify-between gap-3 shadow-xs">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-purple-400 font-bold text-xs">
+              <Wrench className="w-4 h-4" />
+              <span>Artisan Service Stations & Workshops</span>
+            </div>
+            <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
+              Mechanics, barbers, and tailors: Register station for ₦5k. Manage ₦500 listings, calendar & tasks.
+            </p>
+          </div>
+          <button
+            onClick={() => setIsServicesModalOpen(true)}
+            className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shrink-0 shadow-md transition-all active:scale-95"
+          >
+            Open Station Hub
+          </button>
         </div>
       </div>
 

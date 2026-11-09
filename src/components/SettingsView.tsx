@@ -27,6 +27,8 @@ import {
   Check,
   Sliders,
   Sparkles,
+  Share2,
+  Wrench,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { CurrencyCode, LanguageCode, AppFontSize } from '../types';
@@ -87,6 +89,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setFontSize,
     chatWallpaper,
     setChatWallpaper,
+    setIsReferralModalOpen,
+    setIsServicesModalOpen,
+    referralProgram,
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores'>('services');
@@ -546,6 +551,51 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           {/* Quick Hub App Preferences (Language, Currency, Low Data, Theme) */}
           <div className="divide-y divide-slate-100 dark:divide-neutral-800/80 bg-white dark:bg-[#18152e] border-y border-slate-100 dark:border-neutral-800">
+            {/* Invite & Earn ₦500 Referral */}
+            <button
+              onClick={() => setIsReferralModalOpen(true)}
+              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors bg-emerald-50/50 dark:bg-emerald-950/20"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+                  <Share2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                    <span>Invite Friends & Earn ₦500</span>
+                    <span className="text-[10px] bg-emerald-200 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 font-bold px-1.5 py-0.2 rounded-full">
+                      Anti-Ghost
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    Earn ₦500/active friend. Unlocked: ₦{referralProgram.availableBonus.toLocaleString()}
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            </button>
+
+            {/* Artisan Stations & Workshop Hub */}
+            <button
+              onClick={() => setIsServicesModalOpen(true)}
+              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center">
+                  <Wrench className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-slate-900 dark:text-white">
+                    Artisan Stations & Services
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    Station registration (₦5k), listings (₦500), calendar & apprentice staff
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400" />
+            </button>
+
             {/* Phone Authentication & Change Number */}
             <button
               onClick={() => setIsAuthModalOpen(true)}

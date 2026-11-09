@@ -37,6 +37,7 @@ import { HealthcareModal } from './components/HealthcareModal';
 import { LegalModal } from './components/LegalModal';
 import { DisplayWallpaperModal } from './components/DisplayWallpaperModal';
 import { CreatorModal } from './components/CreatorModal';
+import { ReferralModal } from './components/ReferralModal';
 
 const AppContent: React.FC = () => {
   const { activeChatId, activeTab } = useApp();
@@ -127,6 +128,9 @@ const AppContent: React.FC = () => {
 
         {/* AfriCreator: Subscriptions, Show Tickets & Direct Music Drops */}
         <CreatorModal />
+
+        {/* Anti-Ghost Referral & Invite System */}
+        <ReferralModal />
       </div>
     </div>
   );

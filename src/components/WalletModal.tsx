@@ -45,7 +45,7 @@ export const WalletModal: React.FC = () => {
       const res = topUpWallet(topUpAmount);
       setFeedback({
         type: 'success',
-        text: `₦${topUpAmount.toLocaleString()} funded via Paystack! Reference: ${res.reference}`,
+        text: `₦${topUpAmount.toLocaleString()} credited via Paystack! (1% fee: ₦${res.fee.toLocaleString()} capped at ₦2,000). Ref: ${res.reference}`,
       });
       setWalletTab('overview');
     }, 600);
@@ -295,6 +295,41 @@ export const WalletModal: React.FC = () => {
                 />
               </div>
 
+              {/* Top-up Fee Breakdown: 1% with ₦2,000 max cap */}
+              {(() => {
+                const fee = Math.min(Math.round(topUpAmount * 0.01), 2000);
+                const totalCharge = topUpAmount + fee;
+                return (
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900/80 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-2 text-xs">
+                    <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
+                      <span>Credited to Wallet</span>
+                      <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                        ₦{topUpAmount.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
+                      <span className="flex items-center gap-1">
+                        <span>Top-up Fee (1% at ₦2,000 max cap)</span>
+                        {topUpAmount * 0.01 > 2000 && (
+                          <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.2 rounded-full">
+                            Capped at ₦2k
+                          </span>
+                        )}
+                      </span>
+                      <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                        ₦{fee.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center font-bold text-slate-900 dark:text-slate-100">
+                      <span>Total Debit / Payable</span>
+                      <span className="font-mono text-sm text-[#0ba4db]">
+                        ₦{totalCharge.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="pt-2 flex gap-2">
                 <button
                   type="button"
@@ -317,7 +352,9 @@ export const WalletModal: React.FC = () => {
                   ) : (
                     <>
                       <CreditCard className="w-4 h-4" />
-                      <span>Pay ₦{topUpAmount.toLocaleString()} with Paystack</span>
+                      <span>
+                        Pay ₦{(topUpAmount + Math.min(Math.round(topUpAmount * 0.01), 2000)).toLocaleString()} with Paystack
+                      </span>
                     </>
                   )}
                 </button>

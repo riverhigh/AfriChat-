@@ -162,8 +162,11 @@ export const DisplayWallpaperModal: React.FC<DisplayWallpaperModalProps> = ({
               <div className="flex items-center gap-2">
                 <Image className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                 <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                  Chat Background Wallpaper
+                  Chat Wallpaper (Chats Only)
                 </h4>
+                <span className="text-[9px] font-bold px-1.5 py-0.2 bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 rounded-full">
+                  In-Chat Only
+                </span>
               </div>
 
               {chatWallpaper && (
@@ -177,6 +180,9 @@ export const DisplayWallpaperModal: React.FC<DisplayWallpaperModalProps> = ({
                 </button>
               )}
             </div>
+            <p className="text-[11px] text-slate-500 dark:text-neutral-400 mb-2 leading-snug">
+              Custom wallpapers are displayed exclusively inside your 1-on-1 and group chat threads without affecting tabs or menus.
+            </p>
 
             {/* Device Image Upload Button */}
             <label className="w-full p-4 rounded-2xl border-2 border-dashed border-purple-400/50 dark:border-purple-600/40 hover:bg-purple-500/5 transition-colors flex flex-col items-center justify-center cursor-pointer text-center group">
