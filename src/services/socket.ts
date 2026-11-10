@@ -1,4 +1,4 @@
-﻿import { io, Socket } from 'socket.io-client';
+import { io, Socket } from 'socket.io-client';
 import { ChatMessage } from '../types';
 
 let socket: Socket | null = null;
@@ -121,4 +121,20 @@ export const emitPhoneCallSignal = (targetPhone: string, data: any) => {
 export const registerSocketPhone = (cleanPhone: string) => {
   const s = getSocket();
   s?.emit('register_phone', cleanPhone.replace(/\D/g, ''));
+};
+
+// 5. Live 24h Status (Stories) Signaling
+export const emitPostStatus = (status: any) => {
+  const s = getSocket();
+  s?.emit('post_status', { status });
+};
+
+export const emitViewStatus = (statusId: string, viewer: any) => {
+  const s = getSocket();
+  s?.emit('view_status', { statusId, viewer });
+};
+
+export const emitLikeStatus = (statusId: string, liked: boolean, likerId: string, likerName?: string) => {
+  const s = getSocket();
+  s?.emit('like_status', { statusId, liked, likerId, likerName });
 };

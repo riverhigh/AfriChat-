@@ -1,4 +1,4 @@
-﻿import {
+import {
   initSocket,
   getSocket,
   joinChatRoom,
@@ -8,6 +8,9 @@
   joinLiveSpace,
   leaveLiveSpace,
   registerSocketUser,
+  emitPostStatus,
+  emitViewStatus,
+  emitLikeStatus,
 } from '../services/socket';
 
 export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
@@ -2031,9 +2034,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
     }
 
-    // Subscribe to real-time status feed
-    if (!isSupabaseConfigured) return;
-    const statusSub = supabase.channel('status_feed_sub', { config: { broadcast: { self: false } } });
+    // 2. Fetch from local server REST fallback
+    try {
+      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      fetch(`http://${socketHost}:3002/api/statuses`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((serverStatuses) => {
+          if (Array.isArray(serverStatuses) && serverStatuses.length > 0) {
+            const incoming = serverStatuses
+              .filter((s: any) => {
+                const rp = (s.userPhone || s.phoneNumber || '').replace(/\D/g, '');
+                return rp && rp !== myCleanPhone;
+              })
+              .map((s: any) => ({ ...s, isMe: false }));
+            if (incoming.length > 0) {
+              setStatuses((prev) => {
+                const existingIds = new Set(prev.map((item) => item.id));
+                const newItems = incoming.filter((item) => !existingIds.has(item.id));
+                return [...prev, ...newItems];
+              });
+            }
+          }
+        })
+        .catch(() => {});
+    } catch (_) {}
+
+    // 3. Real-Time Socket.io Status Listeners
+    const socket = getSocket();
+    const onSocketNewStatus = ({ status }: any) => {
+      if (!status) return;
+      const senderPhone = (status.userPhone || '').replace(/\D/g, '');
+      if (!senderPhone || senderPhone === myCleanPhone) return;
+      setStatuses((prev) => {
+        if (prev.some((s) => s.id === status.id)) return prev;
+        return [{ ...status, isMe: false }, ...prev];
+      });
+    };
+
+    const onSocketViewed = (payload: any) => {
+      if (!payload?.statusId || !payload?.viewer) return;
+      setStatuses((prev) =>
+        prev.map((s) => {
+          if (s.id !== payload.statusId) return s;
+          if (s.viewers?.some((v: any) => v.id === payload.viewer.id)) return s;
+          return { ...s, viewsCount: (s.viewsCount || 0) + 1, viewers: [...(s.viewers || []), payload.viewer] };
+        })
+      );
+    };
+
+    const onSocketLiked = (payload: any) => {
+      if (!payload?.statusId) return;
+      setStatuses((prev) =>
+        prev.map((s) => {
+          if (s.id !== payload.statusId) return s;
+          return { ...s, likesCount: payload.liked ? (s.likesCount || 0) + 1 : Math.max(0, (s.likesCount || 0) - 1) };
+        })
+      );
+    };
+
+    socket?.on('new_status', onSocketNewStatus);
+    socket?.on('status_viewed', onSocketViewed);
+    socket?.on('status_liked', onSocketLiked);
+
+    // 4. Subscribe to real-time status feed via Supabase
+    if (!isSupabaseConfigured) return () => {
+      socket?.off('new_status', onSocketNewStatus);
+      socket?.off('status_viewed', onSocketViewed);
+      socket?.off('status_liked', onSocketLiked);
+    };
+    const statusSub = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
     statusSub
       .on('broadcast', { event: 'new_status' }, ({ payload }: any) => {
         if (!payload?.status) return;
@@ -2067,7 +2136,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .subscribe();
 
     return () => {
-      statusSub.unsubscribe();
+      if (statusSub) statusSub.unsubscribe();
+      socket?.off('new_status', onSocketNewStatus);
+      socket?.off('status_viewed', onSocketViewed);
+      socket?.off('status_liked', onSocketLiked);
     };
   }, [isAuthenticated, currentUser?.phoneNumber]);
 
@@ -2367,10 +2439,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
     }
 
-    // Broadcast like to status_feed so owner sees updated count
+    // 1. Broadcast like via Socket.io
+    emitLikeStatus(statusId, newLiked, currentUser.id, currentUser.fullName);
+
+    // 2. Broadcast like to status_feed so owner sees updated count
     if (isSupabaseConfigured) {
       setTimeout(() => {
-        const ch = supabase.channel(`status_like_${statusId}`, { config: { broadcast: { self: false } } });
+        const ch = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
         ch.subscribe((st) => {
           if (st === 'SUBSCRIBED') {
             ch.send({
@@ -2392,6 +2467,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       avatar: currentUser.avatarUrl || '',
       timeViewed: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
+
+    // 1. Broadcast view via Socket.io
+    emitViewStatus(statusId, viewer);
     setStatuses((prev) =>
       prev.map((s) => {
         if (s.id === statusId) {
@@ -2412,7 +2490,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
     if (isSupabaseConfigured) {
       setTimeout(() => {
-        const ch = supabase.channel(`status_view_${statusId}`, { config: { broadcast: { self: false } } });
+        const ch = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
         ch.subscribe((st) => {
           if (st === 'SUBSCRIBED') {
             ch.send({
@@ -2472,7 +2550,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         likes_count: 0,
       }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
 
-      const statusFeedCh = supabase.channel('status_feed_pub', { config: { broadcast: { self: false } } });
+      emitPostStatus({ ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false });
+      const statusFeedCh = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
       statusFeedCh.subscribe((st) => {
         if (st === 'SUBSCRIBED') {
           statusFeedCh.send({
@@ -2522,7 +2601,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         likes_count: 0,
       }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
 
-      const statusFeedCh = supabase.channel('status_feed_pub', { config: { broadcast: { self: false } } });
+      emitPostStatus({ ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false });
+      const statusFeedCh = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
       statusFeedCh.subscribe((st) => {
         if (st === 'SUBSCRIBED') {
           statusFeedCh.send({
@@ -2573,7 +2653,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         likes_count: 0,
       }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
 
-      const statusFeedCh = supabase.channel('status_feed_pub', { config: { broadcast: { self: false } } });
+      emitPostStatus({ ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false });
+      const statusFeedCh = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
       statusFeedCh.subscribe((st) => {
         if (st === 'SUBSCRIBED') {
           statusFeedCh.send({
@@ -2624,7 +2705,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         likes_count: 0,
       }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
 
-      const statusFeedCh = supabase.channel('status_feed_pub', { config: { broadcast: { self: false } } });
+      emitPostStatus({ ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false });
+      const statusFeedCh = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
       statusFeedCh.subscribe((st) => {
         if (st === 'SUBSCRIBED') {
           statusFeedCh.send({

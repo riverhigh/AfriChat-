@@ -1,0 +1,21 @@
+[
+  {
+    "id": "status_test_100",
+    "userId": "usr_a",
+    "userPhone": "2348011111111",
+    "userName": "User A",
+    "caption": "My first AGC story!",
+    "statusType": "thought",
+    "createdAt": "Just now",
+    "viewsCount": 1,
+    "likesCount": 1,
+    "viewers": [
+      {
+        "id": "usr_b",
+        "name": "User B",
+        "avatar": "",
+        "timeViewed": "12:05 PM"
+      }
+    ]
+  }
+]

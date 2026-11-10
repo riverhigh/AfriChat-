@@ -55,7 +55,33 @@ const usersByPhone = new Map<string, RegisteredUser>();
 const phoneToSocketId = new Map<string, string>();
 const USERS_FILE = path.join(__dirname, 'data_users.json');
 const COMMUNITIES_FILE = path.join(__dirname, 'data_communities.json');
+const STATUSES_FILE = path.join(__dirname, 'data_statuses.json');
 const communitiesMap = new Map<string, any>();
+const statusesMap = new Map<string, any>();
+
+try {
+  if (fs.existsSync(STATUSES_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(STATUSES_FILE, 'utf8'));
+    if (Array.isArray(raw)) {
+      const now = Date.now();
+      for (const s of raw) {
+        if (s.id && (!s.expiresAt || new Date(s.expiresAt).getTime() > now)) {
+          statusesMap.set(s.id, s);
+        }
+      }
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading local statuses registry:', e);
+}
+
+function saveStatusesFile() {
+  try {
+    fs.writeFileSync(STATUSES_FILE, JSON.stringify(Array.from(statusesMap.values()), null, 2));
+  } catch (e) {
+    console.warn('Notice saving statuses registry:', e);
+  }
+}
 
 try {
   if (fs.existsSync(COMMUNITIES_FILE)) {
@@ -197,6 +223,23 @@ app.post('/api/communities', (req: Request, res: Response) => {
   res.json({ success: true, community: comm });
 });
 
+app.get('/api/statuses', (_req: Request, res: Response) => {
+  const now = Date.now();
+  const list = Array.from(statusesMap.values()).filter(
+    (s: any) => !s.expiresAt || new Date(s.expiresAt).getTime() > now
+  );
+  res.json(list);
+});
+
+app.post('/api/statuses', (req: Request, res: Response) => {
+  const st = req.body;
+  if (!st || !st.id) return res.status(400).json({ error: 'Status data required' });
+  statusesMap.set(st.id, st);
+  saveStatusesFile();
+  io.emit('new_status', { status: st });
+  res.json({ success: true, status: st });
+});
+
 // Create raw HTTP server to handle both Express REST and WebSocket upgrades
 const httpServer = createServer(app);
 
@@ -301,6 +344,44 @@ io.on('connection', (socket: Socket) => {
     // If it's a town community or group, broadcast to everyone
     if (chatId.startsWith('town_comm_')) {
       socket.broadcast.emit('new_message', { chatId, message });
+    }
+  });
+
+  // 2b. Live 24h Status (Stories) Handlers
+  socket.on('post_status', (payload: any) => {
+    const status = payload?.status || payload;
+    if (status?.id) {
+      statusesMap.set(status.id, status);
+      saveStatusesFile();
+      socket.broadcast.emit('new_status', { status });
+    }
+  });
+
+  socket.on('view_status', (payload: { statusId: string; viewer: any }) => {
+    if (payload?.statusId) {
+      const s = statusesMap.get(payload.statusId);
+      if (s) {
+        s.viewsCount = (s.viewsCount || 0) + 1;
+        s.viewers = s.viewers || [];
+        if (payload.viewer && !s.viewers.some((v: any) => v.id === payload.viewer.id)) {
+          s.viewers.push(payload.viewer);
+        }
+        statusesMap.set(payload.statusId, s);
+        saveStatusesFile();
+      }
+      io.emit('status_viewed', payload);
+    }
+  });
+
+  socket.on('like_status', (payload: { statusId: string; liked: boolean; likerId: string; likerName?: string }) => {
+    if (payload?.statusId) {
+      const s = statusesMap.get(payload.statusId);
+      if (s) {
+        s.likesCount = payload.liked ? (s.likesCount || 0) + 1 : Math.max(0, (s.likesCount || 0) - 1);
+        statusesMap.set(payload.statusId, s);
+        saveStatusesFile();
+      }
+      io.emit('status_liked', payload);
     }
   });
 

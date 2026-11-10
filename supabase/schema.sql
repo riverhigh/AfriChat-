@@ -1515,6 +1515,7 @@ $$;
 create table if not exists public.user_statuses (
   id              text primary key,
   user_id         text not null,
+  user_phone      text,
   user_name       text not null,
   user_avatar     text,
   status_type     text default 'thought',
@@ -1614,6 +1615,7 @@ alter table public.feature_flags enable row level security;
 
 create policy "Public read statuses" on public.user_statuses for select using (true);
 create policy "Authenticated write statuses" on public.user_statuses for insert with check (true);
+create policy "Allow update statuses" on public.user_statuses for update using (true);
 
 create policy "Public read errand runners" on public.errand_runners for select using (true);
 create policy "Public read errand items" on public.errand_items for select using (true);
