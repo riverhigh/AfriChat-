@@ -326,6 +326,16 @@ export function useWebRTC({
     pc.ontrack = (event) => {
       if (event.streams && event.streams[0]) {
         setRemoteStream(event.streams[0]);
+      } else if (event.track) {
+        const stream = new MediaStream([event.track]);
+        setRemoteStream(stream);
+      }
+      stopRingtone();
+      setConnectionState('connected');
+      if (!timerIntervalRef.current) {
+        timerIntervalRef.current = window.setInterval(() => {
+          setDurationSeconds((prev) => prev + 1);
+        }, 1000);
       }
     };
 
@@ -333,6 +343,21 @@ export function useWebRTC({
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         sendSignal('webrtc_ice', { candidate: event.candidate.toJSON() });
+      }
+    };
+
+    // ICE connection state changes
+    pc.oniceconnectionstatechange = () => {
+      if (!pc) return;
+      const iceState = pc.iceConnectionState;
+      if (iceState === 'connected' || iceState === 'completed') {
+        stopRingtone();
+        setConnectionState('connected');
+        if (!timerIntervalRef.current) {
+          timerIntervalRef.current = window.setInterval(() => {
+            setDurationSeconds((prev) => prev + 1);
+          }, 1000);
+        }
       }
     };
 
@@ -469,7 +494,20 @@ export function useWebRTC({
       console.warn('Socket.io join call room error:', e);
     }
 
-    // 3. Setup Supabase Realtime Broadcast Channel
+    // 3. Set initial state & announce presence immediately across all available transports
+    if (isInitiator) {
+      setConnectionState('ringing');
+      startRingtone();
+    } else {
+      setConnectionState('connecting');
+    }
+
+    sendSignal(isInitiator ? 'peer_join' : 'receiver_ready', {
+      timestamp: Date.now(),
+      isInitiator,
+    });
+
+    // 4. Setup Supabase Realtime Broadcast Channel as cross-network relay
     const channelName = `call_room_${roomId}`;
     const channel = supabase.channel(channelName, {
       config: { broadcast: { self: false } },
@@ -484,14 +522,6 @@ export function useWebRTC({
 
     channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        if (isInitiator) {
-          setConnectionState('ringing');
-          startRingtone();
-        } else {
-          setConnectionState('connecting');
-        }
-
-        // Announce presence across all channels
         sendSignal(isInitiator ? 'peer_join' : 'receiver_ready', {
           timestamp: Date.now(),
           isInitiator,
@@ -499,12 +529,16 @@ export function useWebRTC({
       }
     });
 
-    // Periodic heartbeat presence ping if initiator is waiting for receiver
+    // Periodic heartbeat presence ping until peer answers
     const pingInterval = setInterval(() => {
-      if (isInitiator && !peerReadyRef.current) {
-        sendSignal('peer_join', { timestamp: Date.now(), retry: true });
+      if (!peerReadyRef.current) {
+        sendSignal(isInitiator ? 'peer_join' : 'receiver_ready', {
+          timestamp: Date.now(),
+          isInitiator,
+          retry: true,
+        });
       }
-    }, 2000);
+    }, 1200);
 
     return () => clearInterval(pingInterval);
   }, [handleInboundSignal, isInitiator, roomId, sendSignal, startRingtone]);

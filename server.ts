@@ -194,10 +194,15 @@ io.on('connection', (socket: Socket) => {
   });
 
   // 2. Live Chat Message Broadcast
-  socket.on('send_message', (payload: { chatId: string; message: any }) => {
-    const { chatId, message } = payload;
+  socket.on('send_message', (payload: { chatId: string; message: any; targetPhone?: string }) => {
+    const { chatId, message, targetPhone } = payload;
     // Broadcast to everyone else in this chat room
     socket.to(`chat:${chatId}`).emit('new_message', { chatId, message });
+    // Also broadcast to target user's phone channel so incoming messages update their chat list
+    if (targetPhone) {
+      const cleanTarget = targetPhone.replace(/\D/g, '');
+      socket.to(`phone:${cleanTarget}`).emit('new_message', { chatId, message });
+    }
   });
 
   // 3. Typing Indicator
@@ -226,9 +231,10 @@ io.on('connection', (socket: Socket) => {
   });
 
   // 5. Direct Phone Calling Relay
-  socket.on('phone_call_signal', (payload: { targetPhone: string; data: any }) => {
+  socket.on('phone_call_signal', (payload: { targetPhone: string; data: any; event?: string }) => {
     const cleanTarget = payload.targetPhone.replace(/\D/g, '');
-    io.to(`phone:${cleanTarget}`).emit('incoming_call', payload.data);
+    const eventName = payload.event || 'incoming_call';
+    io.to(`phone:${cleanTarget}`).emit(eventName, payload.data);
   });
 
   socket.on('register_phone', (cleanPhone: string) => {

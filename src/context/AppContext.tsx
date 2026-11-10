@@ -1,11 +1,23 @@
 import {
   initSocket,
+  getSocket,
   joinChatRoom,
   leaveChatRoom,
   emitLiveMessage,
+  emitPhoneCallSignal,
   joinLiveSpace,
   leaveLiveSpace,
 } from '../services/socket';
+
+export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
+  const cleanA = (phoneA || '').replace(/\D/g, '');
+  const cleanB = (phoneB || '').replace(/\D/g, '');
+  if (cleanA && cleanB) {
+    const sorted = [cleanA, cleanB].sort();
+    return `dm_${sorted[0]}_${sorted[1]}`;
+  }
+  return '';
+};
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import {
   supabase,
@@ -1782,11 +1794,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setStatuses((prev) => [newStatus, ...prev.filter((s) => !s.isMe)]);
   };
 
-  // ── Incoming Call Phone Listener via Supabase Realtime ────────────────────
+  // ── Multi-Transport Incoming Call Listener (Socket.io + BroadcastChannel + Supabase)
   useEffect(() => {
     const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '');
     if (!myCleanPhone) return;
 
+    const handleIncomingCall = (payload: any) => {
+      if (!activeCall && payload?.roomId) {
+        setIncomingCall(payload);
+      }
+    };
+
+    const handleCallDeclined = () => {
+      setActiveCall(null);
+      setIncomingCall(null);
+    };
+
+    // 1. Socket.io Phone channel listener
+    const socket = getSocket();
+    socket?.on('incoming_call', handleIncomingCall);
+    socket?.on('call_declined', handleCallDeclined);
+
+    // 2. BroadcastChannel for same-browser multi-tab calling
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('africhat_phone_calls');
+      bc.onmessage = (e) => {
+        if (e.data?.targetPhone === myCleanPhone) {
+          if (e.data?.event === 'call_declined') {
+            handleCallDeclined();
+          } else if (e.data?.data) {
+            handleIncomingCall(e.data.data);
+          }
+        }
+      };
+    } catch (_) {}
+
+    // 3. Supabase Realtime channel listener
     const channelName = `phone_call_${myCleanPhone}`;
     const channel = supabase.channel(channelName, {
       config: { broadcast: { self: false } },
@@ -1794,16 +1838,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     channel
       .on('broadcast', { event: 'incoming_call' }, ({ payload }) => {
-        if (!activeCall) {
-          setIncomingCall(payload);
-        }
+        handleIncomingCall(payload);
       })
       .on('broadcast', { event: 'call_declined' }, () => {
-        setActiveCall(null);
+        handleCallDeclined();
       })
       .subscribe();
 
     return () => {
+      socket?.off('incoming_call', handleIncomingCall);
+      socket?.off('call_declined', handleCallDeclined);
+      if (bc) bc.close();
       channel.unsubscribe();
     };
   }, [currentUser.phoneNumber, activeCall]);
@@ -1829,23 +1874,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isInitiator,
     });
 
-    // Broadcast incoming call to target user's phone channel
+    // Multi-transport broadcast: Socket.io + BroadcastChannel + Supabase
     const cleanTargetPhone = phone.replace(/\D/g, '');
+    const callPayload = {
+      roomId: generatedRoomId,
+      callerName: currentUser.fullName,
+      callerPhone: currentUser.phoneNumber,
+      callerAvatar: currentUser.avatarUrl,
+      type,
+      timestamp: Date.now(),
+    };
+
     if (cleanTargetPhone && isInitiator) {
+      // 1. Socket.io
+      emitPhoneCallSignal(cleanTargetPhone, callPayload);
+
+      // 2. BroadcastChannel
+      try {
+        const bc = new BroadcastChannel('africhat_phone_calls');
+        bc.postMessage({ targetPhone: cleanTargetPhone, event: 'incoming_call', data: callPayload });
+        bc.close();
+      } catch (_) {}
+
+      // 3. Supabase Realtime
       const targetChannel = supabase.channel(`phone_call_${cleanTargetPhone}`);
       targetChannel.subscribe((status) => {
         if (status === 'SUBSCRIBED') {
           targetChannel.send({
             type: 'broadcast',
             event: 'incoming_call',
-            payload: {
-              roomId: generatedRoomId,
-              callerName: currentUser.fullName,
-              callerPhone: currentUser.phoneNumber,
-              callerAvatar: currentUser.avatarUrl,
-              type,
-              timestamp: Date.now(),
-            },
+            payload: callPayload,
           });
         }
       });
@@ -1872,8 +1930,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const declineIncomingCall = () => {
     if (!incomingCall) return;
-    const cleanCallerPhone = incomingCall.callerPhone.replace(/\D/g, '');
+    const cleanCallerPhone = incomingCall.callerPhone?.replace(/\D/g, '');
     if (cleanCallerPhone) {
+      // 1. Socket.io
+      const socket = getSocket();
+      socket?.emit('phone_call_signal', { targetPhone: cleanCallerPhone, event: 'call_declined', data: { roomId: incomingCall.roomId } });
+
+      // 2. BroadcastChannel
+      try {
+        const bc = new BroadcastChannel('africhat_phone_calls');
+        bc.postMessage({ targetPhone: cleanCallerPhone, event: 'call_declined', data: { roomId: incomingCall.roomId } });
+        bc.close();
+      } catch (_) {}
+
+      // 3. Supabase Realtime
       const channel = supabase.channel(`phone_call_${cleanCallerPhone}`);
       channel.subscribe((status) => {
         if (status === 'SUBSCRIBED') {
@@ -1901,6 +1971,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const endCall = () => {
+    if (activeCall?.phone) {
+      const cleanPhone = activeCall.phone.replace(/\D/g, '');
+      if (cleanPhone) {
+        const socket = getSocket();
+        socket?.emit('phone_call_signal', { targetPhone: cleanPhone, event: 'call_declined', data: { roomId: activeCall.roomId } });
+        try {
+          const bc = new BroadcastChannel('africhat_phone_calls');
+          bc.postMessage({ targetPhone: cleanPhone, event: 'call_declined', data: { roomId: activeCall.roomId } });
+          bc.close();
+        } catch (_) {}
+      }
+    }
     setActiveCall(null);
   };
 
@@ -1914,11 +1996,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 const sendMessage = (chatId: string, text: string) => {
     if (!text.trim()) return;
 
+    const currentChat = chats.find((c) => c.id === chatId);
+    const targetCleanPhone = currentChat?.phone?.replace(/\D/g, '');
+
     const newMsg: ChatMessage = {
       id: `msg_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       chatId,
       sender: 'user',
       senderName: currentUser.fullName || 'AfriChat User',
+      senderPhone: currentUser.phoneNumber,
+      senderAvatar: currentUser.avatarUrl,
       text,
       translatedText: {
         en: text,
@@ -1954,14 +2041,14 @@ const sendMessage = (chatId: string, text: string) => {
     // 2. Broadcast via BroadcastChannel (instant same-computer tab/window sync)
     try {
       const bc = new BroadcastChannel('africhat_chats_sync');
-      bc.postMessage({ chatId, message: newMsg, senderId: currentUser.id });
+      bc.postMessage({ chatId, message: newMsg, senderId: currentUser.id, targetPhone: targetCleanPhone });
       bc.close();
     } catch (e) {
       console.warn('BroadcastChannel error:', e);
     }
 
     // 3. Broadcast via Socket.io
-    emitLiveMessage(chatId, newMsg);
+    emitLiveMessage(chatId, newMsg, targetCleanPhone);
 
     // 4. Broadcast via Supabase Realtime
     try {
@@ -2742,21 +2829,28 @@ const sendMessage = (chatId: string, text: string) => {
   };
 
   const startChatWithContact = (contact: DeviceContact) => {
+    const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    const otherPhone = (contact.normalizedPhoneNumber || contact.rawPhoneNumber || '').replace(/\D/g, '');
+    const deterministicId = myPhone && otherPhone ? `dm_${[myPhone, otherPhone].sort().join('_')}` : '';
+
     let existingChat = chats.find(
       (c) =>
+        (deterministicId && c.id === deterministicId) ||
+        (otherPhone && c.phone && c.phone.replace(/\D/g, '') === otherPhone) ||
         c.phone === contact.normalizedPhoneNumber ||
         c.phone === contact.rawPhoneNumber ||
         c.name.toLowerCase() === contact.name.toLowerCase()
     );
 
+    const targetChatId = deterministicId || existingChat?.id || `chat_${Date.now()}`;
+
     if (!existingChat) {
-      const newChatId = `chat_${Date.now()}`;
       const newThread: ChatThread = {
-        id: newChatId,
+        id: targetChatId,
         name: contact.name,
         avatar:
           contact.avatar ||
-          'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+          "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
         verifiedStore: false,
         location: 'Contact Book',
         unreadCount: 0,
@@ -2764,10 +2858,14 @@ const sendMessage = (chatId: string, text: string) => {
         lastMessageTime: 'Just now',
         catalog: [],
         isOnline: true,
-        phone: contact.normalizedPhoneNumber,
+        phone: contact.normalizedPhoneNumber || contact.rawPhoneNumber,
       };
       setChats((prev) => [newThread, ...prev]);
       existingChat = newThread;
+    } else if (existingChat.id !== targetChatId) {
+      const updated = { ...existingChat, id: targetChatId };
+      setChats((prev) => prev.map((c) => (c.id === existingChat!.id ? updated : c)));
+      existingChat = updated;
     }
 
     setActiveTab('chats');
@@ -4272,33 +4370,65 @@ const sendMessage = (chatId: string, text: string) => {
 
     const handleIncomingMessage = ({ chatId, message, senderId }: { chatId: string; message: ChatMessage; senderId?: string }) => {
       if (senderId && senderId === currentUser.id) return;
+      if (message.sender === 'user' && message.senderPhone && currentUser.phoneNumber && message.senderPhone.replace(/\D/g, '') === currentUser.phoneNumber.replace(/\D/g, '')) return;
+
+      const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '');
+      const otherCleanPhone = message.senderPhone?.replace(/\D/g, '');
+      const canonicalDmId = myCleanPhone && otherCleanPhone ? `dm_${[myCleanPhone, otherCleanPhone].sort().join('_')}` : '';
+      const resolvedChatId = canonicalDmId || chatId;
 
       setMessages((prev) => {
-        const list = prev[chatId] || [];
+        const list = prev[resolvedChatId] || prev[chatId] || [];
         if (list.some((m) => m.id === message.id)) return prev;
         const receivedMsg: ChatMessage = {
           ...message,
+          chatId: resolvedChatId,
           sender: 'other',
           status: 'delivered',
         };
         return {
           ...prev,
-          [chatId]: [...list, receivedMsg],
+          [resolvedChatId]: [...list, receivedMsg],
         };
       });
 
-      setChats((prev) =>
-        prev.map((c) =>
-          c.id === chatId
-            ? {
-                ...c,
-                lastMessage: message.text || (message.type === 'voice' ? '🎤 Voice message' : '📎 Attachment'),
-                lastMessageTime: message.timestamp,
-                unreadCount: activeChatId === chatId ? 0 : (c.unreadCount || 0) + 1,
-              }
-            : c
-        )
-      );
+      setChats((prev) => {
+        const index = prev.findIndex(
+          (c) =>
+            c.id === resolvedChatId ||
+            c.id === chatId ||
+            (otherCleanPhone && c.phone && c.phone.replace(/\D/g, '') === otherCleanPhone)
+        );
+
+        const msgText = message.text || (message.type === 'voice' ? '🎤 Voice message' : '📎 Attachment');
+
+        if (index >= 0) {
+          const updated = [...prev];
+          const matched = { ...updated[index], id: resolvedChatId };
+          matched.lastMessage = msgText;
+          matched.lastMessageTime = message.timestamp;
+          matched.unreadCount = activeChatId === resolvedChatId || activeChatId === chatId ? 0 : (matched.unreadCount || 0) + 1;
+          updated.splice(index, 1);
+          return [matched, ...updated];
+        } else {
+          const newThread: ChatThread = {
+            id: resolvedChatId,
+            name: message.senderName || 'AfriChat Contact',
+            avatar:
+              message.senderAvatar ||
+              "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+            verifiedStore: false,
+            location: 'Direct Chat',
+            unreadCount: activeChatId === resolvedChatId || activeChatId === chatId ? 0 : 1,
+            lastMessage: msgText,
+            lastMessageTime: message.timestamp,
+            catalog: [],
+            isOnline: true,
+            phone: message.senderPhone || '',
+          };
+          return [newThread, ...prev];
+        }
+      });
     };
 
     // 1. Socket.io listener

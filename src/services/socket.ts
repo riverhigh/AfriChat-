@@ -68,55 +68,57 @@ export const registerSocketUser = (user: { id: string; fullName: string; phoneNu
 
 // 1. Chat Rooms
 export const joinChatRoom = (chatId: string) => {
-  if (socket?.connected) {
-    socket.emit('join_chat', chatId);
-  }
+  const s = getSocket();
+  s?.emit('join_chat', chatId);
 };
 
 export const leaveChatRoom = (chatId: string) => {
-  if (socket?.connected) {
-    socket.emit('leave_chat', chatId);
-  }
+  const s = getSocket();
+  s?.emit('leave_chat', chatId);
 };
 
 // 2. Chat Message Signaling
-export const emitLiveMessage = (chatId: string, message: ChatMessage) => {
-  if (socket?.connected) {
-    socket.emit('send_message', { chatId, message });
-  }
+export const emitLiveMessage = (chatId: string, message: ChatMessage, targetPhone?: string) => {
+  const s = getSocket();
+  s?.emit('send_message', { chatId, message, targetPhone });
 };
 
 // 3. Audio Spaces / Street Radio
 export const joinSpaceRoom = (spaceId: string, user: { id: string; name: string; avatar?: string }) => {
-  if (socket?.connected) {
-    socket.emit('join_space', { spaceId, user });
-  }
+  const s = getSocket();
+  s?.emit('join_space', { spaceId, user });
 };
 
 export const leaveSpaceRoom = (spaceId: string, userId: string) => {
-  if (socket?.connected) {
-    socket.emit('leave_space', { spaceId, userId });
-  }
+  const s = getSocket();
+  s?.emit('leave_space', { spaceId, userId });
 };
 
 export const joinLiveSpace = joinSpaceRoom;
 export const leaveLiveSpace = leaveSpaceRoom;
 
 export const emitSpaceSpeaking = (spaceId: string, userId: string, isSpeaking: boolean) => {
-  if (socket?.connected) {
-    socket.emit('space_speaking', { spaceId, userId, isSpeaking });
-  }
+  const s = getSocket();
+  s?.emit('space_speaking', { spaceId, userId, isSpeaking });
 };
 
 // 4. WebRTC Video/Voice Calling
 export const joinWebRTCCallRoom = (roomId: string) => {
-  if (socket?.connected) {
-    socket.emit('join_call_room', roomId);
-  }
+  const s = getSocket();
+  s?.emit('join_call_room', roomId);
 };
 
 export const emitCallSignal = (roomId: string, event: string, data: any) => {
-  if (socket?.connected) {
-    socket.emit('call_signal', { roomId, event, data });
-  }
+  const s = getSocket();
+  s?.emit('call_signal', { roomId, event, data });
+};
+
+export const emitPhoneCallSignal = (targetPhone: string, data: any) => {
+  const s = getSocket();
+  s?.emit('phone_call_signal', { targetPhone, data });
+};
+
+export const registerSocketPhone = (cleanPhone: string) => {
+  const s = getSocket();
+  s?.emit('register_phone', cleanPhone.replace(/\D/g, ''));
 };
