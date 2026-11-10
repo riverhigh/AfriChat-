@@ -32,7 +32,7 @@ export const ScanQrModal: React.FC = () => {
     deviceContacts,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'scan' | 'my_qr'>('scan');
+  const [activeTab, setActiveTab] = useState<'scan' | 'my_qr'>('my_qr');
   const [flashlightOn, setFlashlightOn] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [scanResult, setScanResult] = useState<{
@@ -76,18 +76,17 @@ export const ScanQrModal: React.FC = () => {
       .catch((err) => console.warn('QR code generation error:', err));
   }, [currentUser]);
 
-  // Handle camera scanning loop
+  // RULE 3: Component unmount & modal close cleanup
   useEffect(() => {
-    if (!isScanQrModalOpen || activeTab !== 'scan') {
-      stopCamera();
-      return;
-    }
-
-    startCamera();
-
     return () => {
       stopCamera();
     };
+  }, []);
+
+  useEffect(() => {
+    if (!isScanQrModalOpen || activeTab !== 'scan') {
+      stopCamera();
+    }
   }, [isScanQrModalOpen, activeTab]);
 
   const startCamera = async () => {
@@ -116,13 +115,21 @@ export const ScanQrModal: React.FC = () => {
     }
   };
 
+  // RULE 2: Explicitly stop all media tracks
   const stopCamera = () => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
     }
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current.getTracks().forEach((t) => {
+        try {
+          t.stop();
+          t.enabled = false;
+        } catch (e) {
+          console.warn('Error stopping camera track:', e);
+        }
+      });
       streamRef.current = null;
     }
     setIsCameraActive(false);
@@ -293,6 +300,7 @@ export const ScanQrModal: React.FC = () => {
             onClick={() => {
               setActiveTab('scan');
               setScanResult(null);
+              startCamera();
             }}
             className={`py-2 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
               activeTab === 'scan'
@@ -366,14 +374,21 @@ export const ScanQrModal: React.FC = () => {
 
                 {/* Placeholder when camera inactive */}
                 {!isCameraActive && (
-                  <div className="absolute inset-0 bg-neutral-950 flex flex-col items-center justify-center p-4 text-center">
-                    <Scan className="w-12 h-12 text-purple-400 mx-auto mb-2 opacity-80 animate-pulse" />
-                    <p className="text-xs text-white/90 font-medium">Point at AfriChat QR code</p>
-                    <p className="text-[10px] text-purple-300/60 mt-1">
-                      Camera active or tap Upload to scan from gallery
-                    </p>
-                  </div>
-                )}
+                    <div className="absolute inset-0 bg-neutral-950 flex flex-col items-center justify-center p-4 text-center z-10">
+                      <Scan className="w-12 h-12 text-purple-400 mx-auto mb-2 opacity-80" />
+                      <p className="text-xs text-white/90 font-medium mb-3">Camera is paused</p>
+                      <button
+                        type="button"
+                        onClick={startCamera}
+                        className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl shadow-md transition-all active:scale-95"
+                      >
+                        Start Camera Scanner
+                      </button>
+                      <p className="text-[10px] text-purple-300/60 mt-3">
+                        Or tap Gallery below to scan an image
+                      </p>
+                    </div>
+                  )}
 
                 {/* Corner Finder Brackets */}
                 <div className="absolute top-4 left-4 w-7 h-7 border-t-4 border-l-4 border-purple-500 rounded-tl-lg pointer-events-none" />

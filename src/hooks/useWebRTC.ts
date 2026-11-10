@@ -15,6 +15,7 @@ export interface UseWebRTCOptions {
   callType: 'voice' | 'video';
   isInitiator: boolean;
   onCallEnded?: () => void;
+  enabled?: boolean;
 }
 
 export type CallConnectionState =
@@ -219,7 +220,12 @@ export function useWebRTC({
     }
 
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current.getTracks().forEach((track) => {
+        try {
+          track.stop();
+          track.enabled = false;
+        } catch (_) {}
+      });
       localStreamRef.current = null;
     }
     setLocalStream(null);
@@ -505,6 +511,7 @@ export function useWebRTC({
 
   // ── Main Launch Effect ─────────────────────────────────────────────────────
   useEffect(() => {
+    if (!enabled) return;
     let isCancelled = false;
     let cleanupInterval: (() => void) | undefined;
 
