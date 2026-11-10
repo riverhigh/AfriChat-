@@ -2171,6 +2171,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 1. Socket.io Phone channel listener
     const socket = getSocket();
+
+    // 🔒 Single-device session enforcement
+    socket?.on('force_logout', (data: { reason: string; message: string }) => {
+      console.warn('⚠️ AGC force_logout received:', data?.reason);
+      localStorage.setItem('AGC_is_authenticated', 'false');
+      localStorage.removeItem('AGC_session_token');
+      setIsAuthenticated(false);
+      setTimeout(() => {
+        alert('⚠️ AGC Security Alert\n\nYour account was just signed in on another device.\nYou have been logged out from this device for security.');
+        window.location.reload();
+      }, 300);
+    });
+
     socket?.on('incoming_call', handleIncomingCall);
     socket?.on('call_declined', handleCallDeclined);
 
@@ -3101,6 +3114,13 @@ const sendMessage = (chatId: string, text: string) => {
     avatarUrl?: string,
     about?: string
   ) => {
+    // Generate a unique session token for single-device enforcement
+    const sessionToken = `${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+    const cleanPhone = phoneNumber.replace(/\D/g, '');
+
+    // Store session token so we can detect if another device steals the session
+    localStorage.setItem('AGC_session_token', sessionToken);
+
     const updatedUser: UserProfile = {
       id: `usr_${Date.now()}`,
       phoneNumber,
@@ -3122,9 +3142,14 @@ const sendMessage = (chatId: string, text: string) => {
     requestNotificationPermission().catch(() => {});
     setIsAuthModalOpen(false);
 
-    // 2. Register with Socket.io Gateway
+    // 2. Register with Socket.io Gateway (pass sessionToken for single-session enforcement)
     try {
       registerSocketUser(updatedUser);
+      // Also emit register_phone with session token so server can kick old socket
+      const sock = getSocket();
+      if (sock) {
+        sock.emit('register_phone', { phone: cleanPhone, sessionToken });
+      }
     } catch (e) {
       console.warn('Socket user register notice:', e);
     }
@@ -3132,10 +3157,11 @@ const sendMessage = (chatId: string, text: string) => {
     // 3. Register with local server REST API
     try {
       const payload = JSON.stringify(updatedUser);
+      const registerPayload = JSON.stringify({ ...updatedUser, sessionToken });
       fetch('/api/users/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: payload,
+        body: registerPayload,
       }).catch(() => {
         const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
         fetch(`http://${socketHost}:3002/api/users/register`, {

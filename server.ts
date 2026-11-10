@@ -45,6 +45,10 @@ interface RegisteredUser {
 }
 
 const usersByPhone = new Map<string, RegisteredUser>();
+
+// ── Single-Session Enforcement: phone → active socket id ──────────────────────
+// When a phone logs in on a new device/tab, the old socket receives 'force_logout'
+const phoneToSocketId = new Map<string, string>();
 const USERS_FILE = path.join(__dirname, 'data_users.json');
 
 try {
@@ -89,7 +93,39 @@ app.post('/api/users/register', (req: Request, res: Response) => {
   saveUsersFile();
   console.log(`✅ [User Registered]: ${user.fullName} (${user.phoneNumber})`);
   io.emit('user_registered', user);
-  res.json({ success: true, user });
+
+  // 🔒 Single-session: kick any existing socket for this phone
+  const { sessionToken } = req.body;
+  const existingSocketId = phoneToSocketId.get(cleanPhone);
+  if (existingSocketId) {
+    const existingSocket = io.sockets.sockets.get(existingSocketId);
+    if (existingSocket) {
+      existingSocket.emit('force_logout', {
+        reason: 'new_device_login',
+        message: 'Your account was opened on another device.',
+      });
+      existingSocket.disconnect(true);
+    }
+  }
+  // Store session token for validation
+  if (sessionToken) {
+    (user as any).sessionToken = sessionToken;
+    usersByPhone.set(cleanPhone, user);
+  }
+
+  res.json({ success: true, user, alreadyRegistered: false });
+});
+
+// REST: Check if phone is already registered (for duplicate-number guard)
+app.get('/api/users/check-phone', (req: Request, res: Response) => {
+  const rawPhone = (req.query.phone as string || '');
+  const clean = rawPhone.replace(/\D/g, '');
+  if (!clean) return res.status(400).json({ error: 'Phone required' });
+  const existing = usersByPhone.get(clean);
+  if (existing) {
+    return res.json({ registered: true, name: existing.fullName, avatarUrl: existing.avatarUrl });
+  }
+  return res.json({ registered: false });
 });
 
 // REST: User lookup by phone number
@@ -237,9 +273,30 @@ io.on('connection', (socket: Socket) => {
     io.to(`phone:${cleanTarget}`).emit(eventName, payload.data);
   });
 
-  socket.on('register_phone', (cleanPhone: string) => {
-    const clean = cleanPhone.replace(/\D/g, '');
+  socket.on('register_phone', (payload: string | { phone: string; sessionToken?: string }) => {
+    const rawPhone = typeof payload === 'string' ? payload : payload.phone;
+    const sessionToken = typeof payload === 'object' ? payload.sessionToken : undefined;
+    const clean = rawPhone.replace(/\D/g, '');
+    if (!clean) return;
+
+    // 🔒 Single-session enforcement via Socket.io
+    const existingSocketId = phoneToSocketId.get(clean);
+    if (existingSocketId && existingSocketId !== socket.id) {
+      const existingSocket = io.sockets.sockets.get(existingSocketId);
+      if (existingSocket) {
+        existingSocket.emit('force_logout', {
+          reason: 'new_device_login',
+          message: 'Your account was opened on another device.',
+        });
+        existingSocket.disconnect(true);
+      }
+    }
+
+    phoneToSocketId.set(clean, socket.id);
     socket.join(`phone:${clean}`);
+    // Store phone on socket for cleanup on disconnect
+    (socket as any)._agcPhone = clean;
+    console.log(`📱 [Phone Registered]: ${clean} → socket ${socket.id}`);
   });
 
   // 6. WebRTC Call Room Signaling Relay
@@ -255,6 +312,11 @@ io.on('connection', (socket: Socket) => {
   socket.on('disconnect', () => {
     onlineUsers.delete(socket.id);
     io.emit('presence_update', Array.from(onlineUsers.values()));
+    // Clean up phone→socket mapping if this socket was the active one
+    const agcPhone = (socket as any)._agcPhone;
+    if (agcPhone && phoneToSocketId.get(agcPhone) === socket.id) {
+      phoneToSocketId.delete(agcPhone);
+    }
     console.log(`🔌 [Socket Disconnected]: ${socket.id}`);
   });
 });

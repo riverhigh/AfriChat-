@@ -156,7 +156,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     }
   };
 
-  // Verify OTP
+  // Verify OTP — also checks if this phone is already registered
   const verifyOtpCode = async (codeToVerify: string) => {
     setIsVerifying(true);
     setErrorMessage(null);
@@ -164,6 +164,41 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     setTimeout(async () => {
       // Validate code (generated OTP, fallback 123456, or Supabase verify)
       if (codeToVerify === generatedOtp || codeToVerify === '123456' || codeToVerify.length === 6) {
+        // ✅ OTP valid — now check if this number is already registered
+        const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
+        try {
+          const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+          const checkUrl = `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`;
+          const resp = await fetch(checkUrl).catch(() => null);
+          if (resp && resp.ok) {
+            const data = await resp.json();
+            if (data.registered && data.name) {
+              // Returning user — log them straight in without asking for profile again
+              setIsVerifying(false);
+              loginWithPhone(fullNormalizedNumber, data.name, data.avatarUrl, 'Available · Using AGC');
+              return;
+            }
+          }
+        } catch (_) {}
+
+        // Also check Supabase if configured
+        try {
+          const { supabase: sb, isSupabaseConfigured: sbConfigured } = await import('../services/supabase');
+          if (sbConfigured) {
+            const { data: profile } = await sb
+              .from('profiles')
+              .select('full_name, avatar_url')
+              .eq('phone_number', fullNormalizedNumber)
+              .maybeSingle();
+            if (profile?.full_name) {
+              setIsVerifying(false);
+              loginWithPhone(fullNormalizedNumber, profile.full_name, profile.avatar_url, 'Available · Using AGC');
+              return;
+            }
+          }
+        } catch (_) {}
+
+        // New user — go to profile setup
         setIsVerifying(false);
         setStep('profile');
       } else {
