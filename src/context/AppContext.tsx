@@ -118,7 +118,7 @@ import {
   INITIAL_ADMIN_BROADCAST,
 } from '../data/mockData';
 
-interface ActiveCallState {
+export interface ActiveCallState {
   name: string;
   phone: string;
   avatar?: string;
@@ -126,6 +126,8 @@ interface ActiveCallState {
   type: 'voice' | 'video';
   isMuted: boolean;
   isSpeaker: boolean;
+  roomId?: string;
+  isInitiator?: boolean;
 }
 
 interface AppContextType {
@@ -195,10 +197,19 @@ interface AppContextType {
   releaseEscrowFunds: (orderId: string, enteredPin: string) => { success: boolean; message: string };
   openChatWithProduct: (chatId: string, product: Product) => void;
   activeCall: ActiveCallState | null;
-  startCall: (name: string, phone: string, avatar?: string, type?: 'voice' | 'video') => void;
+  startCall: (name: string, phone: string, avatar?: string, type?: 'voice' | 'video', roomId?: string, isInitiator?: boolean) => void;
   endCall: () => void;
   toggleCallMute: () => void;
   toggleCallSpeaker: () => void;
+  incomingCall: {
+    roomId: string;
+    callerName: string;
+    callerPhone: string;
+    callerAvatar?: string;
+    type: 'voice' | 'video';
+  } | null;
+  acceptIncomingCall: () => void;
+  declineIncomingCall: () => void;
   // 1. Meme & Sticker Studio
   isMemeStudioOpen: boolean;
   setIsMemeStudioOpen: (val: boolean) => void;
@@ -823,7 +834,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `post_${Date.now()}`,
       creatorId: 'cr_kelvin_vibe',
       creatorName: 'You (Creator)',
-      creatorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      creatorAvatar: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
       creatorHandle: '@you_creator',
       content,
       mediaType: mediaType || 'text',
@@ -1241,6 +1252,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [escrowOrders]);
   const [activeEscrowModalOrder, setActiveEscrowModalOrder] = useState<EscrowOrder | null>(null);
   const [activeCall, setActiveCall] = useState<ActiveCallState | null>(null);
+  const [incomingCall, setIncomingCall] = useState<{
+    roomId: string;
+    callerName: string;
+    callerPhone: string;
+    callerAvatar?: string;
+    type: 'voice' | 'video';
+  } | null>(null);
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -1311,7 +1329,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: '',
       phoneNumber: '',
       fullName: 'AfriChat User',
-      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      avatarUrl: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
       about: 'Available · Using AfriChat',
       createdAt: new Date().toISOString(),
       lastSeen: 'online',
@@ -1764,12 +1782,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setStatuses((prev) => [newStatus, ...prev.filter((s) => !s.isMe)]);
   };
 
+  // ── Incoming Call Phone Listener via Supabase Realtime ────────────────────
+  useEffect(() => {
+    const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '');
+    if (!myCleanPhone) return;
+
+    const channelName = `phone_call_${myCleanPhone}`;
+    const channel = supabase.channel(channelName, {
+      config: { broadcast: { self: false } },
+    });
+
+    channel
+      .on('broadcast', { event: 'incoming_call' }, ({ payload }) => {
+        if (!activeCall) {
+          setIncomingCall(payload);
+        }
+      })
+      .on('broadcast', { event: 'call_declined' }, () => {
+        setActiveCall(null);
+      })
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [currentUser.phoneNumber, activeCall]);
+
   const startCall = (
     name: string,
     phone: string,
     avatar?: string,
-    type: 'voice' | 'video' = 'voice'
+    type: 'voice' | 'video' = 'voice',
+    roomId?: string,
+    isInitiator: boolean = true
   ) => {
+    const generatedRoomId = roomId || `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     setActiveCall({
       name,
       phone,
@@ -1778,18 +1825,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type,
       isMuted: false,
       isSpeaker: false,
+      roomId: generatedRoomId,
+      isInitiator,
     });
+
+    // Broadcast incoming call to target user's phone channel
+    const cleanTargetPhone = phone.replace(/\D/g, '');
+    if (cleanTargetPhone && isInitiator) {
+      const targetChannel = supabase.channel(`phone_call_${cleanTargetPhone}`);
+      targetChannel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          targetChannel.send({
+            type: 'broadcast',
+            event: 'incoming_call',
+            payload: {
+              roomId: generatedRoomId,
+              callerName: currentUser.fullName,
+              callerPhone: currentUser.phoneNumber,
+              callerAvatar: currentUser.avatarUrl,
+              type,
+              timestamp: Date.now(),
+            },
+          });
+        }
+      });
+    }
 
     const newCallItem: CallLogItem = {
       id: `call_${Date.now()}`,
       name,
       phone,
-      avatar: avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      avatar: avatar || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
       type,
       direction: 'outgoing',
       time: 'Just now',
     };
     setCalls((prev) => [newCallItem, ...prev]);
+  };
+
+  const acceptIncomingCall = () => {
+    if (!incomingCall) return;
+    const { callerName, callerPhone, callerAvatar, type, roomId } = incomingCall;
+    setIncomingCall(null);
+    startCall(callerName, callerPhone, callerAvatar, type, roomId, false);
+  };
+
+  const declineIncomingCall = () => {
+    if (!incomingCall) return;
+    const cleanCallerPhone = incomingCall.callerPhone.replace(/\D/g, '');
+    if (cleanCallerPhone) {
+      const channel = supabase.channel(`phone_call_${cleanCallerPhone}`);
+      channel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          channel.send({
+            type: 'broadcast',
+            event: 'call_declined',
+            payload: { roomId: incomingCall.roomId },
+          });
+          channel.unsubscribe();
+        }
+      });
+    }
+
+    const missedItem: CallLogItem = {
+      id: `call_${Date.now()}`,
+      name: incomingCall.callerName,
+      phone: incomingCall.callerPhone,
+      avatar: incomingCall.callerAvatar || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+      type: incomingCall.type,
+      direction: 'missed',
+      time: 'Just now',
+    };
+    setCalls((prev) => [missedItem, ...prev]);
+    setIncomingCall(null);
   };
 
   const endCall = () => {
@@ -1803,14 +1911,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleCallSpeaker = () => {
     setActiveCall((prev) => (prev ? { ...prev, isSpeaker: !prev.isSpeaker } : null));
   };
-
-  const sendMessage = (chatId: string, text: string) => {
+const sendMessage = (chatId: string, text: string) => {
     if (!text.trim()) return;
 
     const newMsg: ChatMessage = {
-      id: `msg_user_${Date.now()}`,
+      id: `msg_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       chatId,
       sender: 'user',
+      senderName: currentUser.fullName || 'AfriChat User',
       text,
       translatedText: {
         en: text,
@@ -1825,13 +1933,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'sent',
     };
 
+    // 1. Update local state
     setMessages((prev) => ({
       ...prev,
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
-
-    // Broadcast live message via Socket.io
-    emitLiveMessage(chatId, newMsg);
 
     setChats((prev) =>
       prev.map((c) =>
@@ -1845,42 +1951,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       )
     );
 
-    setTimeout(() => {
-      let replyText = 'Received your inquiry! Let me check the shop stock right now.';
-      if (chatId === 'chat_mama_chidinma') {
-        replyText = 'Noted my customer! I reserve am for you immediately. You fit pay with Paystack or your AfriChat Wallet to lock the escrow!';
-      } else if (chatId === 'chat_kofi_tech') {
-        replyText = 'Copy that boss. Testing done, once escrow confirmed via Paystack/Wallet we paste your waybill track number.';
-      }
+    // 2. Broadcast via BroadcastChannel (instant same-computer tab/window sync)
+    try {
+      const bc = new BroadcastChannel('africhat_chats_sync');
+      bc.postMessage({ chatId, message: newMsg, senderId: currentUser.id });
+      bc.close();
+    } catch (e) {
+      console.warn('BroadcastChannel error:', e);
+    }
 
-      const autoMsg: ChatMessage = {
-        id: `msg_auto_${Date.now()}`,
-        chatId,
-        sender: 'other',
-        senderName: chats.find((c) => c.id === chatId)?.name || 'Vendor',
-        text: replyText,
-        type: 'text',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        status: 'delivered',
-      };
+    // 3. Broadcast via Socket.io
+    emitLiveMessage(chatId, newMsg);
 
-      setMessages((prev) => ({
-        ...prev,
-        [chatId]: [...(prev[chatId] || []), autoMsg],
-      }));
-
-      setChats((prev) =>
-        prev.map((c) =>
-          c.id === chatId
-            ? {
-                ...c,
-                lastMessage: replyText,
-                lastMessageTime: autoMsg.timestamp,
-              }
-            : c
-        )
-      );
-    }, 1800);
+    // 4. Broadcast via Supabase Realtime
+    try {
+      const sbChannel = supabase.channel(`chat_${chatId}`, {
+        config: { broadcast: { self: false } },
+      });
+      sbChannel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          sbChannel.send({
+            type: 'broadcast',
+            event: 'new_message',
+            payload: { chatId, message: newMsg, senderId: currentUser.id },
+          });
+        }
+      });
+    } catch (e) {
+      console.warn('Supabase chat broadcast error:', e);
+    }
   };
 
   const sendVoiceNote = (chatId: string, durationSeconds: number, transcript: string) => {
@@ -2526,7 +2625,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `usr_${Date.now()}`,
       phoneNumber,
       fullName: fullName || 'AfriChat User',
-      avatarUrl: avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      avatarUrl: avatarUrl || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
       about: about || 'Hey there! I am using AfriChat.',
       createdAt: new Date().toISOString(),
       lastSeen: 'online',
@@ -2558,32 +2657,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setDeviceContacts((prev) => [...prev]);
   };
 
-  const addNewDeviceContact = (name: string, phone: string, about?: string) => {
+  const addNewDeviceContact = (name: string, phone: string, about?: string, isRegistered: boolean = true, customAvatar?: string) => {
     const cleaned = phone.replace(/[\s-]/g, '');
     const normalized = cleaned.startsWith('0') ? `+234${cleaned.slice(1)}` : cleaned.startsWith('+') ? cleaned : `+234${cleaned}`;
+    const avatar = customAvatar || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>";
     const newContact: DeviceContact = {
       id: `cnt_${Date.now()}`,
       name,
       rawPhoneNumber: phone,
       normalizedPhoneNumber: normalized,
-      about: about || 'Hey there! I am using AfriChat.',
-      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-      isRegisteredOnAfriChat: true,
-      registeredUser: {
-        id: `usr_${Date.now()}`,
-        phoneNumber: normalized,
-        fullName: name,
-        avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-        about: about || 'Hey there! I am using AfriChat.',
-        createdAt: new Date().toISOString(),
-        lastSeen: 'Just now',
-      },
+      about: about || (isRegistered ? 'Available · Using AfriChat' : 'Invited to AfriChat'),
+      avatar,
+      isRegisteredOnAfriChat: isRegistered,
+      registeredUser: isRegistered
+        ? {
+            id: `usr_${Date.now()}`,
+            phoneNumber: normalized,
+            fullName: name,
+            avatarUrl: avatar,
+            about: about || 'Available · Using AfriChat',
+            createdAt: new Date().toISOString(),
+            lastSeen: 'Just now',
+          }
+        : undefined,
     };
     setDeviceContacts((prev) => {
-      const updated = [newContact, ...prev];
+      const updated = [newContact, ...prev.filter(c => c.normalizedPhoneNumber !== normalized)];
       localStorage.setItem('africhat_device_contacts', JSON.stringify(updated));
       return updated;
     });
+    return newContact;
   };
 
   const startChatWithContact = (contact: DeviceContact) => {
@@ -3669,7 +3772,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newComment = {
       id: `comm_${Date.now()}`,
       readerName: currentUser.fullName || 'Avid Reader',
-      readerAvatar: currentUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
+      readerAvatar: currentUser.avatarUrl || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
       comment: commentText.trim(),
       timestamp: 'Just now',
     };
@@ -3809,7 +3912,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hostUserName: currentUser.fullName,
       buddyUserId: `buddy_${Date.now()}`,
       buddyUserName: buddyName,
-      buddyAvatar: buddyAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      buddyAvatar: buddyAvatar || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
       currentChapter: 1,
       currentPage: 1,
       isPaidByOne: true, // 2 friends can both read together if one pays
@@ -4031,7 +4134,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `crs_${Date.now()}`,
       tutorId: currentUser.id,
       tutorName: tutorProfile.tutorName || currentUser.fullName,
-      tutorAvatar: currentUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      tutorAvatar: currentUser.avatarUrl || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
       tutorIsBlueVerified: true,
       enrolledStudentsCount: 0,
       rating: 5.0,
@@ -4106,41 +4209,98 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
 
-  // Real-Time Socket.io Live Gateway Connection
+  // Real-Time Multi-Transport Live Chat Connection (Socket.io + BroadcastChannel + Supabase)
   useEffect(() => {
     const socket = initSocket({
       id: currentUser.id,
       name: currentUser.fullName,
       avatar: currentUser.avatarUrl,
+      phone: currentUser.phoneNumber,
     });
 
-    const handleIncomingMessage = ({ chatId, message }: { chatId: string; message: ChatMessage }) => {
+    const handleIncomingMessage = ({ chatId, message, senderId }: { chatId: string; message: ChatMessage; senderId?: string }) => {
+      if (senderId && senderId === currentUser.id) return;
+
       setMessages((prev) => {
         const list = prev[chatId] || [];
         if (list.some((m) => m.id === message.id)) return prev;
+        const receivedMsg: ChatMessage = {
+          ...message,
+          sender: 'other',
+          status: 'delivered',
+        };
         return {
           ...prev,
-          [chatId]: [...list, message],
+          [chatId]: [...list, receivedMsg],
         };
       });
+
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                lastMessage: message.text || (message.type === 'voice' ? '🎤 Voice message' : '📎 Attachment'),
+                lastMessageTime: message.timestamp,
+                unreadCount: activeChatId === chatId ? 0 : (c.unreadCount || 0) + 1,
+              }
+            : c
+        )
+      );
     };
 
+    // 1. Socket.io listener
     socket.on('new_message', handleIncomingMessage);
+
+    // 2. BroadcastChannel listener (instant multi-tab / window sync)
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('africhat_chats_sync');
+      bc.onmessage = (e) => {
+        if (e.data && e.data.chatId && e.data.message) {
+          handleIncomingMessage(e.data);
+        }
+      };
+    } catch (e) {
+      console.warn('BroadcastChannel not available:', e);
+    }
 
     return () => {
       socket.off('new_message', handleIncomingMessage);
+      if (bc) bc.close();
     };
-  }, [currentUser]);
+  }, [currentUser, activeChatId]);
 
-  // Join active chat room when switching chats
+  // Join active chat room when switching chats (Socket.io + Supabase Realtime)
   useEffect(() => {
-    if (activeChatId) {
-      joinChatRoom(activeChatId);
-      return () => {
-        leaveChatRoom(activeChatId);
-      };
-    }
-  }, [activeChatId]);
+    if (!activeChatId) return;
+
+    joinChatRoom(activeChatId);
+
+    const sbChannel = supabase.channel(`chat_${activeChatId}`, {
+      config: { broadcast: { self: false } },
+    });
+
+    sbChannel
+      .on('broadcast', { event: 'new_message' }, ({ payload }) => {
+        if (payload && payload.senderId !== currentUser.id) {
+          setMessages((prev) => {
+            const list = prev[activeChatId] || [];
+            if (list.some((m) => m.id === payload.message.id)) return prev;
+            return {
+              ...prev,
+              [activeChatId]: [...list, { ...payload.message, sender: 'other', status: 'delivered' }],
+            };
+          });
+        }
+      })
+      .subscribe();
+
+    return () => {
+      leaveChatRoom(activeChatId);
+      sbChannel.unsubscribe();
+    };
+  }, [activeChatId, currentUser.id]);
 
 
   // 29. Super Admin Console & Moderation State
@@ -4339,6 +4499,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         endCall,
         toggleCallMute,
         toggleCallSpeaker,
+        incomingCall,
+        acceptIncomingCall,
+        declineIncomingCall,
         // 1. Meme & Sticker Studio
         isMemeStudioOpen,
         setIsMemeStudioOpen,

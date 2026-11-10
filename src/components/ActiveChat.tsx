@@ -293,20 +293,6 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
         {/* Right Action Icons */}
         <div className="flex items-center gap-1 text-white">
-          {/* Privacy Shield Button (Click triggers test screenshot block) */}
-          <button
-            type="button"
-            onClick={triggerScreenshotAttempt}
-            className={`p-1.5 rounded-full flex items-center gap-1 text-[11px] font-mono transition-colors ${
-              isScreenshotBlockerActive
-                ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
-                : 'text-white/60 hover:text-white'
-            }`}
-            title="Privacy Guard Active: Prevents screenshot & screen recording"
-          >
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span className="hidden sm:inline font-bold">Guard</span>
-          </button>
 
           {/* Street Radio Live Space indicator */}
           {currentChat.activeSpaceId && (
@@ -364,14 +350,6 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             <Phone className="w-5 h-5" />
           </button>
 
-          <button
-            type="button"
-            onClick={() => setIsDisplayModalOpen(true)}
-            className="p-2 hover:bg-white/10 rounded-full transition-colors text-purple-300 hover:text-white"
-            title="Chat Wallpaper & Text Size Adjuster"
-          >
-            <Sliders className="w-5 h-5" />
-          </button>
 
           <button
             type="button"

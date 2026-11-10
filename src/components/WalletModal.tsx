@@ -11,6 +11,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { openPaystackPopup } from '../services/paystack';
 
 export const WalletModal: React.FC = () => {
   const {
@@ -40,16 +41,43 @@ export const WalletModal: React.FC = () => {
     if (topUpAmount <= 0) return;
 
     setIsProcessing(true);
-    // Simulate instantaneous Paystack secure authorization
-    setTimeout(() => {
-      setIsProcessing(false);
-      const res = topUpWallet(topUpAmount);
-      setFeedback({
-        type: 'success',
-        text: `₦${topUpAmount.toLocaleString()} credited via Paystack! (1% fee: ₦${res.fee.toLocaleString()} capped at ₦2,000). Ref: ${res.reference}`,
-      });
-      setWalletTab('overview');
-    }, 600);
+    setFeedback(null);
+
+    const userEmail = currentUser.email || `${currentUser.phoneNumber.replace(/[^0-9]/g, '')}@africhat.africa`;
+
+    openPaystackPopup({
+      email: userEmail,
+      amount: topUpAmount,
+      currency: 'NGN',
+      metadata: {
+        userId: currentUser.id,
+        phoneNumber: currentUser.phoneNumber,
+        type: 'wallet_topup',
+      },
+      onSuccess: (response) => {
+        setIsProcessing(false);
+        const res = topUpWallet(topUpAmount);
+        setFeedback({
+          type: 'success',
+          text: `₦${topUpAmount.toLocaleString()} credited via Paystack! (1% fee: ₦${res.fee.toLocaleString()} capped at ₦2,000). Ref: ${response.reference || res.reference}`,
+        });
+        setWalletTab('overview');
+      },
+      onClose: () => {
+        setIsProcessing(false);
+        setFeedback({
+          type: 'error',
+          text: 'Paystack top-up cancelled. Wallet was not credited.',
+        });
+      },
+      onError: (err) => {
+        setIsProcessing(false);
+        setFeedback({
+          type: 'error',
+          text: `Payment error: ${err.message || 'Could not complete Paystack'}`,
+        });
+      },
+    });
   };
 
   const handleWithdrawSubmit = (e: React.FormEvent) => {

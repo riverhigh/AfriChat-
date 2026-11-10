@@ -9,6 +9,7 @@ import { StatusViewerModal } from './components/StatusViewerModal';
 import { MarketplaceView } from './components/MarketplaceView';
 import { CallsView } from './components/CallsView';
 import { ActiveCallModal } from './components/ActiveCallModal';
+import { IncomingCallModal } from './components/IncomingCallModal';
 import { SettingsView } from './components/SettingsView';
 import { TownView } from './components/TownView';
 import { CheckoutDrawer } from './components/CheckoutDrawer';
@@ -89,6 +90,7 @@ const AppContent: React.FC = () => {
         {/* Global Modals & Interactive Overlays */}
         <StatusViewerModal />
         <ActiveCallModal />
+        <IncomingCallModal />
         <CheckoutDrawer />
         <EscrowModal />
         <VoiceRecorderModal

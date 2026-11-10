@@ -10,6 +10,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { openPaystackPopup } from '../services/paystack';
 
 export const CheckoutDrawer: React.FC = () => {
   const {
@@ -35,32 +36,69 @@ export const CheckoutDrawer: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeChatId) return;
+    if (!activeChatId || !activeCheckoutProduct) return;
 
     setErrorMessage(null);
 
-    if (paymentOption === 'wallet' && !hasSufficientWalletBalance) {
-      setErrorMessage(
-        `Insufficient wallet balance (${formatPrice(wallet.availableBalance, 'NGN')}). Top up with Paystack or choose Paystack Direct.`
-      );
-      return;
-    }
+    if (paymentOption === 'wallet') {
+      if (!hasSufficientWalletBalance) {
+        setErrorMessage(
+          `Insufficient wallet balance (${formatPrice(wallet.availableBalance, 'NGN')}). Top up with Paystack or choose Paystack Direct.`
+        );
+        return;
+      }
 
-    setIsProcessing(true);
-    setTimeout(() => {
-      setIsProcessing(false);
+      setIsProcessing(true);
       const res = createEscrowOrder(
         activeChatId,
         activeCheckoutProduct,
-        paymentOption,
+        'wallet',
         buyerName,
         deliveryAddress
       );
-
+      setIsProcessing(false);
       if (!res.success && res.error) {
         setErrorMessage(res.error);
       }
-    }, 1200);
+    } else {
+      // Real Paystack Popup Flow
+      setIsProcessing(true);
+      const userEmail = currentUser.email || `${currentUser.phoneNumber.replace(/[^0-9]/g, '')}@africhat.africa`;
+
+      openPaystackPopup({
+        email: userEmail,
+        amount: productPrice,
+        currency: activeCheckoutProduct.currency || 'NGN',
+        metadata: {
+          chatId: activeChatId,
+          productId: activeCheckoutProduct.id,
+          productTitle: activeCheckoutProduct.title,
+          buyerName,
+          deliveryAddress,
+        },
+        onSuccess: (paystackRes) => {
+          setIsProcessing(false);
+          const res = createEscrowOrder(
+            activeChatId,
+            activeCheckoutProduct,
+            'paystack',
+            buyerName,
+            deliveryAddress
+          );
+          if (!res.success && res.error) {
+            setErrorMessage(res.error);
+          }
+        },
+        onClose: () => {
+          setIsProcessing(false);
+          setErrorMessage('Paystack checkout was cancelled.');
+        },
+        onError: (err) => {
+          setIsProcessing(false);
+          setErrorMessage(`Payment error: ${err.message || 'Unable to open Paystack'}`);
+        },
+      });
+    }
   };
 
   return (

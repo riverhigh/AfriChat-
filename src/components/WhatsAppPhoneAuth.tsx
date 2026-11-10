@@ -39,14 +39,19 @@ const AFRICAN_COUNTRIES: CountryCode[] = [
   { name: 'United States', code: '+1', flag: '🇺🇸' },
 ];
 
-const AVATAR_PRESETS = [
-  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=200&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=200&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=200&auto=format&fit=crop&q=80',
+const makeIconAvatar = (bg: string, fg: string) =>
+  `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='${bg}'/><circle cx='50' cy='38' r='18' fill='${fg}'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='${fg}'/></svg>`;
+
+const AVATAR_PALETTES = [
+  { name: 'Purple', bg: '%23180a33', fg: '%23a855f7' },
+  { name: 'Indigo', bg: '%230c1438', fg: '%236366f1' },
+  { name: 'Emerald', bg: '%2306231a', fg: '%2310b981' },
+  { name: 'Amber', bg: '%23261605', fg: '%23f59e0b' },
+  { name: 'Rose', bg: '%23280816', fg: '%23f43f5e' },
+  { name: 'Cyan', bg: '%2308252e', fg: '%2306b6d4' },
 ];
+
+const AVATAR_PRESETS = AVATAR_PALETTES.map((p) => makeIconAvatar(p.bg, p.fg));
 
 export const WhatsAppPhoneAuth: React.FC = () => {
   const { loginWithPhone } = useApp();
@@ -555,31 +560,53 @@ export const WhatsAppPhoneAuth: React.FC = () => {
 
               {/* Avatar Selector */}
               <div className="flex flex-col items-center gap-3">
-                <div className="relative w-24 h-24 rounded-full border-2 border-purple-500 p-0.5 bg-[#140b2b] shadow-xl shadow-purple-950/60">
+                <div className="relative w-24 h-24 rounded-full border-2 border-purple-500 p-0.5 bg-[#140b2b] shadow-xl shadow-purple-950/60 flex items-center justify-center overflow-hidden">
                   <img
                     src={selectedAvatar}
-                    alt="Profile"
+                    alt="Profile Avatar"
                     className="w-full h-full rounded-full object-cover"
                   />
-                  <div className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-md ring-2 ring-[#180a33]">
+                  <label
+                    className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-md ring-2 ring-[#180a33] cursor-pointer hover:scale-105 transition-transform"
+                    title="Upload custom photo"
+                  >
                     <Camera className="w-4 h-4" />
-                  </div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            if (typeof reader.result === 'string') {
+                              setSelectedAvatar(reader.result);
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                    />
+                  </label>
                 </div>
 
                 {/* Avatar presets carousel */}
                 <div className="space-y-1 text-center">
-                  <span className="text-[11px] font-bold text-purple-300/80">Select an Avatar</span>
+                  <span className="text-[11px] font-bold text-purple-300/80">Choose Avatar Color</span>
                   <div className="flex gap-2 justify-center pt-1">
                     {AVATAR_PRESETS.map((url, i) => (
                       <button
                         key={i}
                         type="button"
                         onClick={() => setSelectedAvatar(url)}
-                        className={`w-8 h-8 rounded-full overflow-hidden border-2 transition-transform ${
-                          selectedAvatar === url ? 'border-purple-400 scale-110 ring-2 ring-purple-500/40' : 'border-transparent opacity-60 hover:opacity-100'
+                        className={`w-9 h-9 rounded-full overflow-hidden border-2 transition-transform ${
+                          selectedAvatar === url
+                            ? 'border-purple-400 scale-110 ring-2 ring-purple-500/40'
+                            : 'border-purple-900/60 opacity-70 hover:opacity-100'
                         }`}
                       >
-                        <img src={url} alt="Preset" className="w-full h-full object-cover" />
+                        <img src={url} alt="Avatar Icon" className="w-full h-full object-cover" />
                       </button>
                     ))}
                   </div>

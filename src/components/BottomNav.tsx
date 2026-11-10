@@ -117,7 +117,7 @@ export const BottomNav: React.FC = () => {
               : 'border-slate-300 dark:border-neutral-700'
           }`}>
             <img
-              src={currentUser.avatarUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80"}
+              src={currentUser.avatarUrl || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>"}
               alt="Hub"
               className="w-full h-full rounded-full object-cover"
             />

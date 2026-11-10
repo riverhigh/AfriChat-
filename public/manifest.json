@@ -1,0 +1,55 @@
+{
+  "name": "AfriChat - African Super-App",
+  "short_name": "AfriChat",
+  "description": "Pan-African Super-Messaging, Encrypted Escrow Commerce, Artisan Stations & Street Radio.",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "background_color": "#090514",
+  "theme_color": "#581c87",
+  "orientation": "portrait",
+  "categories": ["social", "shopping", "finance", "business"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Chats",
+      "short_name": "Chats",
+      "description": "Open your AfriChat conversations",
+      "url": "/?tab=chats",
+      "icons": [{ "src": "/favicon.svg", "sizes": "96x96" }]
+    },
+    {
+      "name": "Stores",
+      "short_name": "Stores",
+      "description": "Browse African Stores & Escrow Marketplace",
+      "url": "/?tab=market",
+      "icons": [{ "src": "/favicon.svg", "sizes": "96x96" }]
+    },
+    {
+      "name": "Artisans",
+      "short_name": "Artisans",
+      "description": "Book Verified Mechanics, Barbers & Tailors",
+      "url": "/?tab=settings&sub=artisan",
+      "icons": [{ "src": "/favicon.svg", "sizes": "96x96" }]
+    }
+  ]
+}

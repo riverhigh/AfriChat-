@@ -3,38 +3,46 @@ import { ChatMessage } from '../types';
 
 let socket: Socket | null = null;
 
-// Determine backend URL
+// Determine backend URL (dynamic hostname allows phone and laptop on same Wi-Fi to connect)
 const getSocketUrl = (): string => {
   if (typeof window !== 'undefined' && window.location) {
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const envUrl = import.meta.env.VITE_SOCKET_URL as string;
+    if (envUrl) return envUrl;
+
+    const hostname = window.location.hostname;
+    const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.');
     if (isLocal) {
-      return 'http://localhost:3001';
+      return `http://${hostname}:3002`;
     }
   }
   return '';
 };
 
-export const initSocket = (user?: { id: string; name: string; avatar?: string }): Socket => {
+export const initSocket = (user?: { id: string; name: string; avatar?: string; phone?: string }): Socket => {
   if (!socket) {
     const url = getSocketUrl();
     socket = io(url, {
       autoConnect: true,
       reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 2000,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1500,
       transports: ['websocket', 'polling'],
       withCredentials: true,
     });
 
     socket.on('connect', () => {
-      console.log('🟢 [AfriChat Live]: Connected to Socket.io Gateway (ID:', socket?.id, ')');
+      console.log('🟢 [AfriChat Live]: Connected to Socket.io Gateway on port 3002 (ID:', socket?.id, ')');
       if (user) {
         socket?.emit('user_online', { userId: user.id, userName: user.name, avatar: user.avatar });
+        if (user.phone) {
+          const cleanPhone = user.phone.replace(/\D/g, '');
+          socket?.emit('register_phone', cleanPhone);
+        }
       }
     });
 
     socket.on('connect_error', (err) => {
-      console.warn('⚠️ [AfriChat Live]: Socket connection deferred (offline or dev standalone mode):', err.message);
+      console.warn('⚠️ [AfriChat Live]: Socket connection deferred:', err.message);
     });
 
     socket.on('disconnect', (reason) => {
@@ -90,5 +98,18 @@ export const leaveLiveSpace = (spaceId: string, userId: string) => {
 export const emitSpaceSpeaking = (spaceId: string, userId: string, isSpeaking: boolean) => {
   if (socket?.connected) {
     socket.emit('space_speaking', { spaceId, userId, isSpeaking });
+  }
+};
+
+// 3. WebRTC Call Relays
+export const joinWebRTCCallRoom = (roomId: string) => {
+  if (socket?.connected) {
+    socket.emit('join_call_room', roomId);
+  }
+};
+
+export const emitCallSignal = (roomId: string, event: string, data: any) => {
+  if (socket?.connected) {
+    socket.emit('call_signal', { roomId, event, data });
   }
 };
