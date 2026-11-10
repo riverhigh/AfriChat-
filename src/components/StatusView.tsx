@@ -35,6 +35,7 @@ export const StatusView: React.FC = () => {
   const {
     statuses,
     setActiveViewingStatus,
+    markStatusViewed,
     addDeviceMediaStatus,
     addDeviceVideoStatus,
     addThoughtStatus,
@@ -360,7 +361,7 @@ export const StatusView: React.FC = () => {
                 /* Thought Bubble Card in Feed */
                 <div
                   key={status.id}
-                  onClick={() => setActiveViewingStatus(status)}
+                  onClick={() => { setActiveViewingStatus(status); markStatusViewed(status.id); }}
                   className="p-4 rounded-3xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 cursor-pointer shadow-2xs hover:shadow-md transition-all relative overflow-hidden group"
                 >
                   <div className="flex items-center justify-between mb-2.5">
@@ -429,7 +430,7 @@ export const StatusView: React.FC = () => {
             return (
               <div
                 key={status.id}
-                onClick={() => setActiveViewingStatus(status)}
+                onClick={() => { setActiveViewingStatus(status); markStatusViewed(status.id); }}
                 className="flex items-center justify-between p-3 bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100/70 dark:hover:bg-neutral-800/60 rounded-2xl cursor-pointer transition-colors border border-slate-200/60 dark:border-neutral-800"
               >
                 <div className="flex items-center gap-3.5 min-w-0">

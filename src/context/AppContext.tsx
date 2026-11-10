@@ -1,4 +1,4 @@
-import {
+﻿import {
   initSocket,
   getSocket,
   joinChatRoom,
@@ -180,6 +180,7 @@ interface AppContextType {
   activeViewingStatus: UserStatus | null;
   setActiveViewingStatus: (status: UserStatus | null) => void;
   likeStatus: (statusId: string) => void;
+  markStatusViewed: (statusId: string) => void;
   addStatus: (caption: string, mediaUrl?: string) => void;
   addThoughtStatus: (thoughtText: string, themeBg: string) => void;
   addDeviceMediaStatus: (caption: string, mediaUrl: string, mediaType?: 'image' | 'video') => void;
@@ -1980,6 +1981,96 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (_) {}
   }, [isAuthenticated, currentUser.id, currentUser.phoneNumber]);
 
+  // Status Feed: fetch existing statuses from contacts + subscribe to live updates
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser?.phoneNumber) return;
+    const myCleanPhone = currentUser.phoneNumber.replace(/\D/g, '');
+
+    // Fetch contact statuses from Supabase (last 24h)
+    if (isSupabaseConfigured) {
+      supabase
+        .from('user_statuses')
+        .select('*')
+        .gte('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(200)
+        .then(({ data }) => {
+          if (!data || !Array.isArray(data)) return;
+          const incoming = data
+            .filter((row: any) => {
+              const rp = (row.user_phone || '').replace(/\D/g, '');
+              return rp && rp !== myCleanPhone;
+            })
+            .map((row: any): UserStatus => ({
+              id: row.id,
+              userId: row.user_id,
+              userPhone: row.user_phone,
+              userName: row.user_name || 'AGC User',
+              userAvatar: row.user_avatar || '',
+              isMe: false,
+              statusType: row.status_type || 'thought',
+              mediaUrl: row.media_url || undefined,
+              videoUrl: row.video_url || undefined,
+              thoughtBg: row.thought_bg || undefined,
+              caption: row.caption || '',
+              createdAt: row.created_at || 'Recently',
+              expiresInHours: 24,
+              viewsCount: row.views_count || 0,
+              likesCount: row.likes_count || 0,
+              hasLikedByMe: false,
+              viewers: [],
+            }));
+          if (incoming.length > 0) {
+            setStatuses((prev) => {
+              const myStatuses = prev.filter((s) => s.isMe);
+              const existingIds = new Set(prev.map((s) => s.id));
+              const newOnes = incoming.filter((s) => !existingIds.has(s.id));
+              return [...myStatuses, ...newOnes];
+            });
+          }
+        });
+    }
+
+    // Subscribe to real-time status feed
+    if (!isSupabaseConfigured) return;
+    const statusSub = supabase.channel('status_feed_sub', { config: { broadcast: { self: false } } });
+    statusSub
+      .on('broadcast', { event: 'new_status' }, ({ payload }: any) => {
+        if (!payload?.status) return;
+        const incoming: UserStatus = payload.status;
+        const senderPhone = (incoming.userPhone || '').replace(/\D/g, '');
+        if (!senderPhone || senderPhone === myCleanPhone) return;
+        setStatuses((prev) => {
+          if (prev.some((s) => s.id === incoming.id)) return prev;
+          return [{ ...incoming, isMe: false }, ...prev];
+        });
+      })
+      .on('broadcast', { event: 'status_viewed' }, ({ payload }: any) => {
+        if (!payload?.statusId || !payload?.viewer) return;
+        setStatuses((prev) =>
+          prev.map((s) => {
+            if (s.id !== payload.statusId) return s;
+            if (s.viewers?.some((v) => v.id === payload.viewer.id)) return s;
+            return { ...s, viewsCount: s.viewsCount + 1, viewers: [...(s.viewers || []), payload.viewer] };
+          })
+        );
+      })
+      .on('broadcast', { event: 'status_liked' }, ({ payload }: any) => {
+        if (!payload?.statusId) return;
+        setStatuses((prev) =>
+          prev.map((s) => {
+            if (s.id !== payload.statusId) return s;
+            return { ...s, likesCount: payload.liked ? s.likesCount + 1 : Math.max(0, s.likesCount - 1) };
+          })
+        );
+      })
+      .subscribe();
+
+    return () => {
+      statusSub.unsubscribe();
+    };
+  }, [isAuthenticated, currentUser?.phoneNumber]);
+
   // 10. User Uploaded Memes & GIFs + In-Chat Drawer State
   const [userMemes, setUserMemes] = useState<UserUploadedMeme[]>(() => {
     try {
@@ -2250,12 +2341,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const likeStatus = (statusId: string) => {
+    let newLiked = false;
+    let newCount = 0;
+
     setStatuses((prev) =>
       prev.map((s) => {
         if (s.id === statusId) {
-          const hasLiked = !s.hasLikedByMe;
-          const newLikes = hasLiked ? s.likesCount + 1 : Math.max(0, s.likesCount - 1);
-          return { ...s, hasLikedByMe: hasLiked, likesCount: newLikes };
+          newLiked = !s.hasLikedByMe;
+          newCount = newLiked ? s.likesCount + 1 : Math.max(0, s.likesCount - 1);
+          return { ...s, hasLikedByMe: newLiked, likesCount: newCount };
         }
         return s;
       })
@@ -2271,6 +2365,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           : null
       );
+    }
+
+    // Broadcast like to status_feed so owner sees updated count
+    if (isSupabaseConfigured) {
+      setTimeout(() => {
+        const ch = supabase.channel(`status_like_${statusId}`, { config: { broadcast: { self: false } } });
+        ch.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            ch.send({
+              type: 'broadcast',
+              event: 'status_liked',
+              payload: { statusId, liked: newLiked, likerId: currentUser.id, likerName: currentUser.fullName },
+            });
+            supabase.from('user_statuses').update({ likes_count: newCount }).eq('id', statusId).then(() => {});
+          }
+        });
+      }, 0);
+    }
+  };
+
+  const markStatusViewed = (statusId: string) => {
+    const viewer: import('../types').StatusViewer = {
+      id: currentUser.id,
+      name: currentUser.fullName,
+      avatar: currentUser.avatarUrl || '',
+      timeViewed: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    setStatuses((prev) =>
+      prev.map((s) => {
+        if (s.id === statusId) {
+          const alreadyViewed = s.viewers?.some((v) => v.id === currentUser.id);
+          if (alreadyViewed) return s;
+          const newCount = s.viewsCount + 1;
+          if (isSupabaseConfigured) {
+            supabase.from('user_statuses').update({ views_count: newCount }).eq('id', statusId).then(() => {});
+          }
+          return {
+            ...s,
+            viewsCount: newCount,
+            viewers: [...(s.viewers || []), viewer],
+          };
+        }
+        return s;
+      })
+    );
+    if (isSupabaseConfigured) {
+      setTimeout(() => {
+        const ch = supabase.channel(`status_view_${statusId}`, { config: { broadcast: { self: false } } });
+        ch.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            ch.send({
+              type: 'broadcast',
+              event: 'status_viewed',
+              payload: { statusId, viewer },
+            });
+          }
+        });
+      }, 0);
     }
   };
 
@@ -2301,6 +2453,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
+
+    // Publish to Supabase so contacts can see this status
+    if (isSupabaseConfigured) {
+      supabase.from('user_statuses').upsert({
+        id: newStatus.id,
+        user_id: currentUser.id,
+        user_phone: currentUser.phoneNumber?.replace(/\D/g, '') || '',
+        user_name: currentUser.fullName,
+        user_avatar: currentUser.avatarUrl || '',
+        status_type: newStatus.statusType || 'thought',
+        media_url: newStatus.mediaUrl || null,
+        video_url: newStatus.videoUrl || null,
+        thought_bg: newStatus.thoughtBg || null,
+        caption: newStatus.caption,
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        views_count: 0,
+        likes_count: 0,
+      }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
+
+      const statusFeedCh = supabase.channel('status_feed_pub', { config: { broadcast: { self: false } } });
+      statusFeedCh.subscribe((st) => {
+        if (st === 'SUBSCRIBED') {
+          statusFeedCh.send({
+            type: 'broadcast',
+            event: 'new_status',
+            payload: { status: { ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false } },
+          });
+        }
+      });
+    }
   };
 
   const addThoughtStatus = (thoughtText: string, themeBg: string) => {
@@ -2321,6 +2503,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       viewers: [],
     };
     setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
+
+    // Publish to Supabase so contacts can see this status
+    if (isSupabaseConfigured) {
+      supabase.from('user_statuses').upsert({
+        id: newStatus.id,
+        user_id: currentUser.id,
+        user_phone: currentUser.phoneNumber?.replace(/\D/g, '') || '',
+        user_name: currentUser.fullName,
+        user_avatar: currentUser.avatarUrl || '',
+        status_type: newStatus.statusType || 'thought',
+        media_url: newStatus.mediaUrl || null,
+        video_url: newStatus.videoUrl || null,
+        thought_bg: newStatus.thoughtBg || null,
+        caption: newStatus.caption,
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        views_count: 0,
+        likes_count: 0,
+      }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
+
+      const statusFeedCh = supabase.channel('status_feed_pub', { config: { broadcast: { self: false } } });
+      statusFeedCh.subscribe((st) => {
+        if (st === 'SUBSCRIBED') {
+          statusFeedCh.send({
+            type: 'broadcast',
+            event: 'new_status',
+            payload: { status: { ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false } },
+          });
+        }
+      });
+    }
   };
 
   const addDeviceMediaStatus = (caption: string, mediaUrl: string, mediaType: 'image' | 'video' = 'image') => {
@@ -2342,6 +2554,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       viewers: [],
     };
     setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
+
+    // Publish to Supabase so contacts can see this status
+    if (isSupabaseConfigured) {
+      supabase.from('user_statuses').upsert({
+        id: newStatus.id,
+        user_id: currentUser.id,
+        user_phone: currentUser.phoneNumber?.replace(/\D/g, '') || '',
+        user_name: currentUser.fullName,
+        user_avatar: currentUser.avatarUrl || '',
+        status_type: newStatus.statusType || 'thought',
+        media_url: newStatus.mediaUrl || null,
+        video_url: newStatus.videoUrl || null,
+        thought_bg: newStatus.thoughtBg || null,
+        caption: newStatus.caption,
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        views_count: 0,
+        likes_count: 0,
+      }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
+
+      const statusFeedCh = supabase.channel('status_feed_pub', { config: { broadcast: { self: false } } });
+      statusFeedCh.subscribe((st) => {
+        if (st === 'SUBSCRIBED') {
+          statusFeedCh.send({
+            type: 'broadcast',
+            event: 'new_status',
+            payload: { status: { ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false } },
+          });
+        }
+      });
+    }
   };
 
   const addDeviceVideoStatus = (caption: string, videoUrl: string, thumbnail?: string) => {
@@ -2363,6 +2605,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       viewers: [],
     };
     setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
+
+    // Publish to Supabase so contacts can see this status
+    if (isSupabaseConfigured) {
+      supabase.from('user_statuses').upsert({
+        id: newStatus.id,
+        user_id: currentUser.id,
+        user_phone: currentUser.phoneNumber?.replace(/\D/g, '') || '',
+        user_name: currentUser.fullName,
+        user_avatar: currentUser.avatarUrl || '',
+        status_type: newStatus.statusType || 'thought',
+        media_url: newStatus.mediaUrl || null,
+        video_url: newStatus.videoUrl || null,
+        thought_bg: newStatus.thoughtBg || null,
+        caption: newStatus.caption,
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        views_count: 0,
+        likes_count: 0,
+      }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
+
+      const statusFeedCh = supabase.channel('status_feed_pub', { config: { broadcast: { self: false } } });
+      statusFeedCh.subscribe((st) => {
+        if (st === 'SUBSCRIBED') {
+          statusFeedCh.send({
+            type: 'broadcast',
+            event: 'new_status',
+            payload: { status: { ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false } },
+          });
+        }
+      });
+    }
   };
 
   // ── Multi-Transport Incoming Call Listener (Socket.io + BroadcastChannel + Supabase)
@@ -5533,6 +5805,7 @@ const sendMessage = (chatId: string, text: string) => {
         activeViewingStatus,
         setActiveViewingStatus,
         likeStatus,
+        markStatusViewed,
         addStatus,
         addThoughtStatus,
         addDeviceMediaStatus,

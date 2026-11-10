@@ -1,4 +1,4 @@
-export type CurrencyCode = 'NGN' | 'KES' | 'GHS' | 'ZAR';
+﻿export type CurrencyCode = 'NGN' | 'KES' | 'GHS' | 'ZAR';
 
 export type LanguageCode = 'en' | 'pcm' | 'sw' | 'yo' | 'ha' | 'fr';
 
@@ -277,6 +277,7 @@ export interface StatusViewer {
 export interface UserStatus {
   id: string;
   userId: string;
+  userPhone?: string;
   userName: string;
   userAvatar: string;
   isMe?: boolean;
