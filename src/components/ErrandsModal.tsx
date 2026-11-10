@@ -122,6 +122,7 @@ export const ErrandsModal: React.FC = () => {
       itemsTotal: cartTotal,
       deliveryFee,
       totalAmount: grandTotal,
+      currency: 'NGN',
       dropoffAddress,
       customNotes,
     });
@@ -291,8 +292,8 @@ export const ErrandsModal: React.FC = () => {
                                 </h5>
                                 {milestone && (
                                   <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
-                                    <span>{milestone.badgeIcon}</span>
-                                    <span>{milestone.badgeName}</span>
+                                    <span>{milestone.icon}</span>
+                                    <span>{milestone.name}</span>
                                   </span>
                                 )}
                               </div>
@@ -350,8 +351,8 @@ export const ErrandsModal: React.FC = () => {
                       const m = getHighestMilestone('errand', selectedRunner.completedCount);
                       return m ? (
                         <div className="text-center px-2 py-1 rounded-xl bg-amber-500/20 border border-amber-500/30">
-                          <span className="text-lg">{m.badgeIcon}</span>
-                          <span className="text-[9px] font-bold block text-amber-300">{m.badgeName}</span>
+                          <span className="text-lg">{m.icon}</span>
+                          <span className="text-[9px] font-bold block text-amber-300">{m.name}</span>
                         </div>
                       ) : null;
                     })()}
@@ -545,7 +546,7 @@ export const ErrandsModal: React.FC = () => {
 
                         {/* Items list */}
                         <div className="p-2.5 rounded-xl bg-white dark:bg-black/40 border border-slate-200 dark:border-neutral-800 text-xs space-y-1">
-                          {order.items.map((i, idx) => (
+                          {order.items.map((i: any, idx: number) => (
                             <div key={idx} className="flex justify-between text-slate-700 dark:text-slate-300">
                               <span>{i.quantity}x {i.item.name}</span>
                               <span className="font-mono">{formatPrice(i.subtotal, 'NGN')}</span>
@@ -577,7 +578,7 @@ export const ErrandsModal: React.FC = () => {
                               Runner's Uploaded Purchase Receipts & Items:
                             </span>
                             <div className="flex gap-2 overflow-x-auto pb-1">
-                              {order.proofImages.map((img, idx) => (
+                              {order.proofImages.map((img: string, idx: number) => (
                                 <img
                                   key={idx}
                                   src={img}
@@ -597,7 +598,7 @@ export const ErrandsModal: React.FC = () => {
                               onClick={() => {
                                 const code = prompt('Enter your 4-digit security code to release escrow funds:');
                                 if (code === order.escrowReleaseCode) {
-                                  completeErrandWithCode(order.id, code);
+                                  completeErrandWithCode(order.id, code || '');
                                   alert('🎉 Funds released from escrow to runner!');
                                 } else if (code) {
                                   alert('❌ Invalid code! Escrow funds remain locked.');
@@ -698,7 +699,7 @@ export const ErrandsModal: React.FC = () => {
                           const m = getHighestMilestone('errand', myRunnerProfile.completedCount);
                           return m ? (
                             <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                              {m.badgeIcon} {m.badgeName}
+                              {m.icon} {m.name}
                             </span>
                           ) : null;
                         })()}
@@ -776,7 +777,7 @@ export const ErrandsModal: React.FC = () => {
                       My Published Items ({myRunnerProfile.itemsForSale.length})
                     </h5>
                     <div className="space-y-1.5">
-                      {myRunnerProfile.itemsForSale.map((item) => (
+                      {myRunnerProfile.itemsForSale.map((item: any) => (
                         <div
                           key={item.id}
                           className="p-2.5 rounded-xl bg-slate-50 dark:bg-purple-950/20 border border-slate-200 dark:border-purple-900/30 flex items-center justify-between text-xs"

@@ -1,5 +1,5 @@
 -- ============================================================
--- AfriChat Super-App — Full Supabase PostgreSQL Schema
+-- AGC (All Good Connects) Super-App — Full Supabase PostgreSQL Schema
 -- Generated: 2026-11-09
 -- Run this in: Supabase Dashboard → SQL Editor → New Query
 -- ============================================================
@@ -1506,3 +1506,115 @@ begin
   return jsonb_build_object('success', true, 'message', 'Personal data scrubbed successfully pursuant to NDPA');
 end;
 $$;
+
+-- ============================================================
+-- SECTION 34: AGC STATUSES, ERRANDS & FEATURE FLAGS
+-- ============================================================
+
+-- Persistent 24h User Statuses (Solves refresh disappearance)
+create table if not exists public.user_statuses (
+  id              text primary key,
+  user_id         text not null,
+  user_name       text not null,
+  user_avatar     text,
+  status_type     text default 'thought',
+  thought_bg      text,
+  media_url       text,
+  video_url       text,
+  caption         text,
+  views_count     int default 0,
+  likes_count     int default 0,
+  expires_at      timestamptz default (now() + interval '24 hours'),
+  created_at      timestamptz default now()
+);
+
+-- Errand Runners Directory
+create table if not exists public.errand_runners (
+  id                text primary key,
+  user_id           text not null,
+  name              text not null,
+  phone             text not null,
+  avatar            text,
+  location          text not null,
+  bio               text,
+  rating            numeric(3,2) default 5.0,
+  completed_count   int default 0,
+  delivery_base_fee numeric(12,2) default 1500.00,
+  currency          text default 'NGN',
+  is_online         boolean default true,
+  is_registered     boolean default true,
+  created_at        timestamptz default now()
+);
+
+-- Errand Inventory Items (Runner controls what they can buy)
+create table if not exists public.errand_items (
+  id              text primary key,
+  runner_id       text references public.errand_runners(id) on delete cascade,
+  name            text not null,
+  price           numeric(12,2) not null,
+  unit            text not null default 'kg',
+  category        text default 'Groceries',
+  in_stock        boolean default true,
+  created_at      timestamptz default now()
+);
+
+-- Errand Orders with Escrow PIN Code & Image Proof
+create table if not exists public.errand_orders (
+  id                  text primary key,
+  customer_id         text not null,
+  customer_name       text not null,
+  customer_phone      text not null,
+  runner_id           text not null,
+  runner_name         text not null,
+  runner_phone        text not null,
+  items_json          jsonb not null default '[]'::jsonb,
+  items_total         numeric(12,2) not null,
+  delivery_fee        numeric(12,2) not null,
+  total_amount        numeric(12,2) not null,
+  currency            text default 'NGN',
+  dropoff_address     text not null,
+  custom_notes        text,
+  status              text default 'pending',
+  escrow_release_code text not null,
+  proof_images        text[] default array[]::text[],
+  dispute_reason      text,
+  created_at          timestamptz default now()
+);
+
+-- Admin Feature Switches Table (Controls Wallet & Subsystems)
+create table if not exists public.feature_flags (
+  id              text primary key default 'global_flags',
+  wallet          boolean default true,
+  market          boolean default true,
+  artisan         boolean default true,
+  errands         boolean default true,
+  ajo             boolean default true,
+  payroll         boolean default true,
+  writers         boolean default true,
+  creator         boolean default true,
+  escrow          boolean default true,
+  tutor           boolean default true,
+  dispatch        boolean default true,
+  calls           boolean default true,
+  status          boolean default true,
+  town            boolean default true,
+  audio_spaces    boolean default true,
+  healthcare      boolean default true,
+  legal           boolean default true,
+  jobs            boolean default true,
+  updated_at      timestamptz default now()
+);
+
+-- Enable RLS
+alter table public.user_statuses enable row level security;
+alter table public.errand_runners enable row level security;
+alter table public.errand_items enable row level security;
+alter table public.errand_orders enable row level security;
+alter table public.feature_flags enable row level security;
+
+create policy "Public read statuses" on public.user_statuses for select using (true);
+create policy "Authenticated write statuses" on public.user_statuses for insert with check (true);
+
+create policy "Public read errand runners" on public.errand_runners for select using (true);
+create policy "Public read errand items" on public.errand_items for select using (true);
+create policy "Public read feature flags" on public.feature_flags for select using (true);

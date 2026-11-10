@@ -1,6 +1,10 @@
 ﻿import React, { useState } from 'react';
 import {
   ShieldCheck,
+  Sliders,
+  ToggleLeft,
+  ToggleRight,
+  Check,
   X,
   Users,
   Lock,
@@ -34,9 +38,12 @@ export const AdminDashboardModal: React.FC = () => {
     formatPrice,
     audioSpaces,
     serviceProviders,
+    featureFlags,
+    toggleFeatureFlag,
+    isFeatureEnabled,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'escrow' | 'broadcast' | 'supabase'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'features' | 'users' | 'escrow' | 'broadcast' | 'supabase'>('overview');
   const [userSearchQuery, setUserSearchQuery] = useState('');
   const [userRoleFilter, setUserRoleFilter] = useState<'all' | 'user' | 'creator' | 'merchant' | 'admin'>('all');
   const [escrowFilter, setEscrowFilter] = useState<'all' | 'escrow_secured' | 'funds_released' | 'disputed'>('all');

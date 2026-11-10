@@ -33,6 +33,7 @@ import {
   FileCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { openPaystackPopup } from '../services/paystack';
 import {
   ServiceCategory,
   ServiceProvider,

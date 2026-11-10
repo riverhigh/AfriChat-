@@ -1,5 +1,5 @@
-// AfriChat Service Worker v2.5.0
-const CACHE_NAME = 'africhat-cache-v2.5.0';
+// AGC (All Good Connects) Service Worker v3.0.0
+const CACHE_NAME = 'agc-cache-v3.0.0';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -36,7 +36,6 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
-        // Return cache first, but fetch update in background
         fetch(event.request).then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
@@ -45,6 +44,63 @@ self.addEventListener('fetch', (event) => {
         return cachedResponse;
       }
       return fetch(event.request);
+    })
+  );
+});
+
+// ── Web Push Notification Listener ───────────────────────────────────────────
+self.addEventListener('push', (event) => {
+  let data = {
+    title: 'AGC Notification',
+    body: 'You have a new update on AGC (All Good Connects).',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    data: { url: '/' },
+  };
+
+  if (event.data) {
+    try {
+      const payload = event.data.json();
+      data = { ...data, ...payload };
+    } catch (_) {
+      data.body = event.data.text();
+    }
+  }
+
+  const options = {
+    body: data.body,
+    icon: data.icon || '/icon-192.png',
+    badge: data.badge || '/icon-192.png',
+    vibrate: [100, 50, 100],
+    data: data.data || { url: '/' },
+    actions: data.actions || [
+      { action: 'open', title: 'Open AGC' },
+      { action: 'close', title: 'Dismiss' },
+    ],
+  };
+
+  event.waitUntil(self.registration.showNotification(data.title, options));
+});
+
+// ── Notification Click Handler ───────────────────────────────────────────────
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+
+  if (event.action === 'close') return;
+
+  const targetUrl = event.notification.data?.url || '/';
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.includes(self.location.origin) && 'focus' in client) {
+          client.navigate(targetUrl);
+          return client.focus();
+        }
+      }
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
+      }
     })
   );
 });

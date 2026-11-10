@@ -1,34 +1,30 @@
 ﻿import React, { useState } from 'react';
 import {
-  X,
-  GraduationCap,
-  Sparkles,
-  ShieldCheck,
-  CheckCircle2,
   BookOpen,
-  Play,
-  Video,
-  FileText,
-  Clock,
-  Star,
-  Users,
-  Award,
+  GraduationCap,
   BadgeCheck,
-  Plus,
-  ArrowRight,
-  TrendingUp,
-  DollarSign,
+  Search,
+  FileUp,
+  FileText,
+  Video,
+  Award,
+  Star,
+  CheckCircle2,
+  Users,
+  Clock,
+  Play,
   Lock,
   Unlock,
-  CreditCard,
-  Wallet,
-  Layers,
   ChevronRight,
-  AlertCircle,
-  HelpCircle,
-  Search,
+  ShieldCheck,
+  Sparkles,
+  Wallet,
+  X,
+  CreditCard,
+  Plus,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { openPaystackPopup } from '../services/paystack';
 import { Course, CourseCategory, CourseLesson } from '../types';
 
 export const TutorCoursesModal: React.FC = () => {
@@ -74,6 +70,13 @@ export const TutorCoursesModal: React.FC = () => {
   const [newLessonTitle, setNewLessonTitle] = useState('');
   const [newLessonDuration, setNewLessonDuration] = useState('30');
   const [newLessonNotes, setNewLessonNotes] = useState('');
+  // Course Rich Media & File Attachment States
+  const [newThumbnailUrl, setNewThumbnailUrl] = useState('');
+  const [newLessonVideoUrl, setNewLessonVideoUrl] = useState('');
+  const [newLessonPdfName, setNewLessonPdfName] = useState('');
+  const [newLessonPdfUrl, setNewLessonPdfUrl] = useState('');
+  const [newLessonFileName, setNewLessonFileName] = useState('');
+  const [newLessonFileUrl, setNewLessonFileUrl] = useState('');
   const [lessonsList, setLessonsList] = useState<CourseLesson[]>([
     {
       id: 'lsn_init_1',
@@ -118,24 +121,58 @@ export const TutorCoursesModal: React.FC = () => {
       return;
     }
 
-    setIsRegistering(true);
-    setTimeout(() => {
-      setIsRegistering(false);
-      const res = registerAsTutor({
-        tutorName: tutorRegName.trim(),
-        bio: tutorBio.trim(),
-        category: tutorCategory,
-        payVerificationBlueCheck: payBlueCheck,
-        paymentMethod: regPaymentMethod,
-      });
+    const totalFee = 5000 + (payBlueCheck ? 4000 : 0);
 
-      if (res.success) {
-        showToast(res.message);
-        setActiveTab('studio');
-      } else {
-        alert(res.message);
-      }
-    }, 600);
+    if (regPaymentMethod === 'paystack') {
+      const userEmail = currentUser.email || `${currentUser.phoneNumber.replace(/[^0-9]/g, '')}@AGC.africa`;
+      openPaystackPopup({
+        email: userEmail,
+        amount: totalFee,
+        currency: 'NGN',
+        metadata: {
+          type: 'tutor_registration',
+          academyName: tutorRegName.trim(),
+        },
+        onSuccess: (resp) => {
+          const res = registerAsTutor({
+            tutorName: tutorRegName.trim(),
+            bio: tutorBio.trim(),
+            category: tutorCategory,
+            payVerificationBlueCheck: payBlueCheck,
+            paymentMethod: 'paystack',
+          });
+          if (res.success) {
+            showToast(`🎉 Paystack payment of ₦${totalFee.toLocaleString()} successful! Ref: ${resp.reference}. ${res.message}`);
+            setActiveTab('studio');
+          }
+        },
+        onClose: () => {
+          alert('Tutor registration payment cancelled.');
+        },
+      });
+      return;
+    }
+
+    // Wallet option
+    if (wallet.availableBalance < totalFee) {
+      alert(`Insufficient wallet balance (${formatPrice(wallet.availableBalance, 'NGN')}). Registration fee is ₦${totalFee.toLocaleString()}. Please choose Paystack or top up your wallet.`);
+      return;
+    }
+
+    const res = registerAsTutor({
+      tutorName: tutorRegName.trim(),
+      bio: tutorBio.trim(),
+      category: tutorCategory,
+      payVerificationBlueCheck: payBlueCheck,
+      paymentMethod: 'wallet',
+    });
+
+    if (res.success) {
+      showToast(res.message);
+      setActiveTab('studio');
+    } else {
+      alert(res.message);
+    }
   };
 
   const handleUpgradeUnlimited = (method: 'wallet' | 'paystack') => {
@@ -145,6 +182,48 @@ export const TutorCoursesModal: React.FC = () => {
     } else {
       alert(res.message);
     }
+  };
+
+  const handleThumbnailUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') setNewThumbnailUrl(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleLessonVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') setNewLessonVideoUrl(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleLessonPdfUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setNewLessonPdfName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') setNewLessonPdfUrl(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleLessonFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setNewLessonFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') setNewLessonFileUrl(reader.result);
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleAddLessonItem = () => {
@@ -157,14 +236,24 @@ export const TutorCoursesModal: React.FC = () => {
       id: `lsn_${Date.now()}`,
       title: newLessonTitle.trim(),
       durationMinutes: Number(newLessonDuration) || 30,
-      videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4',
+      videoUrl: newLessonVideoUrl || 'https://www.w3schools.com/html/mov_bbb.mp4',
+      videoType: newLessonVideoUrl ? 'upload' : 'url',
       notes: newLessonNotes.trim() || 'Comprehensive course notes and practical walkthrough instructions.',
+      pdfUrl: newLessonPdfUrl || undefined,
+      pdfName: newLessonPdfName || undefined,
+      fileUrl: newLessonFileUrl || undefined,
+      fileName: newLessonFileName || undefined,
       isPreview: lessonsList.length === 0,
     };
 
     setLessonsList([...lessonsList, item]);
     setNewLessonTitle('');
     setNewLessonNotes('');
+    setNewLessonVideoUrl('');
+    setNewLessonPdfName('');
+    setNewLessonPdfUrl('');
+    setNewLessonFileName('');
+    setNewLessonFileUrl('');
   };
 
   const handlePublishSubmit = (e: React.FormEvent) => {
@@ -554,6 +643,36 @@ export const TutorCoursesModal: React.FC = () => {
                         <p className="text-xs text-slate-700 dark:text-neutral-300 leading-relaxed">
                           {currentLesson.notes}
                         </p>
+
+                        {/* Downloadable Lesson Resources */}
+                        {(currentLesson.pdfUrl || currentLesson.fileUrl) && (
+                          <div className="pt-2 border-t border-blue-200 dark:border-blue-900/50 flex flex-wrap gap-2">
+                            {currentLesson.pdfUrl && (
+                              <a
+                                href={currentLesson.pdfUrl}
+                                download={currentLesson.pdfName || 'lecture-notes.pdf'}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-700 dark:text-red-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                              >
+                                <FileText className="w-3.5 h-3.5 text-red-500" />
+                                <span>Download PDF: {currentLesson.pdfName || 'Lecture Notes'}</span>
+                              </a>
+                            )}
+                            {currentLesson.fileUrl && (
+                              <a
+                                href={currentLesson.fileUrl}
+                                download={currentLesson.fileName || 'resources.zip'}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-3 py-1.5 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30 text-purple-700 dark:text-purple-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                              >
+                                <FileUp className="w-3.5 h-3.5 text-purple-500" />
+                                <span>Download Files: {currentLesson.fileName || 'Project Assets'}</span>
+                              </a>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -940,6 +1059,33 @@ export const TutorCoursesModal: React.FC = () => {
                       >
                         Add
                       </button>
+                    </div>
+
+                    {/* Lesson Rich Media Attachments */}
+                    <div className="grid grid-cols-3 gap-2 pt-1 text-[10px]">
+                      <label className="p-2 rounded-xl bg-slate-50 dark:bg-neutral-900 border border-dashed border-slate-300 dark:border-neutral-700 flex flex-col items-center justify-center text-center cursor-pointer hover:border-blue-500 transition-colors">
+                        <Video className="w-4 h-4 text-blue-500 mb-0.5" />
+                        <span className="truncate max-w-[85px] font-bold text-slate-700 dark:text-slate-300">
+                          {newLessonVideoUrl ? 'Video Ready ✓' : 'Upload Video'}
+                        </span>
+                        <input type="file" accept="video/*" className="hidden" onChange={handleLessonVideoUpload} />
+                      </label>
+
+                      <label className="p-2 rounded-xl bg-slate-50 dark:bg-neutral-900 border border-dashed border-slate-300 dark:border-neutral-700 flex flex-col items-center justify-center text-center cursor-pointer hover:border-red-500 transition-colors">
+                        <FileText className="w-4 h-4 text-red-500 mb-0.5" />
+                        <span className="truncate max-w-[85px] font-bold text-slate-700 dark:text-slate-300">
+                          {newLessonPdfName ? 'PDF Added ✓' : 'Attach PDF'}
+                        </span>
+                        <input type="file" accept=".pdf" className="hidden" onChange={handleLessonPdfUpload} />
+                      </label>
+
+                      <label className="p-2 rounded-xl bg-slate-50 dark:bg-neutral-900 border border-dashed border-slate-300 dark:border-neutral-700 flex flex-col items-center justify-center text-center cursor-pointer hover:border-purple-500 transition-colors">
+                        <FileUp className="w-4 h-4 text-purple-500 mb-0.5" />
+                        <span className="truncate max-w-[85px] font-bold text-slate-700 dark:text-slate-300">
+                          {newLessonFileName ? 'File Added ✓' : 'Project Files'}
+                        </span>
+                        <input type="file" accept=".zip,.docx,.xlsx,.fig,.rar" className="hidden" onChange={handleLessonFileUpload} />
+                      </label>
                     </div>
 
                     <div className="space-y-1 pt-1 max-h-32 overflow-y-auto">

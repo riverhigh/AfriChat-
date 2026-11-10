@@ -74,6 +74,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     setIsEmojiMemeDrawerOpen,
     setIsHealthModalOpen,
     setIsLegalModalOpen,
+    setIsErrandsModalOpen,
     statuses,
     setActiveViewingStatus,
   } = useApp();

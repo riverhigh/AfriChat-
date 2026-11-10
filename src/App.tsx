@@ -52,6 +52,11 @@ import { CallErrorBoundary } from './components/CallErrorBoundary';
 
 const AppContent: React.FC = () => {
   const { activeChatId, activeTab, isAuthenticated, endCall } = useApp();
+  const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('agc_splash_shown'));
+  const handleSplashDone = useCallback(() => {
+    sessionStorage.setItem('agc_splash_shown', 'true');
+    setShowSplash(false);
+  }, []);
   const [isVoiceRecorderOpen, setIsVoiceRecorderOpen] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);

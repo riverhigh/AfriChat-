@@ -277,8 +277,8 @@ export const CreatorModal: React.FC = () => {
                 <Sparkles className="w-4.5 h-4.5 text-purple-400" />
               </div>
               <div>
-                <h2 className="text-base font-black text-white leading-none">AfriCreator Hub</h2>
-                <p className="text-[11px] text-white/35 mt-0.5">VIP Calls · Files · Music · Shows</p>
+                <h2 className="text-base font-black text-white leading-none">AGC Creator Hub</h2>
+                <p className="text-[11px] text-purple-300 mt-0.5">Subscriptions & Exclusives for African Artists · Strictly Clean Content Only</p>
               </div>
             </div>
             <button
@@ -330,6 +330,19 @@ export const CreatorModal: React.FC = () => {
           ════════════════════════════════════════════════════════════════ */}
           {activeTab === 'feed' && (
             <div className="space-y-5">
+                            {/* Artist Hub Mission Banner */}
+              <div className="p-3 rounded-2xl bg-gradient-to-r from-purple-950/60 via-indigo-950/60 to-purple-950/60 border border-purple-500/40 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">🎨</span>
+                  <div>
+                    <strong className="text-white block font-bold">The Premier Fan Subscription Platform for African Artists</strong>
+                    <span className="text-[11px] text-purple-300/80">
+                      Direct monthly fan subscriptions for musicians, skit makers, painters & dancers. 100% clean, respectful creative expression — zero adult/NSFW content.
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               {/* Creator filter chips */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
                 {(['all', ...creators.map((c) => c.id)] as string[]).map((id) => {
