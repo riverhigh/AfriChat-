@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   Scale,
   FileText,
@@ -83,7 +83,7 @@ export const LegalModal: React.FC = () => {
       amountOrValue: contractValue,
       durationOrDate: contractDuration,
       governingLaw: `Laws of ${governingState}`,
-      specificTerms: specificTerms || 'All deliverables must meet standard merchantability. Escrow release contingent upon mutual written approval in AfriChat.',
+      specificTerms: specificTerms || 'All deliverables must meet standard merchantability. Escrow release contingent upon mutual written approval in AGC.',
     });
 
     setSelectedTemplate(null);
@@ -96,7 +96,7 @@ export const LegalModal: React.FC = () => {
     if (firstChat) {
       sendMessage(
         firstChat.id,
-        `📜 [AFRICHAT LEGAL CONTRACT ATTACHED]\nAgreement: ${contract.templateTitle}\nParty A: ${contract.partyAName}\nParty B: ${contract.partyBName}\nValue: ${contract.amountOrValue}\nStatus: ${contract.status.toUpperCase()}\nSignature: ${contract.signatureA}`
+        `📜 [AGC LEGAL CONTRACT ATTACHED]\nAgreement: ${contract.templateTitle}\nParty A: ${contract.partyAName}\nParty B: ${contract.partyBName}\nValue: ${contract.amountOrValue}\nStatus: ${contract.status.toUpperCase()}\nSignature: ${contract.signatureA}`
       );
       setIsLegalModalOpen(false);
       setActiveChatId(firstChat.id);
@@ -604,7 +604,7 @@ export const LegalModal: React.FC = () => {
                   </h4>
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-neutral-400 leading-tight">
-                  Track annual return deadlines, TIN compliance, and business name renewals for your AfriChat catalog store.
+                  Track annual return deadlines, TIN compliance, and business name renewals for your AGC catalog store.
                 </p>
 
                 <div className="mt-3 space-y-2">

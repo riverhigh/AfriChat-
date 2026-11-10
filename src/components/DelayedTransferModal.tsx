@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   Send,
@@ -215,11 +215,11 @@ export const DelayedTransferModal: React.FC = () => {
               {/* Quick Contact Picker */}
               <div>
                 <label className="text-xs font-bold text-slate-700 dark:text-neutral-300 block mb-1.5">
-                  Select Contact on AfriChat
+                  Select Contact on AGC
                 </label>
                 <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
                   {deviceContacts
-                    .filter((c) => c.isRegisteredOnAfriChat)
+                    .filter((c) => c.isRegisteredOnAGC)
                     .slice(0, 5)
                     .map((contact) => (
                       <button

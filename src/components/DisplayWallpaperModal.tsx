@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   Type,
   Image,
@@ -151,7 +151,7 @@ export const DisplayWallpaperModal: React.FC<DisplayWallpaperModalProps> = ({
                 Live Preview at {fontSize.toUpperCase()}:
               </span>
               <p className="text-slate-800 dark:text-neutral-100 font-medium leading-relaxed">
-                "Bros, the original Dutch wax fabric has landed! We hold payment in AfriChat Escrow until you confirm delivery."
+                "Bros, the original Dutch wax fabric has landed! We hold payment in AGC Escrow until you confirm delivery."
               </p>
             </div>
           </div>

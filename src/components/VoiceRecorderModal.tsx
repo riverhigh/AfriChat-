@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { Mic, Square, Send, X, AlertCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -30,7 +30,7 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
     ],
     en: [
       "Hello! I am confirming whether this can be dispatched to my office address today via Escrow.",
-      "Please hold the item for me, I have deposited the payment in the AfriChat Escrow Vault.",
+      "Please hold the item for me, I have deposited the payment in the AGC Escrow Vault.",
     ],
   };
 

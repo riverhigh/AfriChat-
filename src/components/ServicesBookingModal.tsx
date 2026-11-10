@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   Search,
@@ -685,7 +685,7 @@ export const ServicesBookingModal: React.FC = () => {
                   <div className="p-4 bg-purple-50 dark:bg-purple-950/30 rounded-2xl border border-purple-200 dark:border-purple-800 text-xs space-y-2">
                     <div className="font-bold text-sm text-purple-900 dark:text-purple-300 flex items-center gap-1.5">
                       <ShieldCheck className="w-4 h-4 text-purple-600" />
-                      <span>AfriChat Escrow Protection</span>
+                      <span>AGC Escrow Protection</span>
                     </div>
                     <p className="text-purple-800/80 dark:text-purple-400/80 leading-relaxed text-[11px]">
                       Your payment of{' '}
@@ -903,7 +903,7 @@ export const ServicesBookingModal: React.FC = () => {
                       >
                         <div className="flex items-center gap-1.5 text-xs mb-0.5">
                           <DollarSign className="w-3.5 h-3.5" />
-                          <span>AfriChat Wallet</span>
+                          <span>AGC Wallet</span>
                         </div>
                         <span className="text-[10px] opacity-80 block font-mono">
                           Balance: ₦{wallet.availableBalance.toLocaleString()}
@@ -1122,7 +1122,7 @@ export const ServicesBookingModal: React.FC = () => {
 
                           <div className="flex items-center justify-between pt-1">
                             <span className="text-[10px] text-slate-500">
-                              Fee: ₦500 from AfriChat Wallet
+                              Fee: ₦500 from AGC Wallet
                             </span>
                             <div className="flex gap-2">
                               <button

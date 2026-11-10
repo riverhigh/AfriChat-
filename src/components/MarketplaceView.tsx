@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { fetchProducts, supabase } from '../services/supabase';
 import {
   GraduationCap,
@@ -39,7 +39,7 @@ export const MarketplaceView: React.FC = () => {
           const mapped: Product[] = data.map((d: any) => ({
             id: d.id,
             sellerId: d.seller_id,
-            sellerName: d.seller_name || 'AfriChat Verified Merchant',
+            sellerName: d.seller_name || 'AGC Verified Merchant',
             title: d.title,
             description: d.description || '',
             price: Number(d.price) || 0,

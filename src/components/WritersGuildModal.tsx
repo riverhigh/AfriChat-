@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   BookOpen,
@@ -137,7 +137,7 @@ export const WritersGuildModal: React.FC = () => {
       return;
     }
     if (!antiAiPledged) {
-      alert('You must sign the Anti-AI Human Author Pledge. AI-generated books are strictly prohibited on AfriChat.');
+      alert('You must sign the Anti-AI Human Author Pledge. AI-generated books are strictly prohibited on AGC.');
       return;
     }
     if (!firstChapterContent.trim()) {
@@ -890,7 +890,7 @@ export const WritersGuildModal: React.FC = () => {
                 </div>
                 <div>
                   <h4 className="font-bold text-sm">Tip the Author</h4>
-                  <p className="text-[10px] text-slate-400">100% direct to author's AfriChat wallet</p>
+                  <p className="text-[10px] text-slate-400">100% direct to author's AGC wallet</p>
                 </div>
               </div>
               <button onClick={() => setTipModalBook(null)} className="text-slate-400">
@@ -985,7 +985,7 @@ export const WritersGuildModal: React.FC = () => {
                       <span className="font-bold text-xs text-slate-900 dark:text-white block">
                         {chat.name}
                       </span>
-                      <span className="text-[10px] text-slate-400">{chat.location || 'AfriChat Contact'}</span>
+                      <span className="text-[10px] text-slate-400">{chat.location || 'AGC Contact'}</span>
                     </div>
                   </div>
 

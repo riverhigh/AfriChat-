@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   Heart,
@@ -97,7 +97,7 @@ export const StatusViewerModal: React.FC = () => {
               } text-white shadow-2xl relative border-2 border-white/20`}
             >
               <div className="text-[10px] uppercase font-bold tracking-widest text-white/70 mb-2 font-mono flex items-center gap-1.5">
-                <span>💭 AFRICHAT THOUGHT</span>
+                <span>💭 AGC THOUGHT</span>
               </div>
               <p className="text-xl sm:text-2xl font-bold leading-relaxed font-display text-center drop-shadow-sm">
                 &ldquo;{status.caption}&rdquo;

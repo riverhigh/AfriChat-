@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { Download, RefreshCw, CheckCircle2, Smartphone, Sparkles, ExternalLink, ShieldCheck } from 'lucide-react';
 
 interface BeforeInstallPromptEvent extends Event {
@@ -53,7 +53,7 @@ export const PwaInstallCard: React.FC = () => {
       setShowIosInstructions(true);
     } else {
       alert(
-        'To install AfriChat on your device:\n1. Tap the browser menu (⋮ or Share)\n2. Select "Install App" or "Add to Home Screen".'
+        'To install AGC on your device:\n1. Tap the browser menu (⋮ or Share)\n2. Select "Install App" or "Add to Home Screen".'
       );
     }
   };
@@ -71,9 +71,9 @@ export const PwaInstallCard: React.FC = () => {
       }
       // Simulate version verification network check
       await new Promise((resolve) => setTimeout(resolve, 1100));
-      setUpdateStatus('AfriChat is up to date! (v2.4.0 active)');
+      setUpdateStatus('AGC is up to date! (v2.4.0 active)');
     } catch {
-      setUpdateStatus('Checked. You are on the latest AfriChat release.');
+      setUpdateStatus('Checked. You are on the latest AGC release.');
     } finally {
       setIsCheckingUpdate(false);
       setTimeout(() => {
@@ -95,12 +95,14 @@ export const PwaInstallCard: React.FC = () => {
     <div className="bg-white dark:bg-[#18152e] rounded-3xl p-4 border border-purple-500/20 dark:border-purple-500/20 shadow-xs space-y-3.5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 rounded-2xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
-            <Smartphone className="w-5 h-5" />
-          </div>
+          <img
+            src="/icon-192.png"
+            alt="AGC Logo"
+            className="w-10 h-10 rounded-2xl object-cover shadow-sm ring-1 ring-purple-500/20"
+          />
           <div>
             <div className="flex items-center gap-2">
-              <h4 className="text-sm font-bold text-slate-900 dark:text-white">AfriChat App & PWA</h4>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">AGC App & PWA</h4>
               <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400">
                 {APP_VERSION}
               </span>

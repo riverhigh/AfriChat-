@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import {
   Smartphone,
   ArrowRight,
@@ -188,7 +188,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         fullNormalizedNumber,
         fullName.trim(),
         selectedAvatar,
-        'Available · Using AfriChat'
+        'Available · Using AGC'
       );
     }, 1200);
   };
@@ -212,7 +212,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         <div className="absolute -bottom-32 -right-32 w-96 h-96 bg-indigo-700/20 rounded-full blur-[120px]" />
       </div>
 
-      {/* Top Banner / In-app SMS Notification Pill (AfriChat Theme) */}
+      {/* Top Banner / In-app SMS Notification Pill (AGC Theme) */}
       {showNotification && generatedOtp && step === 'otp' && (
         <div className="fixed top-4 left-4 right-4 z-50 max-w-sm mx-auto p-3.5 bg-[#170c2e]/95 backdrop-blur-md border border-purple-500/40 rounded-2xl shadow-2xl shadow-purple-950/80 animate-in slide-in-from-top-4">
           <div className="flex items-start gap-3">
@@ -223,12 +223,12 @@ export const WhatsAppPhoneAuth: React.FC = () => {
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-purple-400 flex items-center gap-1">
                   <Sparkles className="w-3 h-3 text-amber-400" />
-                  <span>AFRICHAT SMS · NOW</span>
+                  <span>AGC SMS · NOW</span>
                 </span>
                 <span className="text-[10px] text-slate-400 font-mono">Carrier Instant</span>
               </div>
               <p className="text-xs text-slate-200 mt-1">
-                Your AfriChat verification code is: <strong className="text-white font-mono text-sm tracking-wider font-bold bg-purple-900/40 px-1.5 py-0.5 rounded border border-purple-500/30">{generatedOtp}</strong>
+                Your AGC verification code is: <strong className="text-white font-mono text-sm tracking-wider font-bold bg-purple-900/40 px-1.5 py-0.5 rounded border border-purple-500/30">{generatedOtp}</strong>
               </p>
               <button
                 type="button"
@@ -266,13 +266,15 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                 </button>
               ) : null}
 
-              {/* AfriChat Squircle Logo */}
-              <div className="w-9 h-9 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center shadow-md shadow-purple-600/30 ring-1 ring-purple-400/30">
-                <span className="font-display font-black text-white text-base tracking-tight">AC</span>
-              </div>
+              {/* AGC Squircle Logo */}
+              <img
+                src="/icon-192.png"
+                alt="AGC Logo"
+                className="w-10 h-10 rounded-2xl object-cover shadow-md shadow-purple-600/30 ring-1 ring-purple-400/30"
+              />
               <div>
                 <h2 className="text-base font-black tracking-tight font-display flex items-center gap-1.5">
-                  <span>AfriChat</span>
+                  <span>AGC</span>
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block animate-pulse" />
                 </h2>
                 <p className="text-[10px] text-purple-300/70 font-medium">Pan-African Super-App</p>
@@ -304,7 +306,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                   <Smartphone className="w-7 h-7" />
                 </div>
                 <h1 className="text-2xl font-black text-white tracking-tight font-display">
-                  Welcome to AfriChat
+                  Welcome to AGC
                 </h1>
                 <p className="text-xs text-purple-200/70 mt-1.5 leading-relaxed max-w-xs mx-auto">
                   Enter your phone number to sign in or create your verified account. Carrier SMS charges may apply.
@@ -477,7 +479,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                 </div>
               )}
 
-              {/* 6 Digit Input Boxes (AfriChat Purple Styled) */}
+              {/* 6 Digit Input Boxes (AGC Purple Styled) */}
               <div className="flex justify-center gap-2 sm:gap-2.5 max-w-xs mx-auto py-2">
                 {otpDigits.map((digit, idx) => (
                   <input
@@ -548,7 +550,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                   Create Your Profile
                 </h1>
                 <p className="text-xs text-purple-200/70 mt-1">
-                  Choose your display avatar and full name for AfriChat
+                  Choose your display avatar and full name for AGC
                 </p>
               </div>
 
@@ -667,7 +669,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
             
             <div className="space-y-1.5">
               <h2 className="text-lg font-black text-white font-display">
-                Connecting to AfriChat...
+                Connecting to AGC...
               </h2>
               <p className="text-xs text-purple-200/70 max-w-xs mx-auto">
                 Setting up your encrypted wallet, verified phone session, and African marketplace sync.

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   Sparkles,
   Ticket,
@@ -161,7 +161,7 @@ export const CreatorModal: React.FC = () => {
       currency: 'NGN',
       availableTickets: 150,
       coverImage: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=600&auto=format&fit=crop&q=80',
-      description: '100% revenue credited to creator AfriChat Wallet.',
+      description: '100% revenue credited to creator AGC Wallet.',
     });
     setNewShowTitle('');
     setShowNewShowForm(false);
@@ -800,7 +800,7 @@ export const CreatorModal: React.FC = () => {
                   </div>
                   <h3 className="text-base font-black text-white">Become a Verified Creator</h3>
                   <p className="text-xs text-white/40 max-w-xs mx-auto leading-relaxed">
-                    Sell music, list shows, run fan subscriptions & VIP sessions — all paid straight to your AfriChat Wallet.
+                    Sell music, list shows, run fan subscriptions & VIP sessions — all paid straight to your AGC Wallet.
                   </p>
                 </div>
 

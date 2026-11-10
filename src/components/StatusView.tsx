@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   Plus,
   Eye,
@@ -373,7 +373,7 @@ export const StatusView: React.FC = () => {
                       <div>
                         <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
                           <span>{status.userName}</span>
-                          {(status.userId === 'usr_africhat_official_admin' || status.userName === 'AfriChat Official') && (
+                          {(status.userId === 'usr_AGC_official_admin' || status.userName === 'AGC Official') && (
                             <span className="inline-flex items-center gap-0.5 text-[9px] font-mono font-bold bg-amber-500/20 text-amber-600 dark:text-amber-400 px-1.5 py-0.2 rounded-full border border-amber-500/30">
                               <BadgeCheck className="w-3 h-3 text-amber-500" />
                               <span>Official Admin</span>

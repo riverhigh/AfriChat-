@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+﻿import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../services/supabase';
 import { getSocket, emitCallSignal, joinWebRTCCallRoom } from '../services/socket';
 
@@ -72,7 +72,7 @@ function createFallbackStream(isVideo: boolean): MediaStream {
           ctx.fillStyle = '#ffffff';
           ctx.font = 'bold 18px sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText('AfriChat Video', 240, 185);
+          ctx.fillText('AGC Video', 240, 185);
 
           requestAnimationFrame(render);
         };
@@ -94,6 +94,7 @@ export function useWebRTC({
   callType,
   isInitiator,
   onCallEnded,
+  enabled = true,
 }: UseWebRTCOptions) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -466,7 +467,7 @@ export function useWebRTC({
   const setupSignaling = useCallback(async () => {
     // 1. Setup BroadcastChannel for instant same-browser multi-tab signaling
     try {
-      const bc = new BroadcastChannel(`africhat_call_${roomId}`);
+      const bc = new BroadcastChannel(`AGC_call_${roomId}`);
       broadcastChannelRef.current = bc;
       bc.onmessage = (msg) => {
         const { event, payload, id } = msg.data || {};

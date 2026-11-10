@@ -1,4 +1,4 @@
-import { io, Socket } from 'socket.io-client';
+﻿import { io, Socket } from 'socket.io-client';
 import { ChatMessage } from '../types';
 
 let socket: Socket | null = null;
@@ -31,7 +31,7 @@ export const initSocket = (user?: { id: string; name: string; avatar?: string; p
     });
 
     socket.on('connect', () => {
-      console.log('🟢 [AfriChat Live]: Connected to Socket.io Gateway on port 3002 (ID:', socket?.id, ')');
+      console.log('🟢 [AGC Live]: Connected to Socket.io Gateway on port 3002 (ID:', socket?.id, ')');
       if (user) {
         socket?.emit('user_online', { userId: user.id, userName: user.name, avatar: user.avatar, phoneNumber: user.phone });
         if (user.phone) {
@@ -42,11 +42,11 @@ export const initSocket = (user?: { id: string; name: string; avatar?: string; p
     });
 
     socket.on('connect_error', (err) => {
-      console.warn('⚠️ [AfriChat Live]: Socket connection deferred:', err.message);
+      console.warn('⚠️ [AGC Live]: Socket connection deferred:', err.message);
     });
 
     socket.on('disconnect', (reason) => {
-      console.log('🔌 [AfriChat Live]: Disconnected:', reason);
+      console.log('🔌 [AGC Live]: Disconnected:', reason);
     });
   }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+﻿import React, { useEffect, useRef } from 'react';
 import {
   Phone,
   PhoneOff,
@@ -91,7 +91,7 @@ export const IncomingCallModal: React.FC = () => {
       <div className="relative z-10 text-center pt-8 space-y-2">
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-500/15 border border-purple-500/30 text-[11px] font-mono text-purple-300 font-bold">
           <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
-          <span>AfriChat End-to-End Encrypted</span>
+          <span>AGC End-to-End Encrypted</span>
         </div>
 
         <h3 className="text-sm font-semibold uppercase tracking-wider text-purple-300/80 pt-1">
@@ -128,7 +128,7 @@ export const IncomingCallModal: React.FC = () => {
 
         <div className="mt-8 flex items-center gap-2 text-xs font-mono text-purple-300 bg-white/5 px-3.5 py-1.5 rounded-full border border-white/10">
           <Radio className="w-3.5 h-3.5 animate-spin text-purple-400" />
-          <span>Ringing across AfriChat network...</span>
+          <span>Ringing across AGC network...</span>
         </div>
       </div>
 

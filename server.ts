@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+﻿import express, { Request, Response } from 'express';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import cors from 'cors';
@@ -25,7 +25,7 @@ app.use(express.json());
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
-    service: 'AfriChat Real-Time Live Gateway',
+    service: 'AGC Real-Time Live Gateway',
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(process.uptime()),
     port: PORT,
@@ -77,11 +77,11 @@ app.post('/api/users/register', (req: Request, res: Response) => {
   const cleanPhone = phoneNumber.replace(/\D/g, '');
   const user: RegisteredUser = {
     id: id || `usr_${Date.now()}`,
-    fullName: fullName || 'AfriChat User',
+    fullName: fullName || 'AGC User',
     phoneNumber,
     cleanPhone,
     avatarUrl,
-    about: about || 'Available · Using AfriChat',
+    about: about || 'Available · Using AGC',
     registeredAt: new Date().toISOString(),
     role: role || 'user',
   };
@@ -168,11 +168,11 @@ io.on('connection', (socket: Socket) => {
     const clean = userData.phoneNumber.replace(/\D/g, '');
     const reg: RegisteredUser = {
       id: userData.id || `usr_${Date.now()}`,
-      fullName: userData.fullName || userData.name || 'AfriChat User',
+      fullName: userData.fullName || userData.name || 'AGC User',
       phoneNumber: userData.phoneNumber,
       cleanPhone: clean,
       avatarUrl: userData.avatarUrl || userData.avatar,
-      about: userData.about || 'Available · Using AfriChat',
+      about: userData.about || 'Available · Using AGC',
       registeredAt: new Date().toISOString(),
       role: userData.role || 'user',
     };
@@ -261,7 +261,7 @@ io.on('connection', (socket: Socket) => {
 
 // Start listening
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 AfriChat Live Gateway running on http://localhost:${PORT}`);
+  console.log(`🚀 AGC Live Gateway running on http://localhost:${PORT}`);
   console.log(`📡 WebSocket & User Registry ready`);
 });
 

@@ -1,4 +1,4 @@
-import {
+﻿import {
   ChatThread,
   ChatMessage,
   Product,
@@ -47,7 +47,7 @@ import {
 
 export const LOCALIZED_STRINGS: Record<LanguageCode, Record<string, string>> = {
   en: {
-    appName: 'AfriChat',
+    appName: 'AGC',
     chats: 'Chats',
     status: 'Status',
     market: 'Stores',
@@ -82,7 +82,7 @@ export const LOCALIZED_STRINGS: Record<LanguageCode, Record<string, string>> = {
     statusLikes: 'Likes',
   },
   pcm: {
-    appName: 'AfriChat',
+    appName: 'AGC',
     chats: 'Chats',
     status: 'Status',
     market: 'Stores',
@@ -117,7 +117,7 @@ export const LOCALIZED_STRINGS: Record<LanguageCode, Record<string, string>> = {
     statusLikes: 'People wey like',
   },
   sw: {
-    appName: 'AfriChat',
+    appName: 'AGC',
     chats: 'Soga',
     status: 'Hali',
     market: 'Maduka',
@@ -152,7 +152,7 @@ export const LOCALIZED_STRINGS: Record<LanguageCode, Record<string, string>> = {
     statusLikes: 'Waliopenda',
   },
   yo: {
-    appName: 'AfriChat',
+    appName: 'AGC',
     chats: 'Ọ̀rọ̀',
     status: 'Ipo Mi',
     market: 'Àwọn Ìtajà',
@@ -187,7 +187,7 @@ export const LOCALIZED_STRINGS: Record<LanguageCode, Record<string, string>> = {
     statusLikes: 'Àwọn tó fẹ́ràn rẹ̀',
   },
   ha: {
-    appName: 'AfriChat',
+    appName: 'AGC',
     chats: 'Hira',
     status: 'Hali',
     market: 'Shaguna',
@@ -222,7 +222,7 @@ export const LOCALIZED_STRINGS: Record<LanguageCode, Record<string, string>> = {
     statusLikes: 'Masu so',
   },
   fr: {
-    appName: 'AfriChat',
+    appName: 'AGC',
     chats: 'Discussions',
     status: 'Statuts',
     market: 'Boutiques',
@@ -733,7 +733,7 @@ export const MOCK_FINANCIAL_POLL_SAMPLE: FinancialPoll = {
   totalVoters: 9,
   userVotedOptionId: 'opt_danfo',
   status: 'active',
-  payoutRule: 'Funds are locked into AfriChat Escrow. On Saturday 7PM, the pot (₦90k) directly pays the restaurant bill via Paystack!',
+  payoutRule: 'Funds are locked into AGC Escrow. On Saturday 7PM, the pot (₦90k) directly pays the restaurant bill via Paystack!',
   options: [
     {
       id: 'opt_danfo',
@@ -885,8 +885,8 @@ export const MOCK_CHATS: ChatThread[] = [
     phone: '+234 809 111 2233',
   },
   {
-    id: 'chat_africhat_official',
-    name: 'AfriChat',
+    id: 'chat_AGC_official',
+    name: 'AGC',
     avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80',
     verifiedStore: true,
     storeCategory: 'Official Platform Channel',
@@ -896,7 +896,7 @@ export const MOCK_CHATS: ChatThread[] = [
     lastMessageTime: 'Yesterday',
     catalog: [],
     isOnline: true,
-    phone: 'AfriChat Support',
+    phone: 'AGC Support',
   },
   {
     id: 'chat_success_opti',
@@ -1098,7 +1098,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       sender: 'system',
       type: 'scam_warning',
       scamEntity: MOCK_SCAM_DATABASE['+2348099990011'],
-      text: '⚠️ DANGER ALERT: This phone number (+234 809 999 0011) has been flagged 18 times for fake bank alert scams and undelivered cargo. Do NOT transfer funds outside AfriChat Escrow Vault!',
+      text: '⚠️ DANGER ALERT: This phone number (+234 809 999 0011) has been flagged 18 times for fake bank alert scams and undelivered cargo. Do NOT transfer funds outside AGC Escrow Vault!',
       timestamp: '09:10 AM',
       status: 'read',
     },
@@ -1247,9 +1247,9 @@ export const MOCK_CALLS: CallLogItem[] = [
 export const INITIAL_CURRENT_USER: UserProfile = {
   id: '',
   phoneNumber: '',
-  fullName: 'AfriChat User',
+  fullName: 'AGC User',
   avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-  about: 'Available · Using AfriChat',
+  about: 'Available · Using AGC',
   createdAt: new Date().toISOString(),
   lastSeen: 'online',
   isPhoneVerified: false,
@@ -1263,7 +1263,7 @@ export const MOCK_DEVICE_CONTACTS: DeviceContact[] = [
     normalizedPhoneNumber: '+2348031234567',
     avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
     about: 'Pure Dutch Super-Wax & Lace importer 🇳🇬✨',
-    isRegisteredOnAfriChat: true,
+    isRegisteredOnAGC: true,
     registeredUser: {
       id: 'chat_mama_chidinma',
       phoneNumber: '+2348031234567',
@@ -1281,7 +1281,7 @@ export const MOCK_DEVICE_CONTACTS: DeviceContact[] = [
     normalizedPhoneNumber: '+2348028889911',
     avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
     about: 'Pixel & Galaxy phones direct Dubai cargo with warranty 📱',
-    isRegisteredOnAfriChat: true,
+    isRegisteredOnAGC: true,
     registeredUser: {
       id: 'chat_kofi_tech',
       phoneNumber: '+2348028889911',
@@ -1299,7 +1299,7 @@ export const MOCK_DEVICE_CONTACTS: DeviceContact[] = [
     normalizedPhoneNumber: '+2348035551928',
     avatar: 'https://images.unsplash.com/photo-1544723795-3fb6469f5b39?w=150&auto=format&fit=crop&q=80',
     about: 'Matogun site engineer & electrical contractor',
-    isRegisteredOnAfriChat: true,
+    isRegisteredOnAGC: true,
     registeredUser: {
       id: 'chat_yomi',
       phoneNumber: '+2348035551928',
@@ -1317,7 +1317,7 @@ export const MOCK_DEVICE_CONTACTS: DeviceContact[] = [
     normalizedPhoneNumber: '+233245551234',
     avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
     about: 'Whipped raw shea butter & traditional black soap 🌿',
-    isRegisteredOnAfriChat: true,
+    isRegisteredOnAGC: true,
     registeredUser: {
       id: 'chat_amina_organics',
       phoneNumber: '+233245551234',
@@ -1334,14 +1334,14 @@ export const MOCK_DEVICE_CONTACTS: DeviceContact[] = [
     rawPhoneNumber: '0810 999 4433',
     normalizedPhoneNumber: '+2348109994433',
     avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    about: 'Hey there! I am using AfriChat.',
-    isRegisteredOnAfriChat: true,
+    about: 'Hey there! I am using AGC.',
+    isRegisteredOnAGC: true,
     registeredUser: {
       id: 'chat_jam',
       phoneNumber: '+2348109994433',
       fullName: 'Jam 💫',
       avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-      about: 'Hey there! I am using AfriChat.',
+      about: 'Hey there! I am using AGC.',
       createdAt: '2026-02-10T16:00:00Z',
       lastSeen: '05:03',
     },
@@ -1352,7 +1352,7 @@ export const MOCK_DEVICE_CONTACTS: DeviceContact[] = [
     rawPhoneNumber: '0805 777 0022',
     normalizedPhoneNumber: '+2348057770022',
     about: 'Dispatch bike rider across Island & Mainland',
-    isRegisteredOnAfriChat: false,
+    isRegisteredOnAGC: false,
   },
   {
     id: 'cnt_7',
@@ -1360,7 +1360,7 @@ export const MOCK_DEVICE_CONTACTS: DeviceContact[] = [
     rawPhoneNumber: '0809 333 1188',
     normalizedPhoneNumber: '+2348093331188',
     about: 'Family contact in Garki, Abuja',
-    isRegisteredOnAfriChat: false,
+    isRegisteredOnAGC: false,
   },
   {
     id: 'cnt_8',
@@ -1368,7 +1368,7 @@ export const MOCK_DEVICE_CONTACTS: DeviceContact[] = [
     rawPhoneNumber: '+254 712 990 011',
     normalizedPhoneNumber: '+254712990011',
     about: 'M-Pesa cash merchant at Westlands',
-    isRegisteredOnAfriChat: false,
+    isRegisteredOnAGC: false,
   },
 ];
 
@@ -1477,7 +1477,7 @@ export const MOCK_JOB_POSTINGS: JobPosting[] = [
     requirements: [
       'Valid Lagos State Riders Card / Driver License',
       'Familiarity with Lekki, Ikoyi, Yaba and Ikeja shortcut routes',
-      'Smartphone with AfriChat & Google Maps installed',
+      'Smartphone with AGC & Google Maps installed',
     ],
     contactPhone: '+2348039991122',
     employerId: 'emp_gokada',
@@ -1493,7 +1493,7 @@ export const MOCK_JOB_POSTINGS: JobPosting[] = [
     type: 'Full-time',
     salaryRange: '₦150,000 - ₦220,000 / month + Commission',
     currency: 'NGN',
-    description: 'Manage store catalog, inventory stock counts, customer chat inquiries, and escrow dispatches on AfriChat.',
+    description: 'Manage store catalog, inventory stock counts, customer chat inquiries, and escrow dispatches on AGC.',
     requirements: [
       'Knowledge of authentic Dutch Super-Wax, Lace & Ankara fabrics',
       'Great communication in English & Pidgin',
@@ -1882,7 +1882,7 @@ export const MOCK_PAYROLL_EMPLOYEES: PayrollEmployee[] = [
     frequency: 'monthly',
     nextPaymentDate: 'Nov 28, 2026',
     status: 'active',
-    bankOrWallet: 'AfriChat Wallet (Direct)',
+    bankOrWallet: 'AGC Wallet (Direct)',
     accountNumber: '+2348038884921',
     lastPaidDate: 'Oct 28, 2026',
   },
@@ -2267,7 +2267,7 @@ export const MOCK_CONTRACT_TEMPLATES: LegalContractTemplate[] = [
     id: 'tmpl_sales_escrow',
     title: 'Goods Sales & Escrow Supply Contract',
     category: 'Sales & Escrow Supply',
-    description: 'Binds buyer and vendor for high-value merchandise (phones, fabric bolts, machinery). Payment held in AfriChat Escrow until inspection.',
+    description: 'Binds buyer and vendor for high-value merchandise (phones, fabric bolts, machinery). Payment held in AGC Escrow until inspection.',
     applicableLaw: 'Sale of Goods Act & Electronic Transactions Framework',
     badge: 'In-Chat Commerce',
   },
@@ -2376,7 +2376,7 @@ export const MOCK_CREATORS: CreatorProfile[] = [
     subscribersCount: 2150,
     monthlySubPrice: 3000,
     currency: 'NGN',
-    bio: 'Amapiano street mixes, official club anthems, and underground sound curation. Buy high-res club edits directly to your AfriChat player.',
+    bio: 'Amapiano street mixes, official club anthems, and underground sound curation. Buy high-res club edits directly to your AGC player.',
     isVerified: true,
     badge: 'Certified DJ',
     totalEarnings: 5100000,
@@ -2470,7 +2470,7 @@ export const MOCK_CREATOR_SHOWS: CreatorShowTicket[] = [
     type: 'online_stream',
     date: 'Friday, Nov 27, 2026',
     time: '10:00 PM WAT',
-    venueOrStreamUrl: 'Private 1080p Encrypted Street Radio Stream in AfriChat',
+    venueOrStreamUrl: 'Private 1080p Encrypted Street Radio Stream in AGC',
     price: 3500,
     currency: 'NGN',
     availableTickets: 420,
@@ -2563,7 +2563,7 @@ export const MOCK_ARTISAN_STATION: ArtisanStation = {
   categoryLabel: 'Automobile & Generator Engineering',
   location: 'Surulere Workshop District, Lagos',
   workshopAddress: 'Block 4, Western Avenue Artisan Complex, Surulere, Lagos',
-  about: 'Full-service auto-mechanics, diagnostic bay, generator repair, and apprentices training garage. Licensed AfriChat Station with Escrow warranty protection.',
+  about: 'Full-service auto-mechanics, diagnostic bay, generator repair, and apprentices training garage. Licensed AGC Station with Escrow warranty protection.',
   avatar: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=200&auto=format&fit=crop&q=80',
   isApproved: true,
   registrationFeePaid: true,
@@ -2669,7 +2669,7 @@ export const MOCK_ARTISAN_STATION: ArtisanStation = {
 
 export const MOCK_REFERRAL_PROGRAM: ReferralProgram = {
   referralCode: 'AFRI-CHIOMA-77',
-  referralLink: 'https://africhat.app/join?ref=AFRI-CHIOMA-77',
+  referralLink: 'https://AGC.app/join?ref=AFRI-CHIOMA-77',
   rewardPerActiveUser: 500,
   totalEarned: 2500,
   availableBonus: 1500,
@@ -3231,7 +3231,7 @@ export const MOCK_ADMIN_USERS: import('../types').AdminUserRecord[] = [
 
 export const INITIAL_ADMIN_BROADCAST: import('../types').AdminSystemBroadcast = {
   id: 'bc_welcome_01',
-  title: 'AfriChat Live Gateway & Supabase Active',
+  title: 'AGC Live Gateway & Supabase Active',
   message: 'Real-time peer sockets, encrypted escrow vaults, and Supabase cloud sync are operational across all African nodes.',
   level: 'info',
   createdAt: 'Just now',

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   GraduationCap,
   QrCode,
@@ -329,9 +329,14 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
             )}
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
+            <img
+              src="/icon-192.png"
+              alt="AGC Logo"
+              className="w-7 h-7 rounded-lg object-cover shadow-sm ring-1 ring-white/20"
+            />
             <span className="font-display font-bold text-lg tracking-tight text-white">
-              AfriChat
+              AGC
             </span>
           </div>
         </div>
@@ -343,7 +348,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
               type="button"
               onClick={() => setIsWalletModalOpen(true)}
               className="flex items-center gap-1.5 pl-2.5 pr-1.5 py-1"
-              title="Open AfriChat Wallet"
+              title="Open AGC Wallet"
             >
               <Wallet className="w-3.5 h-3.5 text-amber-400" />
               <span>{hideBalanceOnNav ? '₦ ••••••' : formattedShortBalance}</span>

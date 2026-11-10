@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   Sparkles,
@@ -141,7 +141,7 @@ export const CelebrityVerificationModal: React.FC = () => {
                     )}
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-neutral-400 mt-0.5">
-                    {currentUser.celebrityCategory || 'Apply below to unlock celebrity checkmark across AfriChat'}
+                    {currentUser.celebrityCategory || 'Apply below to unlock celebrity checkmark across AGC'}
                   </p>
                 </div>
               </div>

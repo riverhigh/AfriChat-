@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   Smartphone,
@@ -102,7 +102,7 @@ export const AuthModal: React.FC = () => {
           await upsertProfile(data.user.id, {
             full_name: emailFullName.trim(),
             avatar_url: `https://api.dicebear.com/7.x/avataaars/svg?seed=${data.user.id}`,
-            bio: 'Active on AfriChat',
+            bio: 'Active on AGC',
           });
 
           const profileRes = await fetchProfile(data.user.id);
@@ -117,7 +117,7 @@ export const AuthModal: React.FC = () => {
             });
           }
 
-          setEmailSuccess('Account created successfully! Welcome to AfriChat.');
+          setEmailSuccess('Account created successfully! Welcome to AGC.');
           setTimeout(() => {
             setIsAuthModalOpen(false);
           }, 1200);
@@ -227,12 +227,14 @@ export const AuthModal: React.FC = () => {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 dark:border-neutral-800">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
-              <ShieldCheck className="w-4 h-4" />
-            </div>
+            <img
+              src="/icon-192.png"
+              alt="AGC Logo"
+              className="w-8 h-8 rounded-xl object-cover shadow-xs ring-1 ring-purple-500/20"
+            />
             <div>
               <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 font-display">
-                AfriChat Identity & Login
+                AGC Identity & Login
               </h3>
               <p className="text-[10px] text-slate-400">
                 Connected to Supabase Cloud Authentication

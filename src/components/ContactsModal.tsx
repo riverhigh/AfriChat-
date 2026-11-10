@@ -43,8 +43,8 @@ export const ContactsModal: React.FC = () => {
 
   if (!isContactsModalOpen) return null;
 
-  const registeredList = deviceContacts.filter((c) => c.isRegisteredOnAfriChat);
-  const nonRegisteredList = deviceContacts.filter((c) => !c.isRegisteredOnAfriChat);
+  const registeredList = deviceContacts.filter((c) => c.isRegisteredOnAGC);
+  const nonRegisteredList = deviceContacts.filter((c) => !c.isRegisteredOnAGC);
 
   const filteredContacts = deviceContacts.filter((contact) => {
     const matchesSearch =
@@ -53,8 +53,8 @@ export const ContactsModal: React.FC = () => {
       contact.normalizedPhoneNumber.includes(searchQuery);
 
     if (!matchesSearch) return false;
-    if (filterTab === 'registered') return contact.isRegisteredOnAfriChat;
-    if (filterTab === 'invite') return !contact.isRegisteredOnAfriChat;
+    if (filterTab === 'registered') return contact.isRegisteredOnAGC;
+    if (filterTab === 'invite') return !contact.isRegisteredOnAGC;
     return true;
   });
 
@@ -74,6 +74,8 @@ export const ContactsModal: React.FC = () => {
     setIsChecking(true);
     setCheckResult(null);
     const normalized = normalizePhone(clean);
+    let foundName = '';
+    let foundAvatar = '';
 
     // 1. Check live Gateway server registry
     try {
@@ -107,7 +109,7 @@ export const ContactsModal: React.FC = () => {
           .maybeSingle();
 
         if (data && data.phone_number) {
-          foundName = data.full_name || 'AfriChat User';
+          foundName = data.full_name || 'AGC User';
           foundAvatar = data.avatar_url || ICON_AVATAR;
         }
       } catch (err) {
@@ -120,7 +122,7 @@ export const ContactsModal: React.FC = () => {
       const localMatch = deviceContacts.find(
         (c) => c.normalizedPhoneNumber === normalized || c.rawPhoneNumber === clean
       );
-      if (localMatch && localMatch.isRegisteredOnAfriChat) {
+      if (localMatch && localMatch.isRegisteredOnAGC) {
         foundName = localMatch.name;
         foundAvatar = localMatch.avatar || ICON_AVATAR;
       }
@@ -145,9 +147,9 @@ export const ContactsModal: React.FC = () => {
 
   const handleAddFoundUser = () => {
     if (!checkResult || checkResult.status !== 'found') return;
-    const name = checkResult.name || 'AfriChat Contact';
-    addNewDeviceContact(name, checkResult.phone, 'AfriChat User', true, checkResult.avatar);
-    setInviteSentToast(`âœ… ${name} added to your AfriChat contacts!`);
+    const name = checkResult.name || 'AGC Contact';
+    addNewDeviceContact(name, checkResult.phone, 'AGC User', true, checkResult.avatar);
+    setInviteSentToast(`âœ… ${name} added to your AGC contacts!`);
     setTimeout(() => setInviteSentToast(null), 3000);
     setNewPhone('');
     setCheckResult(null);
@@ -157,10 +159,10 @@ export const ContactsModal: React.FC = () => {
   const handleSendInviteToJoin = () => {
     if (!checkResult) return;
     const name = `Contact ${checkResult.phone}`;
-    addNewDeviceContact(name, checkResult.phone, 'Invited to AfriChat', false);
+    addNewDeviceContact(name, checkResult.phone, 'Invited to AGC', false);
     
     // Attempt navigator.share or copy invite
-    const inviteText = `Hey! Connect with me on AfriChat, the African Super-App for calls, chat and market. Join here: ${window.location.origin}`;
+    const inviteText = `Hey! Connect with me on AGC, the African Super-App for calls, chat and market. Join here: ${window.location.origin}`;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(inviteText);
     }
@@ -173,7 +175,7 @@ export const ContactsModal: React.FC = () => {
   };
 
   const handleSendInvite = (contact: DeviceContact) => {
-    const inviteText = `Hey ${contact.name}! Connect with me on AfriChat. Join here: ${window.location.origin}`;
+    const inviteText = `Hey ${contact.name}! Connect with me on AGC. Join here: ${window.location.origin}`;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(inviteText);
     }
@@ -203,10 +205,10 @@ export const ContactsModal: React.FC = () => {
             </div>
             <div>
               <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100 font-display">
-                Contacts on AfriChat
+                Contacts on AGC
               </h3>
               <p className="text-[10px] text-purple-400/80">
-                {registeredList.length} on AfriChat Â· {nonRegisteredList.length} inviteable
+                {registeredList.length} on AGC Â· {nonRegisteredList.length} inviteable
               </p>
             </div>
           </div>
@@ -251,7 +253,7 @@ export const ContactsModal: React.FC = () => {
                     : 'bg-slate-100 dark:bg-purple-950/40 text-slate-600 dark:text-purple-300'
                 }`}
               >
-                On AfriChat ({registeredList.length})
+                On AGC ({registeredList.length})
               </button>
               <button
                 type="button"
@@ -289,7 +291,7 @@ export const ContactsModal: React.FC = () => {
                 Add Contact by Phone Number
               </h4>
               <p className="text-[11px] text-slate-500 dark:text-purple-300/60 mt-0.5">
-                AfriChat verifies instantly if this number is an active user.
+                AGC verifies instantly if this number is an active user.
               </p>
             </div>
 
@@ -316,7 +318,7 @@ export const ContactsModal: React.FC = () => {
               </button>
             </form>
 
-            {/* Result: User Found on AfriChat */}
+            {/* Result: User Found on AGC */}
             {checkResult?.status === 'found' && (
               <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl space-y-2.5 animate-in zoom-in-95">
                 <div className="flex items-center gap-3">
@@ -330,7 +332,7 @@ export const ContactsModal: React.FC = () => {
                       </span>
                       <span className="text-[9px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 px-1.5 py-0.5 rounded-full flex items-center gap-1">
                         <CheckCircle2 className="w-2.5 h-2.5" />
-                        <span>Uses AfriChat</span>
+                        <span>Uses AGC</span>
                       </span>
                     </div>
                     <span className="text-[11px] font-mono text-purple-300/70 block mt-0.5">
@@ -359,17 +361,17 @@ export const ContactsModal: React.FC = () => {
               </div>
             )}
 
-            {/* Result: Not on AfriChat */}
+            {/* Result: Not on AGC */}
             {checkResult?.status === 'not_found' && (
               <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl space-y-2.5 animate-in zoom-in-95">
                 <div className="flex items-start gap-2.5">
                   <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
                   <div>
                     <h5 className="text-xs font-bold text-slate-900 dark:text-white">
-                      Not registered on AfriChat yet
+                      Not registered on AGC yet
                     </h5>
                     <p className="text-[11px] text-slate-600 dark:text-purple-300/70 mt-0.5">
-                      {checkResult.phone} is not on AfriChat. You can send them a free invite link to connect with you.
+                      {checkResult.phone} is not on AGC. You can send them a free invite link to connect with you.
                     </p>
                   </div>
                 </div>
@@ -422,7 +424,7 @@ export const ContactsModal: React.FC = () => {
                       className="w-full h-full object-cover"
                     />
                   </div>
-                  {contact.isRegisteredOnAfriChat && (
+                  {contact.isRegisteredOnAGC && (
                     <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white dark:border-[#120a21]" />
                   )}
                 </div>
@@ -432,9 +434,9 @@ export const ContactsModal: React.FC = () => {
                     <h4 className="font-semibold text-xs text-slate-900 dark:text-slate-100 truncate">
                       {contact.name}
                     </h4>
-                    {contact.isRegisteredOnAfriChat && (
+                    {contact.isRegisteredOnAGC && (
                       <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/20 border border-emerald-500/30 px-1.5 py-0.2 rounded-full font-bold">
-                        AfriChat User
+                        AGC User
                       </span>
                     )}
                   </div>
@@ -451,7 +453,7 @@ export const ContactsModal: React.FC = () => {
 
               {/* Action Buttons */}
               <div className="flex items-center gap-1.5 shrink-0 pl-2">
-                {contact.isRegisteredOnAfriChat ? (
+                {contact.isRegisteredOnAGC ? (
                   <>
                     <button
                       type="button"

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   Search,
   CheckCheck,
@@ -317,7 +317,7 @@ export const ChatList: React.FC = () => {
         <MessageSquarePlus className="w-6 h-6" />
       </button>
 
-      {/* AfriChat Contact Info Profile Modal */}
+      {/* AGC Contact Info Profile Modal */}
       <ContactProfileModal
         chat={selectedProfileChat}
         isOpen={Boolean(selectedProfileChat)}

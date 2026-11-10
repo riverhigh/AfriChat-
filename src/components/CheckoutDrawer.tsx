@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   ShieldCheck,
@@ -21,6 +21,7 @@ export const CheckoutDrawer: React.FC = () => {
     activeChatId,
     wallet,
     setIsWalletModalOpen,
+    currentUser,
   } = useApp();
 
   const [paymentOption, setPaymentOption] = useState<'paystack' | 'wallet'>('paystack');
@@ -63,7 +64,7 @@ export const CheckoutDrawer: React.FC = () => {
     } else {
       // Real Paystack Popup Flow
       setIsProcessing(true);
-      const userEmail = currentUser.email || `${currentUser.phoneNumber.replace(/[^0-9]/g, '')}@africhat.africa`;
+      const userEmail = currentUser.email || `${currentUser.phoneNumber.replace(/[^0-9]/g, '')}@AGC.africa`;
 
       openPaystackPopup({
         email: userEmail,
@@ -177,11 +178,11 @@ export const CheckoutDrawer: React.FC = () => {
           <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/60 dark:border-indigo-800/40 rounded-2xl flex items-start gap-2.5">
             <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
             <p className="text-xs text-indigo-900 dark:text-indigo-200 leading-relaxed">
-              Your payment is held safely in the AfriChat Escrow Vault. The seller is only paid after you inspect your parcel and share your 4-digit PIN.
+              Your payment is held safely in the AGC Escrow Vault. The seller is only paid after you inspect your parcel and share your 4-digit PIN.
             </p>
           </div>
 
-          {/* Payment Method Selector: Paystack vs AfriChat Wallet */}
+          {/* Payment Method Selector: Paystack vs AGC Wallet */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">
               Select Payment Method
@@ -227,7 +228,7 @@ export const CheckoutDrawer: React.FC = () => {
                 </div>
               </div>
 
-              {/* Option 2: AfriChat Wallet */}
+              {/* Option 2: AGC Wallet */}
               <div
                 onClick={() => setPaymentOption('wallet')}
                 className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex items-center justify-between ${
@@ -242,7 +243,7 @@ export const CheckoutDrawer: React.FC = () => {
                   </div>
                   <div>
                     <div className="font-semibold text-xs text-slate-900 dark:text-slate-100">
-                      AfriChat Wallet Balance
+                      AGC Wallet Balance
                     </div>
                     <div className="text-[11px] font-mono text-slate-500">
                       Available: <strong className="text-indigo-600 dark:text-indigo-400">{formatPrice(wallet.availableBalance, 'NGN')}</strong>

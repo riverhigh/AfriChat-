@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
@@ -45,16 +45,23 @@ import { WritersGuildModal } from './components/WritersGuildModal';
 import { AdminDashboardModal } from './components/AdminDashboardModal';
 import { TutorCoursesModal } from './components/TutorCoursesModal';
 import { WhatsAppPhoneAuth } from './components/WhatsAppPhoneAuth';
+import { PhoneSignUpBanner } from './components/PhoneSignUpBanner';
+import { CallErrorBoundary } from './components/CallErrorBoundary';
 
 const AppContent: React.FC = () => {
-  const { activeChatId, activeTab, isAuthenticated } = useApp();
+  const { activeChatId, activeTab, isAuthenticated, endCall } = useApp();
   const [isVoiceRecorderOpen, setIsVoiceRecorderOpen] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
 
   // Show WhatsApp Phone registration screen if not authenticated
   if (!isAuthenticated) {
-    return <WhatsAppPhoneAuth />;
+    return (
+      <>
+        <PhoneSignUpBanner />
+        <WhatsAppPhoneAuth />
+      </>
+    );
   }
 
   return (
@@ -89,7 +96,7 @@ const AppContent: React.FC = () => {
 
         {/* Global Modals & Interactive Overlays */}
         <StatusViewerModal />
-        <ActiveCallModal />
+        <CallErrorBoundary onReset={endCall}>{"\n"}<ActiveCallModal />{"\n"}</CallErrorBoundary>
         <IncomingCallModal />
         <CheckoutDrawer />
         <EscrowModal />
@@ -112,7 +119,7 @@ const AppContent: React.FC = () => {
         <FinancialPollModal />
         <AjoLedgerModal />
 
-        {/* AfriChat Carrier Phone Auth, Contacts Discovery & Super-App Extensions */}
+        {/* AGC Carrier Phone Auth, Contacts Discovery & Super-App Extensions */}
         <AuthModal />
         <ContactsModal />
         <DispatchModal />
@@ -148,7 +155,7 @@ const AppContent: React.FC = () => {
         {/* Celebrity Identity Verification Badge Modal */}
         <CelebrityVerificationModal />
 
-        {/* Merchant Store Registration & Tiers (₦3k / ₦7k) */}
+        {/* Merchant Store Registration & Tiers (â‚¦3k / â‚¦7k) */}
         <StoreRegistrationModal />
 
         {/* African Writers Guild (Chapters, Buddy Read, Anti-AI Guarantee) */}

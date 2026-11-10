@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import {
   Phone,
   PhoneIncoming,
@@ -71,8 +71,8 @@ export const CallsView: React.FC = () => {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: `AfriChat ${linkType === 'video' ? 'Video' : 'Voice'} Call`,
-          text: `Join my live AfriChat ${linkType} call:`,
+          title: `AGC ${linkType === 'video' ? 'Video' : 'Voice'} Call`,
+          text: `Join my live AGC ${linkType} call:`,
           url: fullGeneratedLink,
         });
       } catch {
@@ -102,7 +102,7 @@ export const CallsView: React.FC = () => {
     // Clear URL param without reload
     window.history.replaceState({}, '', window.location.pathname);
     startCall(
-      `AfriChat Peer (${type.toUpperCase()})`,
+      `AGC Peer (${type.toUpperCase()})`,
       roomId,
       undefined,
       type,
@@ -165,7 +165,7 @@ export const CallsView: React.FC = () => {
             </span>
           </div>
           <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
-            Share a link for your AfriChat audio or video call
+            Share a link for your AGC audio or video call
           </p>
         </div>
       </div>
@@ -190,7 +190,7 @@ export const CallsView: React.FC = () => {
             </div>
             <h3 className="font-bold text-sm text-slate-800 dark:text-slate-200">No recent calls</h3>
             <p className="text-xs text-slate-400 dark:text-neutral-500 mt-1 max-w-xs mx-auto">
-              Calls made or received via AfriChat will show up here. Use the dialpad or create a call link to connect.
+              Calls made or received via AGC will show up here. Use the dialpad or create a call link to connect.
             </p>
             <div className="flex items-center justify-center gap-2 mt-4">
               <button
@@ -489,7 +489,7 @@ export const CallsView: React.FC = () => {
             <div>
               <h3 className="text-base font-black text-white">Incoming Call Invitation</h3>
               <p className="text-xs text-white/50 mt-1">
-                You've been invited to join an AfriChat {invitedCallRoom.type === 'video' ? 'Video' : 'Voice'} Call.
+                You've been invited to join an AGC {invitedCallRoom.type === 'video' ? 'Video' : 'Voice'} Call.
               </p>
             </div>
             <div className="flex gap-2 pt-2">

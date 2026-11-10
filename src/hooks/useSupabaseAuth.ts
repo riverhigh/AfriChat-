@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+﻿import { useEffect, useState, useCallback } from 'react';
 import {
   supabase,
   fetchProfile,
@@ -33,7 +33,7 @@ const FALLBACK_USER: UserProfile = {
   avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=guest',
   bio: '',
   location: '',
-  about: 'Available · AfriChat User',
+  about: 'Available · AGC User',
   createdAt: new Date().toISOString(),
   lastSeen: 'Just now',
   isPhoneVerified: false,

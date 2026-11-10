@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   ShieldCheck,
@@ -161,7 +161,7 @@ export const LegalComplianceModal: React.FC<LegalComplianceModalProps> = ({
                   1. Operating Entity & Intermediary Status
                 </span>
                 <p>
-                  AfriChat is operated by <strong>Web Tab Global Services Technology LTD</strong> (Registration RC8554897, incorporated under the laws of the Federal Republic of Nigeria). AfriChat operates strictly as an <em>intermediary technology software platform</em> connecting buyers, merchants, independent artisans, and users. Web Tab Global Services Technology LTD is <strong>not</strong> a licensed commercial bank, law chamber, or healthcare provider.
+                  AGC is operated by <strong>Web Tab Global Services Technology LTD</strong> (Registration RC8554897, incorporated under the laws of the Federal Republic of Nigeria). AGC operates strictly as an <em>intermediary technology software platform</em> connecting buyers, merchants, independent artisans, and users. Web Tab Global Services Technology LTD is <strong>not</strong> a licensed commercial bank, law chamber, or healthcare provider.
                 </p>
               </div>
 
@@ -179,7 +179,7 @@ export const LegalComplianceModal: React.FC<LegalComplianceModalProps> = ({
                   3. Peer-to-Peer Escrow Facilitation
                 </h4>
                 <p>
-                  AfriChat&apos;s Escrow service holds digital authorization keys until mutual verification of physical product inspection via a 4-digit PIN. Web Tab Global Services Technology LTD facilitates cryptographic release conditions but does not inspect, warehouse, or warrant physical goods sold by third-party catalog merchants.
+                  AGC&apos;s Escrow service holds digital authorization keys until mutual verification of physical product inspection via a 4-digit PIN. Web Tab Global Services Technology LTD facilitates cryptographic release conditions but does not inspect, warehouse, or warrant physical goods sold by third-party catalog merchants.
                 </p>
               </div>
 
@@ -347,7 +347,7 @@ export const LegalComplianceModal: React.FC<LegalComplianceModalProps> = ({
           {activeTab === 'data_rights' && (
             <div className="space-y-4">
               <p>
-                In compliance with the <strong>Nigeria Data Protection Act (NDPA) 2023</strong>, AfriChat provides users with self-service controls over their personal data records.
+                In compliance with the <strong>Nigeria Data Protection Act (NDPA) 2023</strong>, AGC provides users with self-service controls over their personal data records.
               </p>
 
               {dataRequestSuccess && (
@@ -384,7 +384,7 @@ export const LegalComplianceModal: React.FC<LegalComplianceModalProps> = ({
                       <span>Request Permanent Erasure</span>
                     </div>
                     <p className="text-[11px] text-slate-500 dark:text-neutral-400 mt-1">
-                      Permanently delete your profile and phone association from AfriChat and Supabase servers (NDPA Article 34).
+                      Permanently delete your profile and phone association from AGC and Supabase servers (NDPA Article 34).
                     </p>
                   </div>
                   <button

@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+﻿import { createClient } from '@supabase/supabase-js';
 import type { UserProfile } from '../types';
 
 const supabaseUrl: string =
@@ -103,8 +103,8 @@ export async function upsertProfile(
 export function mapProfileToUser(row: Record<string, unknown>): UserProfile {
   return {
     id: row.id as string,
-    fullName: (row.full_name as string) || 'AfriChat User',
-    about: (row.bio as string) || (row.about as string) || 'Available · AfriChat User',
+    fullName: (row.full_name as string) || 'AGC User',
+    about: (row.bio as string) || (row.about as string) || 'Available · AGC User',
     createdAt: (row.created_at as string) || new Date().toISOString(),
     lastSeen: (row.last_seen as string) || 'Just now',
     username: (row.username as string) || '',

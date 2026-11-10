@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+﻿import React, { useState, useRef, useEffect } from 'react';
 import {
   ArrowLeft,
   Phone,
@@ -155,7 +155,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           <div className="absolute -inset-10 opacity-[0.035] dark:opacity-[0.05] flex flex-wrap items-center justify-center gap-10 rotate-[-15deg] select-none">
             {Array.from({ length: 30 }).map((_, i) => (
               <div key={i} className="text-xs font-mono font-bold tracking-widest text-slate-800 dark:text-white whitespace-nowrap">
-                PROTECTED • AFRICHAT PRIVACY SHIELD • CONFIDENTIAL ESCROW
+                PROTECTED • AGC PRIVACY SHIELD • CONFIDENTIAL ESCROW
               </div>
             ))}
           </div>
@@ -419,7 +419,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 <div className="max-w-xs bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-xl p-3 text-center shadow-2xs">
                   <div className="flex items-center justify-center gap-1.5 text-amber-800 dark:text-amber-300 text-xs font-bold mb-1">
                     <Lock className="w-3.5 h-3.5" />
-                    <span>AfriChat Escrow Protection</span>
+                    <span>AGC Escrow Protection</span>
                   </div>
                   <p className="text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
                     {msg.text}
@@ -1000,7 +1000,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         onClose={() => setIsDisplayModalOpen(false)}
       />
 
-      {/* AfriChat Contact Info Profile Modal */}
+      {/* AGC Contact Info Profile Modal */}
       <ContactProfileModal
         chat={currentChat}
         isOpen={isContactProfileOpen}

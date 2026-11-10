@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   ShieldAlert,
@@ -43,7 +43,7 @@ export const ScamReputationModal: React.FC = () => {
     e.preventDefault();
     if (!reportValue.trim()) return;
     flagEntityAsScam(reportValue.trim(), reportType, reportReason);
-    setFeedback(`Report submitted! ${reportValue} flagged in AfriChat crowdsourced scam vault.`);
+    setFeedback(`Report submitted! ${reportValue} flagged in AGC crowdsourced scam vault.`);
     setTimeout(() => {
       setFeedback(null);
       setActiveTab('check');
@@ -258,7 +258,7 @@ export const ScamReputationModal: React.FC = () => {
                   <div className="mt-3 pt-3 border-t border-black/10 dark:border-white/10 text-xs font-medium">
                     {scamLookupEntity.riskLevel === 'critical_scam' ? (
                       <p className="text-rose-700 dark:text-rose-300">
-                        🚨 DO NOT transfer funds directly. Always use AfriChat Escrow Vault to hold money until goods are delivered!
+                        🚨 DO NOT transfer funds directly. Always use AGC Escrow Vault to hold money until goods are delivered!
                       </p>
                     ) : (
                       <p className="text-emerald-700 dark:text-emerald-300">
@@ -347,7 +347,7 @@ export const ScamReputationModal: React.FC = () => {
                 className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition-colors"
               >
                 <Flag className="w-4 h-4" />
-                <span>Submit Fraud Flag to AfriChat Vault</span>
+                <span>Submit Fraud Flag to AGC Vault</span>
               </button>
             </form>
           )}

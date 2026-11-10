@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   ShieldCheck,
@@ -52,7 +52,7 @@ export const EscrowModal: React.FC = () => {
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-5 h-5 text-indigo-400" />
             <div>
-              <h3 className="font-semibold text-sm">AfriChat Escrow Protection</h3>
+              <h3 className="font-semibold text-sm">AGC Escrow Protection</h3>
               <p className="text-[11px] text-indigo-200 font-mono">Order #{order.id}</p>
             </div>
           </div>
@@ -163,7 +163,7 @@ export const EscrowModal: React.FC = () => {
                 type="button"
                 onClick={() => {
                   alert(
-                    `Dispute Flagged for Order #${order.id}. AfriChat Arbiter assigned. Funds will remain safely held in escrow.`
+                    `Dispute Flagged for Order #${order.id}. AGC Arbiter assigned. Funds will remain safely held in escrow.`
                   );
                 }}
                 className="w-full py-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl text-xs font-medium transition-colors"

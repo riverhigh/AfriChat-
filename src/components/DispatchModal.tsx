@@ -4,13 +4,13 @@ import {
   Truck,
   MapPin,
   Phone,
-  Clock,
-  ShieldCheck,
   CheckCircle2,
-  Navigation,
-  DollarSign,
-  PackageCheck,
   Bike,
+  Package,
+  Weight,
+  Navigation,
+  Search,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { DispatchDeliveryOrder, DispatchProvider } from '../types';
@@ -26,22 +26,32 @@ export const DispatchModal: React.FC = () => {
     formatPrice,
   } = useApp();
 
-  const [provider, setProvider] = useState<DispatchProvider>('gokada');
-  const [vehicleType, setVehicleType] = useState<'bike' | 'keke' | 'van'>('bike');
+  // Internal provider state — hidden from user, auto-selected by weight
+  const [vehicleType, setVehicleType] = useState<'bike' | 'van'>('bike');
+  const [packageWeight, setPackageWeight] = useState<number>(1);
   const [senderAddress, setSenderAddress] = useState('Shop 14, Balogun Ultra-Modern Complex, Lagos Island');
   const [senderPhone, setSenderPhone] = useState(currentUser.phoneNumber || '+2348031234567');
   const [recipientName, setRecipientName] = useState('');
   const [recipientPhone, setRecipientPhone] = useState('');
   const [recipientAddress, setRecipientAddress] = useState('');
-  const [packageDesc, setPackageDesc] = useState('Ankara Fabric Bale (6 Yards)');
+  const [packageDesc, setPackageDesc] = useState('');
   const [activeTrackingOrder, setActiveTrackingOrder] = useState<DispatchDeliveryOrder | null>(
     dispatchOrders[0] || null
   );
+  const [isSearching, setIsSearching] = useState(false);
   const [orderCreatedSuccess, setOrderCreatedSuccess] = useState(false);
 
   if (!isDispatchModalOpen) return null;
 
-  const estimatedFee = vehicleType === 'bike' ? 2400 : vehicleType === 'keke' ? 3800 : 6500;
+  // Fee is based on vehicle only — no keke
+  const estimatedFee = vehicleType === 'bike' ? 2400 : 6500;
+
+  // Auto-select provider based on weight — completely hidden from user
+  const autoSelectProvider = (): DispatchProvider => {
+    // Heavy items (≥5kg) or van → PicckR (better for cargo)
+    // Light items (<5kg) + bike → Gokada (faster for parcels)
+    return packageWeight >= 5 || vehicleType === 'van' ? 'pickkr' : 'gokada';
+  };
 
   const handleBookDispatch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,25 +59,36 @@ export const DispatchModal: React.FC = () => {
       alert('Please fill out all recipient delivery details');
       return;
     }
+    if (!packageDesc.trim()) {
+      alert('Please describe the item(s) you are sending');
+      return;
+    }
 
-    const newOrder = createDispatchOrder({
-      provider,
-      vehicleType,
-      senderAddress,
-      senderPhone,
-      recipientName,
-      recipientPhone,
-      recipientAddress,
-      packageDescription: packageDesc,
-      estimatedFee,
-      currency: 'NGN',
-    });
+    // Auto-select provider — user never sees this
+    const selectedProvider = autoSelectProvider();
 
-    setActiveTrackingOrder(newOrder);
-    setOrderCreatedSuccess(true);
+    // Show "Searching for a rider..." state
+    setIsSearching(true);
+
     setTimeout(() => {
-      setOrderCreatedSuccess(false);
-    }, 4000);
+      setIsSearching(false);
+      const newOrder = createDispatchOrder({
+        provider: selectedProvider,
+        vehicleType,
+        senderAddress,
+        senderPhone,
+        recipientName,
+        recipientPhone,
+        recipientAddress,
+        packageDescription: packageDesc,
+        estimatedFee,
+        currency: 'NGN',
+      });
+
+      setActiveTrackingOrder(newOrder);
+      setOrderCreatedSuccess(true);
+      setTimeout(() => setOrderCreatedSuccess(false), 5000);
+    }, 2200); // Simulate rider search
   };
 
   return (
@@ -90,10 +111,10 @@ export const DispatchModal: React.FC = () => {
             </div>
             <div>
               <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100 font-display">
-                Gokada & PickkR Dispatch
+                AGC Dispatch
               </h3>
               <p className="text-[10px] text-slate-400">
-                Instant courier API dispatch & rider tracking
+                Fast, trusted courier delivery across Nigeria
               </p>
             </div>
           </div>
@@ -106,24 +127,39 @@ export const DispatchModal: React.FC = () => {
           </button>
         </div>
 
-        {/* Success Banner */}
-        {orderCreatedSuccess && (
+        {/* Searching for rider overlay */}
+        {isSearching && (
+          <div className="mx-4 mt-3 p-4 bg-indigo-600 text-white rounded-2xl flex flex-col items-center gap-2 shadow-lg animate-in slide-in-from-top-2">
+            <div className="flex items-center gap-2">
+              <Search className="w-5 h-5 animate-pulse" />
+              <strong className="text-sm">Searching for a rider nearby...</strong>
+            </div>
+            <p className="text-xs text-indigo-200">Our system is finding the best available courier for your delivery</p>
+            <div className="w-full bg-indigo-700 rounded-full h-1.5 overflow-hidden mt-1">
+              <div className="bg-white h-full rounded-full animate-[width_2s_ease-in-out_forwards]" style={{ animation: 'pulse 0.8s ease-in-out infinite' }} />
+            </div>
+          </div>
+        )}
+
+        {/* Rider found success banner */}
+        {orderCreatedSuccess && !isSearching && (
           <div className="mx-4 mt-3 p-3 bg-emerald-600 text-white rounded-2xl flex items-center gap-2 shadow-lg animate-in slide-in-from-top-2">
             <CheckCircle2 className="w-5 h-5 shrink-0" />
             <div className="text-xs">
-              <strong>Rider Dispatched!</strong> {activeTrackingOrder?.riderName} ({activeTrackingOrder?.provider.toUpperCase()}) is en route to pickup.
+              <strong>Rider Found & Dispatched!</strong>{' '}
+              {activeTrackingOrder?.riderName} is on the way to pick up your package.
             </div>
           </div>
         )}
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {/* Active Rider Tracking Card if any */}
+          {/* Active Rider Tracking Card */}
           {activeTrackingOrder && (
             <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-950/80 via-slate-900 to-indigo-950 text-white space-y-3 border border-emerald-500/30 shadow-md">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase font-bold font-mono tracking-wider bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
-                  {activeTrackingOrder.provider === 'gokada' ? '🟢 Gokada Express' : '🟠 PickkR Hub'} · Live
+                  🟢 Rider Assigned · Live Tracking
                 </span>
                 <span className="text-xs font-mono font-bold text-amber-300">
                   {activeTrackingOrder.trackingCode}
@@ -140,7 +176,6 @@ export const DispatchModal: React.FC = () => {
                     Plate: {activeTrackingOrder.riderPlate}
                   </p>
                 </div>
-
                 <a
                   href={`tel:${activeTrackingOrder.riderPhone}`}
                   className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 rounded-xl text-xs font-bold flex items-center gap-1 shadow-xs"
@@ -172,80 +207,86 @@ export const DispatchModal: React.FC = () => {
           {/* Booking Form */}
           <form onSubmit={handleBookDispatch} className="space-y-3.5">
             <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider">
-              Book New Delivery Courier
+              Book New Delivery
             </h4>
 
-            {/* Provider API Choice */}
+            {/* Package Info Row */}
             <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setProvider('gokada')}
-                className={`p-3 rounded-2xl border-2 text-left transition-all ${
-                  provider === 'gokada'
-                    ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-950 dark:text-emerald-100'
-                    : 'border-slate-200 dark:border-slate-800 opacity-70 hover:opacity-100'
-                }`}
-              >
-                <div className="font-bold text-xs flex items-center justify-between">
-                  <span>Gokada API</span>
-                  <span className="text-[10px] font-mono text-emerald-600 font-black">45 MIN</span>
-                </div>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                  Instant motorbike parcel delivery across Lagos & Abuja
-                </p>
-              </button>
+              {/* Package Weight */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
+                  <Weight className="w-3 h-3" /> Weight (kg)
+                </label>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  value={packageWeight}
+                  onChange={(e) => setPackageWeight(parseFloat(e.target.value) || 0.1)}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs"
+                />
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setProvider('pickkr')}
-                className={`p-3 rounded-2xl border-2 text-left transition-all ${
-                  provider === 'pickkr'
-                    ? 'border-indigo-600 bg-indigo-50/60 dark:bg-indigo-950/40 text-indigo-950 dark:text-indigo-100'
-                    : 'border-slate-200 dark:border-slate-800 opacity-70 hover:opacity-100'
-                }`}
-              >
-                <div className="font-bold text-xs flex items-center justify-between">
-                  <span>PickkR API</span>
-                  <span className="text-[10px] font-mono text-indigo-600 font-black">SAME DAY</span>
+              {/* Vehicle Type — bike or van only */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Vehicle
+                </label>
+                <div className="grid grid-cols-2 gap-1">
+                  {[
+                    { id: 'bike', label: '🏍️ Bike', desc: '<15kg' },
+                    { id: 'van', label: '🚐 Van', desc: 'Bulk' },
+                  ].map((v) => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => setVehicleType(v.id as 'bike' | 'van')}
+                      className={`py-1.5 px-2 rounded-xl border text-center transition-all text-[11px] ${
+                        vehicleType === v.id
+                          ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-900 dark:text-indigo-200 font-bold'
+                          : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
+                      }`}
+                    >
+                      <div>{v.label}</div>
+                      <div className="text-[9px] text-slate-400">{v.desc}</div>
+                    </button>
+                  ))}
                 </div>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                  Multi-carrier aggregator & interstate waybill shipments
-                </p>
-              </button>
+              </div>
             </div>
 
-            {/* Vehicle Selection */}
+            {/* Item Description */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Vehicle Type
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
+                <Package className="w-3 h-3" /> Item Description
               </label>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { id: 'bike', label: 'Motorbike', desc: 'Up to 15kg' },
-                  { id: 'keke', label: 'Tricycle / Keke', desc: 'Up to 50kg' },
-                  { id: 'van', label: 'Cargo Van', desc: 'Bulk goods' },
-                ].map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    onClick={() => setVehicleType(v.id as any)}
-                    className={`p-2 rounded-xl border text-center transition-all ${
-                      vehicleType === v.id
-                        ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-900 dark:text-indigo-200 font-bold'
-                        : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
-                    }`}
-                  >
-                    <div className="text-xs">{v.label}</div>
-                    <div className="text-[9px] text-slate-400">{v.desc}</div>
-                  </button>
-                ))}
-              </div>
+              <input
+                type="text"
+                value={packageDesc}
+                onChange={(e) => setPackageDesc(e.target.value)}
+                placeholder="e.g. Ankara Fabric, Shoes, Electronics"
+                required
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs"
+              />
+            </div>
+
+            {/* Sender Address */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
+                <MapPin className="w-3 h-3 text-emerald-500" /> Pickup Address
+              </label>
+              <input
+                type="text"
+                value={senderAddress}
+                onChange={(e) => setSenderAddress(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs"
+              />
             </div>
 
             {/* Recipient Details */}
             <div className="space-y-2">
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                Recipient & Dropoff Details
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1">
+                <Navigation className="w-3 h-3 text-indigo-500" /> Recipient & Dropoff Details
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <input
@@ -275,22 +316,7 @@ export const DispatchModal: React.FC = () => {
               />
             </div>
 
-            {/* Package Description */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Item Description
-              </label>
-              <input
-                type="text"
-                value={packageDesc}
-                onChange={(e) => setPackageDesc(e.target.value)}
-                placeholder="e.g. Ankara Fabric, Electronics, Shoes"
-                required
-                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs"
-              />
-            </div>
-
-            {/* Fee quote & Pay button */}
+            {/* Fee quote */}
             <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-xl flex items-center justify-between border border-slate-200 dark:border-slate-800">
               <div>
                 <div className="text-[10px] text-slate-500">Estimated Delivery Fee:</div>
@@ -299,50 +325,73 @@ export const DispatchModal: React.FC = () => {
                 </div>
               </div>
               <div className="text-right text-[11px] text-slate-500">
-                Wallet Balance: <strong className="font-mono text-slate-800 dark:text-slate-200">{formatPrice(wallet.availableBalance, 'NGN')}</strong>
+                Wallet Balance:{' '}
+                <strong className="font-mono text-slate-800 dark:text-slate-200">
+                  {formatPrice(wallet.availableBalance, 'NGN')}
+                </strong>
               </div>
+            </div>
+
+            {/* Security note */}
+            <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+              <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
+              <span>Rider identity verified · Delivery tracked end-to-end · Funds held in escrow until delivery</span>
             </div>
 
             <button
               type="submit"
-              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all active:scale-98"
+              disabled={isSearching}
+              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all active:scale-98"
             >
-              <Truck className="w-4 h-4" />
-              <span>Book {provider.toUpperCase()} Rider Now</span>
+              {isSearching ? (
+                <>
+                  <Search className="w-4 h-4 animate-pulse" />
+                  <span>Searching for a rider...</span>
+                </>
+              ) : (
+                <>
+                  <Truck className="w-4 h-4" />
+                  <span>Book Courier Now</span>
+                </>
+              )}
             </button>
           </form>
 
           {/* Previous Dispatch Orders History */}
-          <div className="pt-2">
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
-              Dispatch History ({dispatchOrders.length})
-            </h4>
-            <div className="space-y-2">
-              {dispatchOrders.map((ord) => (
-                <div
-                  key={ord.id}
-                  onClick={() => setActiveTrackingOrder(ord)}
-                  className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200/80 dark:border-slate-800 cursor-pointer hover:border-indigo-500 transition-colors"
-                >
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-slate-900 dark:text-slate-100">
-                      {ord.recipientName}
-                    </span>
-                    <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                      ₦{ord.estimatedFee.toLocaleString()}
-                    </span>
+          {dispatchOrders.length > 0 && (
+            <div className="pt-2">
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                Dispatch History ({dispatchOrders.length})
+              </h4>
+              <div className="space-y-2">
+                {dispatchOrders.map((ord) => (
+                  <div
+                    key={ord.id}
+                    onClick={() => setActiveTrackingOrder(ord)}
+                    className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200/80 dark:border-slate-800 cursor-pointer hover:border-indigo-500 transition-colors"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-slate-900 dark:text-slate-100">
+                        {ord.recipientName}
+                      </span>
+                      <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                        ₦{ord.estimatedFee.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 truncate mt-0.5">
+                      {ord.recipientAddress}
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono mt-1">
+                      <span>{ord.trackingCode}</span>
+                      <span className="capitalize text-indigo-600 dark:text-indigo-400 font-semibold">
+                        {ord.status.replace('_', ' ')}
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-[11px] text-slate-500 truncate mt-0.5">
-                    {ord.recipientAddress}
-                  </div>
-                  <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono mt-1">
-                    <span>{ord.trackingCode}</span>
-                    <span className="capitalize text-indigo-600 dark:text-indigo-400 font-semibold">{ord.status.replace('_', ' ')}</span>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

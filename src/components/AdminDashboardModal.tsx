@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   ShieldCheck,
   X,
@@ -111,7 +111,7 @@ export const AdminDashboardModal: React.FC = () => {
     createAdminBroadcast(bcTitle.trim(), bcMessage.trim(), bcLevel);
     setBcTitle('');
     setBcMessage('');
-    alert('System broadcast successfully dispatched to all AfriChat clients!');
+    alert('System broadcast successfully dispatched to all AGC clients!');
   };
 
   return (
@@ -127,7 +127,7 @@ export const AdminDashboardModal: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-black tracking-tight font-display">
-                  AfriChat Super Admin Console
+                  AGC Super Admin Console
                 </h2>
                 <span className="text-[10px] uppercase font-mono font-bold bg-amber-400 text-slate-950 px-2 py-0.5 rounded-full">
                   Root
@@ -618,7 +618,7 @@ export const AdminDashboardModal: React.FC = () => {
                         <div className="pt-2 border-t border-slate-100 dark:border-neutral-800 flex items-center justify-between gap-2">
                           <span className="text-[11px] text-slate-500 flex items-center gap-1">
                             <Lock className="w-3 h-3 text-amber-500" />
-                            Funds held securely in AfriChat Escrow Vault
+                            Funds held securely in AGC Escrow Vault
                           </span>
 
                           <div className="flex items-center gap-2">
@@ -660,7 +660,7 @@ export const AdminDashboardModal: React.FC = () => {
                   Dispatch Global System Announcement
                 </h3>
                 <p className="text-xs text-slate-600 dark:text-neutral-400 mb-4">
-                  Broadcasts a real-time banner notice to all online AfriChat users across mobile and web clients.
+                  Broadcasts a real-time banner notice to all online AGC users across mobile and web clients.
                 </p>
 
                 <form onSubmit={handleSendBroadcast} className="space-y-3">
@@ -833,7 +833,7 @@ export const AdminDashboardModal: React.FC = () => {
         <div className="px-5 py-3 bg-slate-50 dark:bg-[#161426] border-t border-slate-100 dark:border-neutral-800 flex items-center justify-between text-xs">
           <span className="text-[11px] text-slate-500 flex items-center gap-1.5">
             <ShieldCheck className="w-4 h-4 text-emerald-500" />
-            <span>AfriChat Admin Core v2.4</span>
+            <span>AGC Admin Core v2.4</span>
           </span>
 
           <button

@@ -21,6 +21,7 @@ export const TownView: React.FC = () => {
   const {
     townCommunities,
     toggleJoinTownCommunity,
+    addTownCommunity,
     hidePhoneNumberInTown,
     toggleHidePhoneNumberInTown,
     currentUser,
@@ -51,7 +52,7 @@ export const TownView: React.FC = () => {
   // Derive user's masked username
   const cleanUsername = currentUser.username
     ? `@${currentUser.username}`
-    : currentUser.fullName && currentUser.fullName !== 'Chioma Adebayo' && currentUser.fullName !== 'AfriChat User'
+    : currentUser.fullName && currentUser.fullName !== 'Chioma Adebayo' && currentUser.fullName !== 'AGC User'
     ? `@${currentUser.fullName.toLowerCase().replace(/[^a-z0-9]/g, '')}`
     : currentUser.phoneNumber
     ? `@user_${currentUser.phoneNumber.slice(-4)}`
@@ -556,10 +557,10 @@ export const TownView: React.FC = () => {
                 type="button"
                 onClick={() => {
                   if (!newCommunityName.trim()) return;
+                  addTownCommunity(newCommunityName, newCommunityType, newCommunityCategory, newCommunityDesc);
                   setShowCreateModal(false);
                   setNewCommunityName('');
                   setNewCommunityDesc('');
-                  alert(`🎉 "${newCommunityName}" created successfully in Town!`);
                 }}
                 className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md transition-colors"
               >

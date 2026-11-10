@@ -7,6 +7,7 @@ import {
   emitPhoneCallSignal,
   joinLiveSpace,
   leaveLiveSpace,
+  registerSocketUser,
 } from '../services/socket';
 
 export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
@@ -298,7 +299,7 @@ interface AppContextType {
   setIsContactsModalOpen: (val: boolean) => void;
   syncDeviceContacts: () => void;
   startChatWithContact: (contact: DeviceContact) => void;
-  addNewDeviceContact: (name: string, phone: string, about?: string) => void;
+  addNewDeviceContact: (name: string, phone: string, about?: string, isRegistered?: boolean, avatar?: string) => DeviceContact;
   // 10. User Uploaded Memes & GIFs + In-Chat Drawer
   userMemes: UserUploadedMeme[];
   addUserMeme: (meme: Omit<UserUploadedMeme, 'id' | 'createdAt'>) => void;
@@ -375,6 +376,7 @@ interface AppContextType {
   hidePhoneNumberInTown: boolean;
   toggleHidePhoneNumberInTown: () => void;
   toggleJoinTownCommunity: (id: string) => void;
+  addTownCommunity: (name: string, type: 'group' | 'channel', category: TownCommunity['category'], description: string) => void;
   // 18. Healthcare & Hospital Telehealth
   doctors: DoctorProfile[];
   queueTokens: HospitalQueueToken[];
@@ -530,22 +532,22 @@ const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
 
 // ─── Data Version Nuke ───────────────────────────────────────────────────────
 // Bump this string whenever you need to wipe all stale cached/mock data.
-const AFRICHAT_DATA_VERSION = 'v3_clean_2026';
+const AGC_DATA_VERSION = 'v3_clean_2026';
 (function nukeStaleMockData() {
   if (typeof window === 'undefined') return;
-  const stored = localStorage.getItem('africhat_data_version');
-  if (stored !== AFRICHAT_DATA_VERSION) {
-    const keepKeys = new Set(['africhat_data_version', 'africhat_font_size', 'africhat_low_data_mode', 'africhat_language', 'africhat_currency', 'africhat_hide_phone_town', 'africhat_user_profile_v2', 'africhat_is_authenticated', 'africhat_device_contacts', 'africhat_registered_users_cache']);
+  const stored = localStorage.getItem('AGC_data_version');
+  if (stored !== AGC_DATA_VERSION) {
+    const keepKeys = new Set(['AGC_data_version', 'AGC_font_size', 'AGC_low_data_mode', 'AGC_language', 'AGC_currency', 'AGC_hide_phone_town', 'AGC_user_profile_v2', 'AGC_is_authenticated', 'AGC_device_contacts', 'AGC_registered_users_cache']);
     const toRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && key.startsWith('africhat_') && !keepKeys.has(key)) {
+      if (key && key.startsWith('AGC_') && !keepKeys.has(key)) {
         toRemove.push(key);
       }
     }
     toRemove.forEach((k) => localStorage.removeItem(k));
-    localStorage.setItem('africhat_data_version', AFRICHAT_DATA_VERSION);
-    console.log('[AfriChat] Stale data cleared, starting fresh.');
+    localStorage.setItem('AGC_data_version', AGC_DATA_VERSION);
+    console.log('[AGC] Stale data cleared, starting fresh.');
   }
 })();
 
@@ -557,12 +559,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Display & Appearance
   const [fontSize, setFontSizeState] = useState<AppFontSize>(() => {
-    return (localStorage.getItem('africhat_font_size') as AppFontSize) || 'normal';
+    return (localStorage.getItem('AGC_font_size') as AppFontSize) || 'normal';
   });
 
   const setFontSize = (size: AppFontSize) => {
     setFontSizeState(size);
-    localStorage.setItem('africhat_font_size', size);
+    localStorage.setItem('AGC_font_size', size);
     document.documentElement.classList.remove('text-size-small', 'text-size-normal', 'text-size-large', 'text-size-huge');
     document.documentElement.classList.add(`text-size-${size}`);
   };
@@ -573,15 +575,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [fontSize]);
 
   const [chatWallpaper, setChatWallpaperState] = useState<string | null>(() => {
-    return localStorage.getItem('africhat_wallpaper') || null;
+    return localStorage.getItem('AGC_wallpaper') || null;
   });
 
   const setChatWallpaper = (wallpaper: string | null) => {
     setChatWallpaperState(wallpaper);
     if (wallpaper) {
-      localStorage.setItem('africhat_wallpaper', wallpaper);
+      localStorage.setItem('AGC_wallpaper', wallpaper);
     } else {
-      localStorage.removeItem('africhat_wallpaper');
+      localStorage.removeItem('AGC_wallpaper');
     }
   };
 
@@ -591,13 +593,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Town Communities & Anonymous Privacy
   const [townCommunities, setTownCommunities] = useState<TownCommunity[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_town_communities_v2');
+      const saved = localStorage.getItem('AGC_town_communities_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && !parsed.some((c: TownCommunity) => c.id === 'town_cv_tech' || c.id === 'town_afritech_daily')) {
           return parsed;
         } else {
-          localStorage.removeItem('africhat_town_communities_v2');
+          localStorage.removeItem('AGC_town_communities_v2');
         }
       }
     } catch (e) {
@@ -606,18 +608,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return [];
   });
   const [hidePhoneNumberInTown, setHidePhoneNumberInTown] = useState<boolean>(() => {
-    return localStorage.getItem('africhat_hide_phone_town') === 'true';
+    return localStorage.getItem('AGC_hide_phone_town') === 'true';
   });
   const toggleHidePhoneNumberInTown = () => {
     setHidePhoneNumberInTown((prev) => {
       const next = !prev;
-      localStorage.setItem('africhat_hide_phone_town', String(next));
+      localStorage.setItem('AGC_hide_phone_town', String(next));
       return next;
     });
   };
   useEffect(() => {
     try {
-      localStorage.setItem('africhat_town_communities_v2', JSON.stringify(townCommunities));
+      localStorage.setItem('AGC_town_communities_v2', JSON.stringify(townCommunities));
     } catch (e) {}
   }, [townCommunities]);
 
@@ -629,6 +631,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         c.id === id ? { ...c, isJoined: !c.isJoined, membersCount: c.isJoined ? c.membersCount - 1 : c.membersCount + 1 } : c
       )
     );
+  };
+
+  const addTownCommunity = (name: string, type: 'group' | 'channel', category: TownCommunity['category'], description: string) => {
+    const newCommunity: TownCommunity = {
+      id: `town_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      name: name.trim(),
+      type,
+      category,
+      membersCount: 1,
+      avatar: `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(name)}&backgroundColor=581c87&textColor=ffffff`,
+      description: description.trim() || `${type === 'channel' ? 'Channel' : 'Group'} community`,
+      isVerified: false,
+      isJoined: true,
+      recentActivity: 'Just created',
+      adminName: currentUser.fullName || 'You',
+    };
+    setTownCommunities((prev) => [newCommunity, ...prev]);
+
+    // Also try to persist to Supabase if configured
+    if (isSupabaseConfigured) {
+      supabase.from('communities').insert({
+        id: newCommunity.id,
+        name: newCommunity.name,
+        type: newCommunity.type,
+        category: newCommunity.category,
+        description: newCommunity.description,
+        admin_id: currentUser.id,
+        members_count: 1,
+        is_verified: false,
+      }).then(({ error }) => {
+        if (error) console.warn('Community Supabase insert error:', error.message);
+      });
+    }
   };
 
   // Healthcare
@@ -832,7 +867,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       song: updatedSong,
-      message: `🎵 Purchased "${song.title}"! 100% payout credited directly to ${song.artistName}'s AfriChat Wallet. Stream & download unlocked.`,
+      message: `🎵 Purchased "${song.title}"! 100% payout credited directly to ${song.artistName}'s AGC Wallet. Stream & download unlocked.`,
     };
   };
 
@@ -883,7 +918,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 22. Artisan Service Station & Workspace Management
   const [artisanStation, setArtisanStation] = useState<ArtisanStation | null>(() => {
     try {
-      const saved = localStorage.getItem('africhat_artisan_station');
+      const saved = localStorage.getItem('AGC_artisan_station');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse artisan station:', e);
@@ -961,7 +996,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setArtisanStation(newStation);
-    localStorage.setItem('africhat_artisan_station', JSON.stringify(newStation));
+    localStorage.setItem('AGC_artisan_station', JSON.stringify(newStation));
     return { success: true, message: 'Artisan Station successfully registered and approved for ₦5,000!', station: newStation };
   };
 
@@ -1006,15 +1041,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         listings: [...artisanStation.listings, newOffering],
       };
       setArtisanStation(updatedStation);
-      localStorage.setItem('africhat_artisan_station', JSON.stringify(updatedStation));
+      localStorage.setItem('AGC_artisan_station', JSON.stringify(updatedStation));
     }
 
-    // Also sync to global serviceProviders so any client in AfriChat can discover and book it
+    // Also sync to global serviceProviders so any client in AGC can discover and book it
     setServiceProviders((prev) => {
       const existing = prev.find((p) => p.phone === currentUser.phoneNumber || (artisanStation && p.id === artisanStation.id));
       if (existing) {
         const updated = prev.map((p) => (p.id === existing.id ? { ...p, servicesOffered: [newOffering, ...p.servicesOffered] } : p));
-        localStorage.setItem('africhat_service_providers', JSON.stringify(updated));
+        localStorage.setItem('AGC_service_providers', JSON.stringify(updated));
         return updated;
       } else {
         const brandNewProvider: ServiceProvider = {
@@ -1044,7 +1079,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ],
         };
         const updated = [brandNewProvider, ...prev];
-        localStorage.setItem('africhat_service_providers', JSON.stringify(updated));
+        localStorage.setItem('AGC_service_providers', JSON.stringify(updated));
         return updated;
       }
     });
@@ -1060,7 +1095,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!artisanStation) return;
     const updated = { ...artisanStation, operatingHours: hours };
     setArtisanStation(updated);
-    localStorage.setItem('africhat_artisan_station', JSON.stringify(updated));
+    localStorage.setItem('AGC_artisan_station', JSON.stringify(updated));
   };
 
   const hireArtisanStaff = (staff: Omit<ArtisanStaff, 'id' | 'hiredAt' | 'status'>) => {
@@ -1073,7 +1108,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (artisanStation) {
       const updated = { ...artisanStation, staff: [...artisanStation.staff, newStaff] };
       setArtisanStation(updated);
-      localStorage.setItem('africhat_artisan_station', JSON.stringify(updated));
+      localStorage.setItem('AGC_artisan_station', JSON.stringify(updated));
     }
     return { success: true, staffMember: newStaff };
   };
@@ -1088,7 +1123,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (artisanStation) {
       const updated = { ...artisanStation, tasks: [newTask, ...artisanStation.tasks] };
       setArtisanStation(updated);
-      localStorage.setItem('africhat_artisan_station', JSON.stringify(updated));
+      localStorage.setItem('AGC_artisan_station', JSON.stringify(updated));
     }
     return { success: true, task: newTask };
   };
@@ -1098,13 +1133,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedTasks = artisanStation.tasks.map((t) => (t.id === taskId ? { ...t, status } : t));
     const updated = { ...artisanStation, tasks: updatedTasks };
     setArtisanStation(updated);
-    localStorage.setItem('africhat_artisan_station', JSON.stringify(updated));
+    localStorage.setItem('AGC_artisan_station', JSON.stringify(updated));
   };
 
   // 23. Anti-Fraud Referral & Invite System
   const [referralProgram, setReferralProgram] = useState<ReferralProgram>(() => {
     try {
-      const saved = localStorage.getItem('africhat_referral_program');
+      const saved = localStorage.getItem('AGC_referral_program');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse referral program:', e);
@@ -1145,13 +1180,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...prev,
         availableBonus: 0,
       };
-      localStorage.setItem('africhat_referral_program', JSON.stringify(updated));
+      localStorage.setItem('AGC_referral_program', JSON.stringify(updated));
       return updated;
     });
     return {
       success: true,
       amountClaimed: bonusToClaim,
-      message: `🎉 ₦${bonusToClaim.toLocaleString()} referral reward credited to your AfriChat wallet!`,
+      message: `🎉 ₦${bonusToClaim.toLocaleString()} referral reward credited to your AGC wallet!`,
     };
   };
 
@@ -1182,7 +1217,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         availableBonus: prev.availableBonus + additionalBonus,
         referredList: newReferredList,
       };
-      localStorage.setItem('africhat_referral_program', JSON.stringify(updated));
+      localStorage.setItem('AGC_referral_program', JSON.stringify(updated));
       return updated;
     });
   };
@@ -1190,13 +1225,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chats, setChats] = useState<ChatThread[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_chats_v2');
+      const saved = localStorage.getItem('AGC_chats_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && !parsed.some((c: ChatThread) => c.id === 'chat_balogun_ajo' || c.id === 'chat_mama_chidinma')) {
           return parsed;
         } else {
-          localStorage.removeItem('africhat_chats_v2');
+          localStorage.removeItem('AGC_chats_v2');
         }
       }
     } catch (e) {
@@ -1206,7 +1241,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>(() => {
     try {
-      const saved = localStorage.getItem('africhat_messages_v2');
+      const saved = localStorage.getItem('AGC_messages_v2');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn(e);
@@ -1215,13 +1250,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [calls, setCalls] = useState<CallLogItem[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_calls_v2');
+      const saved = localStorage.getItem('AGC_calls_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && !parsed.some((c: CallLogItem) => c.phone === '+234 803 123 4567' || c.name === 'Mama Chidinma Textiles')) {
           return parsed;
         } else {
-          localStorage.removeItem('africhat_calls_v2');
+          localStorage.removeItem('AGC_calls_v2');
         }
       }
     } catch (e) {
@@ -1229,15 +1264,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return [];
   });
-  const [statuses, setStatuses] = useState<UserStatus[]>(() => {
+    const [statuses, setStatuses] = useState<UserStatus[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_statuses_v2');
+      const saved = localStorage.getItem('AGC_statuses_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && !parsed.some((s: UserStatus) => s.id === 'stat_chioma_01' || s.userName === 'Kelvin')) {
+        if (Array.isArray(parsed)) {
           return parsed;
-        } else {
-          localStorage.removeItem('africhat_statuses_v2');
         }
       }
     } catch (e) {
@@ -1245,11 +1278,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return [];
   });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('AGC_statuses_v2', JSON.stringify(statuses));
+    } catch (e) {
+      console.warn('Status save error:', e);
+    }
+  }, [statuses]);
   const [activeViewingStatus, setActiveViewingStatus] = useState<UserStatus | null>(null);
   const [activeCheckoutProduct, setActiveCheckoutProduct] = useState<Product | null>(null);
   const [escrowOrders, setEscrowOrders] = useState<EscrowOrder[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_escrow_orders_v2');
+      const saved = localStorage.getItem('AGC_escrow_orders_v2');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn(e);
@@ -1259,7 +1300,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     try {
-      localStorage.setItem('africhat_escrow_orders_v2', JSON.stringify(escrowOrders));
+      localStorage.setItem('AGC_escrow_orders_v2', JSON.stringify(escrowOrders));
     } catch (e) {}
   }, [escrowOrders]);
   const [activeEscrowModalOrder, setActiveEscrowModalOrder] = useState<EscrowOrder | null>(null);
@@ -1282,13 +1323,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 2. Live Audio Spaces / Street Radio State
   const [audioSpaces, setAudioSpaces] = useState<AudioSpace[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_audio_spaces_v2');
+      const saved = localStorage.getItem('AGC_audio_spaces_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && !parsed.some((s: AudioSpace) => s.id === 'space_afrobeats_01' || s.id === 'space_market_02')) {
           return parsed;
         } else {
-          localStorage.removeItem('africhat_audio_spaces_v2');
+          localStorage.removeItem('AGC_audio_spaces_v2');
         }
       }
     } catch (e) {
@@ -1299,7 +1340,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     try {
-      localStorage.setItem('africhat_audio_spaces_v2', JSON.stringify(audioSpaces));
+      localStorage.setItem('AGC_audio_spaces_v2', JSON.stringify(audioSpaces));
     } catch (e) {}
   }, [audioSpaces]);
   const [activeAudioSpace, setActiveAudioSpace] = useState<AudioSpace | null>(null);
@@ -1327,7 +1368,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 8. Phone Number OTP Authentication & Identity State
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
     try {
-      const saved = localStorage.getItem('africhat_user_profile_v2');
+      const saved = localStorage.getItem('AGC_user_profile_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && parsed.phoneNumber && parsed.id !== 'usr_chioma_adebayo' && parsed.fullName !== 'Chioma Adebayo') {
@@ -1340,9 +1381,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       id: '',
       phoneNumber: '',
-      fullName: 'AfriChat User',
+      fullName: 'AGC User',
       avatarUrl: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-      about: 'Available · Using AfriChat',
+      about: 'Available · Using AGC',
       createdAt: new Date().toISOString(),
       lastSeen: 'online',
       isPhoneVerified: false,
@@ -1350,11 +1391,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   useEffect(() => {
     try {
-      const savedWallet = localStorage.getItem('africhat_user_wallet_v2');
+      const savedWallet = localStorage.getItem('AGC_user_wallet_v2');
       if (savedWallet) {
         const parsed = JSON.parse(savedWallet);
         if (parsed && parsed.availableBalance === 125000) {
-          localStorage.setItem('africhat_user_wallet_v2', JSON.stringify({
+          localStorage.setItem('AGC_user_wallet_v2', JSON.stringify({
             availableBalance: 0,
             escrowLockedBalance: 0,
             currency: 'NGN',
@@ -1369,21 +1410,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
       // Clean legacy mock service providers and other caches
-      const sp = localStorage.getItem('africhat_service_providers_v2');
+      const sp = localStorage.getItem('AGC_service_providers_v2');
       if (sp && sp.includes('sp_tunde_mechanic')) {
-        localStorage.removeItem('africhat_service_providers_v2');
+        localStorage.removeItem('AGC_service_providers_v2');
       }
-      const st = localStorage.getItem('africhat_artisan_station_v2');
+      const st = localStorage.getItem('AGC_artisan_station_v2');
       if (st && st.includes('st_kofi_workshop')) {
-        localStorage.removeItem('africhat_artisan_station_v2');
+        localStorage.removeItem('AGC_artisan_station_v2');
       }
     } catch (e) {}
   }, []);
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     try {
-      const profile = localStorage.getItem('africhat_user_profile_v2');
-      const isAuth = localStorage.getItem('africhat_is_authenticated');
+      const profile = localStorage.getItem('AGC_user_profile_v2');
+      const isAuth = localStorage.getItem('AGC_is_authenticated');
       if (isAuth === 'true' && profile) {
         const parsed = JSON.parse(profile);
         if (parsed && parsed.phoneNumber && parsed.id !== 'usr_chioma_adebayo' && parsed.fullName !== 'Chioma Adebayo') {
@@ -1400,7 +1441,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 9. Contact Synchronization & Discovery State
   const [deviceContacts, setDeviceContacts] = useState<DeviceContact[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_device_contacts');
+      const saved = localStorage.getItem('AGC_device_contacts');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse device contacts:', e);
@@ -1412,7 +1453,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 10. User Uploaded Memes & GIFs + In-Chat Drawer State
   const [userMemes, setUserMemes] = useState<UserUploadedMeme[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_user_memes');
+      const saved = localStorage.getItem('AGC_user_memes');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse user memes:', e);
@@ -1423,13 +1464,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Hide balance figure on Nav for public privacy
   const [hideBalanceOnNav, setHideBalanceOnNav] = useState<boolean>(() => {
-    return localStorage.getItem('africhat_hide_balance') === 'true';
+    return localStorage.getItem('AGC_hide_balance') === 'true';
   });
 
   // 11. Gokada / PickkR Dispatch Integration State
   const [dispatchOrders, setDispatchOrders] = useState<DispatchDeliveryOrder[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_dispatch_orders');
+      const saved = localStorage.getItem('AGC_dispatch_orders');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse dispatch orders:', e);
@@ -1441,7 +1482,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 12. Job Board with Employer Pay-to-Post State
   const [jobPostings, setJobPostings] = useState<JobPosting[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_job_postings');
+      const saved = localStorage.getItem('AGC_job_postings');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse jobs:', e);
@@ -1454,7 +1495,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 13. Security Settings (Payment PIN & Security Questions)
   const [securitySettings, setSecuritySettings] = useState<SecuritySettings>(() => {
     try {
-      const saved = localStorage.getItem('africhat_security_settings');
+      const saved = localStorage.getItem('AGC_security_settings');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse security settings:', e);
@@ -1471,7 +1512,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 14. African Services & Appointment Booking State
   const [serviceProviders, setServiceProviders] = useState<ServiceProvider[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_service_providers');
+      const saved = localStorage.getItem('AGC_service_providers');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse service providers:', e);
@@ -1480,7 +1521,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [serviceBookings, setServiceBookings] = useState<ServiceBooking[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_service_bookings');
+      const saved = localStorage.getItem('AGC_service_bookings');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse service bookings:', e);
@@ -1493,7 +1534,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 15. Money Transfer with 1-2 Days Security Delay State
   const [delayedTransfers, setDelayedTransfers] = useState<DelayedTransfer[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_delayed_transfers');
+      const saved = localStorage.getItem('AGC_delayed_transfers');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse delayed transfers:', e);
@@ -1505,7 +1546,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 16. Payroll & Recurring Auto-Debit State
   const [payrollEmployees, setPayrollEmployees] = useState<PayrollEmployee[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_payroll_employees');
+      const saved = localStorage.getItem('AGC_payroll_employees');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse payroll employees:', e);
@@ -1514,7 +1555,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [payrollLogs, setPayrollLogs] = useState<PayrollRunLog[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_payroll_logs');
+      const saved = localStorage.getItem('AGC_payroll_logs');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse payroll logs:', e);
@@ -1526,7 +1567,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Persistent User Wallet State
   const [wallet, setWallet] = useState<UserWallet>(() => {
     try {
-      const saved = localStorage.getItem('africhat_user_wallet_v2');
+      const saved = localStorage.getItem('AGC_user_wallet_v2');
       if (saved) {
         return JSON.parse(saved);
       }
@@ -1544,7 +1585,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Keep wallet persistently saved across all page reloads and refreshes
   useEffect(() => {
     try {
-      localStorage.setItem('africhat_user_wallet_v2', JSON.stringify(wallet));
+      localStorage.setItem('AGC_user_wallet_v2', JSON.stringify(wallet));
     } catch (e) {
       console.warn('Failed to save wallet to localStorage:', e);
     }
@@ -1706,7 +1747,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleHideBalance = () => {
     setHideBalanceOnNav((prev) => {
       const next = !prev;
-      localStorage.setItem('africhat_hide_balance', String(next));
+      localStorage.setItem('AGC_hide_balance', String(next));
       return next;
     });
   };
@@ -1720,7 +1761,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isMe: true,
       statusType: mediaUrl ? 'media' : 'thought',
       mediaUrl: mediaUrl || '/src/assets/images/african_textiles_wax_1794210824926.jpg',
-      caption: caption || 'New post on AfriChat 24h Status!',
+      caption: caption || 'New post on AGC 24h Status!',
       createdAt: 'Just now',
       expiresInHours: 24,
       viewsCount: 0,
@@ -1729,7 +1770,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       viewers: [],
     };
 
-    setStatuses((prev) => [newStatus, ...prev.filter((s) => !s.isMe)]);
+    setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
   };
 
   const addThoughtStatus = (thoughtText: string, themeBg: string) => {
@@ -1749,7 +1790,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hasLikedByMe: false,
       viewers: [],
     };
-    setStatuses((prev) => [newStatus, ...prev.filter((s) => !s.isMe)]);
+    setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
   };
 
   const addDeviceMediaStatus = (caption: string, mediaUrl: string, mediaType: 'image' | 'video' = 'image') => {
@@ -1770,7 +1811,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hasLikedByMe: false,
       viewers: [],
     };
-    setStatuses((prev) => [newStatus, ...prev.filter((s) => !s.isMe)]);
+    setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
   };
 
   const addDeviceVideoStatus = (caption: string, videoUrl: string, thumbnail?: string) => {
@@ -1791,7 +1832,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hasLikedByMe: false,
       viewers: [],
     };
-    setStatuses((prev) => [newStatus, ...prev.filter((s) => !s.isMe)]);
+    setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
   };
 
   // ── Multi-Transport Incoming Call Listener (Socket.io + BroadcastChannel + Supabase)
@@ -1818,7 +1859,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 2. BroadcastChannel for same-browser multi-tab calling
     let bc: BroadcastChannel | null = null;
     try {
-      bc = new BroadcastChannel('africhat_phone_calls');
+      bc = new BroadcastChannel('AGC_phone_calls');
       bc.onmessage = (e) => {
         if (e.data?.targetPhone === myCleanPhone) {
           if (e.data?.event === 'call_declined') {
@@ -1891,7 +1932,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // 2. BroadcastChannel
       try {
-        const bc = new BroadcastChannel('africhat_phone_calls');
+        const bc = new BroadcastChannel('AGC_phone_calls');
         bc.postMessage({ targetPhone: cleanTargetPhone, event: 'incoming_call', data: callPayload });
         bc.close();
       } catch (_) {}
@@ -1938,7 +1979,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // 2. BroadcastChannel
       try {
-        const bc = new BroadcastChannel('africhat_phone_calls');
+        const bc = new BroadcastChannel('AGC_phone_calls');
         bc.postMessage({ targetPhone: cleanCallerPhone, event: 'call_declined', data: { roomId: incomingCall.roomId } });
         bc.close();
       } catch (_) {}
@@ -1977,7 +2018,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const socket = getSocket();
         socket?.emit('phone_call_signal', { targetPhone: cleanPhone, event: 'call_declined', data: { roomId: activeCall.roomId } });
         try {
-          const bc = new BroadcastChannel('africhat_phone_calls');
+          const bc = new BroadcastChannel('AGC_phone_calls');
           bc.postMessage({ targetPhone: cleanPhone, event: 'call_declined', data: { roomId: activeCall.roomId } });
           bc.close();
         } catch (_) {}
@@ -2003,7 +2044,7 @@ const sendMessage = (chatId: string, text: string) => {
       id: `msg_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       chatId,
       sender: 'user',
-      senderName: currentUser.fullName || 'AfriChat User',
+      senderName: currentUser.fullName || 'AGC User',
       senderPhone: currentUser.phoneNumber,
       senderAvatar: currentUser.avatarUrl,
       text,
@@ -2040,7 +2081,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     // 2. Broadcast via BroadcastChannel (instant same-computer tab/window sync)
     try {
-      const bc = new BroadcastChannel('africhat_chats_sync');
+      const bc = new BroadcastChannel('AGC_chats_sync');
       bc.postMessage({ chatId, message: newMsg, senderId: currentUser.id, targetPhone: targetCleanPhone });
       bc.close();
     } catch (e) {
@@ -2198,7 +2239,7 @@ const sendMessage = (chatId: string, text: string) => {
       currency: product.currency,
       status: 'escrow_secured',
       escrowPin: pin,
-      buyerName: buyerName || currentUser.fullName || 'AfriChat User',
+      buyerName: buyerName || currentUser.fullName || 'AGC User',
       sellerName: product.sellerName,
       deliveryAddress: deliveryAddress || '14 Admiralty Way, Lekki Phase 1, Lagos',
       createdAt: 'Just now',
@@ -2215,7 +2256,7 @@ const sendMessage = (chatId: string, text: string) => {
       sender: 'system',
       type: 'escrow_receipt',
       order: newOrder,
-      text: `Payment secured via Paystack in AfriChat Escrow Vault: ${CURRENCY_SYMBOLS[product.currency]}${product.price.toLocaleString()}. Seller notified to dispatch. Share release PIN ${pin} only after receiving parcel!`,
+      text: `Payment secured via Paystack in AGC Escrow Vault: ${CURRENCY_SYMBOLS[product.currency]}${product.price.toLocaleString()}. Seller notified to dispatch. Share release PIN ${pin} only after receiving parcel!`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'delivered',
     };
@@ -2463,7 +2504,7 @@ const sendMessage = (chatId: string, text: string) => {
     const newPoll: FinancialPoll = {
       id: `poll_${Date.now()}`,
       title,
-      creatorName: currentUser.fullName || 'AfriChat User',
+      creatorName: currentUser.fullName || 'AGC User',
       stakePerVote,
       currency: 'NGN',
       totalStakeLocked: 0,
@@ -2606,7 +2647,7 @@ const sendMessage = (chatId: string, text: string) => {
       chatId,
       sender: 'user',
       type: 'text',
-      text: `✅ Paid ${CURRENCY_SYMBOLS.NGN}${amount.toLocaleString()} for Ajo Cycle Round 2 via AfriChat Wallet. Group Pot now 100% complete!`,
+      text: `✅ Paid ${CURRENCY_SYMBOLS.NGN}${amount.toLocaleString()} for Ajo Cycle Round 2 via AGC Wallet. Group Pot now 100% complete!`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'delivered',
     };
@@ -2711,9 +2752,9 @@ const sendMessage = (chatId: string, text: string) => {
     const updatedUser: UserProfile = {
       id: `usr_${Date.now()}`,
       phoneNumber,
-      fullName: fullName || 'AfriChat User',
+      fullName: fullName || 'AGC User',
       avatarUrl: avatarUrl || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-      about: about || 'Available · Using AfriChat',
+      about: about || 'Available · Using AGC',
       createdAt: new Date().toISOString(),
       lastSeen: 'online',
       isPhoneVerified: true,
@@ -2724,8 +2765,8 @@ const sendMessage = (chatId: string, text: string) => {
     setIsAuthenticated(true);
 
     // 1. LocalStorage Persistence (Never wiped)
-    localStorage.setItem('africhat_user_profile_v2', JSON.stringify(updatedUser));
-    localStorage.setItem('africhat_is_authenticated', 'true');
+    localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
+    localStorage.setItem('AGC_is_authenticated', 'true');
     setIsAuthModalOpen(false);
 
     // 2. Register with Socket.io Gateway
@@ -2768,25 +2809,23 @@ const sendMessage = (chatId: string, text: string) => {
           },
           { onConflict: 'phone_number' }
         )
-        .then(() => {
-          console.log('✅ Supabase profile registered');
-        })
-        .catch((err) => {
-          console.warn('Supabase profile save notice:', err);
+        .then(({ error }: any) => {
+          if (error) console.warn('Supabase profile save notice:', error);
+          else console.log('✅ Supabase profile registered');
         });
     }
   };
 
   const logoutUser = () => {
     setIsAuthenticated(false);
-    localStorage.setItem('africhat_is_authenticated', 'false');
+    localStorage.setItem('AGC_is_authenticated', 'false');
     setIsAuthModalOpen(true);
   };
 
   const updateUserProfile = (updates: Partial<UserProfile>) => {
     setCurrentUser((prev) => {
       const updated = { ...prev, ...updates };
-      localStorage.setItem('africhat_user_profile_v2', JSON.stringify(updated));
+      localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated));
       return updated;
     });
   };
@@ -2805,16 +2844,16 @@ const sendMessage = (chatId: string, text: string) => {
       name,
       rawPhoneNumber: phone,
       normalizedPhoneNumber: normalized,
-      about: about || (isRegistered ? 'Available · Using AfriChat' : 'Invited to AfriChat'),
+      about: about || (isRegistered ? 'Available · Using AGC' : 'Invited to AGC'),
       avatar,
-      isRegisteredOnAfriChat: isRegistered,
+      isRegisteredOnAGC: isRegistered,
       registeredUser: isRegistered
         ? {
             id: `usr_${Date.now()}`,
             phoneNumber: normalized,
             fullName: name,
             avatarUrl: avatar,
-            about: about || 'Available · Using AfriChat',
+            about: about || 'Available · Using AGC',
             createdAt: new Date().toISOString(),
             lastSeen: 'Just now',
           }
@@ -2822,7 +2861,7 @@ const sendMessage = (chatId: string, text: string) => {
     };
     setDeviceContacts((prev) => {
       const updated = [newContact, ...prev.filter(c => c.normalizedPhoneNumber !== normalized)];
-      localStorage.setItem('africhat_device_contacts', JSON.stringify(updated));
+      localStorage.setItem('AGC_device_contacts', JSON.stringify(updated));
       return updated;
     });
     return newContact;
@@ -2871,6 +2910,25 @@ const sendMessage = (chatId: string, text: string) => {
     setActiveTab('chats');
     setActiveChatId(existingChat.id);
     setIsContactsModalOpen(false);
+
+    // Persist bilateral chat to Supabase so BOTH sides can see each other's messages
+    if (isSupabaseConfigured && targetChatId) {
+      const myUserId = currentUser.id || myPhone;
+      const otherUserId = contact.registeredUser?.id || otherPhone;
+
+      supabase
+        .from('chats')
+        .upsert({ id: targetChatId, type: 'direct', created_at: new Date().toISOString() }, { onConflict: 'id' })
+        .then(({ error }) => { if (error) console.warn('[AGC] Supabase chat upsert:', error.message); });
+
+      // Insert both participant rows (bilateral — the key fix for one-sided QR chats)
+      [myUserId, otherUserId].filter(Boolean).forEach((uid) => {
+        supabase
+          .from('chat_participants')
+          .upsert({ chat_id: targetChatId, user_id: uid }, { onConflict: 'chat_id,user_id' })
+          .then(({ error }) => { if (error) console.warn('[AGC] Participant upsert:', error.message); });
+      });
+    }
   };
 
   // 10. Meme Handlers
@@ -2882,7 +2940,7 @@ const sendMessage = (chatId: string, text: string) => {
     };
     setUserMemes((prev) => {
       const updated = [newMeme, ...prev];
-      localStorage.setItem('africhat_user_memes', JSON.stringify(updated));
+      localStorage.setItem('AGC_user_memes', JSON.stringify(updated));
       return updated;
     });
   };
@@ -2890,7 +2948,7 @@ const sendMessage = (chatId: string, text: string) => {
   const deleteUserMeme = (memeId: string) => {
     setUserMemes((prev) => {
       const updated = prev.filter((m) => m.id !== memeId);
-      localStorage.setItem('africhat_user_memes', JSON.stringify(updated));
+      localStorage.setItem('AGC_user_memes', JSON.stringify(updated));
       return updated;
     });
   };
@@ -2947,7 +3005,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setDispatchOrders((prev) => {
       const updated = [newOrder, ...prev];
-      localStorage.setItem('africhat_dispatch_orders', JSON.stringify(updated));
+      localStorage.setItem('AGC_dispatch_orders', JSON.stringify(updated));
       return updated;
     });
 
@@ -2992,7 +3050,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setJobPostings((prev) => {
       const updated = [newJob, ...prev];
-      localStorage.setItem('africhat_job_postings', JSON.stringify(updated));
+      localStorage.setItem('AGC_job_postings', JSON.stringify(updated));
       return updated;
     });
 
@@ -3000,7 +3058,7 @@ const sendMessage = (chatId: string, text: string) => {
     return {
       success: true,
       job: newJob,
-      message: 'Job posting published successfully on AfriChat Opportunities Board (₦400 fee deducted)!',
+      message: 'Job posting published successfully on AGC Opportunities Board (₦400 fee deducted)!',
     };
   };
 
@@ -3009,7 +3067,7 @@ const sendMessage = (chatId: string, text: string) => {
     if (wallet.availableBalance < applyFee) {
       return {
         success: false,
-        message: `Insufficient wallet balance for application fee (₦${applyFee}). Please fund your AfriChat wallet first.`,
+        message: `Insufficient wallet balance for application fee (₦${applyFee}). Please fund your AGC wallet first.`,
       };
     }
 
@@ -3056,7 +3114,7 @@ const sendMessage = (chatId: string, text: string) => {
       if ((securitySettings.failedAttempts ?? 0) > 0 || securitySettings.lockoutUntil) {
         setSecuritySettings((prev) => {
           const updated = { ...prev, failedAttempts: 0, lockoutUntil: null };
-          localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
+          localStorage.setItem('AGC_security_settings', JSON.stringify(updated));
           return updated;
         });
       }
@@ -3069,7 +3127,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setSecuritySettings((prev) => {
       const updated = { ...prev, failedAttempts: nextAttempts, lockoutUntil };
-      localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
+      localStorage.setItem('AGC_security_settings', JSON.stringify(updated));
       return updated;
     });
 
@@ -3095,7 +3153,7 @@ const sendMessage = (chatId: string, text: string) => {
   const resetPinLockout = () => {
     setSecuritySettings((prev) => {
       const updated = { ...prev, failedAttempts: 0, lockoutUntil: null };
-      localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
+      localStorage.setItem('AGC_security_settings', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3124,7 +3182,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setSecuritySettings((prev) => {
       const updated = { ...prev, hasPaymentPin: true, paymentPin: newPin, failedAttempts: 0, lockoutUntil: null };
-      localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
+      localStorage.setItem('AGC_security_settings', JSON.stringify(updated));
       return updated;
     });
 
@@ -3138,7 +3196,7 @@ const sendMessage = (chatId: string, text: string) => {
   const setSecurityQuestion = (question: string, answer: string) => {
     setSecuritySettings((prev) => {
       const updated = { ...prev, securityQuestion: question, securityAnswer: answer };
-      localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
+      localStorage.setItem('AGC_security_settings', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3181,7 +3239,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setServiceBookings((prev) => {
       const updated = [newBooking, ...prev];
-      localStorage.setItem('africhat_service_bookings', JSON.stringify(updated));
+      localStorage.setItem('AGC_service_bookings', JSON.stringify(updated));
       return updated;
     });
 
@@ -3217,7 +3275,7 @@ const sendMessage = (chatId: string, text: string) => {
       const updated = prev.map((b) =>
         b.id === bookingId ? { ...b, status: 'cancelled' as const } : b
       );
-      localStorage.setItem('africhat_service_bookings', JSON.stringify(updated));
+      localStorage.setItem('AGC_service_bookings', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3249,7 +3307,7 @@ const sendMessage = (chatId: string, text: string) => {
       const updated = prev.map((b) =>
         b.id === bookingId ? { ...b, status: 'completed' as const } : b
       );
-      localStorage.setItem('africhat_service_bookings', JSON.stringify(updated));
+      localStorage.setItem('AGC_service_bookings', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3268,7 +3326,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setServiceProviders((prev) => {
       const updated = [newProvider, ...prev];
-      localStorage.setItem('africhat_service_providers', JSON.stringify(updated));
+      localStorage.setItem('AGC_service_providers', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3304,7 +3362,7 @@ const sendMessage = (chatId: string, text: string) => {
       recipientName,
       amount,
       currency: 'NGN',
-      note: note || 'Transfer via AfriChat Delayed Escrow',
+      note: note || 'Transfer via AGC Delayed Escrow',
       delayHours,
       scheduledReleaseTime: `${scheduledDate} (${delayHours}h security delay)`,
       releaseTimestampMs: releaseMs,
@@ -3335,7 +3393,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setDelayedTransfers((prev) => {
       const updated = [newTransfer, ...prev];
-      localStorage.setItem('africhat_delayed_transfers', JSON.stringify(updated));
+      localStorage.setItem('AGC_delayed_transfers', JSON.stringify(updated));
       return updated;
     });
 
@@ -3378,7 +3436,7 @@ const sendMessage = (chatId: string, text: string) => {
       const updated = prev.map((t) =>
         t.id === transferId ? { ...t, status: 'cancelled_by_sender' as const } : t
       );
-      localStorage.setItem('africhat_delayed_transfers', JSON.stringify(updated));
+      localStorage.setItem('AGC_delayed_transfers', JSON.stringify(updated));
       return updated;
     });
 
@@ -3415,7 +3473,7 @@ const sendMessage = (chatId: string, text: string) => {
       const updated = prev.map((t) =>
         t.id === transferId ? { ...t, status: 'cleared' as const } : t
       );
-      localStorage.setItem('africhat_delayed_transfers', JSON.stringify(updated));
+      localStorage.setItem('AGC_delayed_transfers', JSON.stringify(updated));
       return updated;
     });
 
@@ -3435,7 +3493,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setPayrollEmployees((prev) => {
       const updated = [newEmp, ...prev];
-      localStorage.setItem('africhat_payroll_employees', JSON.stringify(updated));
+      localStorage.setItem('AGC_payroll_employees', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3445,7 +3503,7 @@ const sendMessage = (chatId: string, text: string) => {
       const updated = prev.map((e) =>
         e.id === id ? { ...e, status: e.status === 'active' ? ('paused' as const) : ('active' as const) } : e
       );
-      localStorage.setItem('africhat_payroll_employees', JSON.stringify(updated));
+      localStorage.setItem('AGC_payroll_employees', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3453,7 +3511,7 @@ const sendMessage = (chatId: string, text: string) => {
   const deletePayrollEmployee = (id: string) => {
     setPayrollEmployees((prev) => {
       const updated = prev.filter((e) => e.id !== id);
-      localStorage.setItem('africhat_payroll_employees', JSON.stringify(updated));
+      localStorage.setItem('AGC_payroll_employees', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3515,7 +3573,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setPayrollLogs((prev) => {
       const updated = [...newLogs, ...prev];
-      localStorage.setItem('africhat_payroll_logs', JSON.stringify(updated));
+      localStorage.setItem('AGC_payroll_logs', JSON.stringify(updated));
       return updated;
     });
 
@@ -3526,7 +3584,7 @@ const sendMessage = (chatId: string, text: string) => {
           ? { ...e, lastPaidDate: 'Today, Just now' }
           : e
       );
-      localStorage.setItem('africhat_payroll_employees', JSON.stringify(updated));
+      localStorage.setItem('AGC_payroll_employees', JSON.stringify(updated));
       return updated;
     });
 
@@ -3541,7 +3599,7 @@ const sendMessage = (chatId: string, text: string) => {
   const [isCelebrityModalOpen, setIsCelebrityModalOpen] = useState(false);
   const [celebrityApplications, setCelebrityApplications] = useState<CelebrityVerificationApplication[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_celebrity_apps');
+      const saved = localStorage.getItem('AGC_celebrity_apps');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse celebrity apps:', e);
@@ -3580,7 +3638,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setCelebrityApplications((prev) => {
       const updated = [newApp, ...prev];
-      localStorage.setItem('africhat_celebrity_apps', JSON.stringify(updated));
+      localStorage.setItem('AGC_celebrity_apps', JSON.stringify(updated));
       return updated;
     });
 
@@ -3591,11 +3649,11 @@ const sendMessage = (chatId: string, text: string) => {
       celebrityStageName: data.stageName,
     };
     setCurrentUser(updatedUser);
-    localStorage.setItem('africhat_user_profile_v2', JSON.stringify(updatedUser));
+    localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
 
     return {
       success: true,
-      message: `🌟 Celebrity Identity Verified! The golden/purple celebrity verified badge is now active on your AfriChat profile and chats.`,
+      message: `🌟 Celebrity Identity Verified! The golden/purple celebrity verified badge is now active on your AGC profile and chats.`,
     };
   };
 
@@ -3607,14 +3665,14 @@ const sendMessage = (chatId: string, text: string) => {
       celebrityCategory: nextStatus ? (currentUser.celebrityCategory || 'Public Figure & Creator') : undefined,
     };
     setCurrentUser(updatedUser);
-    localStorage.setItem('africhat_user_profile_v2', JSON.stringify(updatedUser));
+    localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
   };
 
   // 25. Store Registration & Tiers System (3k/mo for 30 items, 7k/mo for 100 items limit)
   const [isStoreRegModalOpen, setIsStoreRegModalOpen] = useState(false);
   const [storeSubscription, setStoreSubscription] = useState<StoreSubscription>(() => {
     try {
-      const saved = localStorage.getItem('africhat_store_sub');
+      const saved = localStorage.getItem('AGC_store_sub');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse store sub:', e);
@@ -3671,7 +3729,7 @@ const sendMessage = (chatId: string, text: string) => {
       monthlyFee: fee,
       itemLimit,
       itemsCount: storeSubscription ? storeSubscription.itemsCount : 0,
-      storeName: storeName || (currentUser.fullName ? `${currentUser.fullName}'s Official Store` : 'AfriChat Store'),
+      storeName: storeName || (currentUser.fullName ? `${currentUser.fullName}'s Official Store` : 'AGC Store'),
       description: description || 'Verified African merchant catalog.',
       category: category || 'General Trade',
       active: true,
@@ -3680,7 +3738,7 @@ const sendMessage = (chatId: string, text: string) => {
     };
 
     setStoreSubscription(updatedSub);
-    localStorage.setItem('africhat_store_sub', JSON.stringify(updatedSub));
+    localStorage.setItem('AGC_store_sub', JSON.stringify(updatedSub));
 
     return {
       success: true,
@@ -3691,7 +3749,7 @@ const sendMessage = (chatId: string, text: string) => {
   // 26. Creator Digital Files & VIP Sessions
   const [creatorFiles, setCreatorFiles] = useState<CreatorDigitalFile[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_creator_files');
+      const saved = localStorage.getItem('AGC_creator_files');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse creator files:', e);
@@ -3735,7 +3793,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setCreatorFiles((prev) => {
       const updated = prev.map((f) => (f.id === fileId ? updatedFile : f));
-      localStorage.setItem('africhat_creator_files', JSON.stringify(updated));
+      localStorage.setItem('AGC_creator_files', JSON.stringify(updated));
       return updated;
     });
 
@@ -3764,7 +3822,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setCreatorFiles((prev) => {
       const updated = [newFile, ...prev];
-      localStorage.setItem('africhat_creator_files', JSON.stringify(updated));
+      localStorage.setItem('AGC_creator_files', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3851,7 +3909,7 @@ const sendMessage = (chatId: string, text: string) => {
   // 27. Writers System (AfriBooks)
   const [afriBooks, setAfriBooks] = useState<AfriBook[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_afribooks');
+      const saved = localStorage.getItem('AGC_afribooks');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse books:', e);
@@ -3864,7 +3922,7 @@ const sendMessage = (chatId: string, text: string) => {
 
   const [groupReadSessions, setGroupReadSessions] = useState<GroupReadSession[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_group_read');
+      const saved = localStorage.getItem('AGC_group_read');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse group read:', e);
@@ -3889,7 +3947,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setAfriBooks((prev) => {
       const updated = [newBook, ...prev];
-      localStorage.setItem('africhat_afribooks', JSON.stringify(updated));
+      localStorage.setItem('AGC_afribooks', JSON.stringify(updated));
       return updated;
     });
 
@@ -3909,7 +3967,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setAfriBooks((prev) => {
       const updated = prev.map((b) => (b.id === bookId ? { ...b, chapters: [...b.chapters, newChap] } : b));
-      localStorage.setItem('africhat_afribooks', JSON.stringify(updated));
+      localStorage.setItem('AGC_afribooks', JSON.stringify(updated));
       return updated;
     });
 
@@ -3935,7 +3993,7 @@ const sendMessage = (chatId: string, text: string) => {
           chapters: b.chapters.map((ch) => (ch.id === chapterId ? { ...ch, comments: [newComment, ...ch.comments] } : ch)),
         };
       });
-      localStorage.setItem('africhat_afribooks', JSON.stringify(updated));
+      localStorage.setItem('AGC_afribooks', JSON.stringify(updated));
       return updated;
     });
 
@@ -3985,7 +4043,7 @@ const sendMessage = (chatId: string, text: string) => {
             }
           : b
       );
-      localStorage.setItem('africhat_afribooks', JSON.stringify(updated));
+      localStorage.setItem('AGC_afribooks', JSON.stringify(updated));
       return updated;
     });
 
@@ -4037,7 +4095,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setAfriBooks((prev) => {
       const updated = prev.map((b) => (b.id === bookId ? { ...b, isPurchasedByMe: true, totalReads: b.totalReads + 1 } : b));
-      localStorage.setItem('africhat_afribooks', JSON.stringify(updated));
+      localStorage.setItem('AGC_afribooks', JSON.stringify(updated));
       return updated;
     });
 
@@ -4078,7 +4136,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setGroupReadSessions((prev) => {
       const updated = [newSession, ...prev];
-      localStorage.setItem('africhat_group_read', JSON.stringify(updated));
+      localStorage.setItem('AGC_group_read', JSON.stringify(updated));
       return updated;
     });
     setActiveGroupReadSession(newSession);
@@ -4095,7 +4153,7 @@ const sendMessage = (chatId: string, text: string) => {
 
     setGroupReadSessions((prev) => {
       const updated = prev.map((s) => (s.id === sessionId ? { ...s, messages: [...s.messages, newMsg] } : s));
-      localStorage.setItem('africhat_group_read', JSON.stringify(updated));
+      localStorage.setItem('AGC_group_read', JSON.stringify(updated));
       return updated;
     });
 
@@ -4107,7 +4165,7 @@ const sendMessage = (chatId: string, text: string) => {
   const updateGroupReadProgress = (sessionId: string, chapterIndex: number, page: number) => {
     setGroupReadSessions((prev) => {
       const updated = prev.map((s) => (s.id === sessionId ? { ...s, currentChapter: chapterIndex + 1, currentPage: page } : s));
-      localStorage.setItem('africhat_group_read', JSON.stringify(updated));
+      localStorage.setItem('AGC_group_read', JSON.stringify(updated));
       return updated;
     });
 
@@ -4121,7 +4179,7 @@ const sendMessage = (chatId: string, text: string) => {
   // 28. African Tutor & Online Course Marketplace System State
   const [tutorProfile, setTutorProfile] = useState<TutorProfile>(() => {
     try {
-      const saved = localStorage.getItem('africhat_tutor_profile');
+      const saved = localStorage.getItem('AGC_tutor_profile');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse tutor profile:', e);
@@ -4142,7 +4200,7 @@ const sendMessage = (chatId: string, text: string) => {
 
   const [courses, setCourses] = useState<Course[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_courses');
+      const saved = localStorage.getItem('AGC_courses');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse courses:', e);
@@ -4210,11 +4268,11 @@ const sendMessage = (chatId: string, text: string) => {
     };
 
     setTutorProfile(updatedProfile);
-    localStorage.setItem('africhat_tutor_profile', JSON.stringify(updatedProfile));
+    localStorage.setItem('AGC_tutor_profile', JSON.stringify(updatedProfile));
 
     return {
       success: true,
-      message: '🎉 Congratulations! You are now a Registered AfriChat Certified Tutor with Verified Blue Check status. You can publish up to 10 courses!',
+      message: '🎉 Congratulations! You are now a Registered AGC Certified Tutor with Verified Blue Check status. You can publish up to 10 courses!',
     };
   };
 
@@ -4253,11 +4311,11 @@ const sendMessage = (chatId: string, text: string) => {
     };
 
     setTutorProfile(updatedProfile);
-    localStorage.setItem('africhat_tutor_profile', JSON.stringify(updatedProfile));
+    localStorage.setItem('AGC_tutor_profile', JSON.stringify(updatedProfile));
 
     return {
       success: true,
-      message: '🚀 Upgraded to Unlimited Pro Tutor Plan! You can now publish unlimited courses on AfriChat with zero restrictions.',
+      message: '🚀 Upgraded to Unlimited Pro Tutor Plan! You can now publish unlimited courses on AGC with zero restrictions.',
     };
   };
 
@@ -4295,19 +4353,19 @@ const sendMessage = (chatId: string, text: string) => {
 
     const updatedCourses = [newCourse, ...courses];
     setCourses(updatedCourses);
-    localStorage.setItem('africhat_courses', JSON.stringify(updatedCourses));
+    localStorage.setItem('AGC_courses', JSON.stringify(updatedCourses));
 
     const updatedProfile: TutorProfile = {
       ...tutorProfile,
       activeCoursesCount: (tutorProfile.activeCoursesCount || 0) + 1,
     };
     setTutorProfile(updatedProfile);
-    localStorage.setItem('africhat_tutor_profile', JSON.stringify(updatedProfile));
+    localStorage.setItem('AGC_tutor_profile', JSON.stringify(updatedProfile));
 
     return {
       success: true,
       course: newCourse,
-      message: `📚 "${newCourse.title}" published successfully to AfriChat Course Academy!`,
+      message: `📚 "${newCourse.title}" published successfully to AGC Course Academy!`,
     };
   };
 
@@ -4350,7 +4408,7 @@ const sendMessage = (chatId: string, text: string) => {
         : c
     );
     setCourses(updatedCourses);
-    localStorage.setItem('africhat_courses', JSON.stringify(updatedCourses));
+    localStorage.setItem('AGC_courses', JSON.stringify(updatedCourses));
 
     return {
       success: true,
@@ -4413,7 +4471,7 @@ const sendMessage = (chatId: string, text: string) => {
         } else {
           const newThread: ChatThread = {
             id: resolvedChatId,
-            name: message.senderName || 'AfriChat Contact',
+            name: message.senderName || 'AGC Contact',
             avatar:
               message.senderAvatar ||
               "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
@@ -4437,7 +4495,7 @@ const sendMessage = (chatId: string, text: string) => {
     // 2. BroadcastChannel listener (instant multi-tab / window sync)
     let bc: BroadcastChannel | null = null;
     try {
-      bc = new BroadcastChannel('africhat_chats_sync');
+      bc = new BroadcastChannel('AGC_chats_sync');
       bc.onmessage = (e) => {
         if (e.data && e.data.chatId && e.data.message) {
           handleIncomingMessage(e.data);
@@ -4489,7 +4547,7 @@ const sendMessage = (chatId: string, text: string) => {
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>(() => {
     try {
-      const saved = localStorage.getItem('africhat_admin_users');
+      const saved = localStorage.getItem('AGC_admin_users');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn(e);
@@ -4499,13 +4557,13 @@ const sendMessage = (chatId: string, text: string) => {
 
   useEffect(() => {
     try {
-      localStorage.setItem('africhat_admin_users', JSON.stringify(adminUsers));
+      localStorage.setItem('AGC_admin_users', JSON.stringify(adminUsers));
     } catch (e) {}
   }, [adminUsers]);
 
   const [systemBroadcast, setSystemBroadcast] = useState<AdminSystemBroadcast | null>(() => {
     try {
-      const saved = localStorage.getItem('africhat_system_broadcast');
+      const saved = localStorage.getItem('AGC_system_broadcast');
       if (saved) return JSON.parse(saved);
     } catch (e) {}
     return null;
@@ -4514,9 +4572,9 @@ const sendMessage = (chatId: string, text: string) => {
   useEffect(() => {
     try {
       if (systemBroadcast) {
-        localStorage.setItem('africhat_system_broadcast', JSON.stringify(systemBroadcast));
+        localStorage.setItem('AGC_system_broadcast', JSON.stringify(systemBroadcast));
       } else {
-        localStorage.removeItem('africhat_system_broadcast');
+        localStorage.removeItem('AGC_system_broadcast');
       }
     } catch (e) {}
   }, [systemBroadcast]);
@@ -4599,8 +4657,8 @@ const sendMessage = (chatId: string, text: string) => {
     // Push directly to users' Updates tab as an official status story
     const adminStatus: UserStatus = {
       id: `stat_admin_${Date.now()}`,
-      userId: 'usr_africhat_official_admin',
-      userName: 'AfriChat Official',
+      userId: 'usr_AGC_official_admin',
+      userName: 'AGC Official',
       userAvatar: '/favicon.svg',
       caption: `📢 ${title}: ${message}`,
       statusType: 'thought',
@@ -4621,7 +4679,7 @@ const sendMessage = (chatId: string, text: string) => {
     setStatuses((prev) => {
       const updated = [adminStatus, ...prev.filter((s) => s.id !== adminStatus.id)];
       try {
-        localStorage.setItem('africhat_statuses_v2', JSON.stringify(updated));
+        localStorage.setItem('AGC_statuses_v2', JSON.stringify(updated));
       } catch (e) {}
       return updated;
     });
@@ -4815,6 +4873,7 @@ const sendMessage = (chatId: string, text: string) => {
         hidePhoneNumberInTown,
         toggleHidePhoneNumberInTown,
         toggleJoinTownCommunity,
+        addTownCommunity,
         // 19. Healthcare
         doctors,
         queueTokens,

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   Briefcase,
@@ -229,7 +229,7 @@ export const JobBoardModal: React.FC = () => {
               </div>
 
               <div className="p-2.5 bg-amber-50 dark:bg-amber-950/40 rounded-xl text-[11px] text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900">
-                Fee: <strong>₦400</strong> auto-deducted from your AfriChat Wallet balance upon publishing.
+                Fee: <strong>₦400</strong> auto-deducted from your AGC Wallet balance upon publishing.
               </div>
 
               <form onSubmit={handleCreateJob} className="space-y-2.5">

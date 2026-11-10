@@ -200,6 +200,8 @@ export interface ChatMessage {
   chatId: string;
   sender: 'user' | 'other' | 'system';
   senderName?: string;
+  senderPhone?: string;
+  senderAvatar?: string;
   text?: string;
   translatedText?: Record<LanguageCode, string>;
   type:
@@ -294,6 +296,7 @@ export interface UserStatus {
 export interface UserProfile {
   id: string;
   phoneNumber: string;
+  email?: string;
   countryCode?: string;
   fullName: string;
   username?: string;
@@ -324,7 +327,7 @@ export interface DeviceContact {
   normalizedPhoneNumber: string;
   avatar?: string;
   about?: string;
-  isRegisteredOnAfriChat: boolean;
+  isRegisteredOnAGC: boolean;
   isRegistered?: boolean;
   registeredUser?: UserProfile;
   isCelebrityVerified?: boolean;
@@ -351,7 +354,7 @@ export interface DispatchDeliveryOrder {
   recipientPhone: string;
   recipientAddress: string;
   packageDescription: string;
-  vehicleType: 'bike' | 'keke' | 'van';
+  vehicleType: 'bike' | 'van';
   estimatedFee: number;
   currency: CurrencyCode;
   status: 'finding_rider' | 'rider_assigned' | 'in_transit' | 'delivered';

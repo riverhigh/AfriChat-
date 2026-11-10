@@ -1,5 +1,5 @@
-/**
- * Real Paystack Checkout Integration for AfriChat
+﻿/**
+ * Real Paystack Checkout Integration for AGC
  * Interacts directly with Paystack's official inline gateway.
  * Zero simulations: requires actual transaction completion or callback confirmation.
  */
@@ -84,7 +84,7 @@ export const openPaystackPopup = async (params: PaystackPaymentParams): Promise<
 
     const handler = window.PaystackPop.setup({
       key,
-      email: params.email || 'customer@africhat.africa',
+      email: params.email || 'customer@AGC.africa',
       amount: amountInKobo,
       currency: params.currency || 'NGN',
       ref,
@@ -93,7 +93,7 @@ export const openPaystackPopup = async (params: PaystackPaymentParams): Promise<
           {
             display_name: 'Platform',
             variable_name: 'platform',
-            value: 'AfriChat Web App',
+            value: 'AGC Web App',
           },
           ...(params.metadata?.custom_fields || []),
         ],

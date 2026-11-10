@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import {
   QrCode,
   Scan,
@@ -56,7 +56,7 @@ export const ScanQrModal: React.FC = () => {
     if (!currentUser.phoneNumber) return;
 
     const qrPayload = JSON.stringify({
-      app: 'AfriChat',
+      app: 'AGC',
       type: 'user_contact',
       name: currentUser.fullName,
       phone: currentUser.phoneNumber,
@@ -170,9 +170,9 @@ export const ScanQrModal: React.FC = () => {
         const parsed = JSON.parse(rawText);
         if (parsed.phone) {
           const contact = addNewDeviceContact(
-            parsed.name || 'AfriChat User',
+            parsed.name || 'AGC User',
             parsed.phone,
-            'Scanned via AfriChat QR',
+            'Scanned via AGC QR',
             true,
             parsed.avatar
           );
@@ -200,7 +200,7 @@ export const ScanQrModal: React.FC = () => {
         return;
       }
 
-      setErrorMessage(`Scanned: "${rawText.slice(0, 40)}" (Not an AfriChat contact QR)`);
+      setErrorMessage(`Scanned: "${rawText.slice(0, 40)}" (Not an AGC contact QR)`);
     } catch (e) {
       setErrorMessage('Could not process this QR code.');
     }
@@ -276,7 +276,7 @@ export const ScanQrModal: React.FC = () => {
             </div>
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-white font-display">
-                Scan & AfriChat QR Code
+                Scan & AGC QR Code
               </h3>
               <p className="text-[10px] text-purple-300/70">
                 Connect instantly with contacts and verified merchants
@@ -442,7 +442,7 @@ export const ScanQrModal: React.FC = () => {
                 </div>
 
                 <h4 className="text-base font-bold text-white leading-tight font-display">
-                  {currentUser.fullName || 'AfriChat User'}
+                  {currentUser.fullName || 'AGC User'}
                 </h4>
                 <p className="text-xs font-mono font-semibold text-purple-300/80 mt-0.5">
                   {currentUser.phoneNumber}
@@ -475,7 +475,7 @@ export const ScanQrModal: React.FC = () => {
                   </div>
                 ) : (
                   <div className="w-full bg-purple-950/30 border border-purple-500/20 py-2 px-3 rounded-xl flex items-center justify-between text-xs">
-                    <span className="text-purple-300 text-[11px] font-medium">AfriChat Digital ID</span>
+                    <span className="text-purple-300 text-[11px] font-medium">AGC Digital ID</span>
                     <span className="text-emerald-400 font-mono text-[11px] font-bold flex items-center gap-1">
                       <ShieldCheck className="w-3.5 h-3.5" />
                       <span>Verified Peer</span>
@@ -500,8 +500,8 @@ export const ScanQrModal: React.FC = () => {
                   onClick={() => {
                     if (navigator.share) {
                       navigator.share({
-                        title: 'Connect with me on AfriChat',
-                        text: `Scan my AfriChat QR code or call me at ${currentUser.phoneNumber}`,
+                        title: 'Connect with me on AGC',
+                        text: `Scan my AGC QR code or call me at ${currentUser.phoneNumber}`,
                         url: window.location.origin,
                       }).catch(() => {});
                     } else {

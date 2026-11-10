@@ -1,6 +1,6 @@
-{
-  "name": "AfriChat - African Super-App",
-  "short_name": "AfriChat",
+﻿{
+  "name": "AGC - African Super-App",
+  "short_name": "AGC",
   "description": "Pan-African Super-Messaging, Encrypted Escrow Commerce, Artisan Stations & Street Radio.",
   "start_url": "/",
   "id": "/",
@@ -33,7 +33,7 @@
     {
       "name": "Chats",
       "short_name": "Chats",
-      "description": "Open your AfriChat conversations",
+      "description": "Open your AGC conversations",
       "url": "/?tab=chats",
       "icons": [{ "src": "/favicon.svg", "sizes": "96x96" }]
     },

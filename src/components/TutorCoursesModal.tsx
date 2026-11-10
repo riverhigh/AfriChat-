@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   GraduationCap,
@@ -357,7 +357,7 @@ export const TutorCoursesModal: React.FC = () => {
                   <div>
                     <div className="flex items-center gap-1.5 text-purple-400 font-bold">
                       <Sparkles className="w-4 h-4" />
-                      <span>Teach & Earn on AfriChat</span>
+                      <span>Teach & Earn on AGC</span>
                     </div>
                     <p className="text-[11px] text-slate-300 mt-0.5">
                       Register as a certified tutor for ₦5k + ₦4k blue check. Publish up to 10 courses or unlimited for ₦20k/mo!

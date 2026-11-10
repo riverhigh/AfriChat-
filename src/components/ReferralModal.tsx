@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   Share2,
@@ -51,7 +51,7 @@ export const ReferralModal: React.FC = () => {
   };
 
   const handleShareInvite = () => {
-    const text = `Join me on AfriChat with zero-data chat, Escrow protection & artisan services! Use my invite code ${referralProgram.referralCode} to get started: ${referralProgram.referralLink}`;
+    const text = `Join me on AGC with zero-data chat, Escrow protection & artisan services! Use my invite code ${referralProgram.referralCode} to get started: ${referralProgram.referralLink}`;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text);
       alert('Invite message copied! You can share it via SMS or Social Chat.');

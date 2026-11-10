@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   Wallet,
@@ -21,6 +21,7 @@ export const WalletModal: React.FC = () => {
     topUpWallet,
     withdrawWallet,
     formatPrice,
+    currentUser,
   } = useApp();
 
   const [walletTab, setWalletTab] = useState<'overview' | 'topup' | 'withdraw'>('overview');
@@ -43,7 +44,7 @@ export const WalletModal: React.FC = () => {
     setIsProcessing(true);
     setFeedback(null);
 
-    const userEmail = currentUser.email || `${currentUser.phoneNumber.replace(/[^0-9]/g, '')}@africhat.africa`;
+    const userEmail = currentUser.email || `${currentUser.phoneNumber.replace(/[^0-9]/g, '')}@AGC.africa`;
 
     openPaystackPopup({
       email: userEmail,
@@ -130,7 +131,7 @@ export const WalletModal: React.FC = () => {
             </div>
             <div>
               <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">
-                AfriChat Wallet
+                AGC Wallet
               </h3>
               <p className="text-[10px] text-slate-400">
                 Secured by Paystack & Escrow Vault

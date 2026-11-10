@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import {
   X,
   Printer,
@@ -195,7 +195,7 @@ export const InvoiceViewerModal: React.FC = () => {
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-5 h-5 text-indigo-600 shrink-0" />
               <span>
-                Verified AfriChat digital invoice powered by Paystack Direct & Escrow Vault.
+                Verified AGC digital invoice powered by Paystack Direct & Escrow Vault.
               </span>
             </div>
             <div className="font-mono text-[10px] text-slate-400">

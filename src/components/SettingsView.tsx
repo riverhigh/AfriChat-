@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   User,
   Globe,
@@ -318,7 +318,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <Wrench className="w-8 h-8 text-purple-400 mx-auto mb-2" />
                 <div className="text-sm font-bold text-slate-800 dark:text-white">No Registered Artisans Yet</div>
                 <div className="text-xs text-slate-500 dark:text-neutral-400 mt-1 max-w-xs mx-auto">
-                  Be the first to list your workshop or craft on AfriChat and get discovered by nearby customers.
+                  Be the first to list your workshop or craft on AGC and get discovered by nearby customers.
                 </div>
                 <button
                   onClick={() => setIsServicesModalOpen(true)}
@@ -369,7 +369,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           <div className="p-4 text-center text-xs text-slate-400">
-            AfriChat Artisan Hub · Connecting African Skill ⚒
+            AGC Artisan Hub · Connecting African Skill ⚒
           </div>
         </div>
       ) : (
@@ -414,7 +414,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
 
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-1 italic">
-                  &ldquo;{currentUser.about || 'Hey there! I am using AfriChat.'}&rdquo;
+                  &ldquo;{currentUser.about || 'Hey there! I am using AGC.'}&rdquo;
                 </p>
               </div>
             </div>
@@ -430,7 +430,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 onClick={() => setIsScanQrModalOpen(true)}
                 className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
-                title="View AfriChat QR Code"
+                title="View AGC QR Code"
               >
                 <QrCode className="w-5 h-5" />
               </button>
@@ -466,13 +466,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
           )}
 
-          {/* AfriChat Wallet Card with Privacy Masking */}
+          {/* AGC Wallet Card with Privacy Masking */}
           <div className="px-4">
             <div className="p-4 rounded-2xl bg-gradient-to-tr from-[#1e1b4b] via-[#312e81] to-[#4338ca] text-white space-y-3 shadow-md relative overflow-hidden">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Wallet className="w-4 h-4 text-amber-400" />
-                  <span className="text-xs font-semibold">AfriChat Vault & Wallet</span>
+                  <span className="text-xs font-semibold">AGC Vault & Wallet</span>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -596,7 +596,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
                 <div className="p-3 rounded-2xl bg-purple-600 text-white max-w-[85%] rounded-br-xs shadow-xs">
                   <p className="font-medium leading-relaxed">
-                    AfriChat: Fast & secure chats across Africa 🌍
+                    AGC: Fast & secure chats across Africa 🌍
                   </p>
                   <span className="text-[10px] opacity-75 block text-right mt-1">
                     10:45 AM · ✓✓
@@ -856,7 +856,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="flex items-center gap-4">
                 <Smartphone className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                 <div>
-                  <div className="text-sm font-medium">AfriChat Secure Phone OTP</div>
+                  <div className="text-sm font-medium">AGC Secure Phone OTP</div>
                   <div className="text-xs text-slate-500">
                     Logged in as {currentUser.phoneNumber} {currentUser.countryCode ? `(${currentUser.countryCode})` : ''}
                   </div>
@@ -1024,7 +1024,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <ShieldCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0" />
               <div>
                 <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                  AfriChat Escrow & Buyer Protection
+                  AGC Escrow & Buyer Protection
                 </div>
                 <div className="text-[11px] text-slate-500 dark:text-neutral-400">
                   Funds held securely in vault until 4-digit release PIN is verified upon delivery
@@ -1034,7 +1034,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           <div className="p-4 text-center text-xs text-slate-400">
-            AfriChat Super-App · Made for African Markets
+            AGC Super-App · Made for African Markets
           </div>
         </div>
       )}

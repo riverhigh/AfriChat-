@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   Users,
@@ -341,7 +341,7 @@ export const PayrollModal: React.FC = () => {
           {activeTab === 'add' && (
             <form onSubmit={handleAddEmployeeSubmit} className="space-y-3.5">
               <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-2xl text-xs text-purple-900 dark:text-purple-200 leading-relaxed">
-                Add domestic staff, shop attendants, drivers, or artisans. AfriChat automatically processes salary transfers on the scheduled recurring cycle.
+                Add domestic staff, shop attendants, drivers, or artisans. AGC automatically processes salary transfers on the scheduled recurring cycle.
               </div>
 
               <div>
@@ -425,7 +425,7 @@ export const PayrollModal: React.FC = () => {
                     type="text"
                     value={empAccount}
                     onChange={(e) => setEmpAccount(e.target.value)}
-                    placeholder="e.g. AfriChat Wallet or Zenith Bank"
+                    placeholder="e.g. AGC Wallet or Zenith Bank"
                     className="w-full p-2.5 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
                   />
                 </div>

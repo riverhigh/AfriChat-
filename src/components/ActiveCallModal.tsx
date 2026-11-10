@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+﻿import React, { useEffect, useRef, useState } from 'react';
 import {
   PhoneOff,
   Mic,
@@ -101,8 +101,8 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
     try {
       if (navigator.share) {
         await navigator.share({
-          title: `AfriChat ${activeCall.type === 'video' ? 'Video' : 'Voice'} Call`,
-          text: `Join my live AfriChat call:`,
+          title: `AGC ${activeCall.type === 'video' ? 'Video' : 'Voice'} Call`,
+          text: `Join my live AGC call:`,
           url: callLink,
         });
       } else {
@@ -157,7 +157,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
       <div className="relative z-10 px-5 pt-8 pb-4 text-center space-y-2">
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/6 backdrop-blur-md border border-white/10 text-[11px] font-mono font-semibold text-purple-300">
           <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
-          <span>AfriChat Peer WebRTC · E2E Encrypted</span>
+          <span>AGC Peer WebRTC · E2E Encrypted</span>
         </div>
 
         <h2 className="text-2xl font-black font-display tracking-tight text-white mt-2">
