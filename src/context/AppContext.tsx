@@ -19,7 +19,7 @@ export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
   }
   return '';
 };
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
 import {
   supabase,
@@ -2631,7 +2631,13 @@ const sendMessage = (chatId: string, text: string) => {
     if (!text.trim()) return;
 
     const currentChat = chats.find((c) => c.id === chatId);
-    const targetCleanPhone = currentChat?.phone?.replace(/\D/g, '');
+    const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    let targetCleanPhone = currentChat?.phone?.replace(/\D/g, '');
+
+    if (!targetCleanPhone && chatId.startsWith('dm_')) {
+      const parts = chatId.replace('dm_', '').split('_');
+      targetCleanPhone = parts.find((p) => p !== myCleanPhone) || parts[0];
+    }
 
     const newMsg: ChatMessage = {
       id: `msg_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -2694,22 +2700,56 @@ const sendMessage = (chatId: string, text: string) => {
     // 3. Broadcast via Socket.io
     emitLiveMessage(chatId, newMsg, targetCleanPhone);
 
-    // 4. Broadcast via Supabase Realtime
-    try {
-      const sbChannel = supabase.channel(`chat_${chatId}`, {
-        config: { broadcast: { self: false } },
-      });
-      sbChannel.subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          sbChannel.send({
-            type: 'broadcast',
-            event: 'new_message',
-            payload: { chatId, message: newMsg, senderId: currentUser.id },
+    // 4. Broadcast via Supabase Realtime to chat room, recipient inbox & town feed
+    if (isSupabaseConfigured) {
+      try {
+        const sbChannel = supabase.channel(`chat_${chatId}`, {
+          config: { broadcast: { self: false } },
+        });
+        sbChannel.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            sbChannel.send({
+              type: 'broadcast',
+              event: 'new_message',
+              payload: { chatId, message: newMsg, senderId: currentUser.id },
+            });
+          }
+        });
+
+        // Directly broadcast to recipient's personal inbox channel
+        if (targetCleanPhone) {
+          const inboxChannel = supabase.channel(`inbox_${targetCleanPhone}`, {
+            config: { broadcast: { self: false } },
+          });
+          inboxChannel.subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+              inboxChannel.send({
+                type: 'broadcast',
+                event: 'new_message',
+                payload: { chatId, message: newMsg, senderId: currentUser.id },
+              });
+            }
           });
         }
-      });
-    } catch (e) {
-      console.warn('Supabase chat broadcast error:', e);
+
+        // If town community, broadcast to town feed
+        if (chatId.startsWith('town_comm_')) {
+          const townFeed = supabase.channel('town_community_feed', {
+            config: { broadcast: { self: false } },
+          });
+          townFeed.subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+              townFeed.send({
+                type: 'broadcast',
+                event: 'new_message',
+                payload: { chatId, message: newMsg, senderId: currentUser.id },
+              });
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('Supabase chat broadcast notice:', e);
+      }
     }
   };
 
@@ -5107,17 +5147,10 @@ const sendMessage = (chatId: string, text: string) => {
 
 
   // Real-Time Multi-Transport Live Chat Connection (Socket.io + BroadcastChannel + Supabase)
-  useEffect(() => {
-    const socket = initSocket({
-      id: currentUser.id,
-      name: currentUser.fullName,
-      avatar: currentUser.avatarUrl,
-      phone: currentUser.phoneNumber,
-    });
-
-    const handleIncomingMessage = ({ chatId, message, senderId }: { chatId: string; message: ChatMessage; senderId?: string }) => {
-      const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '');
-      const senderCleanPhone = message.senderPhone?.replace(/\D/g, '');
+  const handleIncomingMessage = useCallback(
+    ({ chatId, message, senderId }: { chatId: string; message: ChatMessage; senderId?: string }) => {
+      const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+      const senderCleanPhone = message.senderPhone?.replace(/\D/g, '') || '';
       const otherCleanPhone = senderCleanPhone === myCleanPhone ? '' : senderCleanPhone;
 
       const isSelfChat = chatId.includes('self') || (myCleanPhone && senderCleanPhone === myCleanPhone && (!otherCleanPhone || chatId.endsWith(myCleanPhone)));
@@ -5195,7 +5228,26 @@ const sendMessage = (chatId: string, text: string) => {
           return finalChats;
         }
       });
-    };
+
+      if (activeChatId !== resolvedChatId && activeChatId !== chatId) {
+        showLocalNotification(
+          `💬 ${message.senderName || 'AGC User'}`,
+          message.text || 'Sent you an attachment',
+          message.senderAvatar || '/icon-192.png'
+        );
+      }
+    },
+    [currentUser, activeChatId]
+  );
+
+  useEffect(() => {
+    const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    const socket = initSocket({
+      id: currentUser.id,
+      name: currentUser.fullName,
+      avatar: currentUser.avatarUrl,
+      phone: currentUser.phoneNumber,
+    });
 
     // 1. Socket.io listener
     socket.on('new_message', handleIncomingMessage);
@@ -5213,11 +5265,43 @@ const sendMessage = (chatId: string, text: string) => {
       console.warn('BroadcastChannel not available:', e);
     }
 
+    // 3. Persistent Supabase Realtime Inbox Listener (guarantees cross-device delivery)
+    let sbInboxChannel: any = null;
+    if (isSupabaseConfigured && myCleanPhone) {
+      sbInboxChannel = supabase.channel(`inbox_${myCleanPhone}`, {
+        config: { broadcast: { self: false } },
+      });
+      sbInboxChannel
+        .on('broadcast', { event: 'new_message' }, ({ payload }: any) => {
+          if (payload && payload.message) {
+            handleIncomingMessage(payload);
+          }
+        })
+        .subscribe();
+    }
+
+    // 4. Persistent Supabase Realtime Town Feed Listener
+    let sbTownFeed: any = null;
+    if (isSupabaseConfigured) {
+      sbTownFeed = supabase.channel('town_community_feed', {
+        config: { broadcast: { self: false } },
+      });
+      sbTownFeed
+        .on('broadcast', { event: 'new_message' }, ({ payload }: any) => {
+          if (payload && payload.message && payload.senderId !== currentUser.id) {
+            handleIncomingMessage(payload);
+          }
+        })
+        .subscribe();
+    }
+
     return () => {
       socket.off('new_message', handleIncomingMessage);
       if (bc) bc.close();
+      if (sbInboxChannel) sbInboxChannel.unsubscribe();
+      if (sbTownFeed) sbTownFeed.unsubscribe();
     };
-  }, [currentUser, activeChatId]);
+  }, [currentUser, activeChatId, handleIncomingMessage]);
 
   // Join active chat room when switching chats (Socket.io + Supabase Realtime)
   useEffect(() => {
@@ -5231,15 +5315,8 @@ const sendMessage = (chatId: string, text: string) => {
 
     sbChannel
       .on('broadcast', { event: 'new_message' }, ({ payload }) => {
-        if (payload && payload.senderId !== currentUser.id) {
-          setMessages((prev) => {
-            const list = prev[activeChatId] || [];
-            if (list.some((m) => m.id === payload.message.id)) return prev;
-            return {
-              ...prev,
-              [activeChatId]: [...list, { ...payload.message, sender: 'other', status: 'delivered' }],
-            };
-          });
+        if (payload && payload.message && payload.senderId !== currentUser.id) {
+          handleIncomingMessage(payload);
         }
       })
       .subscribe();
@@ -5248,8 +5325,7 @@ const sendMessage = (chatId: string, text: string) => {
       leaveChatRoom(activeChatId);
       sbChannel.unsubscribe();
     };
-  }, [activeChatId, currentUser.id]);
-
+  }, [activeChatId, currentUser.id, handleIncomingMessage]);
 
   // 29. Super Admin Console & Moderation State
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(() => {

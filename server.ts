@@ -1,10 +1,14 @@
-﻿import express, { Request, Response } from 'express';
+import express, { Request, Response } from 'express';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
@@ -280,10 +284,23 @@ io.on('connection', (socket: Socket) => {
     const { chatId, message, targetPhone } = payload;
     // Broadcast to everyone else in this chat room
     socket.to(`chat:${chatId}`).emit('new_message', { chatId, message });
+
+    // Derive target phone if not explicitly provided
+    let finalTarget = targetPhone ? targetPhone.replace(/\D/g, '') : '';
+    if (!finalTarget && chatId.startsWith('dm_')) {
+      const senderPhone = (socket as any)._agcPhone || (message?.senderPhone || '').replace(/\D/g, '');
+      const parts = chatId.replace('dm_', '').split('_');
+      finalTarget = parts.find((p: string) => p !== senderPhone) || '';
+    }
+
     // Also broadcast to target user's phone channel so incoming messages update their chat list
-    if (targetPhone) {
-      const cleanTarget = targetPhone.replace(/\D/g, '');
-      socket.to(`phone:${cleanTarget}`).emit('new_message', { chatId, message });
+    if (finalTarget) {
+      socket.to(`phone:${finalTarget}`).emit('new_message', { chatId, message });
+    }
+
+    // If it's a town community or group, broadcast to everyone
+    if (chatId.startsWith('town_comm_')) {
+      socket.broadcast.emit('new_message', { chatId, message });
     }
   });
 
