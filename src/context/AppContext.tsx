@@ -4923,7 +4923,33 @@ const sendMessage = (chatId: string, text: string) => {
 
 
   // 29. Super Admin Console & Moderation State
-  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      const path = window.location.pathname.toLowerCase();
+      return hash === '#admin' || search.includes('admin=true') || search.includes('admin=1') || path === '/admin';
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleUrlChange = () => {
+      const hash = window.location.hash.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      const path = window.location.pathname.toLowerCase();
+      if (hash === '#admin' || search.includes('admin=true') || search.includes('admin=1') || path === '/admin') {
+        setIsAdminModalOpen(true);
+      }
+    };
+    window.addEventListener('hashchange', handleUrlChange);
+    window.addEventListener('popstate', handleUrlChange);
+    return () => {
+      window.removeEventListener('hashchange', handleUrlChange);
+      window.removeEventListener('popstate', handleUrlChange);
+    };
+  }, []);
   const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>(() => {
     try {
       const saved = localStorage.getItem('AGC_admin_users');
