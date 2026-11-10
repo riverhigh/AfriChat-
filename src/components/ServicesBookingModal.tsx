@@ -47,6 +47,8 @@ export const ServicesBookingModal: React.FC = () => {
   const {
     isServicesModalOpen,
     setIsServicesModalOpen,
+    isArtisanModalOpen,
+    setIsArtisanModalOpen,
     serviceProviders,
     serviceBookings,
     createServiceBooking,
@@ -65,7 +67,15 @@ export const ServicesBookingModal: React.FC = () => {
     wallet,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'browse' | 'station_hub' | 'my_bookings'>('browse');
+  const [activeTab, setActiveTab] = useState<'browse' | 'station_hub' | 'my_bookings'>(
+    isArtisanModalOpen ? 'station_hub' : 'browse'
+  );
+
+  React.useEffect(() => {
+    if (isArtisanModalOpen) {
+      setActiveTab('station_hub');
+    }
+  }, [isArtisanModalOpen]);
   const [stationSubTab, setStationSubTab] = useState<'listings' | 'schedule' | 'staff' | 'tasks'>('listings');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -126,7 +136,7 @@ export const ServicesBookingModal: React.FC = () => {
   const [endTime, setEndTime] = useState(artisanStation?.operatingHours.endTime || '07:00 PM');
   const [breakTime, setBreakTime] = useState(artisanStation?.operatingHours.breakTime || '01:00 PM - 02:00 PM');
 
-  if (!isServicesModalOpen) return null;
+  if (!isServicesModalOpen && !isArtisanModalOpen) return null;
 
   const categories: { id: string; label: string; icon: React.ReactNode }[] = [
     { id: 'all', label: 'All Jobs', icon: <Briefcase className="w-3.5 h-3.5" /> },
@@ -340,7 +350,7 @@ export const ServicesBookingModal: React.FC = () => {
           </div>
 
           <button
-            onClick={() => setIsServicesModalOpen(false)}
+            onClick={() => { setIsServicesModalOpen(false); setIsArtisanModalOpen(false); }}
             className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-neutral-200 rounded-full hover:bg-slate-100 dark:hover:bg-neutral-900 transition-colors"
           >
             <X className="w-5 h-5" />

@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { fetchProducts, supabase } from '../services/supabase';
 import {
+  GraduationCap,
   Search,
   Store,
   MapPin,
@@ -19,12 +21,60 @@ export const MarketplaceView: React.FC = () => {
     formatPrice,
     setIsServicesModalOpen,
     setIsStoreRegModalOpen,
+    setIsTutorModalOpen,
+    tutorProfile,
     storeSubscription,
   } = useApp();
   const [search, setSearch] = useState('');
   const [selectedCat, setSelectedCat] = useState<'all' | 'textiles' | 'electronics' | 'beauty' | 'fashion'>('all');
+  const [dbProducts, setDbProducts] = useState<Product[]>([]);
 
-  const filteredProducts = MOCK_PRODUCTS.filter((prod) => {
+  // Load from Supabase on mount with real-time update
+  useEffect(() => {
+    let isMounted = true;
+    async function loadData() {
+      try {
+        const { data, error } = await fetchProducts();
+        if (!error && data && data.length > 0 && isMounted) {
+          const mapped: Product[] = data.map((d: any) => ({
+            id: d.id,
+            sellerId: d.seller_id,
+            sellerName: d.seller_name || 'AfriChat Verified Merchant',
+            title: d.title,
+            description: d.description || '',
+            price: Number(d.price) || 0,
+            currency: d.currency || 'NGN',
+            imageUrl: d.image_url || 'https://images.unsplash.com/photo-1544441893-675973e31985?w=500',
+            category: d.category || 'fashion',
+            inStock: Boolean(d.in_stock),
+            stockCount: d.stock_count || 10,
+            location: d.location || 'Lagos, Nigeria',
+            condition: d.condition || 'Brand New',
+            tags: d.tags || [],
+          }));
+          setDbProducts(mapped);
+        }
+      } catch (e) {
+        console.warn('Using local catalog fallback:', e);
+      }
+    }
+    loadData();
+
+    // Realtime changes listener on products
+    const channel = supabase
+      .channel('public:products')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => {
+        loadData();
+      })
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const filteredProducts = dbProducts.filter((prod) => {
     const matchesSearch =
       prod.title.toLowerCase().includes(search.toLowerCase()) ||
       prod.sellerName.toLowerCase().includes(search.toLowerCase()) ||
@@ -81,49 +131,58 @@ export const MarketplaceView: React.FC = () => {
           ))}
         </div>
       </div>
+      {/* Quick Action Cards - compact 3-col strip */}
+      <div className="px-3 pt-3 pb-1">
+        <div className="grid grid-cols-3 gap-2">
 
-      {/* Artisan Service Stations Hub Banner */}
-      <div className="px-3 pt-3 space-y-2">
-        <div className="p-3.5 bg-gradient-to-r from-purple-900/30 via-indigo-950/40 to-slate-900/60 rounded-2xl border border-purple-500/30 flex items-center justify-between gap-3 shadow-xs">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 text-purple-400 font-bold text-xs">
-              <Wrench className="w-4 h-4" />
-              <span>Artisan Service Stations & Workshops</span>
-            </div>
-            <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
-              Mechanics, barbers, and tailors: Register station for ₦5k. Manage ₦500 listings, calendar & tasks.
-            </p>
-          </div>
+          {/* Artisan Stations */}
           <button
             onClick={() => setIsServicesModalOpen(true)}
-            className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shrink-0 shadow-md transition-all active:scale-95"
+            className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-400/50 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-all group active:scale-95 text-center"
           >
-            Open Station Hub
-          </button>
-        </div>
-
-        {/* Store Registration Tiers Banner (₦3k monthly / ₦7k monthly) */}
-        <div className="p-3.5 bg-gradient-to-r from-blue-950/40 via-indigo-950/30 to-purple-950/40 rounded-2xl border border-blue-500/30 flex items-center justify-between gap-3 shadow-xs">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 text-blue-400 font-bold text-xs">
-              <Store className="w-4 h-4" />
-              <span>Merchant Store Registration Tiers</span>
+            <div className="w-10 h-10 rounded-xl bg-purple-500/10 dark:bg-purple-500/15 flex items-center justify-center group-hover:scale-110 transition-transform">
+              <Wrench className="w-5 h-5 text-purple-600 dark:text-purple-400" />
             </div>
-            <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
-              {storeSubscription.isRegistered ? (
-                <span>
-                  Active: <strong className="text-white">{storeSubscription.storeName}</strong> ({storeSubscription.tier === 'starter_30' ? 'Starter · 30 items' : 'Pro · 100 items'}) · {storeSubscription.itemsUsed}/{storeSubscription.itemsLimit} items listed.
-                </span>
-              ) : (
-                'Register catalog store: ₦3,000/mo (30 items limit) or ₦7,000/mo (100 items limit).'
-              )}
-            </p>
-          </div>
+            <div>
+              <div className="text-[11px] font-bold text-slate-800 dark:text-white leading-tight">Artisan Hub</div>
+              <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">₦5k Reg</div>
+            </div>
+          </button>
+
+          {/* AfriCourses */}
+          <button
+            onClick={() => setIsTutorModalOpen(true)}
+            className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-400/50 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-all group active:scale-95 text-center"
+          >
+            <div className="w-10 h-10 rounded-xl bg-purple-500/10 dark:bg-purple-500/15 flex items-center justify-center group-hover:scale-110 transition-transform">
+              <GraduationCap className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+            </div>
+            <div>
+              <div className="text-[11px] font-bold text-slate-800 dark:text-white leading-tight">
+                {tutorProfile.isRegisteredTutor ? 'Tutor Studio' : 'Courses'}
+              </div>
+              <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">₦5k · 10/∞</div>
+            </div>
+          </button>
+
+          {/* Merchant Store */}
           <button
             onClick={() => setIsStoreRegModalOpen(true)}
-            className="px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95 text-white rounded-xl text-xs font-bold shrink-0 shadow-md transition-all active:scale-95"
+            className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-400/50 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-all group active:scale-95 text-center"
           >
-            {storeSubscription.isRegistered ? 'Manage Store' : 'Register Store'}
+            <div className="w-10 h-10 rounded-xl bg-purple-500/10 dark:bg-purple-500/15 flex items-center justify-center group-hover:scale-110 transition-transform">
+              <Store className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+            </div>
+            <div>
+              <div className="text-[11px] font-bold text-slate-800 dark:text-white leading-tight">
+                {storeSubscription.isRegistered ? 'My Store' : 'Open Store'}
+              </div>
+              <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">
+                {storeSubscription.isRegistered
+                  ? storeSubscription.itemsUsed + '/' + storeSubscription.itemsLimit + ' items'
+                  : '₦3k / ₦7k'}
+              </div>
+            </div>
           </button>
         </div>
       </div>
@@ -135,7 +194,24 @@ export const MarketplaceView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {filteredProducts.map((product: Product) => (
+          {filteredProducts.length === 0 ? (
+            <div className="col-span-full py-16 px-4 text-center bg-white dark:bg-neutral-900 rounded-3xl border border-dashed border-purple-300 dark:border-purple-800/40">
+              <Store className="w-12 h-12 text-purple-400 mx-auto mb-3" />
+              <h4 className="font-bold text-sm text-slate-800 dark:text-white font-display">No products listed in stores yet</h4>
+              <p className="text-xs text-slate-400 dark:text-neutral-500 mt-1 max-w-xs mx-auto">
+                Open a store or register a merchant tier to list fabrics, gadgets, skincare, or handmade items with escrow protection.
+              </p>
+              <button
+                type="button"
+                onClick={() => setIsStoreRegModalOpen(true)}
+                className="mt-4 px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-md shadow-purple-600/20 inline-flex items-center gap-1.5"
+              >
+                <Store className="w-4 h-4" />
+                <span>Register Store</span>
+              </button>
+            </div>
+          ) : (
+            filteredProducts.map((product: Product) => (
             <div
               key={product.id}
               className="bg-white dark:bg-neutral-950 rounded-2xl border border-slate-200/80 dark:border-neutral-800 overflow-hidden shadow-2xs hover:shadow-xs transition-shadow flex flex-col justify-between"
@@ -196,7 +272,8 @@ export const MarketplaceView: React.FC = () => {
                 </button>
               </div>
             </div>
-          ))}
+          ))
+          )}
         </div>
       </div>
     </div>

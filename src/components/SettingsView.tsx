@@ -35,6 +35,8 @@ import {
 import { useApp } from '../context/AppContext';
 import { CurrencyCode, LanguageCode, AppFontSize } from '../types';
 import { MarketplaceView } from './MarketplaceView';
+import { LegalComplianceModal } from './LegalComplianceModal';
+import { PwaInstallCard } from './PwaInstallCard';
 
 interface SettingsViewProps {
   onOpenLanguageModal: () => void;
@@ -96,11 +98,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setIsCelebrityModalOpen,
     setIsStoreRegModalOpen,
     setIsWritersModalOpen,
+    setIsAdminModalOpen,
+    serviceProviders,
+    artisanStation,
     storeSubscription,
     referralProgram,
   } = useApp();
 
-  const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores'>('services');
+  const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan'>('services');
+  const [isLegalModalOpen, setIsLegalModalOpen] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -158,7 +164,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white font-display">
-                Fyp
+                Hub
               </h2>
               <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-purple-600/10 text-purple-600 dark:text-purple-400">
                 Personal & Stores
@@ -201,7 +207,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
 
         {/* Segmented Navigation Switcher: Profile vs Stores */}
-        <div className="grid grid-cols-2 p-1 bg-slate-100 dark:bg-neutral-950 rounded-xl text-xs font-semibold">
+        <div className="grid grid-cols-3 p-1 bg-slate-100 dark:bg-neutral-950 rounded-xl text-xs font-semibold">
           <button
             onClick={() => setActiveSubTab('services')}
             className={`py-2 rounded-lg flex items-center justify-center gap-2 transition-all ${
@@ -225,12 +231,147 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <Store className="w-4 h-4" />
             <span>Stores & Market</span>
           </button>
+
+          <button
+            onClick={() => setActiveSubTab('artisan')}
+            className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+              activeSubTab === 'artisan'
+                ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs'
+                : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            <span>Artisan Market</span>
+          </button>
         </div>
       </div>
 
       {/* Render Stores Tab Content when selected */}
       {activeSubTab === 'stores' ? (
         <MarketplaceView />
+      ) : activeSubTab === 'artisan' ? (
+        <div className="space-y-5 px-4 py-4">
+          {/* Artisan Hub Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-black text-slate-900 dark:text-white tracking-tight">Artisan Hub</h3>
+              <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5">Book skilled professionals near you</p>
+            </div>
+            <button
+              onClick={() => setIsServicesModalOpen(true)}
+              className="text-xs font-bold text-purple-600 dark:text-purple-400 bg-purple-500/10 px-3 py-1.5 rounded-full hover:bg-purple-500/20 transition-colors"
+            >
+              View All →
+            </button>
+          </div>
+
+          {/* My Station Card */}
+          {artisanStation ? (
+            <div className="bg-gradient-to-br from-purple-600 to-indigo-600 rounded-2xl p-4 text-white">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider opacity-80">My Station</span>
+                <span className="text-[10px] font-mono bg-white/20 px-2 py-0.5 rounded-full">
+                  {artisanStation.isApproved ? '✓ Verified' : 'Pending Review'}
+                </span>
+              </div>
+              <div className="font-black text-lg leading-tight">{artisanStation.stationName}</div>
+              <div className="text-xs opacity-75 mt-0.5">{artisanStation.category} · {artisanStation.location}</div>
+              <button
+                onClick={() => setIsServicesModalOpen(true)}
+                className="mt-3 w-full py-2 bg-white/20 hover:bg-white/30 rounded-xl text-xs font-bold transition-colors"
+              >
+                Manage Station
+              </button>
+            </div>
+          ) : (
+            <div className="bg-white dark:bg-[#18152e] border border-dashed border-purple-300 dark:border-purple-800 rounded-2xl p-4 flex flex-col items-center gap-2 text-center">
+              <div className="w-10 h-10 rounded-full bg-purple-500/10 flex items-center justify-center">
+                <Wrench className="w-5 h-5 text-purple-500" />
+              </div>
+              <div className="text-sm font-bold text-slate-800 dark:text-white">Register Your Station</div>
+              <div className="text-xs text-slate-500 dark:text-neutral-400">List your skills & get booked by nearby clients · ₦5k setup</div>
+              <button
+                onClick={() => setIsServicesModalOpen(true)}
+                className="mt-1 px-5 py-2 bg-purple-600 text-white text-xs font-bold rounded-xl hover:bg-purple-700 transition-colors"
+              >
+                Set Up Station · ₦5,000
+              </button>
+            </div>
+          )}
+
+          {/* Category Filter Chips */}
+          <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+            {['All', 'Mechanic', 'Barber', 'Plumber', 'Electrician', 'Tailor'].map((cat) => (
+              <span
+                key={cat}
+                className="shrink-0 text-[11px] font-semibold px-3 py-1.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400 cursor-pointer hover:bg-purple-500/20 transition-colors"
+              >
+                {cat}
+              </span>
+            ))}
+          </div>
+
+          {/* Service Provider Cards */}
+          <div className="space-y-3">
+            {serviceProviders.length === 0 ? (
+              <div className="bg-white dark:bg-[#18152e] border border-dashed border-purple-300 dark:border-purple-800 rounded-2xl p-6 text-center">
+                <Wrench className="w-8 h-8 text-purple-400 mx-auto mb-2" />
+                <div className="text-sm font-bold text-slate-800 dark:text-white">No Registered Artisans Yet</div>
+                <div className="text-xs text-slate-500 dark:text-neutral-400 mt-1 max-w-xs mx-auto">
+                  Be the first to list your workshop or craft on AfriChat and get discovered by nearby customers.
+                </div>
+                <button
+                  onClick={() => setIsServicesModalOpen(true)}
+                  className="mt-3 px-4 py-2 bg-purple-600 text-white text-xs font-bold rounded-xl hover:bg-purple-700 transition-colors inline-block"
+                >
+                  Register Your Skills
+                </button>
+              </div>
+            ) : (
+              serviceProviders.slice(0, 5).map((provider) => (
+              <div
+                key={provider.id}
+                className="bg-white dark:bg-[#18152e] border border-slate-200/80 dark:border-neutral-800 rounded-2xl p-3.5 flex gap-3 items-start shadow-xs"
+              >
+                <img
+                  src={provider.avatar}
+                  alt={provider.name}
+                  className="w-14 h-14 rounded-xl object-cover shrink-0 border-2 border-purple-500/20"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-bold text-sm text-slate-900 dark:text-white truncate">{provider.name}</div>
+                    {provider.isVerified && (
+                      <span className="shrink-0 text-[10px] font-mono bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded-full">✓</span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-neutral-400 truncate">{provider.businessName}</div>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <span className="text-[11px] font-semibold text-amber-500">★ {provider.rating}</span>
+                    <span className="text-[10px] text-slate-400">({provider.reviewCount})</span>
+                    <span className="text-[10px] text-slate-400 truncate">· {provider.location}</span>
+                  </div>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-xs font-black text-purple-600 dark:text-purple-400">
+                      ₦{provider.hourlyRate.toLocaleString()}<span className="font-normal text-slate-400">/hr</span>
+                    </span>
+                    <button
+                      onClick={() => setIsServicesModalOpen(true)}
+                      className="text-[11px] font-bold bg-purple-600 text-white px-3 py-1 rounded-lg hover:bg-purple-700 transition-colors"
+                    >
+                      Book Now
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))
+            )}
+          </div>
+
+          <div className="p-4 text-center text-xs text-slate-400">
+            AfriChat Artisan Hub · Connecting African Skill ⚒
+          </div>
+        </div>
       ) : (
         <div className="space-y-4">
           {/* User Profile Identity Row */}
@@ -295,6 +436,35 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </button>
             </div>
           </div>
+
+                    {/* Super Admin Console Access Tile - Only for Admins */}
+          {(currentUser?.role === 'admin' || currentUser?.isAdmin) && (
+          <div className="px-4">
+            <button
+              type="button"
+              onClick={() => setIsAdminModalOpen(true)}
+              className="w-full p-4 rounded-2xl bg-gradient-to-r from-purple-900/90 via-indigo-900/90 to-slate-900 text-white shadow-lg border border-purple-500/40 text-left transition-all hover:scale-[1.01] active:scale-[0.99] flex items-center justify-between group"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-amber-300 shadow-sm group-hover:scale-105 transition-transform">
+                  <ShieldCheck className="w-5 h-5 text-amber-300" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold tracking-tight">Super Admin Console</h3>
+                    <span className="text-[9px] font-mono font-bold bg-amber-400 text-slate-950 px-2 py-0.2 rounded-full uppercase">
+                      Root
+                    </span>
+                  </div>
+                  <p className="text-xs text-purple-200/80 mt-0.5">
+                    User badging, escrow disputes, broadcasts & Supabase cloud health
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-purple-300 group-hover:translate-x-1 transition-transform" />
+            </button>
+          </div>
+          )}
 
           {/* AfriChat Wallet Card with Privacy Masking */}
           <div className="px-4">
@@ -794,6 +964,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
+          {/* PWA App Download & Version Update Checker */}
+          <div className="px-4">
+            <PwaInstallCard />
+          </div>
+
           {/* Escrow Orders History Section */}
           <div className="px-4">
             <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
@@ -863,6 +1038,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
       )}
+      <LegalComplianceModal
+        isOpen={isLegalModalOpen}
+        onClose={() => setIsLegalModalOpen(false)}
+      />
     </div>
   );
 };

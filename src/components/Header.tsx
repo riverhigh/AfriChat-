@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  GraduationCap,
   QrCode,
   Scan,
   MoreVertical,
@@ -32,6 +33,8 @@ import {
   Crown,
   Store,
   CheckCircle2,
+  ShieldCheck,
+  Search,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -42,6 +45,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
   const {
     t,
+    currentUser,
     isDarkMode,
     toggleDarkMode,
     lowDataMode,
@@ -70,11 +74,18 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
     setIsCelebrityModalOpen,
     setIsStoreRegModalOpen,
     setIsWritersModalOpen,
+    setIsTutorModalOpen,
+    setIsArtisanModalOpen,
+    setIsAdminModalOpen,
+    systemBroadcast,
+    setSystemBroadcast,
     joinAudioSpace,
     audioSpaces,
   } = useApp();
 
   const [showMenu, setShowMenu] = useState(false);
+  const [menuFilter, setMenuFilter] = useState<'all' | 'finance' | 'services' | 'tools'>('all');
+  const [menuSearch, setMenuSearch] = useState('');
 
   const formattedShortBalance = `₦${Math.floor(wallet.availableBalance / 1000)}k`;
 
@@ -121,370 +132,130 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                     </button>
                   </div>
 
-                  {/* 2 by 2 Feature Grid */}
-                  <div className="grid grid-cols-2 gap-2">
-                    {/* 1. AfriCreator Hub */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsCreatorModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-gradient-to-br from-purple-500/10 to-pink-500/10 hover:from-purple-500/20 hover:to-pink-500/20 border border-purple-200 dark:border-purple-900/50 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Sparkles className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Creator Hub
-                      </span>
-                      <span className="text-[10px] text-purple-600 dark:text-purple-400 block mt-0.5 leading-tight">
-                        VIP Calls, Files & Drops
-                      </span>
-                    </button>
-
-                    {/* Celebrity Verification Tile */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsCelebrityModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-300 dark:border-amber-800/60 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 to-purple-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Crown className="w-4 h-4 text-amber-200" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Celebrity Check
-                      </span>
-                      <span className="text-[10px] text-amber-600 dark:text-amber-400 block mt-0.5 leading-tight">
-                        Identity Verification
-                      </span>
-                    </button>
-
-                    {/* Store Registration Tiers (3k/7k) */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsStoreRegModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-blue-500/10 hover:bg-blue-500/20 border border-blue-200 dark:border-blue-900/50 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Store className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Store Tiers
-                      </span>
-                      <span className="text-[10px] text-blue-600 dark:text-blue-400 block mt-0.5 leading-tight">
-                        ₦3k / ₦7k Monthly
-                      </span>
-                    </button>
-
-                    {/* African Writers Guild (AfriBooks) */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsWritersModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-200 dark:border-emerald-900/50 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <BookOpen className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Writers Guild
-                      </span>
-                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block mt-0.5 leading-tight">
-                        Chapters & Buddy Read
-                      </span>
-                    </button>
-
-                    {/* 2. AfriHealth */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsHealthModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/40 border border-rose-200/80 dark:border-rose-900/50 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-rose-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <HeartPulse className="w-4 h-4 animate-pulse" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        AfriHealth
-                      </span>
-                      <span className="text-[10px] text-rose-600 dark:text-rose-400 block mt-0.5 leading-tight">
-                        Queues & Telehealth
-                      </span>
-                    </button>
-
-                    {/* 3. AfriLaw & Smart Contracts */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsLegalModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 border border-indigo-200/80 dark:border-indigo-900/50 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Scale className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        AfriLaw
-                      </span>
-                      <span className="text-[10px] text-indigo-600 dark:text-indigo-400 block mt-0.5 leading-tight">
-                        Contracts & Lawyers
-                      </span>
-                    </button>
-
-                    {/* 4. AfriChat Wallet */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsWalletModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-purple-50 dark:bg-purple-950/30 hover:bg-purple-100 dark:hover:bg-purple-900/40 border border-purple-200/80 dark:border-purple-900/50 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Wallet className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Wallet
-                      </span>
-                      <span className="text-[10px] text-amber-600 dark:text-amber-400 block mt-0.5 leading-tight">
-                        Paystack & Escrow
-                      </span>
-                    </button>
-
-                    {/* 5. Street Radio */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        const liveSpace = audioSpaces.find((s) => s.isLive) || audioSpaces[0];
-                        if (liveSpace) joinAudioSpace(liveSpace);
-                      }}
-                      className="p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-200 dark:border-neutral-800 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-rose-500/20 text-rose-500 flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Radio className="w-4 h-4 animate-pulse" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Street Radio
-                      </span>
-                      <span className="text-[10px] text-rose-500 block mt-0.5 leading-tight">
-                        Live 12kbps Audio
-                      </span>
-                    </button>
-
-                    {/* 6. African Artisan Stations & Services */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsServicesModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-purple-500/10 dark:bg-purple-950/30 hover:bg-purple-500/20 dark:hover:bg-purple-900/40 border border-purple-200 dark:border-purple-800 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Wrench className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Artisan Stations
-                      </span>
-                      <span className="text-[10px] text-purple-600 dark:text-purple-300 font-semibold block mt-0.5 leading-tight">
-                        ₦5k Reg • ₦500 List
-                      </span>
-                    </button>
-
-                    {/* Invite & Earn ₦500 Anti-Ghost Referral */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsReferralModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-emerald-500/10 dark:bg-emerald-950/30 hover:bg-emerald-500/20 dark:hover:bg-emerald-900/40 border border-emerald-200 dark:border-emerald-800 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Share2 className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Invite & Earn
-                      </span>
-                      <span className="text-[10px] text-emerald-600 dark:text-emerald-300 font-semibold block mt-0.5 leading-tight">
-                        ₦500/Friend (Anti-Ghost)
-                      </span>
-                    </button>
-
-                    {/* 7. Delayed Transfer */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsTransferModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-200 dark:border-neutral-800 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-600 flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Clock className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Delayed Send
-                      </span>
-                      <span className="text-[10px] text-slate-500 dark:text-neutral-400 block mt-0.5 leading-tight">
-                        1-2 Days Anti-Fraud
-                      </span>
-                    </button>
-
-                    {/* 8. Payroll Auto-Debit */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsPayrollModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-200 dark:border-neutral-800 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-600 flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Repeat className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Payroll
-                      </span>
-                      <span className="text-[10px] text-slate-500 dark:text-neutral-400 block mt-0.5 leading-tight">
-                        Auto-Debit Staff Pay
-                      </span>
-                    </button>
-
-                    {/* 9. Scam Checker */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsScamCheckerOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-200 dark:border-neutral-800 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-600 flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <ShieldAlert className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Scam Checker
-                      </span>
-                      <span className="text-[10px] text-slate-500 dark:text-neutral-400 block mt-0.5 leading-tight">
-                        Verify Phone/Bank
-                      </span>
-                    </button>
-
-                    {/* 10. Dispatch Couriers */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsDispatchModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-200 dark:border-neutral-800 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-600 flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Truck className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Dispatch
-                      </span>
-                      <span className="text-[10px] text-slate-500 dark:text-neutral-400 block mt-0.5 leading-tight">
-                        Gokada & PickkR
-                      </span>
-                    </button>
-
-                    {/* 11. Job Board */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsJobBoardModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-200 dark:border-neutral-800 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-blue-500/20 text-blue-600 flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Briefcase className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Job Board
-                      </span>
-                      <span className="text-[10px] text-slate-500 dark:text-neutral-400 block mt-0.5 leading-tight">
-                        Hire & Earn Gigs
-                      </span>
-                    </button>
-
-                    {/* 12. Meme Studio */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsMemeStudioOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-200 dark:border-neutral-800 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-pink-500/20 text-pink-600 flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Sparkles className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Meme Studio
-                      </span>
-                      <span className="text-[10px] text-slate-500 dark:text-neutral-400 block mt-0.5 leading-tight">
-                        African Stickers
-                      </span>
-                    </button>
-
-                    {/* 13. Ajo & Esusu Savings */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsAjoModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-200 dark:border-neutral-800 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-600 flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <Coins className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Ajo & Esusu
-                      </span>
-                      <span className="text-[10px] text-slate-500 dark:text-neutral-400 block mt-0.5 leading-tight">
-                        Rotating Savings
-                      </span>
-                    </button>
-
-                    {/* 14. Payment PIN & Security */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsSecurityModalOpen(true);
-                      }}
-                      className="p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 border border-slate-200 dark:border-neutral-800 text-left transition-all group"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-purple-500/20 text-purple-600 flex items-center justify-center mb-1.5 shadow-xs group-hover:scale-105 transition-transform">
-                        <LockKeyhole className="w-4 h-4" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                        Security PIN
-                      </span>
-                      <span className="text-[10px] text-slate-500 dark:text-neutral-400 block mt-0.5 leading-tight">
-                        Wallet Auth & Safe
-                      </span>
-                    </button>
+                  {/* Search bar */}
+                  <div className="relative mb-3">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      placeholder="Search features..."
+                      value={menuSearch}
+                      onChange={(e) => setMenuSearch(e.target.value)}
+                      className="w-full pl-8 pr-3 py-2 text-xs rounded-xl bg-slate-100 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                    />
                   </div>
 
+                  {/* Category filter pills */}
+                  {!menuSearch && (
+                    <div className="flex gap-1.5 mb-3 overflow-x-auto pb-0.5 no-scrollbar">
+                      {(['all', 'finance', 'services', 'tools'] as const).map((f) => (
+                        <button
+                          key={f}
+                          type="button"
+                          onClick={() => setMenuFilter(f)}
+                          className={`shrink-0 text-[11px] font-bold px-3 py-1 rounded-full transition-colors ${
+                            menuFilter === f
+                              ? 'bg-purple-600 text-white'
+                              : 'bg-slate-100 dark:bg-neutral-900 text-slate-500 dark:text-neutral-400 hover:bg-slate-200 dark:hover:bg-neutral-800'
+                          }`}
+                        >
+                          {f === 'all' ? '\u2726 All' : f === 'finance' ? '\u20a6 Finance' : f === 'services' ? '\u2692 Services' : '\u2699 Tools'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Admin Console - Hidden from regular users */}
+                  {(currentUser?.role === 'admin' || currentUser?.isAdmin) && !menuSearch && menuFilter === 'all' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false);
+                        setIsAdminModalOpen(true);
+                      }}
+                      className="w-full mb-3 p-3 rounded-2xl bg-purple-500/10 dark:bg-purple-950/40 hover:bg-purple-500/20 border border-purple-500/40 text-left transition-all group flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
+                          <ShieldCheck className="w-4 h-4 text-amber-300" />
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
+                            Super Admin Console
+                          </span>
+                          <span className="text-[10px] text-purple-600 dark:text-purple-400 block mt-0.5 leading-tight">
+                            User Badges, Escrow Vaults & Supabase
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-[9px] font-mono font-bold bg-amber-400 text-slate-950 px-2 py-0.5 rounded-full">
+                        ROOT
+                      </span>
+                    </button>
+                  )}
+
+                  {/* 4-col icon launcher */}
+                  {(() => {
+                    const allTools: { label: string; sub: string; icon: React.ElementType; action: () => void; cat: 'finance' | 'services' | 'tools' }[] = [
+                      { label: 'Wallet', sub: 'Paystack & Escrow', icon: Wallet, action: () => setIsWalletModalOpen(true), cat: 'finance' },
+                      { label: 'Ajo & Esusu', sub: 'Rotating Savings', icon: Coins, action: () => setIsAjoModalOpen(true), cat: 'finance' },
+                      { label: 'Payroll', sub: 'Auto-Debit Pay', icon: Repeat, action: () => setIsPayrollModalOpen(true), cat: 'finance' },
+                      { label: 'Delayed Send', sub: 'Anti-Fraud Send', icon: Clock, action: () => setIsTransferModalOpen(true), cat: 'finance' },
+                      { label: 'Artisan Hub', sub: '\u20a65k · Book Skill', icon: Wrench, action: () => setIsServicesModalOpen(true), cat: 'services' },
+                      { label: 'AfriHealth', sub: 'Queues & Telehealth', icon: HeartPulse, action: () => setIsHealthModalOpen(true), cat: 'services' },
+                      { label: 'AfriLaw', sub: 'Contracts & Law', icon: Scale, action: () => setIsLegalModalOpen(true), cat: 'services' },
+                      { label: 'Dispatch', sub: 'PickkR / Gokada', icon: Truck, action: () => setIsDispatchModalOpen(true), cat: 'services' },
+                      { label: 'Job Board', sub: 'Hire & Earn Gigs', icon: Briefcase, action: () => setIsJobBoardModalOpen(true), cat: 'services' },
+                      { label: 'Creator Hub', sub: 'VIP Calls & Drops', icon: Sparkles, action: () => setIsCreatorModalOpen(true), cat: 'tools' },
+                      { label: 'Celebrity', sub: 'Identity Check', icon: Crown, action: () => setIsCelebrityModalOpen(true), cat: 'tools' },
+                      { label: 'Store Tiers', sub: '\u20a63k / \u20a67k Monthly', icon: Store, action: () => setIsStoreRegModalOpen(true), cat: 'tools' },
+                      { label: 'Writers Guild', sub: 'Chapters & Buddy', icon: BookOpen, action: () => setIsWritersModalOpen(true), cat: 'tools' },
+                      { label: 'Street Radio', sub: 'Live 12kbps Audio', icon: Radio, action: () => { const live = audioSpaces.find((s) => s.isLive) || audioSpaces[0]; if (live) joinAudioSpace(live); }, cat: 'tools' },
+                      { label: 'Invite & Earn', sub: '\u20a6500/Friend', icon: Share2, action: () => setIsReferralModalOpen(true), cat: 'tools' },
+                      { label: 'Tutors', sub: '\u20a65k · Courses', icon: GraduationCap, action: () => setIsTutorModalOpen(true), cat: 'tools' },
+                      { label: 'Meme Studio', sub: 'African Stickers', icon: Sparkles, action: () => setIsMemeStudioOpen(true), cat: 'tools' },
+                      { label: 'Scam Checker', sub: 'Verify Phone/Bank', icon: ShieldAlert, action: () => setIsScamCheckerOpen(true), cat: 'tools' },
+                      { label: 'Security PIN', sub: 'Wallet Auth', icon: LockKeyhole, action: () => setIsSecurityModalOpen(true), cat: 'tools' },
+                    ];
+                    const q = menuSearch.toLowerCase();
+                    const filtered = allTools.filter((t) => {
+                      if (q) return t.label.toLowerCase().includes(q) || t.sub.toLowerCase().includes(q);
+                      if (menuFilter === 'all') return true;
+                      return t.cat === menuFilter;
+                    });
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="py-8 text-center text-xs text-slate-400 dark:text-neutral-500">
+                          No features match &ldquo;{menuSearch}&rdquo;
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="grid grid-cols-4 gap-2">
+                        {filtered.map((tool) => {
+                          const IconComp = tool.icon;
+                          return (
+                            <button
+                              key={tool.label}
+                              type="button"
+                              onClick={() => {
+                                setShowMenu(false);
+                                setMenuSearch('');
+                                tool.action();
+                              }}
+                              className="flex flex-col items-center gap-1.5 p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/40 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-400/50 transition-all group active:scale-95"
+                            >
+                              <div className="w-11 h-11 rounded-2xl bg-purple-500/10 dark:bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center group-hover:scale-110 transition-transform shadow-xs">
+                                <IconComp className="w-5 h-5" />
+                              </div>
+                              <span className="text-[10px] font-bold text-slate-800 dark:text-white leading-tight text-center line-clamp-2 w-full">
+                                {tool.label}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                   {/* System Settings Footer */}
                   <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-neutral-800 space-y-1.5">
                     <div className="grid grid-cols-2 gap-1.5">

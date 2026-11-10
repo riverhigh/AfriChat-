@@ -68,6 +68,7 @@ export const HealthcareModal: React.FC = () => {
   const [vaultConditions, setVaultConditions] = useState(healthVault.chronicConditions.join(', '));
   const [vaultEmergencyName, setVaultEmergencyName] = useState(healthVault.emergencyContactName);
   const [vaultEmergencyPhone, setVaultEmergencyPhone] = useState(healthVault.emergencyContactPhone);
+  const [vaultNdpaConsent, setVaultNdpaConsent] = useState(false);
 
   if (!isHealthModalOpen) return null;
 
@@ -117,6 +118,10 @@ export const HealthcareModal: React.FC = () => {
   };
 
   const handleSaveVault = () => {
+    if (!vaultNdpaConsent) {
+      alert('Under the Nigeria Data Protection Act (NDPA), you must check the consent box before saving personal medical records.');
+      return;
+    }
     updateHealthVault({
       bloodGroup: vaultBloodGroup as any,
       genotype: vaultGenotype as any,
@@ -250,7 +255,16 @@ export const HealthcareModal: React.FC = () => {
               </div>
 
               <div className="space-y-3">
-                {doctors.map((doc) => (
+                {doctors.length === 0 ? (
+                  <div className="py-12 px-4 text-center rounded-2xl bg-white dark:bg-neutral-950 border border-dashed border-rose-200 dark:border-rose-900/40">
+                    <Stethoscope className="w-8 h-8 text-rose-500/60 mx-auto mb-2" />
+                    <h4 className="text-xs font-bold text-slate-800 dark:text-white font-display">No Telehealth Doctors On Duty</h4>
+                    <p className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">
+                      Verified African medical doctors will appear here upon accreditation and going on duty.
+                    </p>
+                  </div>
+                ) : (
+                  doctors.map((doc) => (
                   <div
                     key={doc.id}
                     className="p-3.5 rounded-2xl bg-white dark:bg-neutral-950 border border-slate-200/80 dark:border-neutral-800 shadow-2xs hover:shadow-sm transition-all"
@@ -308,7 +322,8 @@ export const HealthcareModal: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                ))}
+                ))
+                )}
               </div>
             </div>
           )}

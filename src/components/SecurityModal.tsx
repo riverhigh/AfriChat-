@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, Lock, Key, ShieldCheck, CheckCircle2, HelpCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Lock, Key, ShieldCheck, CheckCircle2, HelpCircle, AlertTriangle, Clock } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 const PRESET_SECURITY_QUESTIONS = [
@@ -15,7 +15,8 @@ export const SecurityModal: React.FC = () => {
     isSecurityModalOpen,
     setIsSecurityModalOpen,
     securitySettings,
-    setPaymentPin,
+    updatePaymentPin,
+    verifyPaymentPinDetailed,
     setSecurityQuestion,
   } = useApp();
 
@@ -23,43 +24,86 @@ export const SecurityModal: React.FC = () => {
   const [oldPin, setOldPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
+  const [questionPin, setQuestionPin] = useState('');
   const [selectedQuestion, setSelectedQuestion] = useState(
     securitySettings.securityQuestion || PRESET_SECURITY_QUESTIONS[0]
   );
   const [securityAnswer, setSecurityAnswer] = useState(securitySettings.securityAnswer || '');
   const [savedSuccessMessage, setSavedSuccessMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [lockoutRemaining, setLockoutRemaining] = useState<number | null>(null);
+
+  // Monitor lockout countdown
+  useEffect(() => {
+    if (!securitySettings.lockoutUntil) {
+      setLockoutRemaining(null);
+      return;
+    }
+
+    const checkLock = () => {
+      const now = Date.now();
+      if (securitySettings.lockoutUntil && securitySettings.lockoutUntil > now) {
+        setLockoutRemaining(Math.ceil((securitySettings.lockoutUntil - now) / 1000));
+      } else {
+        setLockoutRemaining(null);
+      }
+    };
+
+    checkLock();
+    const interval = setInterval(checkLock, 1000);
+    return () => clearInterval(interval);
+  }, [securitySettings.lockoutUntil]);
 
   if (!isSecurityModalOpen) return null;
 
   const handleUpdatePin = (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMessage(null);
+    setSavedSuccessMessage(null);
+
     if (newPin.length !== 4 || !/^\d{4}$/.test(newPin)) {
-      alert('PIN must be exactly 4 numeric digits');
+      setErrorMessage('New PIN must be exactly 4 numeric digits.');
       return;
     }
     if (newPin !== confirmPin) {
-      alert('New PIN and Confirm PIN do not match');
+      setErrorMessage('New PIN and Confirm PIN do not match.');
       return;
     }
 
-    setPaymentPin(newPin);
+    const res = updatePaymentPin(newPin, oldPin);
+    if (!res.success) {
+      setErrorMessage(res.message);
+      return;
+    }
+
     setNewPin('');
     setConfirmPin('');
     setOldPin('');
-    setSavedSuccessMessage('4-digit Payment PIN successfully updated and secured!');
-    setTimeout(() => setSavedSuccessMessage(null), 3500);
+    setSavedSuccessMessage(res.message);
+    setTimeout(() => setSavedSuccessMessage(null), 4000);
   };
 
   const handleUpdateQuestions = (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMessage(null);
+    setSavedSuccessMessage(null);
+
     if (!securityAnswer.trim()) {
-      alert('Please enter an answer for your security question');
+      setErrorMessage('Please enter an answer for your security question.');
+      return;
+    }
+
+    // Require current PIN authorization to update security questions
+    const check = verifyPaymentPinDetailed(questionPin);
+    if (!check.success) {
+      setErrorMessage(check.message || 'Current PIN verification required to update security questions.');
       return;
     }
 
     setSecurityQuestion(selectedQuestion, securityAnswer.trim());
-    setSavedSuccessMessage('Security recovery question and answer saved!');
-    setTimeout(() => setSavedSuccessMessage(null), 3500);
+    setQuestionPin('');
+    setSavedSuccessMessage('Security recovery question and answer successfully updated!');
+    setTimeout(() => setSavedSuccessMessage(null), 4000);
   };
 
   return (
@@ -98,6 +142,14 @@ export const SecurityModal: React.FC = () => {
           </button>
         </div>
 
+        {/* Lockout Banner */}
+        {lockoutRemaining !== null && lockoutRemaining > 0 && (
+          <div className="mx-4 mt-3 p-3 bg-rose-600 text-white rounded-2xl flex items-center gap-2 shadow-lg animate-in slide-in-from-top-2 text-xs font-semibold">
+            <Clock className="w-4 h-4 shrink-0 animate-spin" />
+            <span>Anti-Fraud Lockout Active: Please wait {lockoutRemaining}s before attempting again.</span>
+          </div>
+        )}
+
         {/* Success Alert */}
         {savedSuccessMessage && (
           <div className="mx-4 mt-3 p-3 bg-emerald-600 text-white rounded-2xl flex items-center gap-2 shadow-lg animate-in slide-in-from-top-2 text-xs font-semibold">
@@ -106,11 +158,22 @@ export const SecurityModal: React.FC = () => {
           </div>
         )}
 
+        {/* Error Alert */}
+        {errorMessage && (
+          <div className="mx-4 mt-3 p-3 bg-red-500 text-white rounded-2xl flex items-center gap-2 shadow-lg animate-in slide-in-from-top-2 text-xs font-semibold">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="px-4 pt-3 flex gap-2 border-b border-slate-100 dark:border-slate-800 shrink-0">
           <button
             type="button"
-            onClick={() => setActiveTab('pin')}
+            onClick={() => {
+              setActiveTab('pin');
+              setErrorMessage(null);
+            }}
             className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-all ${
               activeTab === 'pin'
                 ? 'border-purple-600 text-purple-600 dark:text-purple-400'
@@ -121,7 +184,10 @@ export const SecurityModal: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab('questions')}
+            onClick={() => {
+              setActiveTab('questions');
+              setErrorMessage(null);
+            }}
             className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-all ${
               activeTab === 'questions'
                 ? 'border-purple-600 text-purple-600 dark:text-purple-400'
@@ -142,11 +208,28 @@ export const SecurityModal: React.FC = () => {
                   <span>Wallet Transaction Protection</span>
                 </div>
                 <p className="text-[11px] leading-relaxed">
-                  Your 4-digit PIN is required before wallet withdrawals, escrow releases, and posting jobs. Default is <strong>1234</strong>.
+                  Your 4-digit PIN is strictly required before withdrawals, releasing escrow funds, or modifying security settings.
                 </p>
               </div>
 
               <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Current 4-Digit PIN {securitySettings.paymentPin === '1234' && <span className="text-slate-400 font-normal">(Default is 1234)</span>}
+                  </label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={oldPin}
+                    onChange={(e) => setOldPin(e.target.value.replace(/\D/g, ''))}
+                    placeholder="••••"
+                    required
+                    disabled={lockoutRemaining !== null && lockoutRemaining > 0}
+                    className="w-full px-4 py-2.5 text-center text-xl font-bold tracking-widest font-mono bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:opacity-50"
+                  />
+                </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Enter New 4-Digit PIN
@@ -159,7 +242,8 @@ export const SecurityModal: React.FC = () => {
                     onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
                     placeholder="••••"
                     required
-                    className="w-full px-4 py-2.5 text-center text-xl font-bold tracking-widest font-mono bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    disabled={lockoutRemaining !== null && lockoutRemaining > 0}
+                    className="w-full px-4 py-2.5 text-center text-xl font-bold tracking-widest font-mono bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:opacity-50"
                   />
                 </div>
 
@@ -175,14 +259,16 @@ export const SecurityModal: React.FC = () => {
                     onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
                     placeholder="••••"
                     required
-                    className="w-full px-4 py-2.5 text-center text-xl font-bold tracking-widest font-mono bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    disabled={lockoutRemaining !== null && lockoutRemaining > 0}
+                    className="w-full px-4 py-2.5 text-center text-xl font-bold tracking-widest font-mono bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:opacity-50"
                   />
                 </div>
               </div>
 
               <button
                 type="submit"
-                className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md transition-all active:scale-98"
+                disabled={lockoutRemaining !== null && lockoutRemaining > 0}
+                className="w-full py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white rounded-xl text-xs font-bold shadow-md transition-all active:scale-98"
               >
                 Save New Payment PIN
               </button>
@@ -232,11 +318,29 @@ export const SecurityModal: React.FC = () => {
                     className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-purple-500"
                   />
                 </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Authorize with Current Payment PIN
+                  </label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={questionPin}
+                    onChange={(e) => setQuestionPin(e.target.value.replace(/\D/g, ''))}
+                    placeholder="••••"
+                    required
+                    disabled={lockoutRemaining !== null && lockoutRemaining > 0}
+                    className="w-full px-4 py-2 text-center text-lg font-bold tracking-widest font-mono bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:opacity-50"
+                  />
+                </div>
               </div>
 
               <button
                 type="submit"
-                className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md transition-all active:scale-98"
+                disabled={lockoutRemaining !== null && lockoutRemaining > 0}
+                className="w-full py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white rounded-xl text-xs font-bold shadow-md transition-all active:scale-98"
               >
                 Save Security Question & Answer
               </button>

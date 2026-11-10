@@ -52,6 +52,7 @@ export const LegalModal: React.FC = () => {
   const [contractDuration, setContractDuration] = useState('14 days from signing');
   const [specificTerms, setSpecificTerms] = useState('');
   const [governingState, setGoverningState] = useState('Lagos State, Nigeria');
+  const [legalIntermediaryConsent, setLegalIntermediaryConsent] = useState(false);
   const [signInput, setSignInput] = useState('');
 
   const [sosActiveMessage, setSosActiveMessage] = useState<string | null>(null);
@@ -66,6 +67,10 @@ export const LegalModal: React.FC = () => {
   };
 
   const handleGenerateContract = () => {
+    if (!legalIntermediaryConsent) {
+      alert('Please confirm that you acknowledge the legal intermediary disclaimer before generating this contract.');
+      return;
+    }
     if (!partyBName.trim() || !selectedTemplate) {
       alert('Please fill in the other party name and select a template.');
       return;
@@ -382,7 +387,12 @@ export const LegalModal: React.FC = () => {
                     </span>
 
                     <div className="space-y-3">
-                      {generatedContracts.map((cntr) => (
+                      {generatedContracts.length === 0 ? (
+                        <div className="p-4 text-center text-xs text-slate-400 bg-white dark:bg-neutral-950 rounded-2xl border border-dashed border-slate-200 dark:border-neutral-800">
+                          No active signed contracts yet. Select a template above to generate a smart legal deed.
+                        </div>
+                      ) : (
+                        generatedContracts.map((cntr) => (
                         <div
                           key={cntr.id}
                           className="p-3.5 rounded-2xl bg-white dark:bg-neutral-950 border border-slate-200/80 dark:border-neutral-800 shadow-2xs"
@@ -434,7 +444,8 @@ export const LegalModal: React.FC = () => {
                             </button>
                           </div>
                         </div>
-                      ))}
+                      ))
+                      )}
                     </div>
                   </div>
                 </div>
@@ -450,7 +461,16 @@ export const LegalModal: React.FC = () => {
               </div>
 
               <div className="space-y-3">
-                {lawyers.map((lawyer) => (
+                {lawyers.length === 0 ? (
+                  <div className="py-12 px-4 text-center rounded-2xl bg-white dark:bg-neutral-950 border border-dashed border-indigo-200 dark:border-indigo-900/40">
+                    <Scale className="w-8 h-8 text-indigo-500/60 mx-auto mb-2" />
+                    <h4 className="text-xs font-bold text-slate-800 dark:text-white font-display">No Attorneys On Duty</h4>
+                    <p className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">
+                      Accredited Nigerian Bar Association (NBA) attorneys will appear here upon verified check-in.
+                    </p>
+                  </div>
+                ) : (
+                  lawyers.map((lawyer) => (
                   <div
                     key={lawyer.id}
                     className="p-3.5 rounded-2xl bg-white dark:bg-neutral-950 border border-slate-200/80 dark:border-neutral-800 shadow-2xs hover:shadow-sm transition-all"
@@ -515,7 +535,8 @@ export const LegalModal: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                ))}
+                ))
+                )}
               </div>
             </div>
           )}

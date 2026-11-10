@@ -101,7 +101,7 @@ export const BottomNav: React.FC = () => {
           </span>
         </button>
 
-        {/* 5. Fyp Tab (FIFTH - Renamed from 'You' to 'Fyp') */}
+        {/* 5. Hub Tab (FIFTH - Personal, Stores, Wallet & Admin) */}
         <button
           type="button"
           onClick={() => setActiveTab('settings')}
@@ -118,12 +118,12 @@ export const BottomNav: React.FC = () => {
           }`}>
             <img
               src={currentUser.avatarUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80"}
-              alt="Fyp"
+              alt="Hub"
               className="w-full h-full rounded-full object-cover"
             />
           </div>
           <span className="text-[10px] mt-1 font-bold tracking-tight">
-            Fyp
+            Hub
           </span>
         </button>
       </div>

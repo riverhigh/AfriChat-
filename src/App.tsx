@@ -41,12 +41,20 @@ import { ReferralModal } from './components/ReferralModal';
 import { CelebrityVerificationModal } from './components/CelebrityVerificationModal';
 import { StoreRegistrationModal } from './components/StoreRegistrationModal';
 import { WritersGuildModal } from './components/WritersGuildModal';
+import { AdminDashboardModal } from './components/AdminDashboardModal';
+import { TutorCoursesModal } from './components/TutorCoursesModal';
+import { WhatsAppPhoneAuth } from './components/WhatsAppPhoneAuth';
 
 const AppContent: React.FC = () => {
-  const { activeChatId, activeTab } = useApp();
+  const { activeChatId, activeTab, isAuthenticated } = useApp();
   const [isVoiceRecorderOpen, setIsVoiceRecorderOpen] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
+
+  // Show WhatsApp Phone registration screen if not authenticated
+  if (!isAuthenticated) {
+    return <WhatsAppPhoneAuth />;
+  }
 
   return (
     <div className="fixed inset-0 w-full h-full bg-slate-900/10 dark:bg-black flex justify-center overflow-hidden text-slate-900 dark:text-white font-sans transition-colors select-none">
@@ -143,6 +151,9 @@ const AppContent: React.FC = () => {
 
         {/* African Writers Guild (Chapters, Buddy Read, Anti-AI Guarantee) */}
         <WritersGuildModal />
+        {/* Super Admin Console & Moderation Desk */}
+        <AdminDashboardModal />
+        <TutorCoursesModal />
       </div>
     </div>
   );

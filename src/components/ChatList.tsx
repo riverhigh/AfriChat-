@@ -283,11 +283,28 @@ export const ChatList: React.FC = () => {
         );
       })}
 
-        {filteredChats.length === 0 && (
+        {chats.length === 0 ? (
+          <div className="py-20 px-6 text-center">
+            <div className="w-16 h-16 rounded-3xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center mx-auto mb-4 border border-purple-500/20">
+              <MessageSquarePlus className="w-8 h-8" />
+            </div>
+            <h3 className="font-bold text-base text-slate-800 dark:text-slate-100 font-display">No conversations yet</h3>
+            <p className="text-xs text-slate-500 dark:text-neutral-400 mt-1.5 max-w-xs mx-auto leading-relaxed">
+              Start chatting with your contacts, join a group savings Ajo, or message verified African merchants.
+            </p>
+            <button
+              onClick={() => setIsContactsModalOpen(true)}
+              className="mt-5 px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-2xl shadow-md shadow-purple-600/20 transition-all active:scale-95 inline-flex items-center gap-2"
+            >
+              <MessageSquarePlus className="w-4 h-4" />
+              <span>Start a Chat</span>
+            </button>
+          </div>
+        ) : filteredChats.length === 0 ? (
           <div className="p-8 text-center text-slate-400 text-xs">
             No chats found matching &ldquo;{searchQuery}&rdquo;.
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Floating Action Button (FAB) */}

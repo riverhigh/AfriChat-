@@ -28,6 +28,7 @@ export const WalletModal: React.FC = () => {
   const [selectedBank, setSelectedBank] = useState('GTBank Nigeria');
   const [accountNumber, setAccountNumber] = useState('0123456789');
   const [accountName, setAccountName] = useState('Chioma Adebayo');
+  const [withdrawPin, setWithdrawPin] = useState('');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 

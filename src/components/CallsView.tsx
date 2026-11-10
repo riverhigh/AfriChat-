@@ -85,7 +85,25 @@ export const CallsView: React.FC = () => {
 
       {/* Call History */}
       <div className="divide-y divide-slate-100 dark:divide-slate-800/60">
-        {calls.map((call) => (
+        {calls.length === 0 ? (
+          <div className="py-16 px-4 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center mx-auto mb-3">
+              <PhoneCall className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-sm text-slate-800 dark:text-slate-200">No recent calls</h3>
+            <p className="text-xs text-slate-400 dark:text-neutral-500 mt-1 max-w-xs mx-auto">
+              Calls made or received via AfriChat will show up here. Use the dialpad or create a call link to connect.
+            </p>
+            <button
+              onClick={() => setShowKeypad(true)}
+              className="mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors inline-flex items-center gap-1.5"
+            >
+              <Phone className="w-3.5 h-3.5" />
+              <span>Open Dialpad</span>
+            </button>
+          </div>
+        ) : (
+          calls.map((call) => (
           <div
             key={call.id}
             className="flex items-center justify-between px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer"
@@ -134,7 +152,8 @@ export const CallsView: React.FC = () => {
               </button>
             </div>
           </div>
-        ))}
+          ))
+        )}
       </div>
 
       {/* Floating Action Button to Open Keypad */}

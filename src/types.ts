@@ -296,6 +296,10 @@ export interface UserProfile {
   phoneNumber: string;
   countryCode?: string;
   fullName: string;
+  username?: string;
+  bio?: string;
+  location?: string;
+  isOnline?: boolean;
   avatarUrl: string;
   about: string;
   isPhoneVerified?: boolean;
@@ -307,6 +311,8 @@ export interface UserProfile {
   celebrityCategory?: string;
   celebrityStageName?: string;
   isCreator?: boolean;
+  role?: 'user' | 'admin' | 'creator' | 'merchant';
+  isAdmin?: boolean;
   creatorPlan?: 'none' | 'gold' | 'creator_plus';
   platformFeeRate?: number;
 }
@@ -378,6 +384,8 @@ export interface SecuritySettings {
   paymentPin?: string;
   securityQuestion?: string;
   securityAnswer?: string;
+  failedAttempts?: number;
+  lockoutUntil?: number | null;
 }
 
 // 14. Service Booking & Appointment System Types (No limits African jobs)
@@ -908,4 +916,83 @@ export interface CelebrityVerificationApplication {
   proofDocumentUrl?: string;
   status: 'pending' | 'approved' | 'rejected';
   submittedAt: string;
+}
+
+// 28. African Tutor & Online Course Marketplace System
+export type CourseCategory =
+  | 'tech_coding'
+  | 'business_finance'
+  | 'languages_culture'
+  | 'creative_design'
+  | 'trades_engineering'
+  | 'academics_jamb';
+
+export interface CourseLesson {
+  id: string;
+  title: string;
+  durationMinutes: number;
+  videoUrl?: string;
+  notes?: string;
+  isPreview?: boolean;
+}
+
+export interface Course {
+  id: string;
+  tutorId: string;
+  tutorName: string;
+  tutorAvatar: string;
+  tutorIsBlueVerified: boolean;
+  title: string;
+  description: string;
+  category: CourseCategory;
+  price: number;
+  currency: CurrencyCode;
+  thumbnailUrl: string;
+  lessonsCount: number;
+  totalDurationHours: number;
+  enrolledStudentsCount: number;
+  rating: number;
+  reviewsCount: number;
+  lessons: CourseLesson[];
+  createdAt: string;
+  isEnrolledByMe?: boolean;
+}
+
+export interface TutorProfile {
+  isRegisteredTutor: boolean;
+  tutorName: string;
+  bio: string;
+  category: string;
+  hasBlueCheck: boolean; // 4k verified blue check condition
+  tier: 'starter_10' | 'unlimited_pro'; // 10 courses limit or unlimited (20k/mo)
+  coursesLimit: number;
+  activeCoursesCount: number;
+  totalEarnings: number;
+  registeredAt?: string;
+  renewalDate?: string;
+}
+
+
+// 24. Super Admin Console & Platform Moderation
+export interface AdminUserRecord {
+  id: string;
+  fullName: string;
+  phoneNumber: string;
+  avatarUrl: string;
+  role: 'user' | 'creator' | 'merchant' | 'admin';
+  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | null;
+  isPhoneVerified: boolean;
+  status: 'active' | 'suspended' | 'flagged';
+  joinedDate: string;
+  walletBalanceNgn: number;
+  ordersCount: number;
+}
+
+export interface AdminSystemBroadcast {
+  id: string;
+  title: string;
+  message: string;
+  level: 'info' | 'warning' | 'alert';
+  createdAt: string;
+  active: boolean;
 }

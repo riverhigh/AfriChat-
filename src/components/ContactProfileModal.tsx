@@ -110,12 +110,25 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
             {chat.isOnline && (
               <span className="absolute bottom-1 right-1 w-5 h-5 bg-emerald-500 border-3 border-black rounded-full" />
             )}
+            {chat.isCelebrityVerified && (
+              <span className="absolute -bottom-1 -left-1 w-7 h-7 bg-gradient-to-tr from-amber-400 to-amber-600 rounded-full flex items-center justify-center text-black shadow-lg border-2 border-black" title="Verified Celebrity">
+                <Star className="w-4 h-4 fill-white text-amber-900" />
+              </span>
+            )}
           </div>
 
           {/* Contact Name & Phone */}
-          <h1 className="text-xl font-bold text-white text-center tracking-tight leading-snug">
-            {chat.name}
-          </h1>
+          <div className="flex items-center gap-2 justify-center">
+            <h1 className="text-xl font-bold text-white text-center tracking-tight leading-snug">
+              {chat.name}
+            </h1>
+            {chat.isCelebrityVerified && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gradient-to-r from-amber-500 to-purple-600 text-white shadow-xs">
+                <Star className="w-3 h-3 fill-white text-amber-900" />
+                <span>Celebrity</span>
+              </span>
+            )}
+          </div>
           <p className="text-xs text-neutral-400 font-mono mt-0.5 tracking-wide">
             {contactPhone}
           </p>

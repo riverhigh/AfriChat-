@@ -119,15 +119,10 @@ export const StatusView: React.FC = () => {
           </p>
         </div>
 
-        {/* Unified Add Update Button */}
-        <button
-          onClick={() => setShowAddStoryMenu(true)}
-          className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors"
-          title="Add Status Story"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Add Story</span>
-        </button>
+        {/* Status Avatar Plus Guide */}
+        <span className="text-[11px] text-purple-600 dark:text-purple-400 font-semibold font-mono">
+          Tap + on Avatar
+        </span>
       </div>
 
       {/* My Status Section */}
@@ -376,8 +371,14 @@ export const StatusView: React.FC = () => {
                         className="w-8 h-8 rounded-full object-cover border border-slate-300 dark:border-neutral-700"
                       />
                       <div>
-                        <div className="text-xs font-bold text-slate-900 dark:text-white">
-                          {status.userName}
+                        <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                          <span>{status.userName}</span>
+                          {(status.userId === 'usr_africhat_official_admin' || status.userName === 'AfriChat Official') && (
+                            <span className="inline-flex items-center gap-0.5 text-[9px] font-mono font-bold bg-amber-500/20 text-amber-600 dark:text-amber-400 px-1.5 py-0.2 rounded-full border border-amber-500/30">
+                              <BadgeCheck className="w-3 h-3 text-amber-500" />
+                              <span>Official Admin</span>
+                            </span>
+                          )}
                         </div>
                         <div className="text-[10px] text-slate-400 font-mono">
                           {status.createdAt} · {status.expiresInHours}h left
@@ -488,6 +489,19 @@ export const StatusView: React.FC = () => {
               </div>
             );
           })}
+
+          {otherStatuses.length === 0 && creatorPosts.filter((p) => {
+            const c = creators.find((cr) => cr.id === p.creatorId);
+            return c?.isSubscribedByMe || c?.isFollowedByMe;
+          }).length === 0 && (
+            <div className="py-12 px-4 text-center rounded-3xl border border-dashed border-slate-200 dark:border-neutral-800 bg-slate-50/50 dark:bg-neutral-900/30">
+              <Clock className="w-8 h-8 text-slate-300 dark:text-neutral-700 mx-auto mb-2" />
+              <p className="text-xs font-bold text-slate-700 dark:text-neutral-300">No recent updates</p>
+              <p className="text-[11px] text-slate-400 dark:text-neutral-500 mt-1 max-w-xs mx-auto">
+                Status stories from your contacts and creators will appear here for 24 hours.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -754,42 +768,24 @@ export const StatusView: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid grid-cols-3 gap-2.5 pt-1">
+            <div className="grid grid-cols-2 gap-3 pt-1">
+              {/* Shared Photo & Video Button */}
               <button
                 type="button"
                 onClick={() => {
                   setShowAddStoryMenu(false);
                   setModalMode('device_photo');
                 }}
-                className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/30 border border-slate-200 dark:border-neutral-800 hover:border-purple-500/50 transition-all text-center group"
+                className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/30 border border-slate-200 dark:border-neutral-800 hover:border-purple-500/50 transition-all text-center group"
               >
-                <div className="w-11 h-11 rounded-2xl bg-purple-600/10 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition-colors">
-                  <Camera className="w-5 h-5" />
+                <div className="w-12 h-12 rounded-2xl bg-purple-600/10 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition-colors">
+                  <Camera className="w-6 h-6" />
                 </div>
                 <span className="text-xs font-bold text-slate-800 dark:text-neutral-200">
-                  Photo / Camera
+                  Photo or Video
                 </span>
-                <span className="text-[9px] text-slate-400">
-                  From device
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAddStoryMenu(false);
-                  setModalMode('device_video');
-                }}
-                className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/30 border border-slate-200 dark:border-neutral-800 hover:border-purple-500/50 transition-all text-center group"
-              >
-                <div className="w-11 h-11 rounded-2xl bg-purple-600/10 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition-colors">
-                  <Video className="w-5 h-5" />
-                </div>
-                <span className="text-xs font-bold text-slate-800 dark:text-neutral-200">
-                  Video Story
-                </span>
-                <span className="text-[9px] text-slate-400">
-                  Short video
+                <span className="text-[10px] text-purple-600 dark:text-purple-400 font-semibold">
+                  Camera & Device Upload
                 </span>
               </button>
 

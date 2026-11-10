@@ -22,6 +22,7 @@ export const EscrowModal: React.FC = () => {
     null
   );
   const [isReleasing, setIsReleasing] = useState(false);
+  const [releasePin, setReleasePin] = useState('');
 
   if (!activeEscrowModalOrder) return null;
 

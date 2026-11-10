@@ -1,4 +1,18 @@
+import {
+  initSocket,
+  joinChatRoom,
+  leaveChatRoom,
+  emitLiveMessage,
+  joinLiveSpace,
+  leaveLiveSpace,
+} from '../services/socket';
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import {
+  supabase,
+  isSupabaseConfigured,
+  fetchProfile,
+  mapProfileToUser,
+} from '../services/supabase';
 import {
   CurrencyCode,
   LanguageCode,
@@ -54,6 +68,10 @@ import {
   BookChapter,
   GroupReadSession,
   CelebrityVerificationApplication,
+  Course,
+  TutorProfile,
+  AdminUserRecord,
+  AdminSystemBroadcast,
 } from '../types';
 import {
   LOCALIZED_STRINGS,
@@ -65,10 +83,10 @@ import {
   MOCK_AUDIO_SPACES,
   MOCK_SCAM_DATABASE,
   MOCK_AJO_BALOGUN,
-  MOCK_FINANCIAL_POLL_SAMPLE,
+
   INITIAL_CURRENT_USER,
   MOCK_DEVICE_CONTACTS,
-  INITIAL_USER_MEMES,
+
   MOCK_DISPATCH_ORDERS,
   MOCK_JOB_POSTINGS,
   MOCK_SERVICE_PROVIDERS,
@@ -94,6 +112,10 @@ import {
   MOCK_CREATOR_FILES,
   MOCK_AFRI_BOOKS,
   MOCK_GROUP_READ_SESSIONS,
+  MOCK_COURSES,
+  INITIAL_TUTOR_PROFILE,
+  MOCK_ADMIN_USERS,
+  INITIAL_ADMIN_BROADCAST,
 } from '../data/mockData';
 
 interface ActiveCallState {
@@ -281,8 +303,11 @@ interface AppContextType {
   // 13. Security Settings (Payment PIN & Security Questions)
   securitySettings: SecuritySettings;
   setPaymentPin: (pin: string) => void;
+  updatePaymentPin: (newPin: string, oldPin?: string) => { success: boolean; message: string };
   setSecurityQuestion: (question: string, answer: string) => void;
   verifyPaymentPin: (pin: string) => boolean;
+  verifyPaymentPinDetailed: (pin: string) => { success: boolean; message?: string; lockedUntil?: number | null };
+  resetPinLockout: () => void;
   isSecurityModalOpen: boolean;
   setIsSecurityModalOpen: (val: boolean) => void;
   // 14. African Services & Appointment Booking (No Limit)
@@ -435,6 +460,33 @@ interface AppContextType {
   startGroupReadSession: (bookId: string, buddyName: string, buddyAvatar?: string) => GroupReadSession;
   sendGroupReadMessage: (sessionId: string, text: string) => void;
   updateGroupReadProgress: (sessionId: string, chapterIndex: number, page: number) => void;
+  // 28. African Tutor & Online Course Marketplace System
+  tutorProfile: TutorProfile;
+  courses: Course[];
+  isTutorModalOpen: boolean;
+  setIsTutorModalOpen: (val: boolean) => void;
+  activeLearningCourse: Course | null;
+  setActiveLearningCourse: (course: Course | null) => void;
+  registerAsTutor: (data: {
+    tutorName: string;
+    bio: string;
+    category: string;
+    payVerificationBlueCheck: boolean;
+    paymentMethod: 'wallet' | 'paystack';
+  }) => { success: boolean; message: string };
+  upgradeTutorUnlimited: (paymentMethod: 'wallet' | 'paystack') => { success: boolean; message: string };
+  publishCourse: (courseData: Omit<Course, 'id' | 'tutorId' | 'tutorName' | 'tutorAvatar' | 'tutorIsBlueVerified' | 'enrolledStudentsCount' | 'rating' | 'reviewsCount' | 'createdAt' | 'isEnrolledByMe'>) => { success: boolean; course?: Course; message: string };
+  enrollInCourse: (courseId: string, paymentMethod: 'wallet' | 'paystack') => { success: boolean; message: string };
+  // 29. Super Admin Console & Moderation
+  isAdminModalOpen: boolean;
+  setIsAdminModalOpen: (val: boolean) => void;
+  adminUsers: AdminUserRecord[];
+  toggleUserVerification: (userId: string, badge: 'blue' | 'gold' | 'creator_plus' | null) => void;
+  toggleUserSuspension: (userId: string) => void;
+  adminResolveEscrow: (orderId: string, action: 'release_to_seller' | 'refund_to_buyer', note: string) => { success: boolean; message: string };
+  systemBroadcast: AdminSystemBroadcast | null;
+  setSystemBroadcast: (broadcast: AdminSystemBroadcast | null) => void;
+  createAdminBroadcast: (title: string, message: string, level: 'info' | 'warning' | 'alert') => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -452,6 +504,27 @@ const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
   GHS: 'GH₵ ',
   ZAR: 'R ',
 };
+
+// ─── Data Version Nuke ───────────────────────────────────────────────────────
+// Bump this string whenever you need to wipe all stale cached/mock data.
+const AFRICHAT_DATA_VERSION = 'v3_clean_2026';
+(function nukeStaleMockData() {
+  if (typeof window === 'undefined') return;
+  const stored = localStorage.getItem('africhat_data_version');
+  if (stored !== AFRICHAT_DATA_VERSION) {
+    const keepKeys = new Set(['africhat_data_version', 'africhat_font_size', 'africhat_low_data_mode', 'africhat_language', 'africhat_currency', 'africhat_hide_phone_town']);
+    const toRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('africhat_') && !keepKeys.has(key)) {
+        toRemove.push(key);
+      }
+    }
+    toRemove.forEach((k) => localStorage.removeItem(k));
+    localStorage.setItem('africhat_data_version', AFRICHAT_DATA_VERSION);
+    console.log('[AfriChat] Stale data cleared, starting fresh.');
+  }
+})();
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [language, setLanguage] = useState<LanguageCode>('en');
@@ -493,7 +566,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isScanQrModalOpen, setIsScanQrModalOpen] = useState(false);
 
   // Town Communities & Anonymous Privacy
-  const [townCommunities, setTownCommunities] = useState<TownCommunity[]>(MOCK_TOWN_COMMUNITIES);
+  const [townCommunities, setTownCommunities] = useState<TownCommunity[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_town_communities_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && !parsed.some((c: TownCommunity) => c.id === 'town_cv_tech' || c.id === 'town_afritech_daily')) {
+          return parsed;
+        } else {
+          localStorage.removeItem('africhat_town_communities_v2');
+        }
+      }
+    } catch (e) {
+      console.warn(e);
+    }
+    return [];
+  });
   const [hidePhoneNumberInTown, setHidePhoneNumberInTown] = useState<boolean>(() => {
     return localStorage.getItem('africhat_hide_phone_town') === 'true';
   });
@@ -504,6 +592,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
   };
+  useEffect(() => {
+    try {
+      localStorage.setItem('africhat_town_communities_v2', JSON.stringify(townCommunities));
+    } catch (e) {}
+  }, [townCommunities]);
+
+
+
   const toggleJoinTownCommunity = (id: string) => {
     setTownCommunities((prev) =>
       prev.map((c) =>
@@ -513,10 +609,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Healthcare
-  const [doctors] = useState<DoctorProfile[]>(MOCK_DOCTORS);
-  const [queueTokens, setQueueTokens] = useState<HospitalQueueToken[]>(MOCK_QUEUE_TOKENS);
-  const [medicationReminders, setMedicationReminders] = useState<MedicationReminder[]>(MOCK_MEDICATION_REMINDERS);
-  const [healthVault, setHealthVault] = useState<HealthVaultRecord>(MOCK_HEALTH_VAULT);
+  const [doctors] = useState<DoctorProfile[]>([]);
+  const [queueTokens, setQueueTokens] = useState<HospitalQueueToken[]>([]);
+  const [medicationReminders, setMedicationReminders] = useState<MedicationReminder[]>([]);
+  const [healthVault, setHealthVault] = useState<HealthVaultRecord>({
+    bloodGroup: 'O+',
+    genotype: 'AA',
+    allergies: [],
+    chronicConditions: [],
+    emergencyContactName: '',
+    emergencyContactPhone: '',
+    emergencyNotes: '',
+    qrCodeId: '',
+    lastUpdated: 'Not configured yet',
+  });
   const [isHealthModalOpen, setIsHealthModalOpen] = useState(false);
 
   const bookDoctorAppointment = (doctorId: string, notes: string) => {
@@ -569,9 +675,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Legal & Smart Contracts
-  const [lawyers] = useState<LawyerProfile[]>(MOCK_LAWYERS);
+  const [lawyers] = useState<LawyerProfile[]>([]);
   const [contractTemplates] = useState<LegalContractTemplate[]>(MOCK_CONTRACT_TEMPLATES);
-  const [generatedContracts, setGeneratedContracts] = useState<GeneratedLegalContract[]>(MOCK_GENERATED_CONTRACTS);
+  const [generatedContracts, setGeneratedContracts] = useState<GeneratedLegalContract[]>([]);
   const [isLegalModalOpen, setIsLegalModalOpen] = useState(false);
 
   const generateLegalContract = (data: Omit<GeneratedLegalContract, 'id' | 'createdAt' | 'status' | 'signatureA'>): GeneratedLegalContract => {
@@ -600,10 +706,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // 21. African Creator & Direct Music Economy State
-  const [creators, setCreators] = useState<CreatorProfile[]>(MOCK_CREATORS);
-  const [creatorPosts, setCreatorPosts] = useState<CreatorPost[]>(MOCK_CREATOR_POSTS);
-  const [creatorShows, setCreatorShows] = useState<CreatorShowTicket[]>(MOCK_CREATOR_SHOWS);
-  const [creatorSongs, setCreatorSongs] = useState<CreatorSong[]>(MOCK_CREATOR_SONGS);
+  const [creators, setCreators] = useState<CreatorProfile[]>([]);
+  const [creatorPosts, setCreatorPosts] = useState<CreatorPost[]>([]);
+  const [creatorShows, setCreatorShows] = useState<CreatorShowTicket[]>([]);
+  const [creatorSongs, setCreatorSongs] = useState<CreatorSong[]>([]);
   const [isCreatorModalOpen, setIsCreatorModalOpen] = useState(false);
 
   const subscribeToCreator = (creatorId: string) => {
@@ -759,7 +865,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse artisan station:', e);
     }
-    return MOCK_ARTISAN_STATION;
+    return null;
   });
   const [isArtisanModalOpen, setIsArtisanModalOpen] = useState(false);
 
@@ -980,7 +1086,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse referral program:', e);
     }
-    return MOCK_REFERRAL_PROGRAM;
+    return {
+      referralCode: '',
+      totalEarned: 0,
+      availableBonus: 0,
+      invitedCount: 0,
+      pendingPayout: 0,
+      invitedContacts: [],
+    };
   });
   const [isReferralModalOpen, setIsReferralModalOpen] = useState(false);
 
@@ -1052,13 +1165,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [chats, setChats] = useState<ChatThread[]>(MOCK_CHATS);
-  const [messages, setMessages] = useState<Record<string, ChatMessage[]>>(INITIAL_MESSAGES);
-  const [calls, setCalls] = useState<CallLogItem[]>(MOCK_CALLS);
-  const [statuses, setStatuses] = useState<UserStatus[]>(MOCK_STATUSES);
+  const [chats, setChats] = useState<ChatThread[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_chats_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && !parsed.some((c: ChatThread) => c.id === 'chat_balogun_ajo' || c.id === 'chat_mama_chidinma')) {
+          return parsed;
+        } else {
+          localStorage.removeItem('africhat_chats_v2');
+        }
+      }
+    } catch (e) {
+      console.warn(e);
+    }
+    return [];
+  });
+  const [messages, setMessages] = useState<Record<string, ChatMessage[]>>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_messages_v2');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn(e);
+    }
+    return {};
+  });
+  const [calls, setCalls] = useState<CallLogItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_calls_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && !parsed.some((c: CallLogItem) => c.phone === '+234 803 123 4567' || c.name === 'Mama Chidinma Textiles')) {
+          return parsed;
+        } else {
+          localStorage.removeItem('africhat_calls_v2');
+        }
+      }
+    } catch (e) {
+      console.warn(e);
+    }
+    return [];
+  });
+  const [statuses, setStatuses] = useState<UserStatus[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_statuses_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && !parsed.some((s: UserStatus) => s.id === 'stat_chioma_01' || s.userName === 'Kelvin')) {
+          return parsed;
+        } else {
+          localStorage.removeItem('africhat_statuses_v2');
+        }
+      }
+    } catch (e) {
+      console.warn(e);
+    }
+    return [];
+  });
   const [activeViewingStatus, setActiveViewingStatus] = useState<UserStatus | null>(null);
   const [activeCheckoutProduct, setActiveCheckoutProduct] = useState<Product | null>(null);
-  const [escrowOrders, setEscrowOrders] = useState<EscrowOrder[]>([]);
+  const [escrowOrders, setEscrowOrders] = useState<EscrowOrder[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_escrow_orders_v2');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn(e);
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('africhat_escrow_orders_v2', JSON.stringify(escrowOrders));
+    } catch (e) {}
+  }, [escrowOrders]);
   const [activeEscrowModalOrder, setActiveEscrowModalOrder] = useState<EscrowOrder | null>(null);
   const [activeCall, setActiveCall] = useState<ActiveCallState | null>(null);
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
@@ -1070,7 +1250,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isMemeStudioOpen, setIsMemeStudioOpen] = useState(false);
 
   // 2. Live Audio Spaces / Street Radio State
-  const [audioSpaces, setAudioSpaces] = useState<AudioSpace[]>(MOCK_AUDIO_SPACES);
+  const [audioSpaces, setAudioSpaces] = useState<AudioSpace[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_audio_spaces_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && !parsed.some((s: AudioSpace) => s.id === 'space_afrobeats_01' || s.id === 'space_market_02')) {
+          return parsed;
+        } else {
+          localStorage.removeItem('africhat_audio_spaces_v2');
+        }
+      }
+    } catch (e) {
+      console.warn(e);
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('africhat_audio_spaces_v2', JSON.stringify(audioSpaces));
+    } catch (e) {}
+  }, [audioSpaces]);
   const [activeAudioSpace, setActiveAudioSpace] = useState<AudioSpace | null>(null);
 
   // 3. Scam Alert & Reputation Checker State
@@ -1090,21 +1291,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isFinancialPollModalOpen, setIsFinancialPollModalOpen] = useState(false);
 
   // 7. Ajo / Esusu Group Savings State
-  const [activeAjoGroup, setActiveAjoGroup] = useState<AjoGroup | null>(MOCK_AJO_BALOGUN);
+  const [activeAjoGroup, setActiveAjoGroup] = useState<AjoGroup | null>(null);
   const [isAjoModalOpen, setIsAjoModalOpen] = useState(false);
 
   // 8. Phone Number OTP Authentication & Identity State
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
     try {
       const saved = localStorage.getItem('africhat_user_profile_v2');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.phoneNumber && parsed.id !== 'usr_chioma_adebayo' && parsed.fullName !== 'Chioma Adebayo') {
+          return { ...parsed, isPhoneVerified: true };
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse user profile:', e);
     }
-    return INITIAL_CURRENT_USER;
+    return {
+      id: '',
+      phoneNumber: '',
+      fullName: 'AfriChat User',
+      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      about: 'Available · Using AfriChat',
+      createdAt: new Date().toISOString(),
+      lastSeen: 'online',
+      isPhoneVerified: false,
+    };
   });
+  useEffect(() => {
+    try {
+      const savedWallet = localStorage.getItem('africhat_user_wallet_v2');
+      if (savedWallet) {
+        const parsed = JSON.parse(savedWallet);
+        if (parsed && parsed.availableBalance === 125000) {
+          localStorage.setItem('africhat_user_wallet_v2', JSON.stringify({
+            availableBalance: 0,
+            escrowLockedBalance: 0,
+            currency: 'NGN',
+            transactions: []
+          }));
+          setWallet({
+            availableBalance: 0,
+            escrowLockedBalance: 0,
+            currency: 'NGN',
+            transactions: []
+          });
+        }
+      }
+      // Clean legacy mock service providers and other caches
+      const sp = localStorage.getItem('africhat_service_providers_v2');
+      if (sp && sp.includes('sp_tunde_mechanic')) {
+        localStorage.removeItem('africhat_service_providers_v2');
+      }
+      const st = localStorage.getItem('africhat_artisan_station_v2');
+      if (st && st.includes('st_kofi_workshop')) {
+        localStorage.removeItem('africhat_artisan_station_v2');
+      }
+    } catch (e) {}
+  }, []);
+
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return localStorage.getItem('africhat_is_authenticated') !== 'false';
+    try {
+      const profile = localStorage.getItem('africhat_user_profile_v2');
+      const isAuth = localStorage.getItem('africhat_is_authenticated');
+      if (isAuth === 'true' && profile) {
+        const parsed = JSON.parse(profile);
+        if (parsed && parsed.phoneNumber && parsed.id !== 'usr_chioma_adebayo' && parsed.fullName !== 'Chioma Adebayo') {
+          return true;
+        }
+      }
+    } catch (e) {
+      return false;
+    }
+    return false;
   });
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
@@ -1116,7 +1375,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse device contacts:', e);
     }
-    return MOCK_DEVICE_CONTACTS;
+    return [];
   });
   const [isContactsModalOpen, setIsContactsModalOpen] = useState(false);
 
@@ -1128,7 +1387,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse user memes:', e);
     }
-    return INITIAL_USER_MEMES;
+    return [];
   });
   const [isEmojiMemeDrawerOpen, setIsEmojiMemeDrawerOpen] = useState(false);
 
@@ -1145,7 +1404,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse dispatch orders:', e);
     }
-    return MOCK_DISPATCH_ORDERS;
+    return [];
   });
   const [isDispatchModalOpen, setIsDispatchModalOpen] = useState(false);
 
@@ -1157,7 +1416,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse jobs:', e);
     }
-    return MOCK_JOB_POSTINGS;
+    return [];
   });
   const [isJobBoardModalOpen, setIsJobBoardModalOpen] = useState(false);
   const [isPostJobModalOpen, setIsPostJobModalOpen] = useState(false);
@@ -1187,7 +1446,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse service providers:', e);
     }
-    return MOCK_SERVICE_PROVIDERS;
+    return [];
   });
   const [serviceBookings, setServiceBookings] = useState<ServiceBooking[]>(() => {
     try {
@@ -1196,7 +1455,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse service bookings:', e);
     }
-    return MOCK_SERVICE_BOOKINGS;
+    return [];
   });
   const [isServicesModalOpen, setIsServicesModalOpen] = useState(false);
   const [selectedServiceProvider, setSelectedServiceProvider] = useState<ServiceProvider | null>(null);
@@ -1209,7 +1468,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse delayed transfers:', e);
     }
-    return MOCK_DELAYED_TRANSFERS;
+    return [];
   });
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
 
@@ -1221,7 +1480,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse payroll employees:', e);
     }
-    return MOCK_PAYROLL_EMPLOYEES;
+    return [];
   });
   const [payrollLogs, setPayrollLogs] = useState<PayrollRunLog[]>(() => {
     try {
@@ -1230,7 +1489,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse payroll logs:', e);
     }
-    return MOCK_PAYROLL_LOGS;
+    return [];
   });
   const [isPayrollModalOpen, setIsPayrollModalOpen] = useState(false);
 
@@ -1245,33 +1504,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('Failed to parse saved wallet:', e);
     }
     return {
-      availableBalance: 125000,
+      availableBalance: 0,
       escrowLockedBalance: 0,
       currency: 'NGN',
-      transactions: [
-        {
-          id: 'tx_init_1',
-          type: 'topup',
-          title: 'Wallet Top-up via Paystack',
-          amount: 50000,
-          currency: 'NGN',
-          timestamp: 'Yesterday, 3:45 PM',
-          status: 'completed',
-          reference: 'PSK_78291034',
-          channel: 'paystack',
-        },
-        {
-          id: 'tx_init_2',
-          type: 'topup',
-          title: 'Direct Card Top-up',
-          amount: 75000,
-          currency: 'NGN',
-          timestamp: '2 days ago',
-          status: 'completed',
-          reference: 'PSK_45192083',
-          channel: 'paystack',
-        },
-      ],
+      transactions: [],
     };
   });
 
@@ -1594,6 +1830,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
 
+    // Broadcast live message via Socket.io
+    emitLiveMessage(chatId, newMsg);
+
     setChats((prev) =>
       prev.map((c) =>
         c.id === chatId
@@ -1773,7 +2012,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       currency: product.currency,
       status: 'escrow_secured',
       escrowPin: pin,
-      buyerName: buyerName || 'Chioma Adebayo',
+      buyerName: buyerName || currentUser.fullName || 'AfriChat User',
       sellerName: product.sellerName,
       deliveryAddress: deliveryAddress || '14 Admiralty Way, Lekki Phase 1, Lagos',
       createdAt: 'Just now',
@@ -1808,7 +2047,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const order = escrowOrders.find((o) => o.id === orderId);
     if (!order) return { success: false, message: 'Order not found' };
 
-    if (enteredPin.trim() !== order.escrowPin.trim() && enteredPin.trim() !== '1234') {
+    if (enteredPin.trim() !== order.escrowPin.trim() && !verifyPaymentPin(enteredPin)) {
       return { success: false, message: 'Invalid 4-digit PIN! Check your order receipt.' };
     }
 
@@ -1898,9 +2137,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 2. Live Audio Spaces / Street Radio Handlers
   const joinAudioSpace = (space: AudioSpace) => {
     setActiveAudioSpace(space);
+    joinLiveSpace(space.id, {
+      id: currentUser.id,
+      name: currentUser.fullName,
+      avatar: currentUser.avatarUrl,
+    });
   };
 
   const leaveAudioSpace = () => {
+    if (activeAudioSpace) {
+      leaveLiveSpace(activeAudioSpace.id, currentUser.id);
+    }
     setActiveAudioSpace(null);
   };
 
@@ -2030,7 +2277,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newPoll: FinancialPoll = {
       id: `poll_${Date.now()}`,
       title,
-      creatorName: 'Chioma Adebayo',
+      creatorName: currentUser.fullName || 'AfriChat User',
       stakePerVote,
       currency: 'NGN',
       totalStakeLocked: 0,
@@ -2104,10 +2351,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const wasSelected = opt.id === poll.userVotedOptionId;
       let names = [...opt.voterNames];
       if (wasSelected) {
-        names = names.filter((n) => n !== 'Chioma (You)');
+        names = names.filter((n) => n !== currentUser.fullName ? `${currentUser.fullName} (You)` : 'You');
       }
-      if (isSelected && !names.includes('Chioma (You)')) {
-        names.push('Chioma (You)');
+      if (isSelected && !names.includes(currentUser.fullName ? `${currentUser.fullName} (You)` : 'You')) {
+        names.push(currentUser.fullName ? `${currentUser.fullName} (You)` : 'You');
       }
       return {
         ...opt,
@@ -2226,22 +2473,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       transactions: [newTx, ...prev.transactions],
     }));
 
-    const updatedUser: UserProfile = {
-      ...currentUser,
-      verificationBadge: badge,
-      isCreator: badge === 'gold' || badge === 'creator_plus' ? true : currentUser.isCreator,
-      creatorPlan: badge === 'creator_plus' ? 'creator_plus' : badge === 'gold' ? 'gold' : currentUser.creatorPlan,
-      platformFeeRate: feeRate,
-      verificationExpiresAt: '30 days remaining',
-    };
-
-    setCurrentUser(updatedUser);
-    localStorage.setItem('africhat_user_profile_v2', JSON.stringify(updatedUser));
-
-    return {
-      success: true,
-      message: `🎉 Success! You are now verified on ${badgeTitle}! You can now host Ajo clubs and enjoy your verified benefits.`,
-    };
+    return { success: true, message: `Badge activated successfully!` };
   };
 
   const createAjoGroup = (ajoData: {
@@ -2250,85 +2482,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     frequency: 'weekly' | 'monthly';
     totalRounds: number;
     rules?: string;
-  }) => {
-    if (!currentUser.verificationBadge) {
-      return {
-        success: false,
-        requiresVerification: true,
-        message: 'Hosting an Ajo / Esusu group requires an active Blue Checkmark (₦4,000/mo, 2% fee) or Gold Creator Checkmark (₦11,000/mo) to guarantee anti-default trust.',
-      };
+  }): { success: boolean; requiresVerification?: boolean; message: string } => {
+    if (!currentUser.isPhoneVerified) {
+      return { success: false, requiresVerification: true, message: 'Phone verification required to create an Ajo group.' };
     }
-
-    const newAjo: AjoGroup = {
+    const newGroup: AjoGroup = {
       id: `ajo_${Date.now()}`,
       name: ajoData.name,
-      description: `Verified Ajo Club hosted by ${currentUser.fullName}`,
+      description: '',
       cycleContributionAmount: ajoData.cycleContributionAmount,
       currency: 'NGN',
       frequency: ajoData.frequency,
       totalRounds: ajoData.totalRounds,
       currentRound: 1,
-      nextPayoutDate: ajoData.frequency === 'weekly' ? 'Next Friday, 4:00 PM' : 'End of Month',
-      currentRecipientName: `${currentUser.fullName} (Host)`,
-      totalPoolPerRound: ajoData.cycleContributionAmount * ajoData.totalRounds,
-      rules:
-        ajoData.rules ||
-        'Smart Escrow rules enforced: missed cycles will result in automatic debit freeze and bad debt flag.',
+      totalPoolPerRound: ajoData.cycleContributionAmount,
+      currentRecipientName: currentUser.fullName,
       members: [
         {
-          id: 'm_host',
-          name: `${currentUser.fullName} (Host)`,
-          avatar:
-            currentUser.avatarUrl ||
-            'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-          phone: currentUser.phoneNumber || '+2348030001122',
+          id: 'm1',
+          name: currentUser.fullName,
+          avatar: currentUser.avatarUrl || '',
+          phone: currentUser.phoneNumber,
+          hasPaidCurrentCycle: false,
           payoutPosition: 1,
-          payoutDate: 'Round 1 (Current)',
-          hasPaidCurrentCycle: true,
-          isReceivedPayout: false,
-        },
-        {
-          id: 'm_2',
-          name: 'Ibrahim Danladi',
-          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-          phone: '+2348021112233',
-          payoutPosition: 2,
-          payoutDate: 'Round 2',
-          hasPaidCurrentCycle: true,
-          isReceivedPayout: false,
-        },
-        {
-          id: 'm_3',
-          name: 'Folake Adeleke',
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-          phone: '+2348054445566',
-          payoutPosition: 3,
-          payoutDate: 'Round 3',
-          hasPaidCurrentCycle: false,
-          isReceivedPayout: false,
-        },
-        {
-          id: 'm_4',
-          name: 'Emeka Okafor',
-          avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-          phone: '+2348097778899',
-          payoutPosition: 4,
-          payoutDate: 'Round 4',
-          hasPaidCurrentCycle: false,
+          payoutDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString(),
           isReceivedPayout: false,
         },
       ],
+      nextPayoutDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString(),
+      rules: ajoData.rules || '',
     };
-
-    setActiveAjoGroup(newAjo);
-    return {
-      success: true,
-      requiresVerification: false,
-      message: `🎉 "${ajoData.name}" has been created! Total pool of ₦${newAjo.totalPoolPerRound.toLocaleString()} per round is now active under smart escrow.`,
-    };
+    setActiveAjoGroup(newGroup);
+    return { success: true, message: `Ajo group "${ajoData.name}" created successfully!` };
   };
 
-  // 8. Phone OTP Auth Handlers
   const loginWithPhone = (
     phoneNumber: string,
     fullName: string,
@@ -2343,6 +2530,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       about: about || 'Hey there! I am using AfriChat.',
       createdAt: new Date().toISOString(),
       lastSeen: 'online',
+      isPhoneVerified: true,
     };
     setCurrentUser(updatedUser);
     setIsAuthenticated(true);
@@ -2596,13 +2784,102 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  // 13. Security Handlers
-  const setPaymentPin = (pin: string) => {
+  // 13. Security Handlers & Anti-Brute-Force Protection
+  const WEAK_PINS = ['0000', '1111', '2222', '3333', '4444', '5555', '6666', '7777', '8888', '9999', '1234', '4321', '0123', '9876'];
+
+  const verifyPaymentPinDetailed = (pin: string): { success: boolean; message?: string; lockedUntil?: number | null } => {
+    const now = Date.now();
+    if (securitySettings.lockoutUntil && securitySettings.lockoutUntil > now) {
+      const remainingSeconds = Math.ceil((securitySettings.lockoutUntil - now) / 1000);
+      return {
+        success: false,
+        message: `Security Lockout Active: Too many failed attempts. Try again in ${remainingSeconds}s.`,
+        lockedUntil: securitySettings.lockoutUntil,
+      };
+    }
+
+    const currentPin = (securitySettings.paymentPin || '1234').trim();
+    if (currentPin === pin.trim()) {
+      if ((securitySettings.failedAttempts ?? 0) > 0 || securitySettings.lockoutUntil) {
+        setSecuritySettings((prev) => {
+          const updated = { ...prev, failedAttempts: 0, lockoutUntil: null };
+          localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
+          return updated;
+        });
+      }
+      return { success: true };
+    }
+
+    const nextAttempts = (securitySettings.failedAttempts || 0) + 1;
+    const isLocked = nextAttempts >= 5;
+    const lockoutUntil = isLocked ? now + 180000 : null;
+
     setSecuritySettings((prev) => {
-      const updated = { ...prev, hasPaymentPin: true, paymentPin: pin };
+      const updated = { ...prev, failedAttempts: nextAttempts, lockoutUntil };
       localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
       return updated;
     });
+
+    if (isLocked) {
+      return {
+        success: false,
+        message: 'Security Alert: 5 failed PIN attempts reached. Account locked for 3 minutes for anti-fraud protection.',
+        lockedUntil: lockoutUntil,
+      };
+    }
+
+    const remaining = 5 - nextAttempts;
+    return {
+      success: false,
+      message: `Incorrect PIN. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining before security lockout.`,
+    };
+  };
+
+  const verifyPaymentPin = (pin: string): boolean => {
+    return verifyPaymentPinDetailed(pin).success;
+  };
+
+  const resetPinLockout = () => {
+    setSecuritySettings((prev) => {
+      const updated = { ...prev, failedAttempts: 0, lockoutUntil: null };
+      localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const updatePaymentPin = (newPin: string, oldPin?: string): { success: boolean; message: string } => {
+    const currentPin = (securitySettings.paymentPin || '1234').trim();
+    
+    // Verify old PIN if one was already set
+    if (securitySettings.hasPaymentPin && currentPin) {
+      if (!oldPin) {
+        return { success: false, message: 'Current 4-digit PIN is required to change PIN.' };
+      }
+      const check = verifyPaymentPinDetailed(oldPin);
+      if (!check.success) {
+        return { success: false, message: check.message || 'Current PIN verification failed.' };
+      }
+    }
+
+    if (!newPin || newPin.length !== 4 || !/^\d{4}$/.test(newPin)) {
+      return { success: false, message: 'New PIN must be exactly 4 numeric digits.' };
+    }
+
+    if (WEAK_PINS.includes(newPin)) {
+      return { success: false, message: 'PIN is too weak or common (e.g. 1234, 0000, 1111). Please choose a stronger PIN.' };
+    }
+
+    setSecuritySettings((prev) => {
+      const updated = { ...prev, hasPaymentPin: true, paymentPin: newPin, failedAttempts: 0, lockoutUntil: null };
+      localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
+      return updated;
+    });
+
+    return { success: true, message: 'Payment PIN successfully updated and secured!' };
+  };
+
+  const setPaymentPin = (pin: string) => {
+    updatePaymentPin(pin);
   };
 
   const setSecurityQuestion = (question: string, answer: string) => {
@@ -2611,11 +2888,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('africhat_security_settings', JSON.stringify(updated));
       return updated;
     });
-  };
-
-  const verifyPaymentPin = (pin: string): boolean => {
-    if (!securitySettings.paymentPin) return true;
-    return securitySettings.paymentPin.trim() === pin.trim();
   };
 
   // 14. African Services & Appointment Booking Handlers
@@ -3094,7 +3366,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse store sub:', e);
     }
-    return MOCK_STORE_SUBSCRIPTION;
+    return {
+      isRegistered: false,
+      tier: null,
+      storeName: '',
+      category: '',
+      description: '',
+      itemsLimit: 0,
+      itemsUsed: 0,
+      expiresAt: '',
+    };
   });
 
   const subscribeStoreTier = (
@@ -3162,7 +3443,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse creator files:', e);
     }
-    return MOCK_CREATOR_FILES;
+    return [];
   });
 
   const buyCreatorFile = (fileId: string) => {
@@ -3322,7 +3603,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse books:', e);
     }
-    return MOCK_AFRI_BOOKS;
+    return [];
   });
   const [activeReadingBook, setActiveReadingBook] = useState<AfriBook | null>(null);
   const [activeReadingChapterIndex, setActiveReadingChapterIndex] = useState<number>(0);
@@ -3335,7 +3616,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse group read:', e);
     }
-    return MOCK_GROUP_READ_SESSIONS;
+    return [];
   });
   const [activeGroupReadSession, setActiveGroupReadSession] = useState<GroupReadSession | null>(null);
 
@@ -3583,6 +3864,427 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
 
+  
+  // 28. African Tutor & Online Course Marketplace System State
+  const [tutorProfile, setTutorProfile] = useState<TutorProfile>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_tutor_profile');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse tutor profile:', e);
+    }
+    return {
+      isRegisteredTutor: false,
+      fullName: '',
+      headline: '',
+      bio: '',
+      rating: 0,
+      totalStudents: 0,
+      totalEarnedNgn: 0,
+      avatarUrl: '',
+      hasBlueVerificationBadge: false,
+      maxCoursesAllowed: 0,
+    };
+  });
+
+  const [courses, setCourses] = useState<Course[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_courses');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse courses:', e);
+    }
+    return [];
+  });
+
+  const [isTutorModalOpen, setIsTutorModalOpen] = useState(false);
+  const [activeLearningCourse, setActiveLearningCourse] = useState<Course | null>(null);
+
+  const registerAsTutor = (data: {
+    tutorName: string;
+    bio: string;
+    category: string;
+    payVerificationBlueCheck: boolean;
+    paymentMethod: 'wallet' | 'paystack';
+  }) => {
+    const regFee = 5000;
+    const blueCheckFee = data.payVerificationBlueCheck ? 4000 : 0;
+    const totalFee = regFee + blueCheckFee;
+
+    if (data.paymentMethod === 'wallet' && wallet.availableBalance < totalFee) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance for ₦${totalFee.toLocaleString()} (₦5,000 Tutor Reg + ${blueCheckFee > 0 ? '₦4,000 Blue Check' : ''}). Please top up your wallet or pay via Paystack.`,
+      };
+    }
+
+    if (data.paymentMethod === 'wallet') {
+      const newTx: WalletTransaction = {
+        id: `tx_tutor_reg_${Date.now()}`,
+        type: 'transfer_out',
+        title: `Certified Tutor Registration Fee (₦${totalFee.toLocaleString()})`,
+        amount: totalFee,
+        currency: 'NGN',
+        timestamp: 'Just now',
+        status: 'completed',
+        channel: 'wallet',
+      };
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - totalFee,
+        transactions: [newTx, ...prev.transactions],
+      }));
+    }
+
+    if (data.payVerificationBlueCheck || currentUser.verificationBadge) {
+      setCurrentUser((prev) => ({
+        ...prev,
+        verificationBadge: 'blue',
+      }));
+    }
+
+    const updatedProfile: TutorProfile = {
+      isRegisteredTutor: true,
+      tutorName: data.tutorName,
+      bio: data.bio,
+      category: data.category,
+      hasBlueCheck: true,
+      tier: 'starter_10',
+      coursesLimit: 10,
+      activeCoursesCount: 0,
+      totalEarnings: 0,
+      registeredAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    };
+
+    setTutorProfile(updatedProfile);
+    localStorage.setItem('africhat_tutor_profile', JSON.stringify(updatedProfile));
+
+    return {
+      success: true,
+      message: '🎉 Congratulations! You are now a Registered AfriChat Certified Tutor with Verified Blue Check status. You can publish up to 10 courses!',
+    };
+  };
+
+  const upgradeTutorUnlimited = (paymentMethod: 'wallet' | 'paystack') => {
+    const proFee = 20000;
+    if (paymentMethod === 'wallet' && wallet.availableBalance < proFee) {
+      return {
+        success: false,
+        message: 'Insufficient wallet balance for ₦20,000 Unlimited Pro Tutor plan. Please top up your wallet or use Paystack.',
+      };
+    }
+
+    if (paymentMethod === 'wallet') {
+      const newTx: WalletTransaction = {
+        id: `tx_tutor_unlimited_${Date.now()}`,
+        type: 'transfer_out',
+        title: 'Tutor Unlimited Pro Subscription (₦20,000 / month)',
+        amount: proFee,
+        currency: 'NGN',
+        timestamp: 'Just now',
+        status: 'completed',
+        channel: 'wallet',
+      };
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - proFee,
+        transactions: [newTx, ...prev.transactions],
+      }));
+    }
+
+    const updatedProfile: TutorProfile = {
+      ...tutorProfile,
+      tier: 'unlimited_pro',
+      coursesLimit: 999999,
+      renewalDate: 'In 30 days',
+    };
+
+    setTutorProfile(updatedProfile);
+    localStorage.setItem('africhat_tutor_profile', JSON.stringify(updatedProfile));
+
+    return {
+      success: true,
+      message: '🚀 Upgraded to Unlimited Pro Tutor Plan! You can now publish unlimited courses on AfriChat with zero restrictions.',
+    };
+  };
+
+  const publishCourse = (
+    courseData: Omit<Course, 'id' | 'tutorId' | 'tutorName' | 'tutorAvatar' | 'tutorIsBlueVerified' | 'enrolledStudentsCount' | 'rating' | 'reviewsCount' | 'createdAt' | 'isEnrolledByMe'>
+  ) => {
+    if (!tutorProfile.isRegisteredTutor) {
+      return {
+        success: false,
+        message: 'Tutor Registration Required: You must register as a tutor (₦5,000 fee + ₦4,000 Blue Check) before publishing courses.',
+      };
+    }
+
+    const myCoursesCount = courses.filter((c) => c.tutorId === currentUser.id).length;
+    if (myCoursesCount >= tutorProfile.coursesLimit) {
+      return {
+        success: false,
+        message: `Course limit reached (${tutorProfile.coursesLimit} courses). Upgrade to the ₦20,000/month Unlimited Pro Plan to add more courses.`,
+      };
+    }
+
+    const newCourse: Course = {
+      ...courseData,
+      id: `crs_${Date.now()}`,
+      tutorId: currentUser.id,
+      tutorName: tutorProfile.tutorName || currentUser.fullName,
+      tutorAvatar: currentUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      tutorIsBlueVerified: true,
+      enrolledStudentsCount: 0,
+      rating: 5.0,
+      reviewsCount: 1,
+      createdAt: 'Just now',
+      isEnrolledByMe: true,
+    };
+
+    const updatedCourses = [newCourse, ...courses];
+    setCourses(updatedCourses);
+    localStorage.setItem('africhat_courses', JSON.stringify(updatedCourses));
+
+    const updatedProfile: TutorProfile = {
+      ...tutorProfile,
+      activeCoursesCount: (tutorProfile.activeCoursesCount || 0) + 1,
+    };
+    setTutorProfile(updatedProfile);
+    localStorage.setItem('africhat_tutor_profile', JSON.stringify(updatedProfile));
+
+    return {
+      success: true,
+      course: newCourse,
+      message: `📚 "${newCourse.title}" published successfully to AfriChat Course Academy!`,
+    };
+  };
+
+  const enrollInCourse = (courseId: string, paymentMethod: 'wallet' | 'paystack') => {
+    const course = courses.find((c) => c.id === courseId);
+    if (!course) return { success: false, message: 'Course not found' };
+
+    if (course.isEnrolledByMe) {
+      return { success: false, message: 'You are already enrolled in this course! Open the classroom tab to start learning.' };
+    }
+
+    if (paymentMethod === 'wallet' && wallet.availableBalance < course.price) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance to enroll for ${CURRENCY_SYMBOLS[course.currency]}${course.price.toLocaleString()}. Please top up your wallet or pay via Paystack.`,
+      };
+    }
+
+    if (paymentMethod === 'wallet') {
+      const newTx: WalletTransaction = {
+        id: `tx_enroll_${Date.now()}`,
+        type: 'transfer_out',
+        title: `Course Enrollment: ${course.title}`,
+        amount: course.price,
+        currency: course.currency,
+        timestamp: 'Just now',
+        status: 'completed',
+        channel: 'wallet',
+      };
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - course.price,
+        transactions: [newTx, ...prev.transactions],
+      }));
+    }
+
+    const updatedCourses = courses.map((c) =>
+      c.id === courseId
+        ? { ...c, isEnrolledByMe: true, enrolledStudentsCount: c.enrolledStudentsCount + 1 }
+        : c
+    );
+    setCourses(updatedCourses);
+    localStorage.setItem('africhat_courses', JSON.stringify(updatedCourses));
+
+    return {
+      success: true,
+      message: `🎓 Enrolled in "${course.title}"! Full curriculum, video lessons, and syllabus unlocked with Escrow learner guarantee.`,
+    };
+  };
+
+
+  // Real-Time Socket.io Live Gateway Connection
+  useEffect(() => {
+    const socket = initSocket({
+      id: currentUser.id,
+      name: currentUser.fullName,
+      avatar: currentUser.avatarUrl,
+    });
+
+    const handleIncomingMessage = ({ chatId, message }: { chatId: string; message: ChatMessage }) => {
+      setMessages((prev) => {
+        const list = prev[chatId] || [];
+        if (list.some((m) => m.id === message.id)) return prev;
+        return {
+          ...prev,
+          [chatId]: [...list, message],
+        };
+      });
+    };
+
+    socket.on('new_message', handleIncomingMessage);
+
+    return () => {
+      socket.off('new_message', handleIncomingMessage);
+    };
+  }, [currentUser]);
+
+  // Join active chat room when switching chats
+  useEffect(() => {
+    if (activeChatId) {
+      joinChatRoom(activeChatId);
+      return () => {
+        leaveChatRoom(activeChatId);
+      };
+    }
+  }, [activeChatId]);
+
+
+  // 29. Super Admin Console & Moderation State
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_admin_users');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn(e);
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('africhat_admin_users', JSON.stringify(adminUsers));
+    } catch (e) {}
+  }, [adminUsers]);
+
+  const [systemBroadcast, setSystemBroadcast] = useState<AdminSystemBroadcast | null>(() => {
+    try {
+      const saved = localStorage.getItem('africhat_system_broadcast');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  });
+
+  useEffect(() => {
+    try {
+      if (systemBroadcast) {
+        localStorage.setItem('africhat_system_broadcast', JSON.stringify(systemBroadcast));
+      } else {
+        localStorage.removeItem('africhat_system_broadcast');
+      }
+    } catch (e) {}
+  }, [systemBroadcast]);
+
+  const toggleUserVerification = (userId: string, badge: 'blue' | 'gold' | 'creator_plus' | null) => {
+    setAdminUsers((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, verificationBadge: badge } : u))
+    );
+    if (currentUser.id === userId) {
+      setCurrentUser((prev) => ({ ...prev, verificationBadge: badge }));
+    }
+  };
+
+  const toggleUserSuspension = (userId: string) => {
+    setAdminUsers((prev) =>
+      prev.map((u) =>
+        u.id === userId
+          ? { ...u, status: u.status === 'suspended' ? 'active' : 'suspended' }
+          : u
+      )
+    );
+  };
+
+  const adminResolveEscrow = (orderId: string, action: 'release_to_seller' | 'refund_to_buyer', note: string) => {
+    const order = escrowOrders.find((o) => o.id === orderId);
+    if (!order) return { success: false, message: 'Escrow order not found' };
+
+    setEscrowOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              status: (action === 'release_to_seller' ? 'funds_released' : 'disputed') as import('../types').EscrowStatus,
+              updatedAt: 'Just now',
+            }
+          : o
+      )
+    );
+
+    setWallet((prev) => ({
+      ...prev,
+      escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - order.totalAmount),
+      transactions: [
+        {
+          id: `tx_${Date.now()}`,
+          type: action === 'release_to_seller' ? 'escrow_release' : 'topup',
+          amount: order.totalAmount,
+          currency: order.currency,
+          title: action === 'release_to_seller'
+            ? `Admin Escrow Force-Release: ${order.product.title} (Ref: ${order.id})`
+            : `Admin Escrow Refund: ${order.product.title} (Ref: ${order.id} - ${note})`,
+          channel: 'wallet',
+          timestamp: 'Just now',
+          status: 'completed',
+        },
+        ...prev.transactions,
+      ],
+    }));
+
+    return {
+      success: true,
+      message:
+        action === 'release_to_seller'
+          ? `Escrow #${orderId} released to seller ${order.sellerName}.`
+          : `Escrow #${orderId} refunded to buyer ${order.buyerName}.`,
+    };
+  };
+
+  const createAdminBroadcast = (title: string, message: string, level: 'info' | 'warning' | 'alert' = 'info') => {
+    const newBroadcast: AdminSystemBroadcast = {
+      id: `bc_${Date.now()}`,
+      title,
+      message,
+      level,
+      createdAt: 'Just now',
+      active: true,
+    };
+    setSystemBroadcast(newBroadcast);
+
+    // Push directly to users' Updates tab as an official status story
+    const adminStatus: UserStatus = {
+      id: `stat_admin_${Date.now()}`,
+      userId: 'usr_africhat_official_admin',
+      userName: 'AfriChat Official',
+      userAvatar: '/favicon.svg',
+      caption: `📢 ${title}: ${message}`,
+      statusType: 'thought',
+      thoughtBg: level === 'alert' 
+        ? 'from-rose-950 via-purple-950 to-black' 
+        : level === 'warning'
+        ? 'from-amber-950 via-purple-950 to-black'
+        : 'from-purple-900 via-indigo-950 to-black',
+      createdAt: 'Just now',
+      expiresInHours: 48,
+      viewsCount: 1,
+      likesCount: 0,
+      hasLikedByMe: false,
+      isMe: false,
+      viewers: [],
+    };
+
+    setStatuses((prev) => {
+      const updated = [adminStatus, ...prev.filter((s) => s.id !== adminStatus.id)];
+      try {
+        localStorage.setItem('africhat_statuses_v2', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -3721,8 +4423,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // 13. Security Settings (Payment PIN & Security Questions)
         securitySettings,
         setPaymentPin,
+        updatePaymentPin,
         setSecurityQuestion,
         verifyPaymentPin,
+        verifyPaymentPinDetailed,
+        resetPinLockout,
         isSecurityModalOpen,
         setIsSecurityModalOpen,
         // 14. African Services & Appointment Booking (No Limit)
@@ -3852,6 +4557,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         startGroupReadSession,
         sendGroupReadMessage,
         updateGroupReadProgress,
+        // 28. African Tutor & Online Course Marketplace System
+        tutorProfile,
+        courses,
+        isTutorModalOpen,
+        setIsTutorModalOpen,
+        activeLearningCourse,
+        setActiveLearningCourse,
+        registerAsTutor,
+        upgradeTutorUnlimited,
+        publishCourse,
+        enrollInCourse,
+        // 29. Super Admin Console & Moderation
+        isAdminModalOpen,
+        setIsAdminModalOpen,
+        adminUsers,
+        toggleUserVerification,
+        toggleUserSuspension,
+        adminResolveEscrow,
+        systemBroadcast,
+        setSystemBroadcast,
+        createAdminBroadcast,
       }}
     >
       {children}
