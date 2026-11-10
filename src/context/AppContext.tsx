@@ -20,6 +20,7 @@ export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
   return '';
 };
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
 import {
   supabase,
   isSupabaseConfigured,
@@ -27,6 +28,11 @@ import {
   mapProfileToUser,
 } from '../services/supabase';
 import {
+  FeatureFlags,
+  ErrandRunner,
+  ErrandItem,
+  ErrandOrder,
+  GamifyMilestone,
   CurrencyCode,
   LanguageCode,
   Product,
@@ -638,6 +644,227 @@ const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // ── Feature Flags System (Wallet as Master Hub) ──────────────────────────
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(() => {
+    try {
+      const saved = localStorage.getItem('AGC_feature_flags_v1');
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return {
+      wallet: true, market: true, artisan: true, errands: true, ajo: true,
+      payroll: true, writers: true, creator: true, escrow: true, tutor: true,
+      dispatch: true, calls: true, status: true, town: true, audioSpaces: true,
+      healthcare: true, legal: true, jobs: true,
+    };
+  });
+
+  const isFeatureEnabled = (key: keyof FeatureFlags): boolean => {
+    if (key === 'wallet') return featureFlags.wallet;
+    const WALLET_DEPENDENTS: (keyof FeatureFlags)[] = [
+      'market', 'artisan', 'errands', 'ajo', 'payroll', 'writers', 'creator', 'escrow', 'tutor'
+    ];
+    if (WALLET_DEPENDENTS.includes(key)) {
+      return featureFlags.wallet && Boolean(featureFlags[key]);
+    }
+    return Boolean(featureFlags[key]);
+  };
+
+  const toggleFeatureFlag = (key: keyof FeatureFlags) => {
+    setFeatureFlags((prev: FeatureFlags) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(next)); } catch (_) {}
+      return next;
+    });
+  };
+
+  // ── Errands System ────────────────────────────────────────────────────────
+  const [errandRunners, setErrandRunners] = useState<ErrandRunner[]>(() => {
+    try {
+      const saved = localStorage.getItem('AGC_errand_runners_v1');
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return [
+      {
+        id: 'runner_kelvin',
+        userId: 'usr_kelvin',
+        name: 'Kelvin Okafor (FastRunner Lekki)',
+        phone: '+2348021112233',
+        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+        location: 'Lekki / Victoria Island',
+        bio: 'Professional market shopper. Fresh meat, fish, curry & farm produce delivery in 45 mins.',
+        rating: 4.9,
+        reviewsCount: 38,
+        completedCount: 32,
+        deliveryBaseFee: 1500,
+        currency: 'NGN',
+        isOnline: true,
+        isRegistered: true,
+        itemsForSale: [
+          { id: 'item_1', name: 'Fresh Whole Chicken', price: 3800, unit: 'kg', category: 'Meat & Poultry', inStock: true },
+          { id: 'item_2', name: 'Fresh Titus Fish (Mackerel)', price: 2900, unit: 'kg', category: 'Meat & Poultry', inStock: true },
+          { id: 'item_3', name: 'Oloyin Honey Beans', price: 1400, unit: 'derica', category: 'Food Stuffs', inStock: true },
+          { id: 'item_4', name: 'Ducros Curry Powder', price: 650, unit: 'pack', category: 'Spices & Seasoning', inStock: true },
+          { id: 'item_5', name: 'Nescafe Classic Coffee', price: 2400, unit: 'jar', category: 'Groceries', inStock: true },
+          { id: 'item_6', name: 'Fresh Bell Peppers (Tatase)', price: 1200, unit: 'basket', category: 'Food Stuffs', inStock: true },
+        ],
+      },
+      {
+        id: 'runner_amina',
+        userId: 'usr_amina',
+        name: 'Amina Bello (Garki Market Express)',
+        phone: '+2348035556677',
+        avatar: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=200&auto=format&fit=crop&q=80',
+        location: 'Wuse / Garki, Abuja',
+        bio: 'Direct market purchases from wholesale dealers. Freshness guaranteed.',
+        rating: 4.8,
+        reviewsCount: 22,
+        completedCount: 18,
+        deliveryBaseFee: 2000,
+        currency: 'NGN',
+        isOnline: true,
+        isRegistered: true,
+        itemsForSale: [
+          { id: 'item_7', name: 'Beef Cut & Cleaned', price: 4200, unit: 'kg', category: 'Meat & Poultry', inStock: true },
+          { id: 'item_8', name: 'Brown Beans', price: 1300, unit: 'derica', category: 'Food Stuffs', inStock: true },
+          { id: 'item_9', name: 'Groundnut Oil (Devon Kings)', price: 3200, unit: 'litre', category: 'Groceries', inStock: true },
+        ],
+      },
+    ];
+  });
+
+  const [errandOrders, setErrandOrders] = useState<ErrandOrder[]>(() => {
+    try {
+      const saved = localStorage.getItem('AGC_errand_orders_v1');
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return [];
+  });
+
+  const [isErrandsModalOpen, setIsErrandsModalOpen] = useState(false);
+
+  useEffect(() => {
+    try { localStorage.setItem('AGC_errand_runners_v1', JSON.stringify(errandRunners)); } catch (_) {}
+  }, [errandRunners]);
+
+  useEffect(() => {
+    try { localStorage.setItem('AGC_errand_orders_v1', JSON.stringify(errandOrders)); } catch (_) {}
+  }, [errandOrders]);
+
+  const createErrandOrder = (
+    orderData: Omit<ErrandOrder, 'id' | 'createdAt' | 'status' | 'escrowReleaseCode' | 'proofImages' | 'customerId' | 'customerName' | 'customerPhone'>
+  ): ErrandOrder | null => {
+    if (wallet.availableBalance < orderData.totalAmount) return null;
+
+    const escrowTx: WalletTransaction = {
+      id: `tx_errand_${Date.now()}`,
+      type: 'escrow_lock',
+      title: `Errand Escrow Lock (Runner: ${orderData.runnerName})`,
+      amount: orderData.totalAmount,
+      currency: 'NGN',
+      timestamp: 'Just now',
+      status: 'completed',
+      channel: 'wallet',
+    };
+
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: prev.availableBalance - orderData.totalAmount,
+      escrowLockedBalance: prev.escrowLockedBalance + orderData.totalAmount,
+      transactions: [escrowTx, ...prev.transactions],
+    }));
+
+    const randomPin = Math.floor(1000 + Math.random() * 9000).toString();
+    const newOrder: ErrandOrder = {
+      ...orderData,
+      id: `errand_${Date.now()}`,
+      customerId: currentUser.id,
+      customerName: currentUser.fullName,
+      customerPhone: currentUser.phoneNumber,
+      status: 'pending',
+      escrowReleaseCode: randomPin,
+      proofImages: [],
+      createdAt: 'Just now',
+    };
+
+    setErrandOrders((prev) => [newOrder, ...prev]);
+    return newOrder;
+  };
+
+  const completeErrandWithCode = (orderId: string, code: string): boolean => {
+    const order = errandOrders.find((o) => o.id === orderId);
+    if (!order || order.escrowReleaseCode !== code) return false;
+
+    const releaseTx: WalletTransaction = {
+      id: `tx_errand_rel_${Date.now()}`,
+      type: 'escrow_release',
+      title: `Errand Escrow Release (Order: ${order.id})`,
+      amount: order.totalAmount,
+      currency: 'NGN',
+      timestamp: 'Just now',
+      status: 'completed',
+      channel: 'wallet',
+    };
+
+    setWallet((prev) => ({
+      ...prev,
+      escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - order.totalAmount),
+      transactions: [releaseTx, ...prev.transactions],
+    }));
+
+    setErrandOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: 'completed' } : o)));
+    setErrandRunners((prev) => prev.map((r) => r.id === order.runnerId ? { ...r, completedCount: r.completedCount + 1 } : r));
+    return true;
+  };
+
+  const disputeErrandOrder = (orderId: string, reason: string) => {
+    setErrandOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: 'disputed', disputeReason: reason } : o)));
+  };
+
+  const registerAsErrandRunner = (data: { name: string; location: string; deliveryBaseFee: number }) => {
+    const newRunner: ErrandRunner = {
+      id: `runner_${Date.now()}`,
+      userId: currentUser.id,
+      name: data.name,
+      phone: currentUser.phoneNumber,
+      avatar: currentUser.avatarUrl,
+      location: data.location,
+      bio: `Verified AGC Errand Runner based in ${data.location}.`,
+      rating: 5.0,
+      reviewsCount: 1,
+      completedCount: 0,
+      deliveryBaseFee: data.deliveryBaseFee,
+      currency: 'NGN',
+      isOnline: true,
+      isRegistered: true,
+      itemsForSale: [
+        { id: `item_${Date.now()}_1`, name: 'Fresh Chicken', price: 3500, unit: 'kg', category: 'Meat & Poultry', inStock: true },
+        { id: `item_${Date.now()}_2`, name: 'Fresh Fish', price: 2800, unit: 'kg', category: 'Meat & Poultry', inStock: true },
+        { id: `item_${Date.now()}_3`, name: 'Curry Powder', price: 500, unit: 'pack', category: 'Spices & Seasoning', inStock: true },
+        { id: `item_${Date.now()}_4`, name: 'Beans (Honey/Brown)', price: 1200, unit: 'derica', category: 'Food Stuffs', inStock: true },
+        { id: `item_${Date.now()}_5`, name: 'Coffee', price: 2200, unit: 'jar', category: 'Groceries', inStock: true },
+      ],
+    };
+    setErrandRunners((prev) => [newRunner, ...prev.filter((r) => r.userId !== currentUser.id)]);
+  };
+
+  const addErrandRunnerItem = (item: Omit<ErrandItem, 'id'>) => {
+    const newItem: ErrandItem = { ...item, id: `item_${Date.now()}` };
+    setErrandRunners((prev) => prev.map((r) => {
+      if (r.userId === currentUser.id || r.phone === currentUser.phoneNumber) {
+        return { ...r, itemsForSale: [newItem, ...r.itemsForSale] };
+      }
+      return r;
+    }));
+  };
+
+  const removeErrandRunnerItem = (itemId: string) => {
+    setErrandRunners((prev) => prev.map((r) => {
+      if (r.userId === currentUser.id || r.phone === currentUser.phoneNumber) {
+        return { ...r, itemsForSale: r.itemsForSale.filter((i: any) => i.id !== itemId) };
+      }
+      return r;
+    }));
+  };
   const [language, setLanguage] = useState<LanguageCode>('en');
   const [currency, setCurrency] = useState<CurrencyCode>('NGN');
   const [lowDataMode, setLowDataMode] = useState<boolean>(false);
@@ -1929,6 +2156,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const handleIncomingCall = (payload: any) => {
       if (!activeCall && payload?.roomId) {
         setIncomingCall(payload);
+        showLocalNotification(
+          `📞 Incoming AGC ${payload.type === 'video' ? 'Video' : 'Voice'} Call`,
+          `${payload.callerName || 'Someone'} is calling you on AGC...`,
+          payload.callerAvatar || '/icon-192.png'
+        );
       }
     };
 
@@ -2236,6 +2468,40 @@ const sendMessage = (chatId: string, text: string) => {
           : c
       )
     );
+
+    // --- Multi-transport broadcast (same as sendMessage) ---
+    const currentChat = chats.find((c) => c.id === chatId);
+    const targetCleanPhone = currentChat?.phone?.replace(/\D/g, '');
+
+    // 2. BroadcastChannel (same-computer tab sync)
+    try {
+      const bc = new BroadcastChannel('AGC_chats_sync');
+      bc.postMessage({ chatId, message: newMsg, senderId: currentUser?.id, targetPhone: targetCleanPhone });
+      bc.close();
+    } catch (e) {
+      console.warn('BroadcastChannel voice note error:', e);
+    }
+
+    // 3. Socket.io
+    emitLiveMessage(chatId, newMsg, targetCleanPhone);
+
+    // 4. Supabase Realtime
+    try {
+      const sbChannel = supabase.channel(`chat_${chatId}`, {
+        config: { broadcast: { self: false } },
+      });
+      sbChannel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          sbChannel.send({
+            type: 'broadcast',
+            event: 'new_message',
+            payload: { chatId, message: newMsg, senderId: currentUser?.id },
+          });
+        }
+      });
+    } catch (e) {
+      console.warn('Supabase voice note broadcast error:', e);
+    }
   };
 
   const sendProductCard = (chatId: string, product: Product) => {
@@ -2853,6 +3119,7 @@ const sendMessage = (chatId: string, text: string) => {
     // 1. LocalStorage Persistence (Never wiped)
     localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
     localStorage.setItem('AGC_is_authenticated', 'true');
+    requestNotificationPermission().catch(() => {});
     setIsAuthModalOpen(false);
 
     // 2. Register with Socket.io Gateway
@@ -4774,6 +5041,19 @@ const sendMessage = (chatId: string, text: string) => {
   return (
     <AppContext.Provider
       value={{
+        featureFlags,
+        isFeatureEnabled,
+        toggleFeatureFlag,
+        errandRunners,
+        errandOrders,
+        isErrandsModalOpen,
+        setIsErrandsModalOpen,
+        createErrandOrder,
+        completeErrandWithCode,
+        disputeErrandOrder,
+        registerAsErrandRunner,
+        addErrandRunnerItem,
+        removeErrandRunnerItem,
         language,
         setLanguage,
         t,

@@ -1,4 +1,5 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useState, useCallback } from 'react';
+import { SplashScreen } from './components/SplashScreen';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
@@ -54,6 +55,11 @@ const AppContent: React.FC = () => {
   const [isVoiceRecorderOpen, setIsVoiceRecorderOpen] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
+
+  // Render SplashScreen overlay before anything else (shows once per session)
+  if (showSplash) {
+    return <SplashScreen onDone={handleSplashDone} />;
+  }
 
   // Show WhatsApp Phone registration screen if not authenticated
   if (!isAuthenticated) {
