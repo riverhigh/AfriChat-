@@ -377,6 +377,21 @@ interface AppContextType {
   toggleHidePhoneNumberInTown: () => void;
   toggleJoinTownCommunity: (id: string) => void;
   addTownCommunity: (name: string, type: 'group' | 'channel', category: TownCommunity['category'], description: string) => void;
+  // Feature Flags System
+  featureFlags: FeatureFlags;
+  isFeatureEnabled: (key: keyof FeatureFlags) => boolean;
+  toggleFeatureFlag: (key: keyof FeatureFlags) => void;
+  // Errands System
+  errandRunners: ErrandRunner[];
+  errandOrders: ErrandOrder[];
+  isErrandsModalOpen: boolean;
+  setIsErrandsModalOpen: (val: boolean) => void;
+  createErrandOrder: (order: Omit<ErrandOrder, 'id' | 'createdAt' | 'status' | 'escrowReleaseCode' | 'proofImages' | 'customerId' | 'customerName' | 'customerPhone'>) => ErrandOrder | null;
+  completeErrandWithCode: (orderId: string, code: string) => boolean;
+  disputeErrandOrder: (orderId: string, reason: string) => void;
+  registerAsErrandRunner: (data: { name: string; location: string; deliveryBaseFee: number }) => void;
+  addErrandRunnerItem: (item: Omit<ErrandItem, 'id'>) => void;
+  removeErrandRunnerItem: (itemId: string) => void;
   // 18. Healthcare & Hospital Telehealth
   doctors: DoctorProfile[];
   queueTokens: HospitalQueueToken[];
@@ -550,6 +565,77 @@ const AGC_DATA_VERSION = 'v3_clean_2026';
     console.log('[AGC] Stale data cleared, starting fresh.');
   }
 })();
+
+
+const INITIAL_ERRAND_RUNNERS: ErrandRunner[] = [
+  {
+    id: 'runner_kelvin',
+    userId: 'usr_kelvin',
+    name: 'Kelvin Okafor (FastRunner Lekki)',
+    phone: '+2348021112233',
+    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+    location: 'Lekki / Victoria Island',
+    bio: 'Professional market shopper. Fresh meat, fish, curry & farm produce delivery in 45 mins.',
+    rating: 4.9,
+    reviewsCount: 38,
+    completedCount: 32, // Gold Errand Master milestone unlocked!
+    deliveryBaseFee: 1500,
+    currency: 'NGN',
+    isOnline: true,
+    isRegistered: true,
+    itemsForSale: [
+      { id: 'item_1', name: 'Fresh Whole Chicken', price: 3800, unit: 'kg', category: 'Meat & Poultry', inStock: true },
+      { id: 'item_2', name: 'Fresh Titus Fish (Mackerel)', price: 2900, unit: 'kg', category: 'Meat & Poultry', inStock: true },
+      { id: 'item_3', name: 'Oloyin Honey Beans', price: 1400, unit: 'derica', category: 'Food Stuffs', inStock: true },
+      { id: 'item_4', name: 'Ducros Curry Powder', price: 650, unit: 'pack', category: 'Spices & Seasoning', inStock: true },
+      { id: 'item_5', name: 'Nescafe Classic Coffee', price: 2400, unit: 'jar', category: 'Groceries', inStock: true },
+      { id: 'item_6', name: 'Fresh Bell Peppers (Tatase)', price: 1200, unit: 'basket', category: 'Food Stuffs', inStock: true },
+    ],
+  },
+  {
+    id: 'runner_amina',
+    userId: 'usr_amina',
+    name: 'Amina Bello (Garki Market Express)',
+    phone: '+2348035556677',
+    avatar: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=200&auto=format&fit=crop&q=80',
+    location: 'Wuse / Garki, Abuja',
+    bio: 'Direct market purchases from wholesale dealers. Freshness guaranteed or money refunded.',
+    rating: 4.8,
+    reviewsCount: 22,
+    completedCount: 18,
+    deliveryBaseFee: 2000,
+    currency: 'NGN',
+    isOnline: true,
+    isRegistered: true,
+    itemsForSale: [
+      { id: 'item_7', name: 'Beef Cut & Cleaned', price: 4200, unit: 'kg', category: 'Meat & Poultry', inStock: true },
+      { id: 'item_8', name: 'Brown Beans', price: 1300, unit: 'derica', category: 'Food Stuffs', inStock: true },
+      { id: 'item_9', name: 'Groundnut Oil (Devon Kings)', price: 3200, unit: 'litre', category: 'Groceries', inStock: true },
+      { id: 'item_10', name: 'Catfish Live/Cleaned', price: 3500, unit: 'kg', category: 'Meat & Poultry', inStock: true },
+    ],
+  },
+];
+
+const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
+  wallet: true,
+  market: true,
+  artisan: true,
+  errands: true,
+  ajo: true,
+  payroll: true,
+  writers: true,
+  creator: true,
+  escrow: true,
+  tutor: true,
+  dispatch: true,
+  calls: true,
+  status: true,
+  town: true,
+  audioSpaces: true,
+  healthcare: true,
+  legal: true,
+  jobs: true,
+};
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [language, setLanguage] = useState<LanguageCode>('en');

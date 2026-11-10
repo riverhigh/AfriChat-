@@ -935,7 +935,12 @@ export interface CourseLesson {
   title: string;
   durationMinutes: number;
   videoUrl?: string;
+  videoType?: 'upload' | 'embed' | 'url';
   notes?: string;
+  pdfUrl?: string;
+  pdfName?: string;
+  fileUrl?: string;
+  fileName?: string;
   isPreview?: boolean;
 }
 
@@ -998,4 +1003,88 @@ export interface AdminSystemBroadcast {
   level: 'info' | 'warning' | 'alert';
   createdAt: string;
   active: boolean;
+}
+
+// 29. Admin Feature Switches & Dependency Hub
+export interface FeatureFlags {
+  wallet: boolean;          // Master dependency hub: if off, disables all money-related features
+  market: boolean;          // requires wallet
+  artisan: boolean;         // requires wallet
+  errands: boolean;         // requires wallet
+  ajo: boolean;             // requires wallet
+  payroll: boolean;         // requires wallet
+  writers: boolean;         // requires wallet
+  creator: boolean;         // requires wallet
+  escrow: boolean;          // requires wallet
+  tutor: boolean;           // requires wallet
+  dispatch: boolean;        // independent
+  calls: boolean;           // independent
+  status: boolean;          // independent
+  town: boolean;            // independent
+  audioSpaces: boolean;     // independent
+  healthcare: boolean;      // independent
+  legal: boolean;           // independent
+  jobs: boolean;            // independent
+}
+
+// 30. Errand Delivery & Shopping Service Types
+export interface ErrandItem {
+  id: string;
+  name: string;
+  price: number;
+  unit: string;
+  category: string;
+  inStock: boolean;
+}
+
+export interface ErrandRunner {
+  id: string;
+  userId: string;
+  name: string;
+  phone: string;
+  avatar: string;
+  location: string;
+  bio: string;
+  rating: number;
+  reviewsCount: number;
+  completedCount: number;
+  deliveryBaseFee: number;
+  currency: CurrencyCode;
+  itemsForSale: ErrandItem[];
+  isOnline: boolean;
+  isRegistered: boolean;
+}
+
+export interface ErrandOrder {
+  id: string;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  runnerId: string;
+  runnerName: string;
+  runnerPhone: string;
+  items: { item: ErrandItem; quantity: number; subtotal: number }[];
+  customNotes?: string;
+  dropoffAddress: string;
+  itemsTotal: number;
+  deliveryFee: number;
+  totalAmount: number;
+  currency: CurrencyCode;
+  status: 'pending' | 'accepted' | 'shopping' | 'delivering' | 'delivered' | 'completed' | 'disputed';
+  escrowReleaseCode: string;
+  proofImages: string[];
+  disputeReason?: string;
+  disputeImages?: string[];
+  createdAt: string;
+}
+
+// 31. Gamified Milestones & Badges
+export interface GamifyMilestone {
+  id: string;
+  category: 'artisan' | 'store' | 'errand' | 'tutor';
+  tierCount: number;
+  badgeName: string;
+  badgeIcon: string;
+  title: string;
+  description: string;
 }

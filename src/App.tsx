@@ -46,6 +46,7 @@ import { AdminDashboardModal } from './components/AdminDashboardModal';
 import { TutorCoursesModal } from './components/TutorCoursesModal';
 import { WhatsAppPhoneAuth } from './components/WhatsAppPhoneAuth';
 import { PhoneSignUpBanner } from './components/PhoneSignUpBanner';
+import { ErrandsModal } from './components/ErrandsModal';
 import { CallErrorBoundary } from './components/CallErrorBoundary';
 
 const AppContent: React.FC = () => {
@@ -123,6 +124,7 @@ const AppContent: React.FC = () => {
         <AuthModal />
         <ContactsModal />
         <DispatchModal />
+        <ErrandsModal />
         <JobBoardModal />
         <SecurityModal />
 

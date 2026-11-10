@@ -797,6 +797,20 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       {/* Attachment popover with all 8 African Super-App Features */}
       {showAttachMenu && (
         <div className="mx-3 mb-2 p-3 bg-white dark:bg-[#1a172e] rounded-2xl shadow-xl grid grid-cols-4 gap-2 text-center text-xs animate-in slide-in-from-bottom-2 shrink-0 z-20 border border-slate-200 dark:border-slate-800">
+                    {/* Errand & Market Shopping */}
+          <button
+            type="button"
+            onClick={() => {
+              setShowAttachMenu(false);
+              setIsErrandsModalOpen(true);
+            }}
+            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+          >
+            <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-1">
+              <ShoppingBag className="w-4 h-4" />
+            </div>
+            <span className="text-[10px] leading-tight font-bold text-purple-500 dark:text-purple-300">Errands</span>
+          </button>
           {/* 1. Meme & Sticker Studio */}
           <button
             type="button"
