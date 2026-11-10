@@ -3,6 +3,8 @@ import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 
 dotenv.config();
 
@@ -30,6 +32,94 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
+// ── Persistent User Registry ────────────────────────────────────────────────
+interface RegisteredUser {
+  id: string;
+  fullName: string;
+  phoneNumber: string;
+  cleanPhone: string;
+  avatarUrl?: string;
+  about?: string;
+  registeredAt: string;
+  role?: string;
+}
+
+const usersByPhone = new Map<string, RegisteredUser>();
+const USERS_FILE = path.join(__dirname, 'data_users.json');
+
+try {
+  if (fs.existsSync(USERS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+    if (Array.isArray(raw)) {
+      for (const u of raw) {
+        if (u.cleanPhone) usersByPhone.set(u.cleanPhone, u);
+      }
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading local users registry:', e);
+}
+
+function saveUsersFile() {
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(Array.from(usersByPhone.values()), null, 2));
+  } catch (e) {
+    console.warn('Notice saving users registry:', e);
+  }
+}
+
+// REST: Register user
+app.post('/api/users/register', (req: Request, res: Response) => {
+  const { id, fullName, phoneNumber, avatarUrl, about, role } = req.body;
+  if (!phoneNumber) {
+    return res.status(400).json({ error: 'Phone number required' });
+  }
+  const cleanPhone = phoneNumber.replace(/\D/g, '');
+  const user: RegisteredUser = {
+    id: id || `usr_${Date.now()}`,
+    fullName: fullName || 'AfriChat User',
+    phoneNumber,
+    cleanPhone,
+    avatarUrl,
+    about: about || 'Available · Using AfriChat',
+    registeredAt: new Date().toISOString(),
+    role: role || 'user',
+  };
+  usersByPhone.set(cleanPhone, user);
+  saveUsersFile();
+  console.log(`✅ [User Registered]: ${user.fullName} (${user.phoneNumber})`);
+  io.emit('user_registered', user);
+  res.json({ success: true, user });
+});
+
+// REST: User lookup by phone number
+app.get('/api/users/lookup', (req: Request, res: Response) => {
+  const rawQuery = (req.query.phone as string || '');
+  const query = rawQuery.replace(/\D/g, '');
+  if (!query) {
+    return res.status(400).json({ found: false, error: 'Phone query required' });
+  }
+  let foundUser: RegisteredUser | undefined = usersByPhone.get(query);
+  if (!foundUser) {
+    for (const [phone, u] of usersByPhone.entries()) {
+      if (phone.endsWith(query) || query.endsWith(phone)) {
+        foundUser = u;
+        break;
+      }
+    }
+  }
+  if (foundUser) {
+    res.json({ found: true, user: foundUser });
+  } else {
+    res.json({ found: false });
+  }
+});
+
+// REST: List all registered users
+app.get('/api/users', (_req: Request, res: Response) => {
+  res.json({ users: Array.from(usersByPhone.values()) });
+});
+
 // Create raw HTTP server to handle both Express REST and WebSocket upgrades
 const httpServer = createServer(app);
 
@@ -52,9 +142,44 @@ io.on('connection', (socket: Socket) => {
   console.log(`⚡ [Socket Connected]: ${socket.id}`);
 
   // User presence registration
-  socket.on('user_online', (userData: { userId: string; userName: string; avatar?: string }) => {
+  socket.on('user_online', (userData: { userId: string; userName: string; avatar?: string; phoneNumber?: string }) => {
     onlineUsers.set(socket.id, userData);
+    if (userData?.phoneNumber) {
+      const clean = userData.phoneNumber.replace(/\D/g, '');
+      socket.join(`phone:${clean}`);
+      if (!usersByPhone.has(clean)) {
+        usersByPhone.set(clean, {
+          id: userData.userId,
+          fullName: userData.userName,
+          phoneNumber: userData.phoneNumber,
+          cleanPhone: clean,
+          avatarUrl: userData.avatar,
+          registeredAt: new Date().toISOString(),
+        });
+        saveUsersFile();
+      }
+    }
     io.emit('presence_update', Array.from(onlineUsers.values()));
+  });
+
+  // User registration event
+  socket.on('register_user', (userData: any) => {
+    if (!userData?.phoneNumber) return;
+    const clean = userData.phoneNumber.replace(/\D/g, '');
+    const reg: RegisteredUser = {
+      id: userData.id || `usr_${Date.now()}`,
+      fullName: userData.fullName || userData.name || 'AfriChat User',
+      phoneNumber: userData.phoneNumber,
+      cleanPhone: clean,
+      avatarUrl: userData.avatarUrl || userData.avatar,
+      about: userData.about || 'Available · Using AfriChat',
+      registeredAt: new Date().toISOString(),
+      role: userData.role || 'user',
+    };
+    usersByPhone.set(clean, reg);
+    saveUsersFile();
+    socket.join(`phone:${clean}`);
+    socket.broadcast.emit('user_registered', reg);
   });
 
   // 1. Join Chat Conversation Room (1-on-1 or Group)
@@ -102,12 +227,13 @@ io.on('connection', (socket: Socket) => {
 
   // 5. Direct Phone Calling Relay
   socket.on('phone_call_signal', (payload: { targetPhone: string; data: any }) => {
-    // Broadcast to target phone room
-    io.to(`phone:${payload.targetPhone}`).emit('incoming_call', payload.data);
+    const cleanTarget = payload.targetPhone.replace(/\D/g, '');
+    io.to(`phone:${cleanTarget}`).emit('incoming_call', payload.data);
   });
 
   socket.on('register_phone', (cleanPhone: string) => {
-    socket.join(`phone:${cleanPhone}`);
+    const clean = cleanPhone.replace(/\D/g, '');
+    socket.join(`phone:${clean}`);
   });
 
   // 6. WebRTC Call Room Signaling Relay
@@ -130,7 +256,7 @@ io.on('connection', (socket: Socket) => {
 // Start listening
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 AfriChat Live Gateway running on http://localhost:${PORT}`);
-  console.log(`📡 WebSocket ready for live chats & Street Radio spaces`);
+  console.log(`📡 WebSocket & User Registry ready`);
 });
 
 export { app, httpServer, io };

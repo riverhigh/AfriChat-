@@ -523,7 +523,7 @@ const AFRICHAT_DATA_VERSION = 'v3_clean_2026';
   if (typeof window === 'undefined') return;
   const stored = localStorage.getItem('africhat_data_version');
   if (stored !== AFRICHAT_DATA_VERSION) {
-    const keepKeys = new Set(['africhat_data_version', 'africhat_font_size', 'africhat_low_data_mode', 'africhat_language', 'africhat_currency', 'africhat_hide_phone_town']);
+    const keepKeys = new Set(['africhat_data_version', 'africhat_font_size', 'africhat_low_data_mode', 'africhat_language', 'africhat_currency', 'africhat_hide_phone_town', 'africhat_user_profile_v2', 'africhat_is_authenticated', 'africhat_device_contacts', 'africhat_registered_users_cache']);
     const toRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -2626,16 +2626,68 @@ const sendMessage = (chatId: string, text: string) => {
       phoneNumber,
       fullName: fullName || 'AfriChat User',
       avatarUrl: avatarUrl || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-      about: about || 'Hey there! I am using AfriChat.',
+      about: about || 'Available · Using AfriChat',
       createdAt: new Date().toISOString(),
       lastSeen: 'online',
       isPhoneVerified: true,
+      role: 'user',
     };
+
     setCurrentUser(updatedUser);
     setIsAuthenticated(true);
+
+    // 1. LocalStorage Persistence (Never wiped)
     localStorage.setItem('africhat_user_profile_v2', JSON.stringify(updatedUser));
     localStorage.setItem('africhat_is_authenticated', 'true');
     setIsAuthModalOpen(false);
+
+    // 2. Register with Socket.io Gateway
+    try {
+      registerSocketUser(updatedUser);
+    } catch (e) {
+      console.warn('Socket user register notice:', e);
+    }
+
+    // 3. Register with local server REST API
+    try {
+      const payload = JSON.stringify(updatedUser);
+      fetch('/api/users/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      }).catch(() => {
+        const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+        fetch(`http://${socketHost}:3002/api/users/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+        }).catch(() => {});
+      });
+    } catch (e) {
+      console.warn('REST user register notice:', e);
+    }
+
+    // 4. Save to Supabase profiles
+    if (isSupabaseConfigured) {
+      supabase
+        .from('profiles')
+        .upsert(
+          {
+            full_name: updatedUser.fullName,
+            phone_number: updatedUser.phoneNumber,
+            avatar_url: updatedUser.avatarUrl,
+            bio: updatedUser.about,
+            is_phone_verified: true,
+          },
+          { onConflict: 'phone_number' }
+        )
+        .then(() => {
+          console.log('✅ Supabase profile registered');
+        })
+        .catch((err) => {
+          console.warn('Supabase profile save notice:', err);
+        });
+    }
   };
 
   const logoutUser = () => {

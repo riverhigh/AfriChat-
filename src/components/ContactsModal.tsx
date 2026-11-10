@@ -75,11 +75,30 @@ export const ContactsModal: React.FC = () => {
     setCheckResult(null);
     const normalized = normalizePhone(clean);
 
-    // 1. Check in Supabase if configured
-    let foundName: string | null = null;
-    let foundAvatar: string | null = null;
+    // 1. Check live Gateway server registry
+    try {
+      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const endpoints = [
+        `/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
+        `http://${socketHost}:3002/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
+      ];
+      for (const ep of endpoints) {
+        try {
+          const res = await fetch(ep);
+          if (res.ok) {
+            const json = await res.json();
+            if (json.found && json.user) {
+              foundName = json.user.fullName;
+              foundAvatar = json.user.avatarUrl;
+              break;
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
 
-    if (isSupabaseConfigured) {
+    // 2. Check in Supabase if configured
+    if (!foundName && isSupabaseConfigured) {
       try {
         const { data } = await supabase
           .from('profiles')
@@ -96,7 +115,7 @@ export const ContactsModal: React.FC = () => {
       }
     }
 
-    // 2. Fallback check local device contacts
+    // 3. Fallback check local device contacts
     if (!foundName) {
       const localMatch = deviceContacts.find(
         (c) => c.normalizedPhoneNumber === normalized || c.rawPhoneNumber === clean

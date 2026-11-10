@@ -180,7 +180,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               type="button"
               onClick={() => setIsScanQrModalOpen(true)}
               className="p-2 rounded-xl bg-purple-50 dark:bg-purple-950/40 hover:bg-purple-100 dark:hover:bg-purple-900/40 text-purple-600 dark:text-purple-400 transition-colors flex items-center gap-1.5 text-xs font-bold"
-              title="View Unique QR Code & UID"
+              title="View Unique QR Code"
             >
               <QrCode className="w-4 h-4" />
               <span className="text-[11px] font-mono">My QR</span>

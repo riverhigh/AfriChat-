@@ -363,13 +363,13 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
             </button>
           </div>
 
-          {/* Scan QR & My UID Button */}
+          {/* Scan QR Button */}
           <button
             type="button"
             onClick={() => setIsScanQrModalOpen(true)}
             className="text-white/80 hover:text-white transition-colors p-1.5 rounded-full hover:bg-white/10"
-            aria-label="Scan QR Code & View UID"
-            title="Scan QR Code & View Your Unique UID"
+            aria-label="Scan QR Code"
+            title="Scan & Share QR Code"
           >
             <Scan className="w-5 h-5 text-purple-200 hover:text-white" />
           </button>

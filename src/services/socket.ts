@@ -4,7 +4,7 @@ import { ChatMessage } from '../types';
 let socket: Socket | null = null;
 
 // Determine backend URL (dynamic hostname allows phone and laptop on same Wi-Fi to connect)
-const getSocketUrl = (): string => {
+export const getSocketUrl = (): string => {
   if (typeof window !== 'undefined' && window.location) {
     const envUrl = import.meta.env.VITE_SOCKET_URL as string;
     if (envUrl) return envUrl;
@@ -33,7 +33,7 @@ export const initSocket = (user?: { id: string; name: string; avatar?: string; p
     socket.on('connect', () => {
       console.log('🟢 [AfriChat Live]: Connected to Socket.io Gateway on port 3002 (ID:', socket?.id, ')');
       if (user) {
-        socket?.emit('user_online', { userId: user.id, userName: user.name, avatar: user.avatar });
+        socket?.emit('user_online', { userId: user.id, userName: user.name, avatar: user.avatar, phoneNumber: user.phone });
         if (user.phone) {
           const cleanPhone = user.phone.replace(/\D/g, '');
           socket?.emit('register_phone', cleanPhone);
@@ -57,6 +57,15 @@ export const getSocket = (): Socket | null => {
   return socket;
 };
 
+export const registerSocketUser = (user: { id: string; fullName: string; phoneNumber: string; avatarUrl?: string; about?: string; role?: string }) => {
+  if (socket?.connected) {
+    socket.emit('register_user', user);
+    if (user.phoneNumber) {
+      socket.emit('register_phone', user.phoneNumber.replace(/\D/g, ''));
+    }
+  }
+};
+
 // 1. Chat Rooms
 export const joinChatRoom = (chatId: string) => {
   if (socket?.connected) {
@@ -70,30 +79,28 @@ export const leaveChatRoom = (chatId: string) => {
   }
 };
 
+// 2. Chat Message Signaling
 export const emitLiveMessage = (chatId: string, message: ChatMessage) => {
   if (socket?.connected) {
     socket.emit('send_message', { chatId, message });
   }
 };
 
-export const emitTypingIndicator = (chatId: string, userName: string, isTyping: boolean) => {
-  if (socket?.connected) {
-    socket.emit('typing', { chatId, userName, isTyping });
-  }
-};
-
-// 2. Audio Spaces / Street Radio
-export const joinLiveSpace = (spaceId: string, user: { id: string; name: string; avatar?: string }) => {
+// 3. Audio Spaces / Street Radio
+export const joinSpaceRoom = (spaceId: string, user: { id: string; name: string; avatar?: string }) => {
   if (socket?.connected) {
     socket.emit('join_space', { spaceId, user });
   }
 };
 
-export const leaveLiveSpace = (spaceId: string, userId: string) => {
+export const leaveSpaceRoom = (spaceId: string, userId: string) => {
   if (socket?.connected) {
     socket.emit('leave_space', { spaceId, userId });
   }
 };
+
+export const joinLiveSpace = joinSpaceRoom;
+export const leaveLiveSpace = leaveSpaceRoom;
 
 export const emitSpaceSpeaking = (spaceId: string, userId: string, isSpeaking: boolean) => {
   if (socket?.connected) {
@@ -101,7 +108,7 @@ export const emitSpaceSpeaking = (spaceId: string, userId: string, isSpeaking: b
   }
 };
 
-// 3. WebRTC Call Relays
+// 4. WebRTC Video/Voice Calling
 export const joinWebRTCCallRoom = (roomId: string) => {
   if (socket?.connected) {
     socket.emit('join_call_room', roomId);
