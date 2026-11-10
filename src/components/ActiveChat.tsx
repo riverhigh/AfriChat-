@@ -30,6 +30,7 @@ import {
   Users,
   Image,
   Sliders,
+  Trash2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
@@ -43,6 +44,7 @@ interface ActiveChatProps {
 
 export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) => {
   const {
+    clearChat,
     activeChatId,
     setActiveChatId,
     chats,
@@ -339,6 +341,20 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             aria-label="Scam Check"
           >
             <ShieldAlert className="w-5 h-5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (window.confirm(`Clear all message history in "${currentChat.name}"?\n\nMessages will be permanently removed from this device.`)) {
+                clearChat(currentChat.id);
+              }
+            }}
+            className="p-2 hover:bg-white/10 rounded-full transition-colors text-white/60 hover:text-rose-400"
+            title="Clear Chat History (Permanent)"
+            aria-label="Clear Chat"
+          >
+            <Trash2 className="w-5 h-5" />
           </button>
         </div>
       </div>

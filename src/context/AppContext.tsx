@@ -172,6 +172,8 @@ interface AppContextType {
   activeChatId: string | null;
   setActiveChatId: (id: string | null) => void;
   chats: ChatThread[];
+  clearChat: (chatId: string) => void;
+  openCommunityChat: (community: TownCommunity) => void;
   messages: Record<string, ChatMessage[]>;
   calls: CallLogItem[];
   statuses: UserStatus[];
@@ -936,6 +938,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {}
   }, [townCommunities]);
 
+  // Sync communities across devices from Supabase & Gateway server
+  useEffect(() => {
+    // 1. Fetch from Supabase town_communities
+    if (isSupabaseConfigured) {
+      supabase
+        .from('town_communities')
+        .select('*')
+        .then(({ data }) => {
+          if (data && Array.isArray(data) && data.length > 0) {
+            setTownCommunities((prev) => {
+              const map = new Map<string, TownCommunity>();
+              prev.forEach((c) => map.set(c.id, c));
+              data.forEach((row: any) => {
+                map.set(row.id, {
+                  id: row.id,
+                  name: row.name,
+                  type: row.type || (row.category === 'Broadcast' ? 'channel' : 'group'),
+                  category: row.category || 'Tech & Hustle',
+                  description: row.description || '',
+                  membersCount: row.members_count || 1,
+                  avatar: row.avatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(row.name)}&backgroundColor=581c87&textColor=ffffff`,
+                  isVerified: row.is_live || false,
+                  isJoined: true,
+                  recentActivity: 'Active community',
+                  adminName: 'AGC Admin',
+                });
+              });
+              const merged = Array.from(map.values());
+              try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(merged)); } catch (_) {}
+              return merged;
+            });
+          }
+        });
+    }
+
+    // 2. Fetch from Gateway server /api/communities
+    try {
+      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      fetch(`http://${socketHost}:3002/api/communities`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((json) => {
+          if (json?.communities && Array.isArray(json.communities) && json.communities.length > 0) {
+            setTownCommunities((prev) => {
+              const map = new Map<string, TownCommunity>();
+              prev.forEach((c) => map.set(c.id, c));
+              json.communities.forEach((c: TownCommunity) => map.set(c.id, c));
+              const merged = Array.from(map.values());
+              try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(merged)); } catch (_) {}
+              return merged;
+            });
+          }
+        })
+        .catch(() => {});
+    } catch (_) {}
+
+    // 3. Socket.io community_created listener
+    const socket = getSocket();
+    const handleCommunityCreated = (comm: TownCommunity) => {
+      if (!comm || !comm.id) return;
+      setTownCommunities((prev) => {
+        if (prev.some((c) => c.id === comm.id)) return prev;
+        const updated = [comm, ...prev];
+        try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+        return updated;
+      });
+    };
+
+    socket?.on('community_created', handleCommunityCreated);
+
+    return () => {
+      socket?.off('community_created', handleCommunityCreated);
+    };
+  }, []);
+
 
 
   const toggleJoinTownCommunity = (id: string) => {
@@ -960,23 +1036,93 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       recentActivity: 'Just created',
       adminName: currentUser.fullName || 'You',
     };
-    setTownCommunities((prev) => [newCommunity, ...prev]);
+    setTownCommunities((prev) => {
+      const updated = [newCommunity, ...prev];
+      try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
 
-    // Also try to persist to Supabase if configured
+    // Create corresponding ChatThread so the group/channel appears in chat list
+    const communityChatId = `town_comm_${newCommunity.id}`;
+    const newThread: ChatThread = {
+      id: communityChatId,
+      name: newCommunity.name,
+      avatar: newCommunity.avatar,
+      isGroup: true,
+      membersCount: 1,
+      verifiedStore: false,
+      location: `${type === 'channel' ? 'Broadcast Channel' : 'Town Group'} · ${category}`,
+      unreadCount: 0,
+      lastMessage: newCommunity.description,
+      lastMessageTime: 'Just now',
+      catalog: [],
+      isOnline: true,
+    };
+    setChats((prev) => {
+      const updated = [newThread, ...prev.filter((c) => c.id !== communityChatId)];
+      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
+
+    // Broadcast via Socket.io
+    const socket = getSocket();
+    socket?.emit('create_community', newCommunity);
+
+    // Save to gateway server
+    try {
+      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      fetch(`http://${socketHost}:3002/api/communities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newCommunity),
+      }).catch(() => {});
+    } catch (_) {}
+
+    // Persist to Supabase town_communities
     if (isSupabaseConfigured) {
-      supabase.from('communities').insert({
+      supabase.from('town_communities').insert({
         id: newCommunity.id,
         name: newCommunity.name,
-        type: newCommunity.type,
         category: newCommunity.category,
         description: newCommunity.description,
-        admin_id: currentUser.id,
+        avatar: newCommunity.avatar,
         members_count: 1,
-        is_verified: false,
       }).then(({ error }) => {
-        if (error) console.warn('Community Supabase insert error:', error.message);
+        if (error) console.warn('Town community Supabase insert notice:', error.message);
       });
     }
+  };
+
+  const openCommunityChat = (community: TownCommunity) => {
+    const chatId = `town_comm_${community.id}`;
+    setChats((prev) => {
+      if (prev.some((c) => c.id === chatId)) return prev;
+      const newThread: ChatThread = {
+        id: chatId,
+        name: community.name,
+        avatar: community.avatar,
+        isGroup: true,
+        membersCount: community.membersCount || 1,
+        verifiedStore: false,
+        location: `${community.type === 'channel' ? 'Broadcast Channel' : 'Town Group'} · ${community.category}`,
+        unreadCount: 0,
+        lastMessage: community.description || `Welcome to ${community.name}`,
+        lastMessageTime: 'Just now',
+        catalog: [],
+        isOnline: true,
+      };
+      const updated = [newThread, ...prev];
+      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
+
+    if (!community.isJoined) {
+      toggleJoinTownCommunity(community.id);
+    }
+
+    joinChatRoom(chatId);
+    setActiveTab('chats');
+    setActiveChatId(chatId);
   };
 
   // Healthcare
@@ -1763,6 +1909,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [isContactsModalOpen, setIsContactsModalOpen] = useState(false);
 
+  // Sync added friend list across devices from Supabase & Gateway server
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser?.phoneNumber) return;
+
+    // 1. Fetch from Supabase device_contacts
+    if (isSupabaseConfigured && currentUser.id) {
+      supabase
+        .from('device_contacts')
+        .select('*')
+        .eq('owner_id', currentUser.id)
+        .then(({ data }) => {
+          if (data && Array.isArray(data) && data.length > 0) {
+            setDeviceContacts((prev) => {
+              const map = new Map<string, DeviceContact>();
+              prev.forEach((c) => map.set(c.normalizedPhoneNumber, c));
+              data.forEach((row: any) => {
+                map.set(row.phone, {
+                  id: row.id || `cnt_${row.phone}`,
+                  name: row.name,
+                  rawPhoneNumber: row.phone,
+                  normalizedPhoneNumber: row.phone,
+                  about: 'Available · Using AGC',
+                  avatar: row.avatar_url,
+                  isRegisteredOnAGC: row.is_on_afri_chat ?? true,
+                });
+              });
+              const merged = Array.from(map.values());
+              try { localStorage.setItem('AGC_device_contacts', JSON.stringify(merged)); } catch (_) {}
+              return merged;
+            });
+          }
+        });
+    }
+
+    // 2. Fetch from local server registry if available
+    try {
+      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      fetch(`http://${socketHost}:3002/api/users`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((json) => {
+          if (json?.users && Array.isArray(json.users)) {
+            setDeviceContacts((prev) => {
+              const map = new Map<string, DeviceContact>();
+              prev.forEach((c) => map.set(c.normalizedPhoneNumber, c));
+              const myClean = (currentUser.phoneNumber || '').replace(/\D/g, '');
+              json.users.forEach((u: any) => {
+                if (u.cleanPhone && u.cleanPhone !== myClean) {
+                  const norm = u.phoneNumber?.startsWith('+') ? u.phoneNumber : `+${u.cleanPhone}`;
+                  if (!map.has(norm)) {
+                    map.set(norm, {
+                      id: `cnt_${u.id}`,
+                      name: u.fullName || 'AGC Contact',
+                      rawPhoneNumber: u.phoneNumber,
+                      normalizedPhoneNumber: norm,
+                      about: u.about || 'Available · Using AGC',
+                      avatar: u.avatarUrl,
+                      isRegisteredOnAGC: true,
+                    });
+                  }
+                }
+              });
+              const merged = Array.from(map.values());
+              try { localStorage.setItem('AGC_device_contacts', JSON.stringify(merged)); } catch (_) {}
+              return merged;
+            });
+          }
+        })
+        .catch(() => {});
+    } catch (_) {}
+  }, [isAuthenticated, currentUser.id, currentUser.phoneNumber]);
+
   // 10. User Uploaded Memes & GIFs + In-Chat Drawer State
   const [userMemes, setUserMemes] = useState<UserUploadedMeme[]>(() => {
     try {
@@ -2172,9 +2389,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 1. Socket.io Phone channel listener
     const socket = getSocket();
 
-    // 🔒 Single-device session enforcement
-    socket?.on('force_logout', (data: { reason: string; message: string }) => {
-      console.warn('⚠️ AGC force_logout received:', data?.reason);
+    // 🔒 Multi-transport single-device session enforcement
+    const triggerForceLogout = () => {
+      console.warn('⚠️ AGC force_logout executed: signed in on another device');
       localStorage.setItem('AGC_is_authenticated', 'false');
       localStorage.removeItem('AGC_session_token');
       setIsAuthenticated(false);
@@ -2182,7 +2399,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         alert('⚠️ AGC Security Alert\n\nYour account was just signed in on another device.\nYou have been logged out from this device for security.');
         window.location.reload();
       }, 300);
-    });
+    };
+
+    socket?.on('force_logout', triggerForceLogout);
 
     socket?.on('incoming_call', handleIncomingCall);
     socket?.on('call_declined', handleCallDeclined);
@@ -2202,7 +2421,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     } catch (_) {}
 
-    // 3. Supabase Realtime channel listener
+    // 3. Supabase Realtime channel listener (calls + session force_logout)
     const channelName = `phone_call_${myCleanPhone}`;
     const channel = supabase.channel(channelName, {
       config: { broadcast: { self: false } },
@@ -2215,13 +2434,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .on('broadcast', { event: 'call_declined' }, () => {
         handleCallDeclined();
       })
+      .on('broadcast', { event: 'force_logout' }, ({ payload }: any) => {
+        const myToken = localStorage.getItem('AGC_session_token');
+        if (payload?.sessionToken && myToken && payload.sessionToken !== myToken) {
+          triggerForceLogout();
+        }
+      })
       .subscribe();
+
+    // 4. Polling heartbeat for session enforcement across remote devices
+    const sessionHeartbeat = setInterval(async () => {
+      if (!isSupabaseConfigured || !currentUser?.phoneNumber) return;
+      const myToken = localStorage.getItem('AGC_session_token');
+      if (!myToken) return;
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('session_token')
+          .eq('phone_number', currentUser.phoneNumber)
+          .maybeSingle();
+        if (data?.session_token && data.session_token !== myToken) {
+          triggerForceLogout();
+        }
+      } catch (_) {}
+    }, 5000);
 
     return () => {
       socket?.off('incoming_call', handleIncomingCall);
       socket?.off('call_declined', handleCallDeclined);
       if (bc) bc.close();
       channel.unsubscribe();
+      clearInterval(sessionHeartbeat);
     };
   }, [currentUser.phoneNumber, activeCall]);
 
@@ -2365,6 +2608,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleCallSpeaker = () => {
     setActiveCall((prev) => (prev ? { ...prev, isSpeaker: !prev.isSpeaker } : null));
   };
+  const clearChat = (chatId: string) => {
+    setMessages((prev) => {
+      const updated = { ...prev, [chatId]: [] };
+      try {
+        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+    setChats((prev) => {
+      const updated = prev.map((c) =>
+        c.id === chatId ? { ...c, lastMessage: 'Chat history cleared', lastMessageTime: '' } : c
+      );
+      try {
+        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
+
 const sendMessage = (chatId: string, text: string) => {
     if (!text.trim()) return;
 
@@ -2392,14 +2654,20 @@ const sendMessage = (chatId: string, text: string) => {
       status: 'sent',
     };
 
-    // 1. Update local state
-    setMessages((prev) => ({
-      ...prev,
-      [chatId]: [...(prev[chatId] || []), newMsg],
-    }));
+    // 1. Update local state and persist
+    setMessages((prev) => {
+      const updated = {
+        ...prev,
+        [chatId]: [...(prev[chatId] || []), newMsg],
+      };
+      try {
+        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
 
-    setChats((prev) =>
-      prev.map((c) =>
+    setChats((prev) => {
+      const updated = prev.map((c) =>
         c.id === chatId
           ? {
               ...c,
@@ -2407,8 +2675,12 @@ const sendMessage = (chatId: string, text: string) => {
               lastMessageTime: newMsg.timestamp,
             }
           : c
-      )
-    );
+      );
+      try {
+        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
 
     // 2. Broadcast via BroadcastChannel (instant same-computer tab/window sync)
     try {
@@ -3174,7 +3446,7 @@ const sendMessage = (chatId: string, text: string) => {
       console.warn('REST user register notice:', e);
     }
 
-    // 4. Save to Supabase profiles
+    // 4. Save session_token to Supabase profiles
     if (isSupabaseConfigured) {
       supabase
         .from('profiles')
@@ -3184,6 +3456,8 @@ const sendMessage = (chatId: string, text: string) => {
             phone_number: updatedUser.phoneNumber,
             avatar_url: updatedUser.avatarUrl,
             bio: updatedUser.about,
+            session_token: sessionToken,
+            last_login_at: new Date().toISOString(),
             is_phone_verified: true,
           },
           { onConflict: 'phone_number' }
@@ -3192,6 +3466,20 @@ const sendMessage = (chatId: string, text: string) => {
           if (error) console.warn('Supabase profile save notice:', error);
           else console.log('✅ Supabase profile registered');
         });
+
+      // Broadcast force_logout via Supabase channel to other devices with this phone
+      try {
+        const ch = supabase.channel(`phone_call_${cleanPhone}`);
+        ch.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            ch.send({
+              type: 'broadcast',
+              event: 'force_logout',
+              payload: { sessionToken, targetPhone: cleanPhone },
+            });
+          }
+        });
+      } catch (_) {}
     }
   };
 
@@ -3240,24 +3528,46 @@ const sendMessage = (chatId: string, text: string) => {
     };
     setDeviceContacts((prev) => {
       const updated = [newContact, ...prev.filter(c => c.normalizedPhoneNumber !== normalized)];
-      localStorage.setItem('AGC_device_contacts', JSON.stringify(updated));
+      try { localStorage.setItem('AGC_device_contacts', JSON.stringify(updated)); } catch (_) {}
       return updated;
     });
+
+    // Also persist friend to Supabase device_contacts
+    if (isSupabaseConfigured && currentUser.id) {
+      try {
+        supabase.from('device_contacts').upsert({
+          owner_id: currentUser.id,
+          name: newContact.name,
+          phone: newContact.normalizedPhoneNumber,
+          avatar_url: newContact.avatar,
+          is_on_afri_chat: newContact.isRegisteredOnAGC,
+        }, { onConflict: 'owner_id,phone' }).then(({ error }) => {
+          if (error) console.warn('Supabase device_contacts notice:', error.message);
+        });
+      } catch (_) {}
+    }
+
     return newContact;
   };
 
   const startChatWithContact = (contact: DeviceContact) => {
     const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
     const otherPhone = (contact.normalizedPhoneNumber || contact.rawPhoneNumber || '').replace(/\D/g, '');
-    const deterministicId = myPhone && otherPhone ? `dm_${[myPhone, otherPhone].sort().join('_')}` : '';
+    const isSelf = contact.id === 'self' || (myPhone && otherPhone && myPhone === otherPhone);
+    const deterministicId = isSelf
+      ? `dm_self_${myPhone}`
+      : myPhone && otherPhone
+      ? `dm_${[myPhone, otherPhone].sort().join('_')}`
+      : '';
 
     let existingChat = chats.find(
       (c) =>
         (deterministicId && c.id === deterministicId) ||
-        (otherPhone && c.phone && c.phone.replace(/\D/g, '') === otherPhone) ||
-        c.phone === contact.normalizedPhoneNumber ||
-        c.phone === contact.rawPhoneNumber ||
-        c.name.toLowerCase() === contact.name.toLowerCase()
+        (isSelf && (c.id === `dm_self_${myPhone}` || c.name.includes('(Message yourself)'))) ||
+        (!isSelf && otherPhone && c.phone && c.phone.replace(/\D/g, '') === otherPhone) ||
+        (!isSelf && c.phone === contact.normalizedPhoneNumber) ||
+        (!isSelf && c.phone === contact.rawPhoneNumber) ||
+        (!isSelf && c.name.toLowerCase() === contact.name.toLowerCase())
     );
 
     const targetChatId = deterministicId || existingChat?.id || `chat_${Date.now()}`;
@@ -4806,27 +5116,38 @@ const sendMessage = (chatId: string, text: string) => {
     });
 
     const handleIncomingMessage = ({ chatId, message, senderId }: { chatId: string; message: ChatMessage; senderId?: string }) => {
-      if (senderId && senderId === currentUser.id) return;
-      if (message.sender === 'user' && message.senderPhone && currentUser.phoneNumber && message.senderPhone.replace(/\D/g, '') === currentUser.phoneNumber.replace(/\D/g, '')) return;
-
       const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '');
-      const otherCleanPhone = message.senderPhone?.replace(/\D/g, '');
-      const canonicalDmId = myCleanPhone && otherCleanPhone ? `dm_${[myCleanPhone, otherCleanPhone].sort().join('_')}` : '';
+      const senderCleanPhone = message.senderPhone?.replace(/\D/g, '');
+      const otherCleanPhone = senderCleanPhone === myCleanPhone ? '' : senderCleanPhone;
+
+      const isSelfChat = chatId.includes('self') || (myCleanPhone && senderCleanPhone === myCleanPhone && (!otherCleanPhone || chatId.endsWith(myCleanPhone)));
+      const canonicalDmId = isSelfChat
+        ? `dm_self_${myCleanPhone}`
+        : myCleanPhone && otherCleanPhone
+        ? `dm_${[myCleanPhone, otherCleanPhone].sort().join('_')}`
+        : '';
       const resolvedChatId = canonicalDmId || chatId;
 
+      // Filter duplicates strictly by message ID
       setMessages((prev) => {
         const list = prev[resolvedChatId] || prev[chatId] || [];
         if (list.some((m) => m.id === message.id)) return prev;
+
+        const isFromMe = (senderId && senderId === currentUser.id) || (senderCleanPhone && senderCleanPhone === myCleanPhone && message.sender === 'user');
         const receivedMsg: ChatMessage = {
           ...message,
           chatId: resolvedChatId,
-          sender: 'other',
+          sender: isSelfChat ? 'user' : (isFromMe ? 'user' : 'other'),
           status: 'delivered',
         };
-        return {
+        const updated = {
           ...prev,
           [resolvedChatId]: [...list, receivedMsg],
         };
+        try {
+          localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
       });
 
       setChats((prev) => {
@@ -4846,24 +5167,32 @@ const sendMessage = (chatId: string, text: string) => {
           matched.lastMessageTime = message.timestamp;
           matched.unreadCount = activeChatId === resolvedChatId || activeChatId === chatId ? 0 : (matched.unreadCount || 0) + 1;
           updated.splice(index, 1);
-          return [matched, ...updated];
+          const finalChats = [matched, ...updated];
+          try {
+            localStorage.setItem('AGC_chats_v2', JSON.stringify(finalChats));
+          } catch (_) {}
+          return finalChats;
         } else {
           const newThread: ChatThread = {
             id: resolvedChatId,
-            name: message.senderName || 'AGC Contact',
+            name: isSelfChat ? `${currentUser.fullName || 'You'} (Message yourself)` : (message.senderName || 'AGC Contact'),
             avatar:
-              message.senderAvatar ||
+              (isSelfChat ? currentUser.avatarUrl : message.senderAvatar) ||
               "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
             verifiedStore: false,
-            location: 'Direct Chat',
+            location: isSelfChat ? 'Notes to Self' : (resolvedChatId.startsWith('town_comm_') ? 'Town Community' : 'Direct Chat'),
             unreadCount: activeChatId === resolvedChatId || activeChatId === chatId ? 0 : 1,
             lastMessage: msgText,
             lastMessageTime: message.timestamp,
             catalog: [],
             isOnline: true,
-            phone: message.senderPhone || '',
+            phone: isSelfChat ? currentUser.phoneNumber : (message.senderPhone || ''),
           };
-          return [newThread, ...prev];
+          const finalChats = [newThread, ...prev];
+          try {
+            localStorage.setItem('AGC_chats_v2', JSON.stringify(finalChats));
+          } catch (_) {}
+          return finalChats;
         }
       });
     };
@@ -5096,6 +5425,8 @@ const sendMessage = (chatId: string, text: string) => {
         featureFlags,
         isFeatureEnabled,
         toggleFeatureFlag,
+        clearChat,
+        openCommunityChat,
         errandRunners,
         errandOrders,
         isErrandsModalOpen,

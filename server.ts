@@ -50,6 +50,29 @@ const usersByPhone = new Map<string, RegisteredUser>();
 // When a phone logs in on a new device/tab, the old socket receives 'force_logout'
 const phoneToSocketId = new Map<string, string>();
 const USERS_FILE = path.join(__dirname, 'data_users.json');
+const COMMUNITIES_FILE = path.join(__dirname, 'data_communities.json');
+const communitiesMap = new Map<string, any>();
+
+try {
+  if (fs.existsSync(COMMUNITIES_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(COMMUNITIES_FILE, 'utf8'));
+    if (Array.isArray(raw)) {
+      for (const c of raw) {
+        if (c.id) communitiesMap.set(c.id, c);
+      }
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading local communities registry:', e);
+}
+
+function saveCommunitiesFile() {
+  try {
+    fs.writeFileSync(COMMUNITIES_FILE, JSON.stringify(Array.from(communitiesMap.values()), null, 2));
+  } catch (e) {
+    console.warn('Notice saving communities registry:', e);
+  }
+}
 
 try {
   if (fs.existsSync(USERS_FILE)) {
@@ -156,6 +179,20 @@ app.get('/api/users', (_req: Request, res: Response) => {
   res.json({ users: Array.from(usersByPhone.values()) });
 });
 
+// REST: Communities endpoints
+app.get('/api/communities', (_req: Request, res: Response) => {
+  res.json({ communities: Array.from(communitiesMap.values()) });
+});
+
+app.post('/api/communities', (req: Request, res: Response) => {
+  const comm = req.body;
+  if (!comm || !comm.id) return res.status(400).json({ error: 'Community data required' });
+  communitiesMap.set(comm.id, comm);
+  saveCommunitiesFile();
+  io.emit('community_created', comm);
+  res.json({ success: true, community: comm });
+});
+
 // Create raw HTTP server to handle both Express REST and WebSocket upgrades
 const httpServer = createServer(app);
 
@@ -216,6 +253,15 @@ io.on('connection', (socket: Socket) => {
     saveUsersFile();
     socket.join(`phone:${clean}`);
     socket.broadcast.emit('user_registered', reg);
+  });
+
+  // Town Communities Broadcast
+  socket.on('create_community', (comm: any) => {
+    if (comm && comm.id) {
+      communitiesMap.set(comm.id, comm);
+      saveCommunitiesFile();
+      io.emit('community_created', comm);
+    }
   });
 
   // 1. Join Chat Conversation Room (1-on-1 or Group)

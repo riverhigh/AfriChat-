@@ -26,6 +26,7 @@ export const ContactsModal: React.FC = () => {
     startChatWithContact,
     addNewDeviceContact,
     startCall,
+    currentUser,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -39,6 +40,7 @@ export const ContactsModal: React.FC = () => {
     name?: string;
     phone: string;
     avatar?: string;
+    isSelf?: boolean;
   } | null>(null);
 
   if (!isContactsModalOpen) return null;
@@ -76,6 +78,27 @@ export const ContactsModal: React.FC = () => {
     const normalized = normalizePhone(clean);
     let foundName = '';
     let foundAvatar = '';
+
+    // Check if user entered their own number -> Message Yourself
+    const myClean = (currentUser.phoneNumber || '').replace(/\D/g, '');
+    const enteredClean = clean.replace(/\D/g, '');
+    const isSelfNumber = Boolean(
+      myClean &&
+      enteredClean &&
+      (myClean === enteredClean || (enteredClean.length >= 7 && (myClean.endsWith(enteredClean) || enteredClean.endsWith(myClean))))
+    );
+
+    if (isSelfNumber) {
+      setIsChecking(false);
+      setCheckResult({
+        status: 'found',
+        name: `${currentUser.fullName || 'You'} (Message yourself)`,
+        phone: currentUser.phoneNumber || normalized,
+        avatar: currentUser.avatarUrl || ICON_AVATAR,
+        isSelf: true,
+      });
+      return;
+    }
 
     // 1. Check live Gateway server registry
     try {
@@ -147,13 +170,23 @@ export const ContactsModal: React.FC = () => {
 
   const handleAddFoundUser = () => {
     if (!checkResult || checkResult.status !== 'found') return;
-    const name = checkResult.name || 'AGC Contact';
-    addNewDeviceContact(name, checkResult.phone, 'AGC User', true, checkResult.avatar);
-    setInviteSentToast(`âœ… ${name} added to your AGC contacts!`);
+    const isSelf = checkResult.isSelf;
+    const name = isSelf
+      ? `${currentUser.fullName || 'You'} (Message yourself)`
+      : (checkResult.name || 'AGC Contact');
+    const contact = addNewDeviceContact(
+      name,
+      checkResult.phone,
+      isSelf ? 'Message yourself · Notes and reminders' : 'AGC User',
+      true,
+      checkResult.avatar
+    );
+    setInviteSentToast(`✅ Opening chat with ${name}...`);
     setTimeout(() => setInviteSentToast(null), 3000);
     setNewPhone('');
     setCheckResult(null);
     setShowAddContactForm(false);
+    startChatWithContact(contact);
   };
 
   const handleSendInviteToJoin = () => {
@@ -410,6 +443,57 @@ export const ContactsModal: React.FC = () => {
 
         {/* Contacts List */}
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-purple-950/40">
+          {/* Quick Message Yourself row */}
+          {(!searchQuery || 'message yourself you notes'.includes(searchQuery.toLowerCase())) && (
+            <div
+              onClick={() => {
+                const selfContact: DeviceContact = {
+                  id: 'self',
+                  name: `${currentUser.fullName || 'You'} (Message yourself)`,
+                  rawPhoneNumber: currentUser.phoneNumber || '',
+                  normalizedPhoneNumber: currentUser.phoneNumber || '',
+                  about: 'Message yourself · Notes, media & links',
+                  avatar: currentUser.avatarUrl || ICON_AVATAR,
+                  isRegisteredOnAGC: true,
+                };
+                startChatWithContact(selfContact);
+              }}
+              className="p-3.5 hover:bg-purple-50 dark:hover:bg-purple-950/40 flex items-center justify-between transition-colors cursor-pointer bg-purple-50/30 dark:bg-purple-950/10 border-b border-purple-200/50 dark:border-purple-900/30 group"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="relative shrink-0">
+                  <div className="w-11 h-11 rounded-full overflow-hidden bg-purple-600/20 border-2 border-purple-500 flex items-center justify-center">
+                    <img
+                      src={currentUser.avatarUrl || ICON_AVATAR}
+                      alt="You"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    />
+                  </div>
+                  <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white dark:border-[#120a21]" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <h4 className="font-bold text-xs text-slate-900 dark:text-slate-100 truncate">
+                      {currentUser.fullName || 'You'} (Message yourself)
+                    </h4>
+                    <span className="text-[9px] font-mono font-bold bg-purple-500/20 text-purple-600 dark:text-purple-300 border border-purple-500/30 px-1.5 py-0.2 rounded-full">
+                      You
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-purple-600 dark:text-purple-300/80 truncate mt-0.5">
+                    Message yourself · Notes, links, reminders
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="px-2.5 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-xs active:scale-95 transition-transform"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>Chat</span>
+              </button>
+            </div>
+          )}
           {filteredContacts.map((contact) => (
             <div
               key={contact.id}

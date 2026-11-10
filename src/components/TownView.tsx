@@ -22,6 +22,7 @@ export const TownView: React.FC = () => {
     townCommunities,
     toggleJoinTownCommunity,
     addTownCommunity,
+    openCommunityChat,
     hidePhoneNumberInTown,
     toggleHidePhoneNumberInTown,
     currentUser,
@@ -76,16 +77,7 @@ export const TownView: React.FC = () => {
   });
 
   const handleOpenCommunityChat = (community: TownCommunity) => {
-    const match = chats.find(
-      (c) =>
-        c.isGroup &&
-        (c.name.toLowerCase().includes('group') ||
-          c.name.toLowerCase().includes(community.name.slice(0, 5).toLowerCase()))
-    ) || chats[0];
-
-    if (match) {
-      setActiveChatId(match.id);
-    }
+    openCommunityChat(community);
   };
 
   return (
@@ -362,7 +354,8 @@ export const TownView: React.FC = () => {
               filteredCommunities.map((item) => (
                 <div
                   key={item.id}
-                  className="p-3.5 rounded-2xl bg-white dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-500/40 shadow-xs transition-all"
+                  onClick={(e) => { e.stopPropagation(); handleOpenCommunityChat(item); }}
+                  className="p-3.5 rounded-2xl bg-white dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-500/60 hover:shadow-md shadow-xs transition-all cursor-pointer group active:scale-[0.99]"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0">
@@ -418,7 +411,7 @@ export const TownView: React.FC = () => {
                     <div className="flex flex-col items-end gap-2 shrink-0">
                       <button
                         type="button"
-                        onClick={() => toggleJoinTownCommunity(item.id)}
+                        onClick={(e) => { e.stopPropagation(); toggleJoinTownCommunity(item.id); }}
                         className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1 ${
                           item.isJoined
                             ? 'bg-slate-100 dark:bg-neutral-800 text-slate-700 dark:text-neutral-300 hover:bg-slate-200'
