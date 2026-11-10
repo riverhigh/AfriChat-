@@ -90,7 +90,12 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
   const formattedShortBalance = `₦${Math.floor(wallet.availableBalance / 1000)}k`;
 
   return (
-    <header className="sticky top-0 z-30 bg-purple-900 dark:bg-black text-white transition-colors border-b border-purple-950 dark:border-neutral-800">
+    <header
+      className="sticky top-0 z-30 bg-purple-900 dark:bg-black text-white transition-colors border-b border-purple-950 dark:border-neutral-800"
+      style={{
+        paddingTop: 'calc(max(env(safe-area-inset-top, 0px), 8px) + 6px)',
+      }}
+    >
       <div className="flex items-center justify-between px-3.5 py-2.5">
         <div className="flex items-center gap-2.5">
           {/* Left Three Dots / Menu */}

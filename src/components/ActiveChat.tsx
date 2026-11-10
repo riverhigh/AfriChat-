@@ -173,7 +173,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       )}
 
       {/* Top Header */}
-      <div className="flex items-center justify-between px-2 py-2 bg-purple-950 dark:bg-black text-white shrink-0 z-20 shadow-xs border-b border-purple-900/60 dark:border-neutral-900">
+      <div
+        className="flex items-center justify-between px-2 pb-2 bg-purple-950 dark:bg-black text-white shrink-0 z-20 shadow-xs border-b border-purple-900/60 dark:border-neutral-900"
+        style={{
+          paddingTop: 'calc(max(env(safe-area-inset-top, 0px), 14px) + 8px)',
+        }}
+      >
         <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={() => setActiveChatId(null)}
@@ -291,35 +296,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           })()}
         </div>
 
-        {/* Right Action Icons */}
+        {/* Right Action Icons: Video, Voice, Scam Check */}
         <div className="flex items-center gap-1 text-white">
-
-          {/* Street Radio Live Space indicator */}
-          {currentChat.activeSpaceId && (
-            <button
-              type="button"
-              onClick={() => {
-                const space = audioSpaces.find((s) => s.id === currentChat.activeSpaceId);
-                if (space) joinAudioSpace(space);
-              }}
-              className="p-1 px-2 bg-rose-600 hover:bg-rose-700 text-white rounded-full text-[11px] font-mono font-bold flex items-center gap-1 animate-pulse"
-              title="Join Live Street Radio Space"
-            >
-              <Radio className="w-3.5 h-3.5" />
-              <span>LIVE</span>
-            </button>
-          )}
-
-          {currentChat.catalog && currentChat.catalog.length > 0 && (
-            <button
-              onClick={() => setShowCatalogDrawer(!showCatalogDrawer)}
-              className="p-2 hover:bg-white/10 rounded-full transition-colors"
-              title="View Catalog"
-            >
-              <ShoppingBag className="w-5 h-5" />
-            </button>
-          )}
-
           <button
             onClick={() =>
               startCall(
@@ -331,6 +309,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             }
             className="p-2 hover:bg-white/10 rounded-full transition-colors"
             aria-label="Video Call"
+            title="Video Call"
           >
             <Video className="w-5 h-5" />
           </button>
@@ -346,16 +325,17 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             }
             className="p-2 hover:bg-white/10 rounded-full transition-colors"
             aria-label="Voice Call"
+            title="Voice Call"
           >
             <Phone className="w-5 h-5" />
           </button>
-
 
           <button
             type="button"
             onClick={() => setIsScamCheckerModalOpen(true)}
             className="p-2 hover:bg-white/10 rounded-full transition-colors text-amber-400"
             title="Check Scam Reputation"
+            aria-label="Scam Check"
           >
             <ShieldAlert className="w-5 h-5" />
           </button>
