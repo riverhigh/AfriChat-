@@ -154,7 +154,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
       <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/40 to-black/90 pointer-events-none" />
 
       {/* Top Bar */}
-      <div className="relative z-10 px-5 pt-8 pb-4 text-center space-y-2">
+      <div className="relative z-10 px-5 pb-4 text-center space-y-2" style={{ paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 12px), 28px)' }}>
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/6 backdrop-blur-md border border-white/10 text-[11px] font-mono font-semibold text-purple-300">
           <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
           <span>AGC Peer WebRTC · E2E Encrypted</span>
@@ -252,7 +252,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
       )}
 
       {/* Bottom Floating Control Dock */}
-      <div className="relative z-10 px-6 pb-12 pt-4">
+      <div className="relative z-10 px-6 pt-4" style={{ paddingBottom: 'max(calc(env(safe-area-inset-bottom, 0px) + 24px), 32px)' }}>
         <div className="max-w-xs mx-auto flex items-center justify-center gap-3 bg-white/8 backdrop-blur-xl border border-white/10 rounded-full p-3 shadow-2xl">
           {/* Mute Toggle */}
           <button

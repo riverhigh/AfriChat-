@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   GraduationCap,
   QrCode,
@@ -91,9 +91,9 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
 
   return (
     <header
-      className="sticky top-0 z-30 bg-purple-900 dark:bg-black text-white transition-colors border-b border-purple-950 dark:border-neutral-800"
+      className="pt-safe-header sticky top-0 z-30 bg-purple-900 dark:bg-black text-white transition-colors border-b border-purple-950 dark:border-neutral-800"
       style={{
-        paddingTop: 'calc(max(env(safe-area-inset-top, 0px), 8px) + 6px)',
+        paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 6px), 14px)',
       }}
     >
       <div className="flex items-center justify-between px-3.5 py-2.5">

@@ -171,7 +171,7 @@ export const StatusViewerModal: React.FC = () => {
       </div>
 
       {/* Bottom Bar: If Me, show views/likes sheet trigger; if Other, show Like + Reply */}
-      <div className="p-4 z-20 bg-gradient-to-t from-black via-black/80 to-transparent">
+      <div className="p-4 z-20 bg-gradient-to-t from-black via-black/80 to-transparent" style={{ paddingBottom: 'max(calc(env(safe-area-inset-bottom, 0px) + 12px), 16px)' }}>
         {isMe ? (
           /* Viewers & Likes Drawer Trigger for My Status */
           <div className="space-y-2">

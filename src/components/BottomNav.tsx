@@ -21,7 +21,7 @@ export const BottomNav: React.FC = () => {
     <nav
       className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 dark:bg-black/95 backdrop-blur-md border-t border-slate-200 dark:border-neutral-900 transition-colors"
       style={{
-        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 8px)',
       }}
     >
       <div className="max-w-md mx-auto grid grid-cols-5 items-center h-16 px-1">

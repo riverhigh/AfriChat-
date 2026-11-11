@@ -273,14 +273,21 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
       )}
 
       {/* Top Navigation Bar */}
-      <div className="flex items-center justify-between px-3 py-2.5 bg-[#0e0e10] border-b border-neutral-800/80 shrink-0 z-20">
+      <div
+        className="flex items-center justify-between px-4 pb-2.5 bg-[#0e0e10] border-b border-neutral-800/80 shrink-0 z-20"
+        style={{
+          paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 10px), 16px)',
+          paddingLeft: 'max(env(safe-area-inset-left, 0px), 14px)',
+          paddingRight: 'max(env(safe-area-inset-right, 0px), 14px)',
+        }}
+      >
         <button
           type="button"
           onClick={onClose}
-          className="p-1 -ml-1 text-white hover:text-purple-400 flex items-center transition-colors"
+          className="p-1.5 text-white hover:text-purple-400 active:scale-95 flex items-center transition-all rounded-full hover:bg-white/10 shrink-0"
           aria-label="Back"
         >
-          <ChevronLeft className="w-7 h-7" />
+          <ChevronLeft className="w-6 h-6" />
         </button>
 
         <span className="font-bold text-sm text-white truncate max-w-[200px] text-center">

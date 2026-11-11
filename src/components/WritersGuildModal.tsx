@@ -199,7 +199,7 @@ export const WritersGuildModal: React.FC = () => {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
       <div className="w-full max-w-lg bg-white dark:bg-[#121020] text-slate-900 dark:text-white h-full sm:h-auto sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl border border-slate-200 dark:border-purple-900/50 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-purple-900/40 bg-gradient-to-r from-purple-950 via-slate-900 to-indigo-950 text-white shrink-0">
+        <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-purple-900/40 bg-gradient-to-r from-purple-950 via-slate-900 to-indigo-950 text-white shrink-0" style={{ paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 10px), 16px)' }}>
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-2xl bg-amber-500 text-black flex items-center justify-center shadow-lg">
               <BookOpen className="w-5 h-5" />

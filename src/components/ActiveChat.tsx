@@ -208,9 +208,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
       {/* Top Header */}
       <div
-        className="flex items-center justify-between px-2 pb-2 bg-purple-950 dark:bg-black text-white shrink-0 z-20 shadow-xs border-b border-purple-900/60 dark:border-neutral-900"
+        className="flex items-center justify-between px-3 pb-2.5 bg-purple-950 dark:bg-black text-white shrink-0 z-20 shadow-xs border-b border-purple-900/60 dark:border-neutral-900"
         style={{
-          paddingTop: 'calc(max(env(safe-area-inset-top, 0px), 14px) + 8px)',
+          paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 8px), 16px)',
+          paddingLeft: 'max(env(safe-area-inset-left, 0px), 12px)',
+          paddingRight: 'max(env(safe-area-inset-right, 0px), 12px)',
         }}
       >
         <div className="flex items-center gap-2 min-w-0">
