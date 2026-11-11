@@ -103,6 +103,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     artisanStation,
     storeSubscription,
     referralProgram,
+    CURRENCY_SYMBOLS,
+    CURRENCY_RATES,
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan'>('services');
@@ -289,12 +291,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <Wrench className="w-5 h-5 text-purple-500" />
               </div>
               <div className="text-sm font-bold text-slate-800 dark:text-white">Register Your Station</div>
-              <div className="text-xs text-slate-500 dark:text-neutral-400">List your skills & get booked by nearby clients · ₦5k setup</div>
+              <div className="text-xs text-slate-500 dark:text-neutral-400">List your skills & get booked by nearby clients · {CURRENCY_SYMBOLS[currency]}5k setup</div>
               <button
                 onClick={() => setIsServicesModalOpen(true)}
                 className="mt-1 px-5 py-2 bg-purple-600 text-white text-xs font-bold rounded-xl hover:bg-purple-700 transition-colors"
               >
-                Set Up Station · ₦5,000
+                Set Up Station · {CURRENCY_SYMBOLS[currency]}{(5000 * (CURRENCY_RATES[currency] / CURRENCY_RATES['NGN'])).toLocaleString(undefined, {maximumFractionDigits: 0})}
               </button>
             </div>
           )}
@@ -353,7 +355,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-xs font-black text-purple-600 dark:text-purple-400">
-                      ₦{provider.hourlyRate.toLocaleString()}<span className="font-normal text-slate-400">/hr</span>
+                      {formatPrice(provider.hourlyRate, 'NGN')}<span className="font-normal text-slate-400">/hr</span>
                     </span>
                     <button
                       onClick={() => setIsServicesModalOpen(true)}
@@ -744,7 +746,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </span>
                   </div>
                   <div className="text-xs text-slate-500">
-                    Earn ₦500/active friend. Unlocked: ₦{referralProgram.availableBonus.toLocaleString()}
+                    Earn {CURRENCY_SYMBOLS[currency]}500/active friend. Unlocked: {formatPrice(referralProgram.availableBonus, 'NGN')}
                   </div>
                 </div>
               </div>

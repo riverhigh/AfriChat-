@@ -176,6 +176,12 @@ interface AppContextType {
   setActiveChatId: (id: string | null) => void;
   chats: ChatThread[];
   clearChat: (chatId: string) => void;
+  updateChat: (chatId: string, updates: Partial<ChatThread>) => void;
+  addMembersToGroup: (chatId: string, memberNames: string[]) => void;
+  blockedUserIds: string[];
+  toggleBlockUser: (idOrPhone: string) => boolean;
+  CURRENCY_SYMBOLS: Record<CurrencyCode, string>;
+  CURRENCY_RATES: Record<CurrencyCode, number>;
   openCommunityChat: (community: TownCommunity) => void;
   messages: Record<string, ChatMessage[]>;
   calls: CallLogItem[];
@@ -543,14 +549,14 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | null>(null);
 
-const CURRENCY_RATES: Record<CurrencyCode, number> = {
+export const CURRENCY_RATES: Record<CurrencyCode, number> = {
   NGN: 1,
   KES: 0.11,
   GHS: 0.011,
   ZAR: 0.013,
 };
 
-const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
+export const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
   NGN: '₦',
   KES: 'KSh ',
   GHS: 'GH₵ ',
@@ -872,7 +878,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   };
   const [language, setLanguage] = useState<LanguageCode>('en');
-  const [currency, setCurrency] = useState<CurrencyCode>('NGN');
+  const [currency, setCurrencyState] = useState<CurrencyCode>(() => {
+    try {
+      const saved = localStorage.getItem('AGC_currency');
+      if (saved && (saved === 'NGN' || saved === 'KES' || saved === 'GHS' || saved === 'ZAR')) {
+        return saved as CurrencyCode;
+      }
+    } catch (_) {}
+    return 'NGN';
+  });
+
+  const setCurrency = (c: CurrencyCode) => {
+    setCurrencyState(c);
+    try {
+      localStorage.setItem('AGC_currency', c);
+    } catch (_) {}
+    setWallet((prev) => ({
+      ...prev,
+      currency: c,
+    }));
+  };
   const [lowDataMode, setLowDataMode] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'status' | 'calls' | 'town' | 'chats' | 'settings' | 'market'>('status');
 
@@ -2962,6 +2987,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleCallSpeaker = () => {
     setActiveCall((prev) => (prev ? { ...prev, isSpeaker: !prev.isSpeaker } : null));
   };
+  // Blocked users list
+  const [blockedUserIds, setBlockedUserIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('AGC_blocked_users');
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return [];
+  });
+
+  const toggleBlockUser = (idOrPhone: string): boolean => {
+    let isBlocked = false;
+    setBlockedUserIds((prev) => {
+      let updated: string[];
+      if (prev.includes(idOrPhone)) {
+        updated = prev.filter((id) => id !== idOrPhone);
+        isBlocked = false;
+      } else {
+        updated = [...prev, idOrPhone];
+        isBlocked = true;
+      }
+      try {
+        localStorage.setItem('AGC_blocked_users', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+    return isBlocked;
+  };
+
+  const updateChat = (chatId: string, updates: Partial<ChatThread>) => {
+    setChats((prev) => {
+      const updated = prev.map((c) => (c.id === chatId ? { ...c, ...updates } : c));
+      try {
+        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
+
+  const addMembersToGroup = (chatId: string, memberNames: string[]) => {
+    if (!memberNames.length) return;
+    const targetChat = chats.find((c) => c.id === chatId);
+    const entityType = targetChat?.isChannel ? 'channel' : 'group';
+
+    setChats((prev) => {
+      const updated = prev.map((c) => {
+        if (c.id === chatId) {
+          return {
+            ...c,
+            membersCount: (c.membersCount || 1) + memberNames.length,
+            lastMessage: `You added ${memberNames.join(', ')}`,
+            lastMessageTime: 'Just now',
+          };
+        }
+        return c;
+      });
+      try {
+        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    const sysMsg: ChatMessage = {
+      id: `msg_sys_${Date.now()}`,
+      chatId,
+      sender: 'system',
+      text: `You added ${memberNames.join(', ')} to the ${entityType}.`,
+      type: 'text',
+      timestamp: 'Just now',
+      status: 'sent',
+    };
+
+    setMessages((prev) => {
+      const current = prev[chatId] || [];
+      const updated = { ...prev, [chatId]: [...current, sysMsg] };
+      try {
+        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
+
   const clearChat = (chatId: string) => {
     setMessages((prev) => {
       const updated = { ...prev, [chatId]: [] };
@@ -5856,6 +5962,12 @@ const sendMessage = (chatId: string, text: string) => {
         isFeatureEnabled,
         toggleFeatureFlag,
         clearChat,
+        updateChat,
+        addMembersToGroup,
+        blockedUserIds,
+        toggleBlockUser,
+        CURRENCY_SYMBOLS,
+        CURRENCY_RATES,
         openCommunityChat,
         errandRunners,
         errandOrders,

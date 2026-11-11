@@ -22,10 +22,15 @@ export const WalletModal: React.FC = () => {
     withdrawWallet,
     formatPrice,
     currentUser,
+    currency,
+    CURRENCY_SYMBOLS,
+    CURRENCY_RATES,
   } = useApp();
 
   const [walletTab, setWalletTab] = useState<'overview' | 'topup' | 'withdraw'>('overview');
-  const [topUpAmount, setTopUpAmount] = useState<number>(25000);
+  const rate = CURRENCY_RATES[currency] || 1;
+  const topUpOptions = [10000, 25000, 50000, 100000].map((v) => Math.round(v * rate));
+  const [topUpAmount, setTopUpAmount] = useState<number>(() => Math.round(25000 * rate));
   const [withdrawAmount, setWithdrawAmount] = useState<number>(10000);
   const [selectedBank, setSelectedBank] = useState('GTBank Nigeria');
   const [accountNumber, setAccountNumber] = useState('0123456789');
@@ -49,7 +54,7 @@ export const WalletModal: React.FC = () => {
     openPaystackPopup({
       email: userEmail,
       amount: topUpAmount,
-      currency: 'NGN',
+      currency: currency,
       metadata: {
         userId: currentUser.id,
         phoneNumber: currentUser.phoneNumber,
@@ -60,7 +65,7 @@ export const WalletModal: React.FC = () => {
         const res = topUpWallet(topUpAmount);
         setFeedback({
           type: 'success',
-          text: `₦${topUpAmount.toLocaleString()} credited via Paystack! (1% fee: ₦${res.fee.toLocaleString()} capped at ₦2,000). Ref: ${response.reference || res.reference}`,
+          text: `${CURRENCY_SYMBOLS[currency]}${topUpAmount.toLocaleString()} credited via Paystack! (1% fee: ${CURRENCY_SYMBOLS[currency]}${res.fee.toLocaleString()}). Ref: ${response.reference || res.reference}`,
         });
         setWalletTab('overview');
       },
@@ -297,10 +302,10 @@ export const WalletModal: React.FC = () => {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Select Amount (NGN)
+                  Select Amount ({CURRENCY_SYMBOLS[currency].trim()})
                 </label>
                 <div className="grid grid-cols-4 gap-2 mb-2 font-mono">
-                  {[10000, 25000, 50000, 100000].map((amt) => (
+                  {topUpOptions.map((amt) => (
                     <button
                       key={amt}
                       type="button"
@@ -311,7 +316,7 @@ export const WalletModal: React.FC = () => {
                           : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
                       }`}
                     >
-                      ₦{(amt / 1000).toFixed(0)}k
+                      {CURRENCY_SYMBOLS[currency]}{amt >= 1000 ? `${Math.round(amt / 1000)}k` : amt}
                     </button>
                   ))}
                 </div>
@@ -334,26 +339,26 @@ export const WalletModal: React.FC = () => {
                     <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
                       <span>Credited to Wallet</span>
                       <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
-                        ₦{topUpAmount.toLocaleString()}
+                        {CURRENCY_SYMBOLS[currency]}{topUpAmount.toLocaleString()}
                       </span>
                     </div>
                     <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
                       <span className="flex items-center gap-1">
-                        <span>Top-up Fee (1% at ₦2,000 max cap)</span>
+                        <span>Top-up Fee (1%)</span>
                         {topUpAmount * 0.01 > 2000 && (
                           <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.2 rounded-full">
-                            Capped at ₦2k
+                            Platform Protected
                           </span>
                         )}
                       </span>
                       <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
-                        ₦{fee.toLocaleString()}
+                        {CURRENCY_SYMBOLS[currency]}{fee.toLocaleString()}
                       </span>
                     </div>
                     <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center font-bold text-slate-900 dark:text-slate-100">
                       <span>Total Debit / Payable</span>
                       <span className="font-mono text-sm text-[#0ba4db]">
-                        ₦{totalCharge.toLocaleString()}
+                        {CURRENCY_SYMBOLS[currency]}{totalCharge.toLocaleString()}
                       </span>
                     </div>
                   </div>
@@ -383,7 +388,7 @@ export const WalletModal: React.FC = () => {
                     <>
                       <CreditCard className="w-4 h-4" />
                       <span>
-                        Pay ₦{(topUpAmount + Math.min(Math.round(topUpAmount * 0.01), 2000)).toLocaleString()} with Paystack
+                        Pay {CURRENCY_SYMBOLS[currency]}{(topUpAmount + Math.min(Math.round(topUpAmount * 0.01), Math.round(2000 * rate))).toLocaleString()} with Paystack
                       </span>
                     </>
                   )}

@@ -212,29 +212,40 @@ export const StatusView: React.FC = () => {
         </div>
       </div>
 
-      {/* Subscribed & Followed Creators Updates Tray */}
+      {/* Subscribed & Followed Creators + Friends Updates Tray */}
       <div className="p-3 border-b border-slate-100 dark:border-neutral-800 bg-slate-50/50 dark:bg-neutral-950/60">
         <div className="flex items-center justify-between mb-2 px-1">
           <span className="text-[11px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-1.5">
             <Crown className="w-3.5 h-3.5 text-amber-500" />
-            <span>Followed & Subscribed Creators</span>
+            <span>Followed Creators & Friends Stories</span>
           </span>
           <button
             onClick={() => setIsCreatorModalOpen(true)}
             className="text-[10px] text-purple-600 dark:text-purple-400 font-bold hover:underline"
           >
-            Explore Hub →
+            Explore Creators →
           </button>
         </div>
 
-        {creators.some((c) => c.isSubscribedByMe || c.isFollowedByMe) ? (
-          <div className="flex items-center gap-3 overflow-x-auto pb-1 no-scrollbar">
-            {creators
-              .filter((c) => c.isSubscribedByMe || c.isFollowedByMe)
-              .map((creator) => (
+        <div className="flex items-center gap-3 overflow-x-auto pb-1 no-scrollbar">
+          {/* Followed & Subscribed Creators */}
+          {creators
+            .filter((c) => c.isSubscribedByMe || c.isFollowedByMe)
+            .map((creator) => {
+              const crStatus = statuses.find(
+                (s) => s.userId === creator.id || s.userName.toLowerCase().includes(creator.name.toLowerCase())
+              );
+              return (
                 <div
                   key={creator.id}
-                  onClick={() => setIsCreatorModalOpen(true)}
+                  onClick={() => {
+                    if (crStatus) {
+                      setActiveViewingStatus(crStatus);
+                      markStatusViewed(crStatus.id);
+                    } else {
+                      setIsCreatorModalOpen(true);
+                    }
+                  }}
                   className="flex flex-col items-center gap-1 shrink-0 cursor-pointer group"
                 >
                   <div className="relative p-0.5 rounded-full bg-gradient-to-tr from-amber-500 via-purple-600 to-pink-500 shadow-xs group-hover:scale-105 transition-transform">
@@ -254,22 +265,47 @@ export const StatusView: React.FC = () => {
                     {creator.isSubscribedByMe ? 'VIP' : 'Following'}
                   </span>
                 </div>
-              ))}
-          </div>
-        ) : (
-          <div className="flex items-center justify-between p-2.5 bg-purple-50/70 dark:bg-purple-950/20 rounded-2xl border border-purple-200 dark:border-purple-900/30">
-            <div className="text-[11px] text-slate-600 dark:text-neutral-300">
-              Follow top African creators to see their 24h stories and VIP drops here.
-            </div>
-            <button
-              type="button"
-              onClick={() => setIsCreatorModalOpen(true)}
-              className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shrink-0 ml-2 shadow-xs"
-            >
-              Follow Creators
-            </button>
-          </div>
-        )}
+              );
+            })}
+
+          {/* Friends & Contacts Stories */}
+          {otherStatuses
+            .filter((s) => !creators.some((c) => c.id === s.userId))
+            .map((status) => (
+              <div
+                key={status.id}
+                onClick={() => {
+                  setActiveViewingStatus(status);
+                  markStatusViewed(status.id);
+                }}
+                className="flex flex-col items-center gap-1 shrink-0 cursor-pointer group"
+              >
+                <div className="relative p-0.5 rounded-full bg-gradient-to-tr from-emerald-500 to-indigo-600 shadow-xs group-hover:scale-105 transition-transform">
+                  <img
+                    src={status.userAvatar}
+                    alt={status.userName}
+                    className="w-13 h-13 rounded-full object-cover border-2 border-white dark:border-black"
+                  />
+                  {status.statusType === 'thought' && (
+                    <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-purple-600 text-white flex items-center justify-center ring-2 ring-white dark:ring-black">
+                      <Sparkles className="w-2.5 h-2.5" />
+                    </div>
+                  )}
+                  {status.videoUrl && (
+                    <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-rose-600 text-white flex items-center justify-center ring-2 ring-white dark:ring-black">
+                      <Play className="w-2 h-2 fill-current ml-0.5" />
+                    </div>
+                  )}
+                </div>
+                <span className="text-[10px] font-bold text-slate-800 dark:text-white max-w-[68px] truncate text-center">
+                  {status.userName.split(' ')[0]}
+                </span>
+                <span className="text-[8px] font-mono font-medium text-slate-400">
+                  {status.createdAt}
+                </span>
+              </div>
+            ))}
+        </div>
       </div>
 
       {/* Statuses Feed */}

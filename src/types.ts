@@ -223,6 +223,7 @@ export interface ChatMessage {
   order?: EscrowOrder;
   memeSticker?: MemeSticker;
   invoiceData?: InvoiceData;
+  invoice?: InvoiceData;
   financialPoll?: FinancialPoll;
   ajoGroup?: AjoGroup;
   scamEntity?: ScamEntity;
@@ -254,6 +255,10 @@ export interface ChatThread {
   isCelebrityVerified?: boolean;
   celebrityCategory?: string;
   celebrityStageName?: string;
+  isMuted?: boolean;
+  isLocked?: boolean;
+  isFavourite?: boolean;
+  disappearingTimer?: string;
 }
 
 export interface CallLogItem {

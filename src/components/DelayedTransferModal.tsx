@@ -29,12 +29,17 @@ export const DelayedTransferModal: React.FC = () => {
     formatPrice,
     deviceContacts,
     securitySettings,
+    currency,
+    CURRENCY_SYMBOLS,
+    CURRENCY_RATES,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'send' | 'pending' | 'history'>('send');
   const [recipientPhone, setRecipientPhone] = useState('');
   const [recipientName, setRecipientName] = useState('');
-  const [amountStr, setAmountStr] = useState('15000');
+  const rate = CURRENCY_RATES[currency] || 1;
+  const chipValues = [5000, 10000, 25000, 50000, 100000].map(v => Math.round(v * rate));
+  const [amountStr, setAmountStr] = useState(() => String(Math.round(15000 * rate)));
   const [delayHours, setDelayHours] = useState<number>(36); // Default 1.5 days (1-2 days)
   const [note, setNote] = useState('');
   const [paymentPin, setPaymentPin] = useState('');
@@ -57,7 +62,8 @@ export const DelayedTransferModal: React.FC = () => {
       return;
     }
 
-    if (amountNum > wallet.availableBalance) {
+    const amountInNGN = currency === "NGN" ? amountNum : amountNum / (CURRENCY_RATES[currency] || 1);
+    if (amountInNGN > wallet.availableBalance) {
       setStatusMessage({
         type: 'error',
         text: `Insufficient wallet balance. You have ${formatPrice(wallet.availableBalance, 'NGN')} available.`,
@@ -275,7 +281,7 @@ export const DelayedTransferModal: React.FC = () => {
               {/* Amount & Quick Chips */}
               <div>
                 <label className="text-xs font-bold text-slate-700 dark:text-neutral-300 block mb-1">
-                  Amount to Send (₦)
+                  Amount to Send ({CURRENCY_SYMBOLS[currency].trim()})
                 </label>
                 <div className="relative">
                   <span className="absolute left-3 top-2.5 text-base font-bold font-mono text-purple-600 dark:text-purple-400">
