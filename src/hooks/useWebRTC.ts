@@ -4,10 +4,31 @@ import { getSocket, emitCallSignal, joinWebRTCCallRoom } from '../services/socke
 
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
+    // Google STUN (fast, local networks)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    // OpenRelay free public TURN (crosses symmetric NAT — mobile 4G/5G)
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    // Cloudflare STUN fallback
+    { urls: 'stun:stun.cloudflare.com:3478' },
   ],
+  iceCandidatePoolSize: 10,
 };
 
 export interface UseWebRTCOptions {
@@ -117,6 +138,8 @@ export function useWebRTC({
   const processedSignalsRef = useRef<Set<string>>(new Set());
   const peerReadyRef = useRef<boolean>(false);
   const hasSentOfferRef = useRef<boolean>(false);
+  const signalQueueRef = useRef<Array<{ event: string; payload: any }>>([]);
+  const supabaseReadyRef = useRef<boolean>(false);
 
   // ── Web Audio Ringback Tone Synthesizer ──────────────────────────────────────
   const playTone = useCallback((freq1: number, freq2: number, durationMs: number) => {
@@ -174,6 +197,24 @@ export function useWebRTC({
   }, [playTone, stopRingtone]);
 
   // ── Multi-Transport Signal Sender (BroadcastChannel + Socket.io + Supabase) ─
+  // Signals are queued if Supabase channel is not yet SUBSCRIBED, then flushed.
+  const flushSignalQueue = useCallback(() => {
+    if (!supabaseChannelRef.current || !supabaseReadyRef.current) return;
+    while (signalQueueRef.current.length > 0) {
+      const queued = signalQueueRef.current.shift();
+      if (!queued) continue;
+      try {
+        supabaseChannelRef.current.send({
+          type: 'broadcast',
+          event: queued.event,
+          payload: queued.payload,
+        });
+      } catch (err) {
+        console.warn('Supabase flush error:', err);
+      }
+    }
+  }, []);
+
   const sendSignal = useCallback((event: string, payload: any) => {
     const packet = {
       event,
@@ -198,17 +239,21 @@ export function useWebRTC({
       console.warn('Socket.io call signal error:', err);
     }
 
-    // 3. Global Supabase Realtime Broadcast
-    try {
-      if (supabaseChannelRef.current) {
+    // 3. Global Supabase Realtime Broadcast (queue if not yet subscribed)
+    if (supabaseReadyRef.current && supabaseChannelRef.current) {
+      try {
         supabaseChannelRef.current.send({
           type: 'broadcast',
           event,
           payload,
         });
+      } catch (err) {
+        console.warn('Supabase call signal error:', err);
+        signalQueueRef.current.push({ event, payload });
       }
-    } catch (err) {
-      console.warn('Supabase call signal error:', err);
+    } else {
+      // Queue for delivery once channel is SUBSCRIBED
+      signalQueueRef.current.push({ event, payload });
     }
   }, [roomId]);
 
@@ -495,7 +540,8 @@ export function useWebRTC({
       console.warn('Socket.io join call room error:', e);
     }
 
-    // 3. Set initial state & announce presence immediately across all available transports
+    // 3. Set initial state & announce presence via fast transports (BC + Socket.io).
+    //    Supabase signal is deferred until channel.subscribe() fires SUBSCRIBED.
     if (isInitiator) {
       setConnectionState('ringing');
       startRingtone();
@@ -503,10 +549,23 @@ export function useWebRTC({
       setConnectionState('connecting');
     }
 
-    sendSignal(isInitiator ? 'peer_join' : 'receiver_ready', {
-      timestamp: Date.now(),
-      isInitiator,
-    });
+    // Announce immediately on BroadcastChannel + Socket.io (Supabase queued)
+    const announceEvent = isInitiator ? 'peer_join' : 'receiver_ready';
+    try {
+      if (broadcastChannelRef.current) {
+        broadcastChannelRef.current.postMessage({
+          event: announceEvent,
+          payload: { timestamp: Date.now(), isInitiator },
+          id: `${announceEvent}_${Date.now()}`,
+          roomId,
+        });
+      }
+    } catch (_) {}
+    try {
+      emitCallSignal(roomId, announceEvent, { timestamp: Date.now(), isInitiator });
+    } catch (_) {}
+    // Queue Supabase signal — will flush once SUBSCRIBED fires
+    signalQueueRef.current.push({ event: announceEvent, payload: { timestamp: Date.now(), isInitiator } });
 
     // 4. Setup Supabase Realtime Broadcast Channel as cross-network relay
     const channelName = `call_room_${roomId}`;
@@ -523,6 +582,10 @@ export function useWebRTC({
 
     channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
+        supabaseReadyRef.current = true;
+        // Flush any signals that were queued before subscription completed
+        flushSignalQueue();
+        // Announce presence now that the channel is live
         sendSignal(isInitiator ? 'peer_join' : 'receiver_ready', {
           timestamp: Date.now(),
           isInitiator,
@@ -530,19 +593,20 @@ export function useWebRTC({
       }
     });
 
-    // Periodic heartbeat presence ping until peer answers
+    // Periodic heartbeat: re-announce presence until peer is confirmed ready.
+    // Uses a gentle 2.5s interval to avoid duplicate-offer race conditions.
     const pingInterval = setInterval(() => {
-      if (!peerReadyRef.current) {
+      if (!peerReadyRef.current && supabaseReadyRef.current) {
         sendSignal(isInitiator ? 'peer_join' : 'receiver_ready', {
           timestamp: Date.now(),
           isInitiator,
           retry: true,
         });
       }
-    }, 1200);
+    }, 2500);
 
     return () => clearInterval(pingInterval);
-  }, [handleInboundSignal, isInitiator, roomId, sendSignal, startRingtone]);
+  }, [handleInboundSignal, isInitiator, roomId, sendSignal, startRingtone, flushSignalQueue]);
 
   // ── Main Launch Effect ─────────────────────────────────────────────────────
   useEffect(() => {

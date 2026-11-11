@@ -27,6 +27,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
   const [copiedLink, setCopiedLink] = useState(false);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const {
     localStream,
@@ -51,15 +52,33 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
 
   // Attach local stream to local video element
   useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
+    const el = localVideoRef.current;
+    if (el && localStream) {
+      el.srcObject = localStream;
+      el.play().catch(() => {
+        // Autoplay blocked; user interaction needed — muted so this usually succeeds
+      });
     }
   }, [localStream]);
 
-  // Attach remote stream to remote video element
+  // Attach remote stream to video element (video calls) + audio element (all calls)
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
+    if (!remoteStream) return;
+
+    // Video: attach to <video> element for video calls
+    const videoEl = remoteVideoRef.current;
+    if (videoEl) {
+      videoEl.srcObject = remoteStream;
+      videoEl.play().catch(() => {});
+    }
+
+    // Audio: always attach remote stream to a dedicated <audio> element.
+    // This ensures sound plays on mobile browsers even when video element
+    // is not rendered (voice calls) or when autoplay policy blocks video.
+    const audioEl = remoteAudioRef.current;
+    if (audioEl) {
+      audioEl.srcObject = remoteStream;
+      audioEl.play().catch(() => {});
     }
   }, [remoteStream]);
 
@@ -250,6 +269,14 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
           )}
         </div>
       )}
+
+      {/* Hidden remote audio element — ensures voice plays on mobile for both voice & video calls */}
+      <audio
+        ref={remoteAudioRef}
+        autoPlay
+        playsInline
+        style={{ display: 'none' }}
+      />
 
       {/* Bottom Floating Control Dock */}
       <div className="relative z-10 px-6 pt-4" style={{ paddingBottom: 'max(calc(env(safe-area-inset-bottom, 0px) + 24px), 32px)' }}>
