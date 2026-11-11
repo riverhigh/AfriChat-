@@ -401,7 +401,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 className="text-neutral-400 hover:text-white"
                 title="Copy phone"
               >
-                {copiedPhone ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedPhone ? <Check className="w-3.5 h-3.5 text-purple-400" /> : <Copy className="w-3.5 h-3.5" />}
               </button>
             </p>
           )}
@@ -426,7 +426,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 onClick={() => setShowInviteLinkDrawer(true)}
                 className="flex flex-col items-center justify-center py-3 px-2 bg-[#1c1c1e] hover:bg-[#252528] active:scale-95 transition-all rounded-2xl border border-neutral-800/80 group"
               >
-                <Share2 className="w-5 h-5 text-emerald-400 mb-1 group-hover:scale-110 transition-transform" />
+                <Share2 className="w-5 h-5 text-purple-400 mb-1 group-hover:scale-110 transition-transform" />
                 <span className="text-xs font-semibold text-white">Invite Link</span>
               </button>
 
@@ -454,7 +454,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 }}
                 className="flex flex-col items-center justify-center py-3 px-2 bg-[#1c1c1e] hover:bg-[#252528] active:scale-95 transition-all rounded-2xl border border-neutral-800/80"
               >
-                <Phone className="w-5 h-5 text-emerald-400 mb-1" />
+                <Phone className="w-5 h-5 text-purple-400 mb-1" />
                 <span className="text-xs font-semibold text-white">Voice</span>
               </button>
 
@@ -466,7 +466,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 }}
                 className="flex flex-col items-center justify-center py-3 px-2 bg-[#1c1c1e] hover:bg-[#252528] active:scale-95 transition-all rounded-2xl border border-neutral-800/80"
               >
-                <Video className="w-5 h-5 text-emerald-400 mb-1" />
+                <Video className="w-5 h-5 text-purple-400 mb-1" />
                 <span className="text-xs font-semibold text-white">Video</span>
               </button>
 
@@ -478,7 +478,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 }}
                 className="flex flex-col items-center justify-center py-3 px-2 bg-[#1c1c1e] hover:bg-[#252528] active:scale-95 transition-all rounded-2xl border border-neutral-800/80"
               >
-                <Search className="w-5 h-5 text-emerald-400 mb-1" />
+                <Search className="w-5 h-5 text-purple-400 mb-1" />
                 <span className="text-xs font-semibold text-white">Search</span>
               </button>
             </div>
@@ -517,7 +517,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                   onClick={() => setShowInviteLinkDrawer(true)}
                   className="p-3 bg-neutral-800 hover:bg-neutral-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 transition-all border border-neutral-700 active:scale-95"
                 >
-                  <Share2 className="w-4 h-4 text-emerald-400" />
+                  <Share2 className="w-4 h-4 text-purple-400" />
                   <span>Share Link</span>
                 </button>
               </div>
@@ -884,7 +884,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
               </div>
               <div className="flex items-center justify-between text-xs text-neutral-400 pt-1 border-t border-neutral-800">
                 <span>Encrypted end-to-end join link</span>
-                <span className="text-[10px] font-mono text-emerald-400 font-bold">Active & Valid</span>
+                <span className="text-[10px] font-mono text-purple-400 font-bold">Active & Valid</span>
               </div>
             </div>
 
@@ -904,7 +904,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 onClick={handleShareInviteLink}
                 className="py-3 px-4 bg-neutral-800 hover:bg-neutral-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 transition-all border border-neutral-700 active:scale-95"
               >
-                <Share2 className="w-4 h-4 text-emerald-400" />
+                <Share2 className="w-4 h-4 text-purple-400" />
                 <span>Share Via...</span>
               </button>
             </div>
@@ -1087,7 +1087,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                           <span className="text-[10px] font-mono">Voice Note</span>
                         </div>
                       ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center text-emerald-400">
+                        <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center text-purple-400">
                           <FileText className="w-6 h-6 mb-1" />
                           <span className="text-[10px] font-mono">Document</span>
                         </div>
@@ -1107,7 +1107,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
       {showEncryptionModal && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
           <div className="w-full max-w-sm bg-[#18181c] rounded-3xl border border-neutral-800 p-5 space-y-4 shadow-2xl text-center">
-            <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/40">
+            <div className="w-12 h-12 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center mx-auto border border-purple-500/40">
               <ShieldCheck className="w-6 h-6" />
             </div>
 

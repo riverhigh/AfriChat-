@@ -20,6 +20,8 @@ import {
   upsertProfile,
   fetchProfile,
   mapProfileToUser,
+  supabase,
+  isSupabaseConfigured,
 } from '../services/supabase';
 
 const COUNTRY_CODES = [
@@ -182,7 +184,7 @@ export const AuthModal: React.FC = () => {
     }
   };
 
-  const handleVerifyOtp = () => {
+  const handleVerifyOtp = async () => {
     const entered = otpDigits.join('');
     if (entered.length < 6) {
       alert('Please enter all 6 digits of your OTP');
@@ -192,6 +194,50 @@ export const AuthModal: React.FC = () => {
       alert('Invalid OTP code. Please enter the 6-digit code shown in the banner.');
       return;
     }
+
+    // Strict role-based login: check if phone number is already registered
+    if (isSupabaseConfigured) {
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('full_name, avatar_url, bio, role, phone_number')
+          .eq('phone_number', fullNormalizedNumber)
+          .maybeSingle();
+
+        if (data && data.full_name) {
+          loginWithPhone(fullNormalizedNumber, data.full_name, data.avatar_url, data.bio, data.role || 'user');
+          setStep('input');
+          setPhoneInput('');
+          setOtpDigits(['', '', '', '', '', '']);
+          setShowSimulatedSms(false);
+          setIsAuthModalOpen(false);
+          return;
+        }
+      } catch (err) {
+        console.warn('Profile check error:', err);
+      }
+    }
+
+    // Check local storage cached profile
+    try {
+      const saved = localStorage.getItem('AGC_user_profile_v2');
+      if (saved) {
+        const profile = JSON.parse(saved);
+        const cleanSaved = (profile.phoneNumber || '').replace(/\D/g, '');
+        const cleanEntered = fullNormalizedNumber.replace(/\D/g, '');
+        if (cleanSaved && cleanSaved === cleanEntered && profile.fullName) {
+          loginWithPhone(profile.phoneNumber, profile.fullName, profile.avatarUrl, profile.about, profile.role || 'user');
+          setStep('input');
+          setPhoneInput('');
+          setOtpDigits(['', '', '', '', '', '']);
+          setShowSimulatedSms(false);
+          setIsAuthModalOpen(false);
+          return;
+        }
+      }
+    } catch (_) {}
+
+    // Truly new user: prompt to set up profile
     setStep('profile');
   };
 

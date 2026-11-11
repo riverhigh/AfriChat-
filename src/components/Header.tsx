@@ -84,7 +84,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
   } = useApp();
 
   const [showMenu, setShowMenu] = useState(false);
-  const [menuFilter, setMenuFilter] = useState<'all' | 'finance' | 'services' | 'tools'>('all');
+  const [menuFilter, setMenuFilter] = useState<'finance' | 'services' | 'tools'>('finance');
   const [menuSearch, setMenuSearch] = useState('');
 
   const formattedShortBalance = `₦${Math.floor(wallet.availableBalance / 1000)}k`;
@@ -152,7 +152,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                   {/* Category filter pills */}
                   {!menuSearch && (
                     <div className="flex gap-1.5 mb-3 overflow-x-auto pb-0.5 no-scrollbar">
-                      {(['all', 'finance', 'services', 'tools'] as const).map((f) => (
+                      {(['finance', 'services', 'tools'] as const).map((f) => (
                         <button
                           key={f}
                           type="button"
@@ -163,14 +163,14 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                               : 'bg-slate-100 dark:bg-neutral-900 text-slate-500 dark:text-neutral-400 hover:bg-slate-200 dark:hover:bg-neutral-800'
                           }`}
                         >
-                          {f === 'all' ? '\u2726 All' : f === 'finance' ? '\u20a6 Finance' : f === 'services' ? '\u2692 Services' : '\u2699 Tools'}
+                          {f === 'finance' ? '\u20a6 Finance' : f === 'services' ? '\u2692 Services' : '\u2699 Tools'}
                         </button>
                       ))}
                     </div>
                   )}
 
                   {/* Admin Console - Hidden from regular users */}
-                  {(currentUser?.role === 'admin' || currentUser?.isAdmin) && !menuSearch && menuFilter === 'all' && (
+                  {(currentUser?.role === 'admin' || currentUser?.isAdmin) && !menuSearch && (
                     <button
                       type="button"
                       onClick={() => {
@@ -211,10 +211,10 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                       { label: 'Dispatch', sub: 'PickkR / Gokada', icon: Truck, action: () => setIsDispatchModalOpen(true), cat: 'services' },
                       { label: 'Job Board', sub: 'Hire & Earn Gigs', icon: Briefcase, action: () => setIsJobBoardModalOpen(true), cat: 'services' },
                       { label: 'Creator Hub', sub: 'VIP Calls & Drops', icon: Sparkles, action: () => setIsCreatorModalOpen(true), cat: 'tools' },
-                      { label: 'Celebrity', sub: 'Identity Check', icon: Crown, action: () => setIsCelebrityModalOpen(true), cat: 'tools' },
+                      
                       { label: 'Store Tiers', sub: '\u20a63k / \u20a67k Monthly', icon: Store, action: () => setIsStoreRegModalOpen(true), cat: 'tools' },
                       { label: 'Writers Guild', sub: 'Chapters & Buddy', icon: BookOpen, action: () => setIsWritersModalOpen(true), cat: 'tools' },
-                      { label: 'Street Radio', sub: 'Live 12kbps Audio', icon: Radio, action: () => { const live = audioSpaces.find((s) => s.isLive) || audioSpaces[0]; if (live) joinAudioSpace(live); }, cat: 'tools' },
+                      { label: 'Spaces', sub: 'Live Audio Spaces', icon: Radio, action: () => { const live = audioSpaces.find((s) => s.isLive) || audioSpaces[0]; if (live) joinAudioSpace(live); }, cat: 'tools' },
                       { label: 'Invite & Earn', sub: '\u20a6500/Friend', icon: Share2, action: () => setIsReferralModalOpen(true), cat: 'tools' },
                       { label: 'Tutors', sub: '\u20a65k · Courses', icon: GraduationCap, action: () => setIsTutorModalOpen(true), cat: 'tools' },
                       { label: 'Meme Studio', sub: 'African Stickers', icon: Sparkles, action: () => setIsMemeStudioOpen(true), cat: 'tools' },
@@ -224,7 +224,6 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                     const q = menuSearch.toLowerCase();
                     const filtered = allTools.filter((t) => {
                       if (q) return t.label.toLowerCase().includes(q) || t.sub.toLowerCase().includes(q);
-                      if (menuFilter === 'all') return true;
                       return t.cat === menuFilter;
                     });
                     if (filtered.length === 0) {

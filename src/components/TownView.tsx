@@ -98,7 +98,7 @@ export const TownView: React.FC = () => {
               </span>
             </div>
             <p className="text-[11px] text-slate-500 dark:text-neutral-400">
-              Community Channels, Groups & Street Radio
+              Community Channels, Groups & Spaces
             </p>
           </div>
 
@@ -149,7 +149,7 @@ export const TownView: React.FC = () => {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search channels, groups, street radio..."
+            placeholder="Search channels, groups, spaces..."
             className="w-full pl-9 pr-8 py-2 text-xs bg-slate-100 dark:bg-neutral-900 rounded-xl border border-transparent focus:border-purple-500 dark:focus:border-purple-500 focus:outline-none text-slate-900 dark:text-white placeholder-slate-400"
           />
           {searchQuery && (
@@ -187,7 +187,7 @@ export const TownView: React.FC = () => {
             }`}
           >
             <Radio className="w-3.5 h-3.5 text-rose-500" />
-            <span>Radio</span>
+            <span>Spaces</span>
             {liveSpaces.length > 0 && (
               <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
             )}
@@ -244,14 +244,14 @@ export const TownView: React.FC = () => {
       {/* Main Town Feed Content */}
       <div className="p-4 space-y-4">
 
-        {/* 1. Live Street Radio Spaces Section */}
+        {/* 1. Live Spaces Spaces Section */}
         {(activeFilter === 'all' || activeFilter === 'spaces') && liveSpaces.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">
-                  Live Street Radio (Low-Bandwidth Spaces)
+                  Live Audio Spaces
                 </span>
               </div>
               <span className="text-[10px] font-mono text-rose-600 dark:text-rose-400 font-bold">
@@ -301,12 +301,18 @@ export const TownView: React.FC = () => {
                       <Headphones className="w-3 h-3 text-purple-500" />
                       {space.listenersCount}
                     </span>
-                    <button
-                      type="button"
-                      className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shadow-xs transition-transform active:scale-95"
-                    >
-                      Tune In
-                    </button>
+                    <div className="flex flex-col items-end gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); joinAudioSpace(space); }}
+                        className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shadow-xs transition-transform active:scale-95"
+                      >
+                        Tune In
+                      </button>
+                      <span className="text-[9px] font-mono text-purple-400/80">
+                        {hidePhoneNumberInTown ? 'Anonymous Listener' : (currentUser?.fullName?.split(' ')[0] || 'You')}
+                      </span>
+                    </div>
                   </div>
                 </div>
               ))}

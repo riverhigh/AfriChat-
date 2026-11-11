@@ -314,7 +314,8 @@ interface AppContextType {
     phoneNumber: string,
     fullName: string,
     avatarUrl?: string,
-    about?: string
+    about?: string,
+    role?: 'user' | 'admin' | 'creator' | 'merchant'
   ) => void;
   logoutUser: () => void;
   updateUserProfile: (updates: Partial<UserProfile>) => void;
@@ -3121,6 +3122,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
+    // Broadcast new group to Socket.io and Supabase so other members see it on their dash
+    try {
+      const bc = new BroadcastChannel('AGC_chats_sync');
+      bc.postMessage({ chatId: newChatId, chat: newThread, message: sysMsg, senderId: currentUser.id });
+      bc.close();
+    } catch (_) {}
+
+    try {
+      emitLiveMessage(newChatId, sysMsg, undefined);
+    } catch (_) {}
+
+    if (isSupabaseConfigured) {
+      try {
+        const sbChannel = supabase.channel('town_community_feed', { config: { broadcast: { self: false } } });
+        sbChannel.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            sbChannel.send({ type: 'broadcast', event: 'new_message', payload: { chatId: newChatId, chat: newThread, message: sysMsg, senderId: currentUser.id } });
+          }
+        });
+      } catch (_) {}
+    }
+
     setActiveChatId(newChatId);
     return newChatId;
   };
@@ -4145,7 +4168,8 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
     phoneNumber: string,
     fullName: string,
     avatarUrl?: string,
-    about?: string
+    about?: string,
+    role?: 'user' | 'admin' | 'creator' | 'merchant'
   ) => {
     // Generate a unique session token for single-device enforcement
     const sessionToken = `${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
@@ -4163,7 +4187,7 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
       createdAt: new Date().toISOString(),
       lastSeen: 'online',
       isPhoneVerified: true,
-      role: 'user',
+      role: role || (phoneNumber.includes('admin') ? 'admin' : 'user'),
     };
 
     setCurrentUser(updatedUser);

@@ -7,6 +7,7 @@ import {
   ShieldAlert,
   Sparkles,
   Users,
+  User,
   Coins,
   Store,
   AlertTriangle,
@@ -29,6 +30,7 @@ export const ChatList: React.FC = () => {
     'all' | 'unread' | 'groups' | 'channels' | 'stores'
   >('all');
   const [selectedProfileChat, setSelectedProfileChat] = useState<ChatThread | null>(null);
+  const [avatarPrompt, setAvatarPrompt] = useState<{ chat: ChatThread; status: any } | null>(null);
 
   const filteredChats = chats.filter((chat) => {
     const matchesSearch =
@@ -170,7 +172,7 @@ export const ChatList: React.FC = () => {
                 title={hasRecentStatus ? `${chat.name} posted a new status - tap to view` : 'View contact info'}
               >
                 {hasRecentStatus ? (
-                  <div className="p-[2.5px] rounded-full bg-gradient-to-tr from-emerald-500 via-teal-400 to-indigo-500 shadow-xs animate-pulse">
+                  <div className="p-[2.5px] rounded-full bg-gradient-to-tr from-purple-600 via-pink-500 to-indigo-600 ring-2 ring-purple-500/60 shadow-[0_0_12px_rgba(168,85,247,0.5)] animate-pulse">
                     <div className="p-0.5 bg-white dark:bg-black rounded-full">
                       <img
                         src={chat.avatar}
@@ -318,6 +320,57 @@ export const ChatList: React.FC = () => {
       </button>
 
       {/* AGC Contact Info Profile Modal */}
+      {/* Avatar Prompt Modal: View Updates or View Profile */}
+      {avatarPrompt && (
+        <div
+          onClick={() => setAvatarPrompt(null)}
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-xs bg-white dark:bg-neutral-900 rounded-3xl p-5 border border-slate-200 dark:border-neutral-800 shadow-2xl text-center space-y-4 animate-in zoom-in-95"
+          >
+            <div className="relative w-16 h-16 mx-auto rounded-full p-1 bg-gradient-to-tr from-purple-600 via-pink-500 to-indigo-600 ring-4 ring-purple-500/30">
+              <img
+                src={avatarPrompt.chat.avatar}
+                alt={avatarPrompt.chat.name}
+                className="w-full h-full rounded-full object-cover"
+              />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white">{avatarPrompt.chat.name}</h3>
+              <p className="text-xs text-purple-600 dark:text-purple-400 font-medium mt-0.5">
+                New 24h status update posted
+              </p>
+            </div>
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  if (avatarPrompt.status) setActiveViewingStatus(avatarPrompt.status);
+                  setAvatarPrompt(null);
+                }}
+                className="w-full py-2.5 px-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-transform active:scale-95"
+              >
+                <Sparkles className="w-4 h-4 text-amber-300" />
+                <span>View Status Updates</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedProfileChat(avatarPrompt.chat);
+                  setAvatarPrompt(null);
+                }}
+                className="w-full py-2.5 px-4 bg-slate-100 dark:bg-neutral-800 hover:bg-slate-200 dark:hover:bg-neutral-700 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-colors"
+              >
+                <User className="w-4 h-4 text-purple-400" />
+                <span>View Profile</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ContactProfileModal
         chat={selectedProfileChat}
         isOpen={Boolean(selectedProfileChat)}

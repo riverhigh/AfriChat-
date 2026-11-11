@@ -774,32 +774,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <ChevronRight className="w-4 h-4 text-slate-400" />
             </button>
 
-            {/* Celebrity Identity Verification */}
-            <button
-              onClick={() => setIsCelebrityModalOpen(true)}
-              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 to-purple-600 text-white flex items-center justify-center">
-                  <Crown className="w-4 h-4 text-amber-200" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <span>Celebrity Identity Verification</span>
-                    {currentUser.isCelebrityVerified && (
-                      <span className="text-[10px] bg-amber-500/20 text-amber-500 font-bold px-1.5 py-0.2 rounded-full border border-amber-500/30">
-                        Celebrity Verified ✓
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    Apply for verified checkmark as a public figure, musician or creator
-                  </div>
-                </div>
-              </div>
-              <ChevronRight className="w-4 h-4 text-slate-400" />
-            </button>
-
             {/* Merchant Store Registration & Tiers (₦3k / ₦7k) */}
             <button
               onClick={() => setIsStoreRegModalOpen(true)}

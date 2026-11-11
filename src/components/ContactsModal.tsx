@@ -222,7 +222,7 @@ export const ContactsModal: React.FC = () => {
   const handleSendInviteToJoin = () => {
     if (!checkResult) return;
     const name = `Contact ${checkResult.phone}`;
-    addNewDeviceContact(name, checkResult.phone, 'Invited to AGC', false);
+    const contact = addNewDeviceContact(name, checkResult.phone, 'AGC Friend', true);
     
     // Attempt navigator.share or copy invite
     const inviteText = `Hey! Connect with me on AGC, the African Super-App for calls, chat and market. Join here: ${window.location.origin}`;
@@ -230,11 +230,12 @@ export const ContactsModal: React.FC = () => {
       navigator.clipboard.writeText(inviteText);
     }
     
-    setInviteSentToast(`ðŸ“² Free SMS invite queued for ${checkResult.phone}. Link copied to clipboard!`);
+    setInviteSentToast(`Added ${checkResult.phone} to AGC contacts & copied invite link!`);
     setTimeout(() => setInviteSentToast(null), 3500);
     setNewPhone('');
     setCheckResult(null);
     setShowAddContactForm(false);
+    startChatWithContact(contact);
   };
 
   const handleSendInvite = (contact: DeviceContact) => {
