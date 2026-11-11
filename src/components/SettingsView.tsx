@@ -543,71 +543,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* 1. Custom Text Size Scale Adjuster (Preserved in Fyp) */}
-          <div className="px-4">
-            <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 shadow-xs space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-purple-600/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
-                    <Type className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                      Text Size & Typography
-                    </h4>
-                    <p className="text-[11px] text-slate-500 dark:text-neutral-400">
-                      Scale app font across chats, feeds & messages
-                    </p>
-                  </div>
-                </div>
-                <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded-full bg-purple-600/15 text-purple-600 dark:text-purple-300">
-                  {fontSize}
-                </span>
-              </div>
-
-              {/* 4 Interactive Size Pills */}
-              <div className="grid grid-cols-4 gap-2">
-                {fontOptions.map((opt) => {
-                  const isSelected = fontSize === opt.id;
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setFontSize(opt.id)}
-                      className={`py-2 px-1.5 rounded-xl text-center border transition-all ${
-                        isSelected
-                          ? 'bg-purple-600 text-white border-purple-600 shadow-xs ring-2 ring-purple-600/20'
-                          : 'bg-slate-50 dark:bg-neutral-800 border-slate-200 dark:border-neutral-700 text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-750'
-                      }`}
-                    >
-                      <span className="block text-xs font-bold leading-tight">
-                        {opt.label}
-                      </span>
-                      <span className={`block text-[10px] mt-0.5 opacity-80 ${isSelected ? 'text-purple-100' : 'text-slate-400'}`}>
-                        {opt.sizePx}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Live Preview Sample */}
-              <div className="p-3 rounded-xl bg-slate-50 dark:bg-neutral-950 border border-slate-100 dark:border-neutral-800/80">
-                <div className="text-[10px] uppercase font-mono font-bold text-slate-400 mb-1.5">
-                  Live Chat Preview:
-                </div>
-                <div className="p-3 rounded-2xl bg-purple-600 text-white max-w-[85%] rounded-br-xs shadow-xs">
-                  <p className="font-medium leading-relaxed">
-                    AGC: Fast & secure chats across Africa 🌍
-                  </p>
-                  <span className="text-[10px] opacity-75 block text-right mt-1">
-                    10:45 AM · ✓✓
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
           {/* 2. Custom Chat Background Wallpaper & Device Upload (Preserved in Fyp) */}
           <div className="px-4">
             <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 shadow-xs space-y-3">
@@ -937,6 +872,41 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   }`}
                 />
               </button>
+            </div>
+
+            {/* Text Size (Moved to bottom, minimalist & less flamboyant, preview removed) */}
+            <div className="px-4 py-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <Type className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                  <div>
+                    <div className="text-sm font-medium">Text Size</div>
+                    <div className="text-xs text-slate-500">Scale app font across chats & messages</div>
+                  </div>
+                </div>
+                <span className="text-xs font-mono font-medium text-slate-500 dark:text-neutral-400">
+                  {fontOptions.find((o) => o.id === fontSize)?.label} ({fontOptions.find((o) => o.id === fontSize)?.sizePx})
+                </span>
+              </div>
+              <div className="grid grid-cols-4 gap-1.5 p-1 bg-slate-100 dark:bg-neutral-900 rounded-xl">
+                {fontOptions.map((opt) => {
+                  const isSelected = fontSize === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setFontSize(opt.id)}
+                      className={`py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        isSelected
+                          ? 'bg-white dark:bg-neutral-800 text-slate-900 dark:text-white shadow-xs font-semibold'
+                          : 'text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
