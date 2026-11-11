@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Download, RefreshCw, CheckCircle2, Smartphone, Sparkles, ExternalLink, ShieldCheck } from 'lucide-react';
 
 interface BeforeInstallPromptEvent extends Event {
@@ -7,10 +7,14 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 export const PwaInstallCard: React.FC = () => {
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(() => {
+    return (typeof window !== 'undefined' && (window as any).deferredPwaPrompt) || null;
+  });
   const [isStandalone, setIsStandalone] = useState(false);
   const [isIos, setIsIos] = useState(false);
+  const [isAndroid, setIsAndroid] = useState(false);
   const [showIosInstructions, setShowIosInstructions] = useState(false);
+  const [showAndroidInstructions, setShowAndroidInstructions] = useState(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
 
@@ -23,38 +27,76 @@ export const PwaInstallCard: React.FC = () => {
       (window.navigator as unknown as { standalone?: boolean }).standalone === true;
     setIsStandalone(Boolean(isStandaloneMode));
 
-    // Check if iOS
+    // Platform detection
     const ua = window.navigator.userAgent.toLowerCase();
     const isIosDevice = /iphone|ipad|ipod/.test(ua);
+    const isAndroidDevice = /android/.test(ua);
     setIsIos(isIosDevice);
+    setIsAndroid(isAndroidDevice);
+
+    // Initial check for globally cached prompt
+    if ((window as any).deferredPwaPrompt) {
+      setDeferredPrompt((window as any).deferredPwaPrompt);
+    }
 
     // Listen for PWA install prompt event
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
+      (window as any).deferredPwaPrompt = e;
       setDeferredPrompt(e as BeforeInstallPromptEvent);
     };
 
+    const handlePromptReady = () => {
+      if ((window as any).deferredPwaPrompt) {
+        setDeferredPrompt((window as any).deferredPwaPrompt);
+      }
+    };
+
+    const handleAppInstalled = () => {
+      setIsStandalone(true);
+      setDeferredPrompt(null);
+      (window as any).deferredPwaPrompt = null;
+      setShowAndroidInstructions(false);
+      setShowIosInstructions(false);
+    };
+
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('pwa-prompt-ready', handlePromptReady);
+    window.addEventListener('appinstalled', handleAppInstalled);
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('pwa-prompt-ready', handlePromptReady);
+      window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
 
   const handleInstallClick = async () => {
-    if (deferredPrompt) {
-      await deferredPrompt.prompt();
-      const choiceResult = await deferredPrompt.userChoice;
-      if (choiceResult.outcome === 'accepted') {
-        setDeferredPrompt(null);
-        setIsStandalone(true);
+    const promptEvent = deferredPrompt || (typeof window !== 'undefined' && (window as any).deferredPwaPrompt);
+    if (promptEvent) {
+      try {
+        await promptEvent.prompt();
+        const choiceResult = await promptEvent.userChoice;
+        if (choiceResult.outcome === 'accepted') {
+          setDeferredPrompt(null);
+          if (typeof window !== 'undefined') (window as any).deferredPwaPrompt = null;
+          setIsStandalone(true);
+          setShowAndroidInstructions(false);
+          setShowIosInstructions(false);
+        }
+      } catch (err) {
+        console.warn('Install prompt error:', err);
       }
+    } else if (isAndroid) {
+      // Direct Android instructions (Chrome 3 dots)
+      setShowAndroidInstructions((prev) => !prev);
+      setShowIosInstructions(false);
     } else if (isIos) {
-      setShowIosInstructions(true);
+      // iOS Safari Share instructions
+      setShowIosInstructions((prev) => !prev);
+      setShowAndroidInstructions(false);
     } else {
-      alert(
-        'To install AGC on your device:\n1. Tap the browser menu (⋮ or Share)\n2. Select "Install App" or "Add to Home Screen".'
-      );
+      setShowAndroidInstructions((prev) => !prev);
     }
   };
 
@@ -129,6 +171,21 @@ export const PwaInstallCard: React.FC = () => {
           </button>
         )}
       </div>
+
+      {/* Android Chrome manual instructions banner */}
+      {showAndroidInstructions && (
+        <div className="p-3 bg-emerald-50/80 dark:bg-emerald-950/30 rounded-2xl border border-emerald-300/60 dark:border-emerald-800/40 text-xs text-slate-700 dark:text-neutral-300 space-y-1.5 animate-in fade-in duration-200">
+          <div className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+            <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span>Install directly on Android</span>
+          </div>
+          <ol className="list-decimal list-inside text-[11px] space-y-1 text-slate-700 dark:text-neutral-300 font-medium">
+            <li>Tap the <strong>three dots (⋮)</strong> in the top-right corner of Chrome</li>
+            <li>Tap <strong>Install app</strong> or <strong>Add to Home screen</strong></li>
+            <li>Tap <strong>Install</strong> to add AGC to your phone's app drawer</li>
+          </ol>
+        </div>
+      )}
 
       {/* iOS Safari manual instructions banner */}
       {showIosInstructions && (

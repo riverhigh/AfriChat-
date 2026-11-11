@@ -7,6 +7,8 @@ import {
   Clock,
   ChevronUp,
   MessageSquare,
+  Repeat,
+  Check,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -15,12 +17,28 @@ export const StatusViewerModal: React.FC = () => {
     activeViewingStatus,
     setActiveViewingStatus,
     likeStatus,
+    addStatus,
     sendMessage,
     setActiveChatId,
   } = useApp();
 
   const [showViewersSheet, setShowViewersSheet] = useState(false);
   const [replyText, setReplyText] = useState('');
+  const [reshared, setReshared] = useState(false);
+  const [reshareNotice, setReshareNotice] = useState<string | null>(null);
+
+  const handleReshare = () => {
+    const caption = status.caption
+      ? `Reshared from ${status.userName}: "${status.caption}"`
+      : `Reshared from ${status.userName}`;
+    addStatus(caption, status.mediaUrl);
+    setReshared(true);
+    setReshareNotice(`Reshared ${status.userName}'s status to your 24h updates!`);
+    setTimeout(() => {
+      setReshared(false);
+      setReshareNotice(null);
+    }, 3000);
+  };
 
   if (!activeViewingStatus) return null;
 
@@ -48,7 +66,14 @@ export const StatusViewerModal: React.FC = () => {
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col justify-between animate-in fade-in duration-150">
       {/* Top Segmented Story Progress Bar */}
-      <div className="p-3 pb-0 z-20 space-y-2">
+      <div
+        className="px-3.5 pb-0 z-20 space-y-2"
+        style={{
+          paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 8px), 14px)',
+          paddingLeft: 'max(env(safe-area-inset-left, 0px), 14px)',
+          paddingRight: 'max(env(safe-area-inset-right, 0px), 14px)',
+        }}
+      >
         <div className="w-full bg-white/20 h-1 rounded-full overflow-hidden">
           <div className="bg-white h-full w-full animate-in slide-in-from-left duration-500" />
         </div>
@@ -180,6 +205,18 @@ export const StatusViewerModal: React.FC = () => {
               </button>
             </form>
 
+            <button
+              type="button"
+              onClick={handleReshare}
+              className={`w-11 h-11 rounded-full flex items-center justify-center transition-all active:scale-125 ${
+                reshared
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/50'
+                  : 'bg-white/15 backdrop-blur-md text-white hover:bg-emerald-600/80 border border-white/20'
+              }`}
+              title="Reshare this update to your 24h status"
+            >
+              {reshared ? <Check className="w-5 h-5 text-white" /> : <Repeat className="w-5 h-5" />}
+            </button>
             <button
               onClick={handleLike}
               className={`w-11 h-11 rounded-full flex items-center justify-center transition-transform active:scale-125 ${

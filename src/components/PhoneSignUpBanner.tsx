@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Download, Share, PlusSquare, Sparkles } from 'lucide-react';
+import { X, Download, Share, PlusSquare, Sparkles, Smartphone } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 interface BeforeInstallPromptEvent extends Event {
@@ -9,11 +9,15 @@ interface BeforeInstallPromptEvent extends Event {
 
 export const PhoneSignUpBanner: React.FC = () => {
   const { isAuthenticated } = useApp();
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(() => {
+    return (typeof window !== 'undefined' && (window as any).deferredPwaPrompt) || null;
+  });
   const [isDismissed, setIsDismissed] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
   const [isIos, setIsIos] = useState(false);
+  const [isAndroid, setIsAndroid] = useState(false);
   const [showIosTip, setShowIosTip] = useState(false);
+  const [showAndroidTip, setShowAndroidTip] = useState(false);
   const [isInstalled, setIsInstalled] = useState(false);
 
   useEffect(() => {
@@ -36,18 +40,41 @@ export const PhoneSignUpBanner: React.FC = () => {
       return;
     }
 
-    // Detect iOS
+    // Detect platform
     const ua = window.navigator.userAgent.toLowerCase();
     const isIosDevice = /iphone|ipad|ipod/.test(ua);
+    const isAndroidDevice = /android/.test(ua);
     setIsIos(isIosDevice);
+    setIsAndroid(isAndroidDevice);
+
+    // Initial check for globally cached prompt
+    if ((window as any).deferredPwaPrompt) {
+      setDeferredPrompt((window as any).deferredPwaPrompt);
+    }
 
     // Capture standard PWA install prompt
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
+      (window as any).deferredPwaPrompt = e;
       setDeferredPrompt(e as BeforeInstallPromptEvent);
     };
 
+    const handlePromptReady = () => {
+      if ((window as any).deferredPwaPrompt) {
+        setDeferredPrompt((window as any).deferredPwaPrompt);
+      }
+    };
+
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      setDeferredPrompt(null);
+      (window as any).deferredPwaPrompt = null;
+      handleDismiss();
+    };
+
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('pwa-prompt-ready', handlePromptReady);
+    window.addEventListener('appinstalled', handleAppInstalled);
 
     // Pop up once after brief delay (1.2s)
     const timer = setTimeout(() => {
@@ -58,6 +85,8 @@ export const PhoneSignUpBanner: React.FC = () => {
     return () => {
       clearTimeout(timer);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('pwa-prompt-ready', handlePromptReady);
+      window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, [isAuthenticated]);
 
@@ -68,21 +97,28 @@ export const PhoneSignUpBanner: React.FC = () => {
   };
 
   const handleInstallClick = async () => {
-    if (deferredPrompt) {
+    const promptEvent = deferredPrompt || (typeof window !== 'undefined' && (window as any).deferredPwaPrompt);
+    if (promptEvent) {
       try {
-        await deferredPrompt.prompt();
-        const choice = await deferredPrompt.userChoice;
+        await promptEvent.prompt();
+        const choice = await promptEvent.userChoice;
         if (choice.outcome === 'accepted') {
           handleDismiss();
+          if (typeof window !== 'undefined') (window as any).deferredPwaPrompt = null;
         }
       } catch (err) {
         console.warn('Install prompt error:', err);
       }
+    } else if (isAndroid) {
+      // Direct Android instructions (Chrome 3 dots)
+      setShowAndroidTip(true);
+      setShowIosTip(false);
     } else if (isIos) {
+      // iOS Safari instructions
       setShowIosTip(true);
+      setShowAndroidTip(false);
     } else {
-      alert('To install AGC:\n1. Tap your browser menu (⋮ or Share)\n2. Select "Install App" or "Add to Home Screen".');
-      handleDismiss();
+      setShowAndroidTip(true);
     }
   };
 
@@ -90,7 +126,10 @@ export const PhoneSignUpBanner: React.FC = () => {
 
   return (
     <div
-      className={`fixed top-4 left-1/2 -translate-x-1/2 w-[92%] max-w-sm z-[200] transition-all duration-300 ease-out ${
+      style={{
+        top: 'max(calc(env(safe-area-inset-top, 0px) + 12px), 16px)',
+      }}
+      className={`fixed left-1/2 -translate-x-1/2 w-[92%] max-w-sm z-[200] transition-all duration-300 ease-out ${
         isVisible ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-4 scale-95 pointer-events-none'
       }`}
     >
@@ -127,6 +166,24 @@ export const PhoneSignUpBanner: React.FC = () => {
             </p>
           </div>
         </div>
+
+        {/* Android Step Guide if expanded */}
+        {showAndroidTip && (
+          <div className="mt-3 p-3 bg-emerald-950/70 border border-emerald-400/40 rounded-xl text-[11px] text-emerald-100 space-y-1.5 animate-in fade-in duration-200">
+            <div className="font-bold text-emerald-300 flex items-center gap-1.5">
+              <Smartphone className="w-3.5 h-3.5" />
+              <span>Install on Android:</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-emerald-500/30 flex items-center justify-center font-bold text-[10px] text-emerald-300">1</span>
+              <span>Tap the <strong>three dots (⋮)</strong> menu in Chrome</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-emerald-500/30 flex items-center justify-center font-bold text-[10px] text-emerald-300">2</span>
+              <span>Tap <strong>Install app</strong> (or Add to Home screen)</span>
+            </div>
+          </div>
+        )}
 
         {/* iOS Step Guide if expanded */}
         {showIosTip && (

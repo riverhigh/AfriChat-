@@ -178,6 +178,13 @@ interface AppContextType {
   clearChat: (chatId: string) => void;
   updateChat: (chatId: string, updates: Partial<ChatThread>) => void;
   addMembersToGroup: (chatId: string, memberNames: string[]) => void;
+  createGroup: (name: string, memberNamesOrPhones: string[], avatar?: string, description?: string) => string;
+  createChannel: (name: string, description?: string, avatar?: string) => string;
+  toggleMemberAdmin: (chatId: string, memberName: string) => void;
+  removeMemberFromGroup: (chatId: string, memberName: string) => void;
+  deleteMessage: (chatId: string, messageId: string) => void;
+  reactToMessage: (chatId: string, messageId: string, emoji: string) => void;
+  sendImageMessage: (chatId: string, imageUrl: string, caption?: string) => void;
   blockedUserIds: string[];
   toggleBlockUser: (idOrPhone: string) => boolean;
   CURRENCY_SYMBOLS: Record<CurrencyCode, string>;
@@ -214,7 +221,7 @@ interface AppContextType {
   setActiveEscrowModalOrder: (order: EscrowOrder | null) => void;
   isDarkMode: boolean;
   toggleDarkMode: () => void;
-  sendMessage: (chatId: string, text: string) => void;
+  sendMessage: (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }) => void;
   sendVoiceNote: (chatId: string, durationSeconds: number, transcript: string) => void;
   sendProductCard: (chatId: string, product: Product) => void;
   loadImage: (chatId: string, messageId: string) => void;
@@ -3068,6 +3075,259 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const createGroup = (name: string, memberNamesOrPhones: string[], avatar?: string, description?: string): string => {
+    const newChatId = 'group_' + Date.now();
+    const myName = currentUser.fullName || 'You';
+    const newThread: ChatThread = {
+      id: newChatId,
+      name,
+      avatar: avatar || 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=150&auto=format&fit=crop&q=80',
+      verifiedStore: false,
+      location: 'Community Group',
+      unreadCount: 0,
+      lastMessage: 'You created group "' + name + '"',
+      lastMessageTime: 'Just now',
+      catalog: [],
+      isOnline: true,
+      isGroup: true,
+      membersCount: memberNamesOrPhones.length + 1,
+      admins: [myName],
+      description,
+    };
+
+    const sysMsg: ChatMessage = {
+      id: 'msg_sys_' + Date.now(),
+      chatId: newChatId,
+      sender: 'system',
+      text: 'You created group "' + name + '" with ' + memberNamesOrPhones.length + ' members.',
+      type: 'text',
+      timestamp: 'Just now',
+      status: 'sent',
+    };
+
+    setChats((prev) => {
+      const updated = [newThread, ...prev];
+      try {
+        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    setMessages((prev) => {
+      const updated = { ...prev, [newChatId]: [sysMsg] };
+      try {
+        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    setActiveChatId(newChatId);
+    return newChatId;
+  };
+
+  const createChannel = (name: string, description?: string, avatar?: string): string => {
+    const newChatId = 'channel_' + Date.now();
+    const myName = currentUser.fullName || 'You';
+    const newThread: ChatThread = {
+      id: newChatId,
+      name,
+      avatar: avatar || 'https://images.unsplash.com/photo-1582213782179-e0d53f98f2ca?w=150&auto=format&fit=crop&q=80',
+      verifiedStore: false,
+      location: 'Broadcast Channel',
+      unreadCount: 0,
+      lastMessage: 'Channel created',
+      lastMessageTime: 'Just now',
+      catalog: [],
+      isOnline: true,
+      isChannel: true,
+      membersCount: 1,
+      admins: [myName],
+      description,
+    };
+
+    const sysMsg: ChatMessage = {
+      id: 'msg_sys_' + Date.now(),
+      chatId: newChatId,
+      sender: 'system',
+      text: 'Channel "' + name + '" created. Broadcast updates, news, and media to your subscribers.',
+      type: 'text',
+      timestamp: 'Just now',
+      status: 'sent',
+    };
+
+    setChats((prev) => {
+      const updated = [newThread, ...prev];
+      try {
+        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    setMessages((prev) => {
+      const updated = { ...prev, [newChatId]: [sysMsg] };
+      try {
+        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    setActiveChatId(newChatId);
+    return newChatId;
+  };
+
+  const toggleMemberAdmin = (chatId: string, memberName: string) => {
+    setChats((prev) => {
+      const updated = prev.map((c) => {
+        if (c.id === chatId) {
+          const currentAdmins = c.admins || [currentUser.fullName || 'You'];
+          const isAlreadyAdmin = currentAdmins.includes(memberName);
+          const updatedAdmins = isAlreadyAdmin
+            ? currentAdmins.filter((a) => a !== memberName)
+            : [...currentAdmins, memberName];
+          return { ...c, admins: updatedAdmins };
+        }
+        return c;
+      });
+      try {
+        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    const sysMsg: ChatMessage = {
+      id: 'msg_sys_' + Date.now(),
+      chatId,
+      sender: 'system',
+      text: memberName + ' was updated as group admin.',
+      type: 'text',
+      timestamp: 'Just now',
+      status: 'sent',
+    };
+    setMessages((prev) => {
+      const updated = { ...prev, [chatId]: [...(prev[chatId] || []), sysMsg] };
+      try {
+        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
+
+  const removeMemberFromGroup = (chatId: string, memberName: string) => {
+    setChats((prev) => {
+      const updated = prev.map((c) => {
+        if (c.id === chatId) {
+          const currentAdmins = (c.admins || []).filter((a) => a !== memberName);
+          return {
+            ...c,
+            membersCount: Math.max(1, (c.membersCount || 2) - 1),
+            admins: currentAdmins,
+          };
+        }
+        return c;
+      });
+      try {
+        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    const sysMsg: ChatMessage = {
+      id: 'msg_sys_' + Date.now(),
+      chatId,
+      sender: 'system',
+      text: memberName + ' was removed from the group.',
+      type: 'text',
+      timestamp: 'Just now',
+      status: 'sent',
+    };
+    setMessages((prev) => {
+      const updated = { ...prev, [chatId]: [...(prev[chatId] || []), sysMsg] };
+      try {
+        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
+
+  const deleteMessage = (chatId: string, messageId: string) => {
+    setMessages((prev) => {
+      const list = prev[chatId] || [];
+      const updatedList = list.filter((m) => m.id !== messageId);
+      const updated = { ...prev, [chatId]: updatedList };
+      try {
+        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
+
+  const reactToMessage = (chatId: string, messageId: string, emoji: string) => {
+    setMessages((prev) => {
+      const list = prev[chatId] || [];
+      const myName = currentUser.fullName || 'You';
+      const updatedList = list.map((m) => {
+        if (m.id === messageId) {
+          const reactions = { ...(m.reactions || {}) };
+          const users = reactions[emoji] || [];
+          if (users.includes(myName)) {
+            reactions[emoji] = users.filter((u) => u !== myName);
+            if (reactions[emoji].length === 0) delete reactions[emoji];
+          } else {
+            reactions[emoji] = [...users, myName];
+          }
+          return { ...m, reactions };
+        }
+        return m;
+      });
+      const updated = { ...prev, [chatId]: updatedList };
+      try {
+        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
+
+  const sendImageMessage = (chatId: string, imageUrl: string, caption?: string) => {
+    const newMsg: ChatMessage = {
+      id: 'msg_img_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      chatId,
+      sender: 'user',
+      senderName: currentUser.fullName || 'AGC User',
+      senderPhone: currentUser.phoneNumber,
+      senderAvatar: currentUser.avatarUrl,
+      type: 'image',
+      imageUrl,
+      text: caption || '',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'sent',
+    };
+
+    setMessages((prev) => {
+      const current = prev[chatId] || [];
+      const updated = { ...prev, [chatId]: [...current, newMsg] };
+      try {
+        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    setChats((prev) => {
+      const updated = prev.map((c) =>
+        c.id === chatId
+          ? {
+              ...c,
+              lastMessage: '📷 Photo',
+              lastMessageTime: newMsg.timestamp,
+            }
+          : c
+      );
+      try {
+        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
+
   const clearChat = (chatId: string) => {
     setMessages((prev) => {
       const updated = { ...prev, [chatId]: [] };
@@ -3087,7 +3347,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-const sendMessage = (chatId: string, text: string) => {
+const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }) => {
     if (!text.trim()) return;
 
     const currentChat = chats.find((c) => c.id === chatId);
@@ -3107,6 +3367,7 @@ const sendMessage = (chatId: string, text: string) => {
       senderPhone: currentUser.phoneNumber,
       senderAvatar: currentUser.avatarUrl,
       text,
+      replyTo,
       translatedText: {
         en: text,
         pcm: text,
@@ -5964,6 +6225,13 @@ const sendMessage = (chatId: string, text: string) => {
         clearChat,
         updateChat,
         addMembersToGroup,
+        createGroup,
+        createChannel,
+        toggleMemberAdmin,
+        removeMemberFromGroup,
+        deleteMessage,
+        reactToMessage,
+        sendImageMessage,
         blockedUserIds,
         toggleBlockUser,
         CURRENCY_SYMBOLS,

@@ -33,6 +33,7 @@ import {
   AlertTriangle,
   ExternalLink,
   UserPlus,
+  UserMinus,
 } from 'lucide-react';
 import { ChatThread } from '../types';
 import { useApp } from '../context/AppContext';
@@ -59,6 +60,8 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
     clearChat,
     updateChat,
     addMembersToGroup,
+    toggleMemberAdmin,
+    removeMemberFromGroup,
     blockedUserIds,
     toggleBlockUser,
     flagEntityAsScam,
@@ -716,23 +719,69 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 </div>
               </div>
 
-              {/* Sample members from contacts */}
-              {deviceContacts.slice(0, 4).map((c) => (
-                <div key={c.id} className="p-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <img
-                      src={c.avatar || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80"}
-                      alt={c.name}
-                      className="w-9 h-9 rounded-full object-cover border border-neutral-700"
-                    />
-                    <div>
-                      <div className="text-xs font-semibold text-white">{c.name}</div>
-                      <div className="text-[10px] text-neutral-400 font-mono">{c.normalizedPhoneNumber}</div>
+              {/* Group / Channel Participants with Admin Permissions & Removal */}
+              {deviceContacts.slice(0, 5).map((c) => {
+                const isMemberAdmin = Boolean(
+                  chat.admins?.includes(c.name) ||
+                  chat.admins?.includes(c.normalizedPhoneNumber)
+                );
+                return (
+                  <div key={c.id} className="p-3 flex items-center justify-between gap-2 hover:bg-neutral-800/30 transition-colors">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img
+                        src={c.avatar || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80"}
+                        alt={c.name}
+                        className="w-9 h-9 rounded-full object-cover border border-neutral-700 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-white truncate flex items-center gap-1.5">
+                          <span>{c.name}</span>
+                          {isMemberAdmin ? (
+                            <span className="text-[9px] font-mono text-purple-400 bg-purple-950/80 px-1.5 py-0.2 rounded-full border border-purple-800 shrink-0">
+                              Admin
+                            </span>
+                          ) : (
+                            <span className="text-[9px] text-neutral-400 bg-neutral-800 px-1.5 py-0.2 rounded-full shrink-0 font-mono">
+                              Member
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-neutral-400 font-mono truncate">{c.normalizedPhoneNumber}</div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          toggleMemberAdmin(chat.id, c.name);
+                          showToast(isMemberAdmin ? `Removed admin permissions from ${c.name}` : `Granted ${c.name} admin permissions`);
+                        }}
+                        className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition-colors ${
+                          isMemberAdmin
+                            ? 'text-amber-400 border-amber-800/60 bg-amber-950/40 hover:bg-amber-900/60'
+                            : 'text-purple-300 border-purple-800/60 bg-purple-950/40 hover:bg-purple-900/60'
+                        }`}
+                        title={isMemberAdmin ? "Dismiss as admin" : "Give admin permissions"}
+                      >
+                        {isMemberAdmin ? "Dismiss" : "Make Admin"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          removeMemberFromGroup(chat.id, c.name);
+                          showToast(`Removed ${c.name} from ${entityType.toLowerCase()}`);
+                        }}
+                        className="text-[10px] font-bold text-rose-400 hover:text-rose-300 px-2 py-1 rounded-lg border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 transition-colors"
+                        title={`Remove from ${entityType.toLowerCase()}`}
+                      >
+                        Remove
+                      </button>
                     </div>
                   </div>
-                  <span className="text-[10px] text-neutral-500 font-mono">Member</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 

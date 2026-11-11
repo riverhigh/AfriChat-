@@ -229,6 +229,13 @@ export interface ChatMessage {
   scamEntity?: ScamEntity;
   timestamp: string;
   status: 'sent' | 'delivered' | 'read';
+  replyTo?: {
+    id?: string;
+    sender: string;
+    text: string;
+  };
+  reactions?: Record<string, string[]>;
+  deleted?: boolean;
 }
 
 export interface ChatThread {
@@ -259,6 +266,9 @@ export interface ChatThread {
   isLocked?: boolean;
   isFavourite?: boolean;
   disappearingTimer?: string;
+  admins?: string[];
+  description?: string;
+  creatorId?: string;
 }
 
 export interface CallLogItem {

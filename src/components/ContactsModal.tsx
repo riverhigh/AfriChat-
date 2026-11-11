@@ -11,6 +11,9 @@ import {
   Loader2,
   Send,
   AlertCircle,
+  Radio,
+  Plus,
+  Check,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
@@ -27,11 +30,38 @@ export const ContactsModal: React.FC = () => {
     addNewDeviceContact,
     startCall,
     currentUser,
+    createGroup,
+    createChannel,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'registered' | 'invite'>('registered');
   const [showAddContactForm, setShowAddContactForm] = useState(false);
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [groupDesc, setGroupDesc] = useState('');
+  const [selectedGroupMembers, setSelectedGroupMembers] = useState<string[]>([]);
+  const [showCreateChannel, setShowCreateChannel] = useState(false);
+  const [channelName, setChannelName] = useState('');
+  const [channelDesc, setChannelDesc] = useState('');
+
+  const handleCreateGroup = () => {
+    if (!groupName.trim()) return;
+    createGroup(groupName.trim(), selectedGroupMembers, undefined, groupDesc.trim());
+    setIsContactsModalOpen(false);
+    setShowCreateGroup(false);
+    setGroupName('');
+    setSelectedGroupMembers([]);
+  };
+
+  const handleCreateChannel = () => {
+    if (!channelName.trim()) return;
+    createChannel(channelName.trim(), channelDesc.trim());
+    setIsContactsModalOpen(false);
+    setShowCreateChannel(false);
+    setChannelName('');
+    setChannelDesc('');
+  };
   const [newPhone, setNewPhone] = useState('');
   const [inviteSentToast, setInviteSentToast] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState(false);
@@ -262,6 +292,45 @@ export const ContactsModal: React.FC = () => {
           </div>
         )}
 
+        {/* Top Quick Actions: New Group & New Channel */}
+        <div className="grid grid-cols-2 gap-2 px-4 pt-3 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              setShowCreateGroup(true);
+              setShowCreateChannel(false);
+              setShowAddContactForm(false);
+            }}
+            className="flex items-center gap-2.5 p-2.5 rounded-2xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-900/60 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors text-left"
+          >
+            <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Users className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-slate-900 dark:text-white truncate">New Group</div>
+              <div className="text-[10px] text-purple-600 dark:text-purple-400">Invite up to 256</div>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setShowCreateChannel(true);
+              setShowCreateGroup(false);
+              setShowAddContactForm(false);
+            }}
+            className="flex items-center gap-2.5 p-2.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors text-left"
+          >
+            <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Radio className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-slate-900 dark:text-white truncate">New Channel</div>
+              <div className="text-[10px] text-indigo-600 dark:text-indigo-400">Broadcast news</div>
+            </div>
+          </button>
+        </div>
+
         {/* Search & Tabs */}
         <div className="p-4 space-y-2.5 border-b border-slate-100 dark:border-purple-900/30 shrink-0">
           <div className="relative flex items-center">
@@ -315,6 +384,126 @@ export const ContactsModal: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Create Group Drawer */}
+        {showCreateGroup && (
+          <div className="p-4 border-b border-purple-200 dark:border-purple-900/60 bg-purple-50/50 dark:bg-purple-950/20 space-y-3 shrink-0 animate-in slide-in-from-top-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-bold text-purple-700 dark:text-purple-300">
+                <Users className="w-4 h-4" />
+                <span>Create New Group</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateGroup(false)}
+                className="text-xs text-slate-400 hover:text-slate-600"
+              >
+                Cancel
+              </button>
+            </div>
+
+            <input
+              type="text"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+              placeholder="Group name (e.g. Lagos Tech Founders)..."
+              className="w-full px-3 py-2 bg-white dark:bg-[#1c1033] rounded-xl text-xs text-slate-900 dark:text-white border border-purple-300 dark:border-purple-800 focus:outline-none focus:ring-1 focus:ring-purple-500"
+            />
+
+            <input
+              type="text"
+              value={groupDesc}
+              onChange={(e) => setGroupDesc(e.target.value)}
+              placeholder="Description or group rules (optional)..."
+              className="w-full px-3 py-1.5 bg-white dark:bg-[#1c1033] rounded-xl text-xs text-slate-900 dark:text-white border border-purple-200 dark:border-purple-900/40 focus:outline-none"
+            />
+
+            <div>
+              <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1.5 uppercase tracking-wider">
+                Select Members ({selectedGroupMembers.length} selected)
+              </div>
+              <div className="flex gap-1.5 overflow-x-auto pb-1 max-h-24 flex-wrap">
+                {registeredList.slice(0, 10).map((c) => {
+                  const isSelected = selectedGroupMembers.includes(c.name);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => {
+                        if (isSelected) {
+                          setSelectedGroupMembers(selectedGroupMembers.filter((n) => n !== c.name));
+                        } else {
+                          setSelectedGroupMembers([...selectedGroupMembers, c.name]);
+                        }
+                      }}
+                      className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1 border transition-colors ${
+                        isSelected
+                          ? 'bg-purple-600 text-white border-purple-600'
+                          : 'bg-white dark:bg-[#1c1033] text-slate-700 dark:text-slate-200 border-slate-200 dark:border-purple-900/50'
+                      }`}
+                    >
+                      {isSelected && <Check className="w-3 h-3" />}
+                      <span>{c.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              disabled={!groupName.trim()}
+              onClick={handleCreateGroup}
+              className="w-full py-2 bg-purple-600 disabled:opacity-50 text-white text-xs font-bold rounded-xl hover:bg-purple-700 transition-colors shadow-xs"
+            >
+              Create Group
+            </button>
+          </div>
+        )}
+
+        {/* Create Channel Drawer */}
+        {showCreateChannel && (
+          <div className="p-4 border-b border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/20 space-y-3 shrink-0 animate-in slide-in-from-top-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                <Radio className="w-4 h-4" />
+                <span>Create Broadcast Channel</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateChannel(false)}
+                className="text-xs text-slate-400 hover:text-slate-600"
+              >
+                Cancel
+              </button>
+            </div>
+
+            <input
+              type="text"
+              value={channelName}
+              onChange={(e) => setChannelName(e.target.value)}
+              placeholder="Channel name (e.g. Afrobeat Daily Hits)..."
+              className="w-full px-3 py-2 bg-white dark:bg-[#1c1033] rounded-xl text-xs text-slate-900 dark:text-white border border-indigo-300 dark:border-indigo-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+
+            <input
+              type="text"
+              value={channelDesc}
+              onChange={(e) => setChannelDesc(e.target.value)}
+              placeholder="Channel topic & broadcast info (optional)..."
+              className="w-full px-3 py-1.5 bg-white dark:bg-[#1c1033] rounded-xl text-xs text-slate-900 dark:text-white border border-indigo-200 dark:border-indigo-900/40 focus:outline-none"
+            />
+
+            <button
+              type="button"
+              disabled={!channelName.trim()}
+              onClick={handleCreateChannel}
+              className="w-full py-2 bg-indigo-600 disabled:opacity-50 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 transition-colors shadow-xs"
+            >
+              Create Broadcast Channel
+            </button>
+          </div>
+        )}
 
         {/* Add Contact Flow - ONLY ASKS FOR PHONE NUMBER */}
         {showAddContactForm && (

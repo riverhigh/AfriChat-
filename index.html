@@ -59,6 +59,27 @@
   <body class="bg-slate-100 dark:bg-black antialiased selection:bg-purple-500 selection:text-white">
     <div id="root"></div>
     <script>
+      // Global PWA BeforeInstallPrompt Event Cache
+      window.deferredPwaPrompt = null;
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        window.deferredPwaPrompt = e;
+        window.dispatchEvent(new CustomEvent('pwa-prompt-ready'));
+      });
+      window.addEventListener('appinstalled', () => {
+        window.deferredPwaPrompt = null;
+        window.dispatchEvent(new CustomEvent('pwa-installed'));
+      });
+
+      // iOS device & standalone mode detection for safe-area insets
+      (function() {
+        var ua = window.navigator.userAgent.toLowerCase();
+        var isIos = /iphone|ipad|ipod/.test(ua);
+        var isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+        if (isIos) document.documentElement.classList.add('ios-device');
+        if (isIos && isStandalone) document.documentElement.classList.add('ios-standalone');
+      })();
+
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js').catch((err) => {

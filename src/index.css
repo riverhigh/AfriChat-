@@ -7,6 +7,44 @@
   --font-mono: 'JetBrains Mono', monospace;
 }
 
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+/* iOS notch device clearance */
+html.ios-device {
+  --sat: max(env(safe-area-inset-top, 0px), 44px);
+}
+
+html.ios-standalone {
+  --sat: max(env(safe-area-inset-top, 0px), 48px);
+}
+
+.pt-safe-header {
+  padding-top: calc(max(env(safe-area-inset-top, 0px), 8px) + 6px);
+}
+
+html.ios-device .pt-safe-header,
+html.ios-standalone .pt-safe-header {
+  padding-top: max(48px, calc(env(safe-area-inset-top, 0px) + 8px));
+}
+
+.pt-safe-chat {
+  padding-top: calc(max(env(safe-area-inset-top, 0px), 12px) + 6px);
+  padding-left: max(env(safe-area-inset-left, 0px), 12px);
+  padding-right: max(env(safe-area-inset-right, 0px), 12px);
+}
+
+html.ios-device .pt-safe-chat,
+html.ios-standalone .pt-safe-chat {
+  padding-top: max(52px, calc(env(safe-area-inset-top, 0px) + 8px));
+  padding-left: max(env(safe-area-inset-left, 0px), 14px);
+  padding-right: max(env(safe-area-inset-right, 0px), 14px);
+}
+
 html {
   background-color: #ffffff;
   height: 100%;

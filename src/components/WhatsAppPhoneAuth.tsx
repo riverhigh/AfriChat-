@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Smartphone,
   ArrowRight,
@@ -249,7 +249,12 @@ export const WhatsAppPhoneAuth: React.FC = () => {
 
       {/* Top Banner / In-app SMS Notification Pill (AGC Theme) */}
       {showNotification && generatedOtp && step === 'otp' && (
-        <div className="fixed top-4 left-4 right-4 z-50 max-w-sm mx-auto p-3.5 bg-[#170c2e]/95 backdrop-blur-md border border-purple-500/40 rounded-2xl shadow-2xl shadow-purple-950/80 animate-in slide-in-from-top-4">
+        <div
+          style={{
+            top: 'max(calc(env(safe-area-inset-top, 0px) + 12px), 16px)',
+          }}
+          className="fixed left-4 right-4 z-50 max-w-sm mx-auto p-3.5 bg-[#170c2e]/95 backdrop-blur-md border border-purple-500/40 rounded-2xl shadow-2xl shadow-purple-950/80 animate-in slide-in-from-top-4"
+        >
           <div className="flex items-start gap-3">
             <div className="w-8 h-8 rounded-full bg-purple-600/20 text-purple-400 flex items-center justify-center shrink-0 border border-purple-500/30">
               <MessageSquare className="w-4 h-4" />
@@ -287,7 +292,12 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         {/* ========================================================================= */}
         {/* MOBILE HEADER: BRAND & PROGRESS */}
         {/* ========================================================================= */}
-        <header className="px-5 pt-6 pb-4 border-b border-purple-500/15 bg-white/[0.02] backdrop-blur-xs">
+        <header
+          className="px-5 pb-4 border-b border-purple-500/15 bg-white/[0.02] backdrop-blur-xs"
+          style={{
+            paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 12px), 24px)',
+          }}
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               {step !== 'phone' && step !== 'initializing' ? (
