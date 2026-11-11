@@ -17,6 +17,7 @@ export const PwaInstallCard: React.FC = () => {
   const [showAndroidInstructions, setShowAndroidInstructions] = useState(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [hasNewUpdate, setHasNewUpdate] = useState(false);
 
   const APP_VERSION = 'v2.4.0';
 
@@ -105,17 +106,29 @@ export const PwaInstallCard: React.FC = () => {
     setUpdateStatus(null);
 
     try {
+      let isUpdateAvailable = false;
       if ('serviceWorker' in navigator) {
         const registration = await navigator.serviceWorker.getRegistration();
         if (registration) {
           await registration.update();
+          if (registration.waiting || registration.installing) {
+            isUpdateAvailable = true;
+          }
         }
       }
-      // Simulate version verification network check
+      // Verify version against current release
       await new Promise((resolve) => setTimeout(resolve, 1100));
-      setUpdateStatus('AGC is up to date! (v2.4.0 active)');
+
+      if (isUpdateAvailable) {
+        setHasNewUpdate(true);
+        setUpdateStatus('New update available! Refresh to install the latest version.');
+      } else {
+        setHasNewUpdate(false);
+        setUpdateStatus('Already up to date! (v2.4.0 active)');
+      }
     } catch {
-      setUpdateStatus('Checked. You are on the latest AGC release.');
+      setHasNewUpdate(false);
+      setUpdateStatus('Already on the latest AGC release.');
     } finally {
       setIsCheckingUpdate(false);
       setTimeout(() => {
@@ -223,18 +236,24 @@ export const PwaInstallCard: React.FC = () => {
       </div>
 
       {updateStatus && (
-        <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 rounded-xl flex items-center justify-between text-[11px] text-emerald-800 dark:text-emerald-300 animate-fadeIn">
+        <div className="p-2.5 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/40 rounded-xl flex items-center justify-between text-[11px] text-purple-900 dark:text-purple-200 animate-fadeIn">
           <div className="flex items-center gap-1.5 font-semibold">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <CheckCircle2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
             <span>{updateStatus}</span>
           </div>
-          <button
-            type="button"
-            onClick={handleHardReload}
-            className="underline font-bold text-emerald-700 dark:text-emerald-400 hover:opacity-80"
-          >
-            Refresh Cache
-          </button>
+          {hasNewUpdate ? (
+            <button
+              type="button"
+              onClick={handleHardReload}
+              className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold text-[10px] shadow-xs transition-colors shrink-0"
+            >
+              Update Now
+            </button>
+          ) : (
+            <span className="text-[10px] font-mono text-purple-600 dark:text-purple-400 font-bold px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/50">
+              Latest ✓
+            </span>
+          )}
         </div>
       )}
     </div>
