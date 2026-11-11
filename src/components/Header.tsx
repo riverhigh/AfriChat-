@@ -202,8 +202,8 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                   {(() => {
                     const allTools: { label: string; sub: string; icon: React.ElementType; action: () => void; cat: 'finance' | 'services' | 'tools' }[] = [
                       { label: 'Wallet', sub: 'Paystack & Escrow', icon: Wallet, action: () => setIsWalletModalOpen(true), cat: 'finance' },
-                      { label: 'Ajo & Esusu', sub: 'Rotating Savings', icon: Coins, action: () => setIsAjoModalOpen(true), cat: 'finance' },
-                      { label: 'Payroll', sub: 'Auto-Debit Pay', icon: Repeat, action: () => setIsPayrollModalOpen(true), cat: 'finance' },
+                      
+                      
                       { label: 'Delayed Send', sub: 'Anti-Fraud Send', icon: Clock, action: () => setIsTransferModalOpen(true), cat: 'finance' },
                       { label: 'Artisan Hub', sub: '\u20a65k · Book Skill', icon: Wrench, action: () => setIsServicesModalOpen(true), cat: 'services' },
                       { label: 'AfriHealth', sub: 'Queues & Telehealth', icon: HeartPulse, action: () => setIsHealthModalOpen(true), cat: 'services' },

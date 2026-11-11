@@ -13,6 +13,7 @@ import {
   X,
   Compass,
   MessageSquare,
+  KeyRound,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { TownCommunity } from '../types';
@@ -36,6 +37,49 @@ export const TownView: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showJoinCodeModal, setShowJoinCodeModal] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [joinCodeError, setJoinCodeError] = useState<string | null>(null);
+
+  const handleJoinByCode = () => {
+    const raw = joinCodeInput.trim();
+    if (!raw) return;
+    const cleanCode = raw.toUpperCase().replace(/^.*\//, '');
+
+    // Check Audio Spaces
+    const spaceMatch = audioSpaces.find(
+      (s) => s.id.toUpperCase().includes(cleanCode) || s.title.toUpperCase().includes(cleanCode)
+    );
+    if (spaceMatch) {
+      joinAudioSpace(spaceMatch);
+      setShowJoinCodeModal(false);
+      setJoinCodeInput('');
+      return;
+    }
+
+    // Check Town Communities
+    const commMatch = townCommunities.find(
+      (c) => c.id.toUpperCase().includes(cleanCode) || c.name.toUpperCase().includes(cleanCode)
+    );
+    if (commMatch) {
+      if (!commMatch.isJoined) toggleJoinTownCommunity(commMatch.id);
+      openCommunityChat(commMatch);
+      setShowJoinCodeModal(false);
+      setJoinCodeInput('');
+      return;
+    }
+
+    // Dynamically join community with this code
+    const isChan = cleanCode.startsWith('C');
+    addTownCommunity(
+      `Group ${cleanCode}`,
+      isChan ? 'channel' : 'group',
+      'Tech & Hustle',
+      `Joined with unique invite code ${cleanCode}`
+    );
+    setShowJoinCodeModal(false);
+    setJoinCodeInput('');
+  };
   const [newCommunityName, setNewCommunityName] = useState('');
   const [newCommunityType, setNewCommunityType] = useState<'group' | 'channel'>('group');
   const [newCommunityCategory, setNewCommunityCategory] = useState<TownCommunity['category']>('Tech & Hustle');
@@ -131,6 +175,16 @@ export const TownView: React.FC = () => {
             </button>
 
             {/* Create Community Button */}
+            <button
+              type="button"
+              onClick={() => setShowJoinCodeModal(true)}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 text-slate-700 dark:text-neutral-200 text-xs font-bold hover:bg-slate-200 dark:hover:bg-neutral-800 transition-colors"
+              title="Join a group, channel or space with code or link"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-purple-500" />
+              <span>Join</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setShowCreateModal(true)}
@@ -566,6 +620,60 @@ export const TownView: React.FC = () => {
                 Publish to Town
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Modal: Join Group / Channel / Space with Code */}
+      {showJoinCodeModal && (
+        <div
+          onClick={() => setShowJoinCodeModal(false)}
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm bg-white dark:bg-neutral-950 rounded-3xl p-5 border border-slate-200 dark:border-neutral-800 shadow-2xl space-y-4 animate-in zoom-in-95"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center font-bold">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900 dark:text-white">Join by Invite Code</h3>
+                  <p className="text-[10px] text-slate-500 dark:text-neutral-400">Enter code or paste unique invite link</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowJoinCodeModal(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={joinCodeInput}
+                onChange={(e) => setJoinCodeInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleJoinByCode()}
+                placeholder="e.g. G9X7A2 or paste link..."
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 text-xs text-slate-900 dark:text-white font-mono tracking-wider placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+              />
+              <p className="text-[10px] text-slate-400">
+                You can join any private or public group, broadcast channel, or live audio space directly.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={!joinCodeInput.trim()}
+              onClick={handleJoinByCode}
+              className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
+            >
+              Join Room Now
+            </button>
           </div>
         </div>
       )}

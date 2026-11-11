@@ -269,6 +269,8 @@ export interface ChatThread {
   admins?: string[];
   description?: string;
   creatorId?: string;
+  members?: string[];
+  inviteCode?: string;
 }
 
 export interface CallLogItem {

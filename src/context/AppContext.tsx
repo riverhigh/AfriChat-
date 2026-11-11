@@ -1719,6 +1719,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+
+  // Automatically mark chat as read when opened (clears badge instantly)
+  useEffect(() => {
+    if (!activeChatId) return;
+    setChats((prev) => {
+      let hasChanges = false;
+      const updated = prev.map((c) => {
+        if (c.id === activeChatId && c.unreadCount > 0) {
+          hasChanges = true;
+          return { ...c, unreadCount: 0 };
+        }
+        return c;
+      });
+      if (hasChanges) {
+        try {
+          localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
+      }
+      return prev;
+    });
+  }, [activeChatId]);
   const [chats, setChats] = useState<ChatThread[]>(() => {
     try {
       const saved = localStorage.getItem('AGC_chats_v2');
@@ -3041,9 +3063,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setChats((prev) => {
       const updated = prev.map((c) => {
         if (c.id === chatId) {
+          const currentMembers = (c as any).members || [];
+          const updatedMemberList = Array.from(new Set([...currentMembers, ...memberNames]));
           return {
             ...c,
-            membersCount: (c.membersCount || 1) + memberNames.length,
+            members: updatedMemberList,
+            membersCount: updatedMemberList.length + 1,
             lastMessage: `You added ${memberNames.join(', ')}`,
             lastMessageTime: 'Just now',
           };
@@ -3078,6 +3103,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const createGroup = (name: string, memberNamesOrPhones: string[], avatar?: string, description?: string): string => {
     const newChatId = 'group_' + Date.now();
+    const shortInvite = 'G' + Math.random().toString(36).substring(2, 7).toUpperCase();
     const myName = currentUser.fullName || 'You';
     const newThread: ChatThread = {
       id: newChatId,
@@ -3093,6 +3119,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isGroup: true,
       membersCount: memberNamesOrPhones.length + 1,
       admins: [myName],
+      members: memberNamesOrPhones,
+      inviteCode: shortInvite,
       description,
     };
 
@@ -3150,6 +3178,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const createChannel = (name: string, description?: string, avatar?: string): string => {
     const newChatId = 'channel_' + Date.now();
+    const shortInvite = 'C' + Math.random().toString(36).substring(2, 7).toUpperCase();
     const myName = currentUser.fullName || 'You';
     const newThread: ChatThread = {
       id: newChatId,
@@ -3165,6 +3194,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isChannel: true,
       membersCount: 1,
       admins: [myName],
+      inviteCode: shortInvite,
       description,
     };
 

@@ -92,6 +92,27 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [toastNotice, setToastNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Swipe from left to right to go back to chats
+  const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current === null || touchStartY.current === null) return;
+    const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+    const deltaY = e.changedTouches[0].clientY - touchStartY.current;
+
+    // Swipe right by at least 65px with small vertical movement
+    if (deltaX > 65 && Math.abs(deltaY) < 55) {
+      setActiveChatId(null);
+    }
+    touchStartX.current = null;
+    touchStartY.current = null;
+  };
 
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -170,7 +191,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   };
 
   return (
-    <div className="flex flex-col h-full w-full max-w-md mx-auto bg-white dark:bg-black transition-colors relative select-none overflow-hidden">
+    <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="flex flex-col h-full w-full max-w-md mx-auto bg-white dark:bg-black transition-colors relative select-none overflow-x-hidden overflow-y-hidden overscroll-none touch-pan-y fixed inset-0 sm:relative sm:inset-auto sm:h-full">
       {/* Custom Chat Wallpaper Layer (Uploaded from device or preset) */}
       {chatWallpaper && (
         <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden">
@@ -180,19 +201,6 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             className="w-full h-full object-cover opacity-20 dark:opacity-25"
           />
           <div className="absolute inset-0 bg-white/70 dark:bg-black/75 backdrop-blur-[0.5px]" />
-        </div>
-      )}
-
-      {/* Screenshot & Screen Recording Blocker Watermark Overlay (Clipped to prevent side drift) */}
-      {isScreenshotBlockerActive && (
-        <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden">
-          <div className="absolute -inset-10 opacity-[0.035] dark:opacity-[0.05] flex flex-wrap items-center justify-center gap-10 rotate-[-15deg] select-none">
-            {Array.from({ length: 30 }).map((_, i) => (
-              <div key={i} className="text-xs font-mono font-bold tracking-widest text-slate-800 dark:text-white whitespace-nowrap">
-                PROTECTED • AGC PRIVACY SHIELD • CONFIDENTIAL ESCROW
-              </div>
-            ))}
-          </div>
         </div>
       )}
 
@@ -450,7 +458,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       {/* Message Feed */}
       <div
         ref={chatContainerRef}
-        className="flex-1 overflow-y-auto px-3 py-2 space-y-2"
+        className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-2 space-y-2.5 overscroll-contain w-full min-w-0"
       >
         {/* Date Divider */}
         <div className="flex justify-center my-2">
@@ -501,7 +509,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
               className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
             >
               <div
-                className={`group max-w-[85%] sm:max-w-[70%] rounded-2xl px-3 py-2 shadow-2xs transition-all relative ${
+                className={`group max-w-[85%] sm:max-w-[75%] rounded-2xl px-3.5 py-2 shadow-2xs transition-all relative break-words break-all [overflow-wrap:anywhere] min-w-0 ${
                   isUser
                     ? 'bg-[#e0e7ff] dark:bg-[#312e81] text-[#1e1b4b] dark:text-white rounded-tr-none'
                     : 'bg-white dark:bg-[#1a172e] text-slate-900 dark:text-slate-100 rounded-tl-none border border-slate-200/60 dark:border-slate-800'
@@ -513,7 +521,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     <div className="font-bold text-purple-700 dark:text-purple-300 text-[10px]">
                       {msg.replyTo.sender}
                     </div>
-                    <div className="text-slate-600 dark:text-slate-300 truncate text-[11px]">
+                    <div className="text-slate-600 dark:text-slate-300 truncate text-[11px] break-words break-all [overflow-wrap:anywhere]">
                       {msg.replyTo.text}
                     </div>
                   </div>
@@ -567,7 +575,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 {/* Text Message */}
                 {msg.type === 'text' && (
                   <div>
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap break-words break-all [overflow-wrap:anywhere] min-w-0">
                       {translatedBody}
                     </p>
 

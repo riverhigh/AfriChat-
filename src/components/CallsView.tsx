@@ -19,7 +19,7 @@ import {
 import { useApp } from '../context/AppContext';
 
 export const CallsView: React.FC = () => {
-  const { calls, startCall, activeCall } = useApp();
+  const { calls, startCall, activeCall, deviceContacts, chats } = useApp();
   const [showKeypad, setShowKeypad] = useState(false);
   const [dialedNumber, setDialedNumber] = useState('');
 

@@ -157,7 +157,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
       <div className="relative z-10 px-5 pb-4 text-center space-y-2" style={{ paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 12px), 28px)' }}>
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/6 backdrop-blur-md border border-white/10 text-[11px] font-mono font-semibold text-purple-300">
           <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
-          <span>AGC Peer WebRTC · E2E Encrypted</span>
+          <span>End-to-End Encrypted</span>
         </div>
 
         <h2 className="text-2xl font-black font-display tracking-tight text-white mt-2">
@@ -175,12 +175,12 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
           {connectionState === 'ringing' && (
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-300 bg-purple-500/15 px-3 py-1 rounded-full border border-purple-500/30 animate-pulse">
               <Radio className="w-3.5 h-3.5 animate-spin" />
-              Ringing · Waiting for peer to connect...
+              Ringing...
             </span>
           )}
           {connectionState === 'connecting' && (
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-300 bg-indigo-500/10 px-3 py-1 rounded-full border border-indigo-500/20 animate-pulse">
-              Connecting peer handshake...
+              Connecting...
             </span>
           )}
           {connectionState === 'connected' && (
@@ -227,7 +227,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
             className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 hover:bg-white/15 text-white/80 hover:text-white backdrop-blur-md border border-white/10 text-xs font-semibold transition-all active:scale-95"
           >
             {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Share2 className="w-3.5 h-3.5" />}
-            <span>{copiedLink ? 'Call Link Copied!' : 'Invite Peer (Tap to Copy/Share Link)'}</span>
+            <span>{copiedLink ? 'Call Link Copied!' : 'Share Call Link'}</span>
           </button>
         </div>
       </div>

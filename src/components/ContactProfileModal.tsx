@@ -117,7 +117,9 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
   };
 
   // 1. Share Invite Link logic
-  const inviteUrl = `${window.location.origin}/join/${isChannel ? 'c' : 'g'}/${chat.id}`;
+  // Generate clean, short unique invite code (e.g. /g/AGC7X9)
+  const shortCode = (chat as any).inviteCode || chat.id.replace(/^(town_comm_|group_|channel_|chat_)/, '').substring(0, 6).toUpperCase();
+  const inviteUrl = `${window.location.origin}/${isChannel ? 'c' : 'g'}/${shortCode}`;
 
   const handleCopyInviteLink = async () => {
     try {
@@ -727,7 +729,23 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
               </div>
 
               {/* Group / Channel Participants with Admin Permissions & Removal */}
-              {deviceContacts.slice(0, 5).map((c) => {
+              {(() => {
+                // Persistent members list from chat thread or contacts
+                const memberList = (chat as any).members && (chat as any).members.length > 0
+                  ? (chat as any).members.map((nameOrPhone: string, idx: number) => {
+                      const matchedContact = deviceContacts.find(
+                        (dc) => dc.name === nameOrPhone || dc.normalizedPhoneNumber === nameOrPhone
+                      );
+                      return {
+                        id: matchedContact?.id || `member_${idx}`,
+                        name: matchedContact?.name || nameOrPhone,
+                        normalizedPhoneNumber: matchedContact?.normalizedPhoneNumber || nameOrPhone,
+                        avatar: matchedContact?.avatar || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+                      };
+                    })
+                  : deviceContacts.slice(0, 4);
+
+                return memberList.map((c: any) => {
                 const isMemberAdmin = Boolean(
                   chat.admins?.includes(c.name) ||
                   chat.admins?.includes(c.normalizedPhoneNumber)
@@ -788,7 +806,8 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                     </div>
                   </div>
                 );
-              })}
+              });
+              })()}
             </div>
           )}
 
