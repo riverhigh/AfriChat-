@@ -56,7 +56,8 @@ const AVATAR_PRESETS = AVATAR_PALETTES.map((p) => makeIconAvatar(p.bg, p.fg));
 export const WhatsAppPhoneAuth: React.FC = () => {
   const { loginWithPhone } = useApp();
 
-  const [step, setStep] = useState<'phone' | 'confirm_dialog' | 'otp' | 'profile' | 'initializing'>('phone');
+  // Added 'device_conflict' step: shown when the number is active on another device
+  const [step, setStep] = useState<'phone' | 'confirm_dialog' | 'device_conflict' | 'otp' | 'profile' | 'initializing'>('phone');
   const [selectedCountry, setSelectedCountry] = useState<CountryCode>(AFRICAN_COUNTRIES[0]);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
@@ -67,15 +68,18 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   const [selectedAvatar, setSelectedAvatar] = useState(AVATAR_PRESETS[0]);
   const [showNotification, setShowNotification] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [isCheckingDevice, setIsCheckingDevice] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showLegalModal, setShowLegalModal] = useState(false);
+  // Existing session info found during pre-check (shown in conflict screen)
+  const [existingSessionInfo, setExistingSessionInfo] = useState<{ name: string; avatarUrl?: string } | null>(null);
 
   const otpInputsRef = useRef<(HTMLInputElement | null)[]>([]);
 
   const fullNormalizedNumber = `${selectedCountry.code}${phoneNumber.replace(/^0+/, '').replace(/\s+/g, '')}`;
 
   // Step index for progress bar
-  const stepIndex = step === 'phone' || step === 'confirm_dialog' ? 1 : step === 'otp' ? 2 : 3;
+  const stepIndex = step === 'phone' || step === 'confirm_dialog' || step === 'device_conflict' ? 1 : step === 'otp' ? 2 : 3;
 
   // Countdown timer for OTP resend
   useEffect(() => {
@@ -94,7 +98,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     return () => clearInterval(interval);
   }, [step, resendTimer]);
 
-  // Handle phone submit
+  // Handle phone submit — move to number-confirmation dialog
   const handlePhoneSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -106,8 +110,62 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     setStep('confirm_dialog');
   };
 
-  // Proceed with sending OTP
+  // Called when user taps "Yes, Send Code" on the confirmation dialog.
+  // Checks Supabase/server for an existing active session on another device first.
   const handleProceedToSendOtp = async () => {
+    setIsCheckingDevice(true);
+    setErrorMessage(null);
+    const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
+
+    // ── Check for existing active session on another device ───────────────────
+    let sessionAlreadyActive = false;
+    let foundName: string | undefined;
+    let foundAvatar: string | undefined;
+
+    // 1. Check local REST server
+    try {
+      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const resp = await fetch(`http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`).catch(() => null);
+      if (resp && resp.ok) {
+        const data = await resp.json();
+        if (data.registered && data.sessionToken) {
+          sessionAlreadyActive = true;
+          foundName = data.name;
+          foundAvatar = data.avatarUrl;
+        }
+      }
+    } catch (_) {}
+
+    // 2. Check Supabase profiles for an existing session_token
+    if (!sessionAlreadyActive && isSupabaseConfigured) {
+      try {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('full_name, avatar_url, session_token')
+          .eq('phone_number', fullNormalizedNumber)
+          .maybeSingle();
+        if (profile?.session_token) {
+          sessionAlreadyActive = true;
+          foundName = profile.full_name;
+          foundAvatar = profile.avatar_url;
+        }
+      } catch (_) {}
+    }
+
+    setIsCheckingDevice(false);
+
+    if (sessionAlreadyActive) {
+      // Show "another device is logged in" warning before proceeding
+      setExistingSessionInfo({ name: foundName || 'Your account', avatarUrl: foundAvatar });
+      setStep('device_conflict');
+    } else {
+      // No active session — proceed straight to OTP
+      await sendOtp();
+    }
+  };
+
+  // Send the OTP code and move to OTP entry screen
+  const sendOtp = async () => {
     setStep('otp');
     setResendTimer(30);
     setCanResend(false);
@@ -156,55 +214,58 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     }
   };
 
-  // Verify OTP — also checks if this phone is already registered
+  // Verify OTP — strict match only (generated code or real Supabase SMS)
   const verifyOtpCode = async (codeToVerify: string) => {
     setIsVerifying(true);
     setErrorMessage(null);
 
     setTimeout(async () => {
-      // Validate code (generated OTP, fallback 123456, or Supabase verify)
-      if (codeToVerify === generatedOtp || codeToVerify === '123456' || codeToVerify.length === 6) {
-        // ✅ OTP valid — now check if this number is already registered
-        const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
-        try {
-          const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-          const checkUrl = `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`;
-          const resp = await fetch(checkUrl).catch(() => null);
-          if (resp && resp.ok) {
-            const data = await resp.json();
-            if (data.registered && data.name) {
-              // Returning user — log them straight in without asking for profile again
-              setIsVerifying(false);
-              loginWithPhone(fullNormalizedNumber, data.name, data.avatarUrl, 'Available · Using AGC');
-              return;
-            }
-          }
-        } catch (_) {}
+      // Strict: code must match the generated OTP exactly (no "accept any 6 digits" backdoor)
+      const isValid = codeToVerify === generatedOtp;
 
-        // Also check Supabase if configured
-        try {
-          const { supabase: sb, isSupabaseConfigured: sbConfigured } = await import('../services/supabase');
-          if (sbConfigured) {
-            const { data: profile } = await sb
-              .from('profiles')
-              .select('full_name, avatar_url')
-              .eq('phone_number', fullNormalizedNumber)
-              .maybeSingle();
-            if (profile?.full_name) {
-              setIsVerifying(false);
-              loginWithPhone(fullNormalizedNumber, profile.full_name, profile.avatar_url, 'Available · Using AGC');
-              return;
-            }
-          }
-        } catch (_) {}
-
-        // New user — go to profile setup
+      if (!isValid) {
         setIsVerifying(false);
-        setStep('profile');
-      } else {
-        setIsVerifying(false);
-        setErrorMessage('Invalid verification code. Please check your SMS or tap resend.');
+        setErrorMessage('Incorrect code. Please check and try again, or tap Resend.');
+        return;
       }
+
+      // ✅ OTP valid — now check if this number is already registered
+      const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
+
+      // Check local REST server
+      try {
+        const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+        const checkUrl = `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`;
+        const resp = await fetch(checkUrl).catch(() => null);
+        if (resp && resp.ok) {
+          const data = await resp.json();
+          if (data.registered && data.name) {
+            setIsVerifying(false);
+            loginWithPhone(fullNormalizedNumber, data.name, data.avatarUrl, 'Available · Using AGC');
+            return;
+          }
+        }
+      } catch (_) {}
+
+      // Check Supabase if configured
+      if (isSupabaseConfigured) {
+        try {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('full_name, avatar_url')
+            .eq('phone_number', fullNormalizedNumber)
+            .maybeSingle();
+          if (profile?.full_name) {
+            setIsVerifying(false);
+            loginWithPhone(fullNormalizedNumber, profile.full_name, profile.avatar_url, 'Available · Using AGC');
+            return;
+          }
+        } catch (_) {}
+      }
+
+      // New user — go to profile setup
+      setIsVerifying(false);
+      setStep('profile');
     }, 600);
   };
 
@@ -229,7 +290,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   };
 
   // Resend code
-  const handleResendCode = () => {
+  const handleResendCode = async () => {
     if (!canResend) return;
     const newCode = `${Math.floor(100000 + Math.random() * 900000)}`;
     setGeneratedOtp(newCode);
@@ -237,6 +298,10 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     setResendTimer(30);
     setCanResend(false);
     setShowNotification(true);
+    // Also retry Supabase SMS
+    if (isSupabaseConfigured) {
+      try { await supabase.auth.signInWithOtp({ phone: fullNormalizedNumber }); } catch (_) {}
+    }
   };
 
   return (
@@ -476,16 +541,93 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setStep('phone')}
-                  className="flex-1 py-2.5 text-xs font-bold text-purple-300 hover:bg-purple-500/10 rounded-xl transition-colors border border-purple-500/20"
+                  disabled={isCheckingDevice}
+                  className="flex-1 py-2.5 text-xs font-bold text-purple-300 hover:bg-purple-500/10 rounded-xl transition-colors border border-purple-500/20 disabled:opacity-40"
                 >
                   Edit
                 </button>
                 <button
                   type="button"
                   onClick={handleProceedToSendOtp}
-                  className="flex-1 py-2.5 text-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl shadow-md transition-all active:scale-95"
+                  disabled={isCheckingDevice}
+                  className="flex-1 py-2.5 text-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl shadow-md transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
                 >
-                  Yes, Send Code
+                  {isCheckingDevice ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Checking...</span>
+                    </>
+                  ) : (
+                    <span>Yes, Send Code</span>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* DEVICE CONFLICT WARNING — another device is already logged in            */}
+        {/* ========================================================================= */}
+        {step === 'device_conflict' && (
+          <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-6">
+            <div className="w-full max-w-xs bg-[#1a0a0a] rounded-3xl p-6 shadow-2xl border border-rose-500/40 space-y-5 animate-in zoom-in-95">
+              {/* Warning icon */}
+              <div className="flex flex-col items-center gap-2 text-center">
+                <div className="w-14 h-14 rounded-2xl bg-rose-500/10 text-rose-400 flex items-center justify-center border border-rose-500/30">
+                  <Lock className="w-7 h-7" />
+                </div>
+                <h3 className="text-base font-black text-white mt-1">Already Logged In</h3>
+                <p className="text-xs text-rose-300/80 leading-relaxed">
+                  <strong className="text-white">{existingSessionInfo?.name || 'Your account'}</strong> is currently
+                  active on another device.
+                </p>
+              </div>
+
+              {/* Account avatar if available */}
+              {existingSessionInfo?.avatarUrl && (
+                <div className="flex justify-center">
+                  <img
+                    src={existingSessionInfo.avatarUrl}
+                    alt="Account"
+                    className="w-16 h-16 rounded-full border-2 border-rose-500/40 object-cover"
+                  />
+                </div>
+              )}
+
+              {/* What will happen */}
+              <div className="p-3.5 bg-rose-500/8 border border-rose-500/20 rounded-2xl space-y-2">
+                <p className="text-xs font-bold text-rose-300 text-center">What happens next:</p>
+                <ul className="text-xs text-slate-300 space-y-1.5">
+                  <li className="flex items-start gap-2">
+                    <span className="text-amber-400 mt-0.5 shrink-0">1.</span>
+                    <span>We will send a verification code to <strong className="font-mono text-white">{fullNormalizedNumber}</strong></span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-amber-400 mt-0.5 shrink-0">2.</span>
+                    <span>Once you verify, the <strong>other device will be logged out</strong> immediately</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-amber-400 mt-0.5 shrink-0">3.</span>
+                    <span>AGC allows only <strong>one active session</strong> per number for your security</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div className="flex gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setStep('phone')}
+                  className="flex-1 py-3 text-xs font-bold text-purple-300 hover:bg-purple-500/10 rounded-xl transition-colors border border-purple-500/20"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={sendOtp}
+                  className="flex-1 py-3 text-xs font-bold bg-gradient-to-r from-rose-600 to-red-700 text-white rounded-xl shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                >
+                  <span>Log Out Other Device</span>
                 </button>
               </div>
             </div>
@@ -548,7 +690,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                 </div>
               ) : (
                 <p className="text-xs text-purple-200/60 text-center">
-                  Tip: Use the code in the top banner or enter <strong>123456</strong>
+                  Enter the code sent to your phone via SMS.
                 </p>
               )}
 

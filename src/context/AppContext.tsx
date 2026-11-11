@@ -310,6 +310,7 @@ interface AppContextType {
   isAuthenticated: boolean;
   isAuthModalOpen: boolean;
   setIsAuthModalOpen: (val: boolean) => void;
+  isKickedOut: boolean;
   loginWithPhone: (
     phoneNumber: string,
     fullName: string,
@@ -1955,6 +1956,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return false;
   });
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isKickedOut, setIsKickedOut] = useState(false);
 
   // 9. Contact Synchronization & Discovery State
   const [deviceContacts, setDeviceContacts] = useState<DeviceContact[]>(() => {
@@ -6407,6 +6409,7 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
         isAuthenticated,
         isAuthModalOpen,
         setIsAuthModalOpen,
+        isKickedOut,
         loginWithPhone,
         logoutUser,
         updateUserProfile,

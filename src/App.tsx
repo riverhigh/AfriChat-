@@ -1,4 +1,5 @@
-﻿import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
+import { ShieldCheck, AlertTriangle, LogIn } from 'lucide-react';
 import { SplashScreen } from './components/SplashScreen';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/Header';
@@ -51,7 +52,7 @@ import { ErrandsModal } from './components/ErrandsModal';
 import { CallErrorBoundary } from './components/CallErrorBoundary';
 
 const AppContent: React.FC = () => {
-  const { activeChatId, activeTab, isAuthenticated, endCall } = useApp();
+  const { activeChatId, activeTab, isAuthenticated, isKickedOut, endCall } = useApp();
   const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('agc_splash_shown'));
   const handleSplashDone = useCallback(() => {
     sessionStorage.setItem('agc_splash_shown', 'true');
@@ -64,6 +65,42 @@ const AppContent: React.FC = () => {
   // Render SplashScreen overlay before anything else (shows once per session)
   if (showSplash) {
     return <SplashScreen onDone={handleSplashDone} />;
+  }
+
+  // ── Kicked-out screen: shown when another device logs in with this number ──
+  if (isKickedOut) {
+    return (
+      <div className="fixed inset-0 z-[999] bg-[#06020d] flex flex-col items-center justify-center p-6 text-white text-center">
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-72 h-72 bg-rose-700/15 rounded-full blur-[120px]" />
+        </div>
+        <div className="relative z-10 max-w-xs space-y-6">
+          <div className="w-16 h-16 rounded-3xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center mx-auto">
+            <AlertTriangle className="w-8 h-8 text-rose-400" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl font-black tracking-tight">Logged Out</h2>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Your account was signed in on <strong className="text-white">another device</strong>.
+              For your security, you have been logged out from this device.
+            </p>
+          </div>
+          <div className="p-4 bg-rose-500/8 border border-rose-500/20 rounded-2xl text-xs text-slate-400 leading-relaxed">
+            <ShieldCheck className="w-4 h-4 text-emerald-400 mx-auto mb-2" />
+            AGC enforces <strong className="text-white">one active session per number</strong> to protect your account.
+            If this wasn't you, your account may be compromised.
+          </div>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="w-full py-4 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-purple-700/30 active:scale-[0.98] transition-all"
+          >
+            <LogIn className="w-4 h-4" />
+            Sign In Again
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // Show WhatsApp Phone registration screen if not authenticated
