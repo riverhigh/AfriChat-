@@ -130,11 +130,12 @@ export const ContactsModal: React.FC = () => {
       return;
     }
 
-    // 1. Check live Gateway server registry
+    // 1. Check live Gateway server / Vite endpoint registry
     try {
       const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const endpoints = [
         `/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
+        `/api/users/lookup?phone=${encodeURIComponent(enteredClean)}`,
         `http://${socketHost}:3002/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
       ];
       for (const ep of endpoints) {
@@ -143,7 +144,7 @@ export const ContactsModal: React.FC = () => {
           if (res.ok) {
             const json = await res.json();
             if (json.found && json.user) {
-              foundName = json.user.fullName;
+              foundName = json.user.fullName || json.user.name;
               foundAvatar = json.user.avatarUrl;
               break;
             }
@@ -152,13 +153,66 @@ export const ContactsModal: React.FC = () => {
       }
     } catch (_) {}
 
-    // 2. Check in Supabase if configured
+    // 2. Check local persistent registered phones registry (all created users)
+    const enteredLast9 = enteredClean.length >= 9 ? enteredClean.slice(-9) : enteredClean;
+    if (!foundName) {
+      try {
+        const raw = localStorage.getItem('AGC_registered_phones');
+        if (raw) {
+          const reg = JSON.parse(raw);
+          for (const [key, val] of Object.entries(reg) as [string, any][]) {
+            const kd = key.replace(/\D/g, '');
+            if (kd === enteredClean || (enteredLast9.length >= 7 && kd.endsWith(enteredLast9))) {
+              foundName = val.fullName || val.username || 'AGC User';
+              foundAvatar = val.avatarUrl;
+              break;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 3. Check all registered users array in local storage
+    if (!foundName) {
+      try {
+        const raw = localStorage.getItem('AGC_all_registered_users');
+        if (raw) {
+          const users: any[] = JSON.parse(raw);
+          for (const u of users) {
+            const up = (u.phoneNumber || '').replace(/\D/g, '');
+            if (up === enteredClean || (enteredLast9.length >= 7 && up.endsWith(enteredLast9))) {
+              foundName = u.fullName || 'AGC User';
+              foundAvatar = u.avatarUrl;
+              break;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 4. Check active or last user profile
+    if (!foundName) {
+      try {
+        const raw = localStorage.getItem('AGC_user_profile_v2');
+        if (raw) {
+          const u = JSON.parse(raw);
+          const up = (u.phoneNumber || '').replace(/\D/g, '');
+          if (up && (up === enteredClean || (enteredLast9.length >= 7 && up.endsWith(enteredLast9)))) {
+            foundName = u.fullName || 'AGC User';
+            foundAvatar = u.avatarUrl;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 5. Check in Supabase if configured
     if (!foundName && isSupabaseConfigured) {
       try {
         const { data } = await supabase
           .from('profiles')
           .select('full_name, phone_number, avatar_url')
-          .or(`phone_number.eq.${normalized},phone_number.eq.${clean}`)
+          .or(`phone_number.eq.${normalized},phone_number.eq.${clean},phone_number.ilike.%${enteredLast9}%`)
+          .limit(1)
           .maybeSingle();
 
         if (data && data.phone_number) {
@@ -166,15 +220,16 @@ export const ContactsModal: React.FC = () => {
           foundAvatar = data.avatar_url || ICON_AVATAR;
         }
       } catch (err) {
-        console.warn('Supabase profile check error:', err);
+        console.warn('Supabase profile check notice:', err);
       }
     }
 
-    // 3. Fallback check local device contacts
+    // 6. Fallback check local device contacts
     if (!foundName) {
-      const localMatch = deviceContacts.find(
-        (c) => c.normalizedPhoneNumber === normalized || c.rawPhoneNumber === clean
-      );
+      const localMatch = deviceContacts.find((c) => {
+        const cp = (c.normalizedPhoneNumber || c.rawPhoneNumber || '').replace(/\D/g, '');
+        return cp === enteredClean || (enteredLast9.length >= 7 && cp.endsWith(enteredLast9));
+      });
       if (localMatch && localMatch.isRegisteredOnAGC) {
         foundName = localMatch.name;
         foundAvatar = localMatch.avatar || ICON_AVATAR;

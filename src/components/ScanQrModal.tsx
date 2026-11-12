@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   QrCode,
   Scan,
@@ -51,18 +51,21 @@ export const ScanQrModal: React.FC = () => {
 
   const isAdmin = currentUser.role === 'admin' || currentUser.phoneNumber === '+2340000000000';
 
-  // Generate real unique QR code image for this specific user
+  // Generate real unique QR code image for this specific user (universal clickable AGC link)
   useEffect(() => {
     if (!currentUser.phoneNumber) return;
 
-    const qrPayload = JSON.stringify({
-      app: 'AGC',
-      type: 'user_contact',
-      name: currentUser.fullName,
-      phone: currentUser.phoneNumber,
-      avatar: currentUser.avatarUrl,
-      timestamp: Date.now(),
-    });
+    const contactPayload = encodeURIComponent(
+      JSON.stringify({
+        app: 'AGC',
+        name: currentUser.fullName,
+        phone: currentUser.phoneNumber,
+        avatar: currentUser.avatarUrl,
+        timestamp: Date.now(),
+      })
+    );
+
+    const qrPayload = `${window.location.origin}/#contact=${contactPayload}`;
 
     QRCode.toDataURL(qrPayload, {
       width: 320,
@@ -165,9 +168,52 @@ export const ScanQrModal: React.FC = () => {
 
   const handleDecodedQr = (rawText: string) => {
     try {
-      // Try JSON format
-      if (rawText.startsWith('{') && rawText.endsWith('}')) {
-        const parsed = JSON.parse(rawText);
+      const text = rawText.trim();
+
+      // 1. URL with #contact=... or ?contact=...
+      if (text.includes('contact=')) {
+        const match = text.match(/contact=([^&#]+)/);
+        if (match) {
+          const jsonStr = decodeURIComponent(match[1]);
+          const parsed = JSON.parse(jsonStr);
+          if (parsed.phone) {
+            const contact = addNewDeviceContact(
+              parsed.name || 'AGC User',
+              parsed.phone,
+              'Scanned via AGC QR',
+              true,
+              parsed.avatar
+            );
+            setScanResult({
+              name: contact.name,
+              phone: contact.normalizedPhoneNumber,
+              avatar: contact.avatar,
+            });
+            stopCamera();
+            return;
+          }
+        }
+      }
+
+      // 2. URL with #call=... or #user=... or ?phone=...
+      if (text.includes('call=') || text.includes('user=') || text.includes('phone=')) {
+        const match = text.match(/(?:call|user|phone)=([^&#]+)/);
+        if (match) {
+          const phone = decodeURIComponent(match[1]);
+          const contact = addNewDeviceContact(`Contact ${phone.slice(-4)}`, phone, 'Added via AGC QR', true);
+          setScanResult({
+            name: contact.name,
+            phone: contact.normalizedPhoneNumber,
+            avatar: contact.avatar,
+          });
+          stopCamera();
+          return;
+        }
+      }
+
+      // 3. Raw JSON format
+      if (text.startsWith('{') && text.endsWith('}')) {
+        const parsed = JSON.parse(text);
         if (parsed.phone) {
           const contact = addNewDeviceContact(
             parsed.name || 'AGC User',
@@ -186,8 +232,8 @@ export const ScanQrModal: React.FC = () => {
         }
       }
 
-      // Try phone regex match
-      const phoneMatch = rawText.match(/\+?\d{10,14}/);
+      // 4. Try phone regex match
+      const phoneMatch = text.match(/\+?\d{10,14}/);
       if (phoneMatch) {
         const phone = phoneMatch[0];
         const contact = addNewDeviceContact(`Contact ${phone.slice(-4)}`, phone, 'Added via QR Scanner', true);
@@ -200,7 +246,7 @@ export const ScanQrModal: React.FC = () => {
         return;
       }
 
-      setErrorMessage(`Scanned: "${rawText.slice(0, 40)}" (Not an AGC contact QR)`);
+      setErrorMessage(`Scanned: "${text.slice(0, 40)}" (Not a valid AGC contact QR)`);
     } catch (e) {
       setErrorMessage('Could not process this QR code.');
     }
@@ -236,7 +282,16 @@ export const ScanQrModal: React.FC = () => {
   };
 
   const handleCopyLink = () => {
-    const link = `${window.location.origin}/#call=${encodeURIComponent(currentUser.phoneNumber || '')}`;
+    const contactPayload = encodeURIComponent(
+      JSON.stringify({
+        app: 'AGC',
+        name: currentUser.fullName,
+        phone: currentUser.phoneNumber,
+        avatar: currentUser.avatarUrl,
+        timestamp: Date.now(),
+      })
+    );
+    const link = `${window.location.origin}/#contact=${contactPayload}`;
     navigator.clipboard?.writeText?.(link);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);

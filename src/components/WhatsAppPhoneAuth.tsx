@@ -266,13 +266,21 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       }
     } catch (_) {}
 
-    // 2. Local REST server check
+    // 2. Server API check (Vite dev server /api or standalone node server on port 3002)
     try {
       const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const resp = await fetch(`http://${socketHost}:3002/api/users/check-username?username=${encodeURIComponent(clean)}`).catch(() => null);
-      if (resp && resp.ok) {
-        const data = await resp.json();
-        if (data.taken) return 'taken';
+      const endpoints = [
+        `/api/users/check-username?username=${encodeURIComponent(clean)}`,
+        `http://${socketHost}:3002/api/users/check-username?username=${encodeURIComponent(clean)}`,
+      ];
+      for (const ep of endpoints) {
+        try {
+          const resp = await fetch(ep);
+          if (resp && resp.ok) {
+            const data = await resp.json();
+            if (data.taken) return 'taken';
+          }
+        } catch (_) {}
       }
     } catch (_) {}
 
@@ -353,19 +361,27 @@ export const WhatsAppPhoneAuth: React.FC = () => {
 
     const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
 
-    // Check local REST server
+    // Check local server endpoints (Vite /api or standalone node on port 3002)
     try {
       const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const resp = await fetch(`http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`).catch(() => null);
-      if (resp && resp.ok) {
-        const data = await resp.json();
-        if (data.registered) {
-          setIsCheckingDevice(false);
-          setIsExistingAccount(true);
-          setExistingSessionInfo({ name: data.name || 'AGC User', avatarUrl: data.avatarUrl });
-          setStep('device_conflict');
-          return;
-        }
+      const endpoints = [
+        `/api/users/check-phone?phone=${cleanPhone}`,
+        `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`,
+      ];
+      for (const ep of endpoints) {
+        try {
+          const resp = await fetch(ep);
+          if (resp && resp.ok) {
+            const data = await resp.json();
+            if (data.registered) {
+              setIsCheckingDevice(false);
+              setIsExistingAccount(true);
+              setExistingSessionInfo({ name: data.name || 'AGC User', avatarUrl: data.avatarUrl });
+              setStep('device_conflict');
+              return;
+            }
+          }
+        } catch (_) {}
       }
     } catch (_) {}
 
@@ -470,18 +486,25 @@ export const WhatsAppPhoneAuth: React.FC = () => {
 
       const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
 
-      // Check local REST server
+      // Check local server endpoints (Vite /api or standalone node on port 3002)
       try {
         const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-        const checkUrl = `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`;
-        const resp = await fetch(checkUrl).catch(() => null);
-        if (resp && resp.ok) {
-          const data = await resp.json();
-          if (data.registered && data.name) {
-            setIsVerifying(false);
-            loginWithPhone(fullNormalizedNumber, data.name, data.avatarUrl, 'Available · Using AGC');
-            return;
-          }
+        const endpoints = [
+          `/api/users/check-phone?phone=${cleanPhone}`,
+          `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`,
+        ];
+        for (const ep of endpoints) {
+          try {
+            const resp = await fetch(ep);
+            if (resp && resp.ok) {
+              const data = await resp.json();
+              if (data.registered && data.name) {
+                setIsVerifying(false);
+                loginWithPhone(fullNormalizedNumber, data.name, data.avatarUrl, 'Available · Using AGC');
+                return;
+              }
+            }
+          } catch (_) {}
         }
       } catch (_) {}
 

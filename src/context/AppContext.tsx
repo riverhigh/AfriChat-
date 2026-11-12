@@ -2217,6 +2217,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [isSupabaseConfigured]);
 
+  // 🌐 LIVE SYSTEM: Realtime Global User Registration & Device Sync
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    const userSyncCh = supabase.channel('global_user_sync', { config: { broadcast: { self: false } } });
+    userSyncCh
+      .on('broadcast', { event: 'user_registered' }, ({ payload }: any) => {
+        if (!payload || !payload.phoneNumber) return;
+        const clean = payload.phoneNumber.replace(/\D/g, '');
+        const core = clean.replace(/^234|^233|^254|^27|^256|^250|^225|^255|^237|^20|^44|^1/, '').replace(/^0+/, '');
+        try {
+          const regMap = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
+          regMap[clean] = payload;
+          regMap[payload.phoneNumber] = payload;
+          if (core) {
+            regMap[core] = payload;
+            if (core.length >= 9) regMap[core.slice(-9)] = payload;
+          }
+          localStorage.setItem('AGC_registered_phones', JSON.stringify(regMap));
+
+          const allUsers: UserProfile[] = JSON.parse(localStorage.getItem('AGC_all_registered_users') || '[]');
+          if (!allUsers.some((u) => u.phoneNumber === payload.phoneNumber)) {
+            allUsers.push(payload);
+            localStorage.setItem('AGC_all_registered_users', JSON.stringify(allUsers));
+          }
+        } catch (_) {}
+      })
+      .subscribe();
+
+    return () => {
+      userSyncCh.unsubscribe();
+    };
+  }, [isSupabaseConfigured]);
+
   // 🌐 LIVE SYSTEM: Hydrate and listen for live Store Subscriptions
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -4749,26 +4783,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('REST user register notice:', e);
     }
 
-    // 4. Save session_token to Supabase profiles
+    // 4. Save to Supabase profiles and broadcast global sync
     if (isSupabaseConfigured) {
       supabase
         .from('profiles')
-        .upsert(
-          {
-            full_name: updatedUser.fullName,
-            phone_number: updatedUser.phoneNumber,
-            avatar_url: updatedUser.avatarUrl,
-            bio: updatedUser.about,
-            session_token: sessionToken,
-            last_login_at: new Date().toISOString(),
-            is_phone_verified: true,
-          },
-          { onConflict: 'phone_number' }
-        )
+        .upsert({
+          id: updatedUser.id,
+          full_name: updatedUser.fullName,
+          phone_number: updatedUser.phoneNumber,
+          avatar_url: updatedUser.avatarUrl,
+          bio: updatedUser.about,
+          updated_at: new Date().toISOString(),
+        })
         .then(({ error }: any) => {
           if (error) console.warn('Supabase profile save notice:', error);
           else console.log('✅ Supabase profile registered');
         });
+
+      try {
+        const syncChannel = supabase.channel('global_user_sync');
+        syncChannel.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            syncChannel.send({
+              type: 'broadcast',
+              event: 'user_registered',
+              payload: updatedUser,
+            });
+          }
+        });
+      } catch (_) {}
 
       // Broadcast force_logout via Supabase channel to other devices with this phone
       try {
@@ -6707,13 +6750,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleUrlChange = () => {
-      const hash = window.location.hash.toLowerCase();
+      const hash = window.location.hash;
+      const hashLower = hash.toLowerCase();
       const search = window.location.search.toLowerCase();
       const path = window.location.pathname.toLowerCase();
-      if (hash === '#admin' || search.includes('admin=true') || search.includes('admin=1') || path === '/admin') {
+      if (hashLower === '#admin' || search.includes('admin=true') || search.includes('admin=1') || path === '/admin') {
         setIsAdminModalOpen(true);
       }
+
+      // Handle universal AGC QR contact link: #contact={json}
+      if (hash.includes('contact=')) {
+        try {
+          const match = hash.match(/contact=([^&#]+)/);
+          if (match) {
+            const data = JSON.parse(decodeURIComponent(match[1]));
+            if (data.phone) {
+              const c = addNewDeviceContact(
+                data.name || 'AGC User',
+                data.phone,
+                'Added via AGC QR',
+                true,
+                data.avatar
+              );
+              startChatWithContact(c);
+              window.history.replaceState(null, '', window.location.pathname);
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Handle call link: #call={phone}
+      if (hash.includes('call=')) {
+        try {
+          const match = hash.match(/call=([^&#]+)/);
+          if (match) {
+            const phone = decodeURIComponent(match[1]);
+            const c = addNewDeviceContact(`Contact ${phone.slice(-4)}`, phone, 'Added via AGC QR', true);
+            startChatWithContact(c);
+            window.history.replaceState(null, '', window.location.pathname);
+          }
+        } catch (_) {}
+      }
     };
+
+    handleUrlChange();
     window.addEventListener('hashchange', handleUrlChange);
     window.addEventListener('popstate', handleUrlChange);
     return () => {
