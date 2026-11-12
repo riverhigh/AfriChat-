@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   User,
   Globe,
@@ -691,72 +691,79 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             {/* Artisan Stations & Workshop Hub */}
             <button
               onClick={() => setIsServicesModalOpen(true)}
-              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors"
+              className="w-full flex items-center justify-between p-3.5 hover:bg-purple-500/10 dark:hover:bg-purple-900/20 text-left transition-all border border-transparent hover:border-purple-500/20 group rounded-2xl"
             >
-              <div className="flex items-center gap-4">
-                <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center">
-                  <Wrench className="w-4 h-4" />
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-md shadow-purple-600/30 group-hover:scale-105 transition-transform shrink-0">
+                  <Wrench className="w-5 h-5 text-purple-200" />
                 </div>
                 <div>
-                  <div className="text-sm font-bold text-slate-900 dark:text-white">
-                    Artisan Stations & Services
+                  <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <span>Artisan Stations & Services</span>
+                    <span className="text-[10px] bg-purple-500/20 text-purple-600 dark:text-purple-300 font-mono font-bold px-2 py-0.5 rounded-full border border-purple-400/30">
+                      Verified Hub
+                    </span>
                   </div>
-                  <div className="text-xs text-slate-500">
+                  <div className="text-xs text-slate-500 dark:text-purple-300/70 mt-0.5">
                     Station registration (₦5k), listings (₦500), calendar & apprentice staff
                   </div>
                 </div>
               </div>
-              <ChevronRight className="w-4 h-4 text-slate-400" />
+              <ChevronRight className="w-4 h-4 text-purple-400 group-hover:translate-x-0.5 transition-transform shrink-0" />
             </button>
 
             {/* Merchant Store Registration & Tiers (₦3k / ₦7k) */}
             <button
               onClick={() => setIsStoreRegModalOpen(true)}
-              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors"
+              className="w-full flex items-center justify-between p-3.5 hover:bg-blue-500/10 dark:hover:bg-blue-900/20 text-left transition-all border border-transparent hover:border-blue-500/20 group rounded-2xl"
             >
-              <div className="flex items-center gap-4">
-                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center">
-                  <Store className="w-4 h-4" />
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-md shadow-blue-600/30 group-hover:scale-105 transition-transform shrink-0">
+                  <Store className="w-5 h-5 text-blue-200" />
                 </div>
                 <div>
                   <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <span>Store Subscription Tiers</span>
-                    {storeSubscription.isRegistered && (
-                      <span className="text-[10px] bg-blue-500/20 text-blue-600 dark:text-blue-400 font-bold px-1.5 py-0.2 rounded-full">
-                        {storeSubscription.tier === 'starter_30' ? 'Starter · 30' : 'Pro · 100'}
+                    {storeSubscription?.isRegistered ? (
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold px-2 py-0.5 rounded-full border border-emerald-400/30">
+                        {storeSubscription.tier === 'starter_30' ? 'Starter · 30 Items' : 'Pro · 100 Items'}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] bg-blue-500/20 text-blue-600 dark:text-blue-400 font-mono font-bold px-2 py-0.5 rounded-full border border-blue-400/30">
+                        From ₦2,199/mo
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-slate-500">
+                  <div className="text-xs text-slate-500 dark:text-blue-300/70 mt-0.5">
                     ₦3k/mo for 30 items limit · ₦7k/mo for 100 items limit
                   </div>
                 </div>
               </div>
-              <ChevronRight className="w-4 h-4 text-slate-400" />
+              <ChevronRight className="w-4 h-4 text-blue-400 group-hover:translate-x-0.5 transition-transform shrink-0" />
             </button>
 
             {/* African Writers Guild (AfriBooks) */}
             <button
               onClick={() => setIsWritersModalOpen(true)}
-              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors"
+              className="w-full flex items-center justify-between p-3.5 hover:bg-emerald-500/10 dark:hover:bg-emerald-900/20 text-left transition-all border border-transparent hover:border-emerald-500/20 group rounded-2xl"
             >
-              <div className="flex items-center gap-4">
-                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
-                  <BookOpen className="w-4 h-4" />
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white flex items-center justify-center shadow-md shadow-emerald-600/30 group-hover:scale-105 transition-transform shrink-0">
+                  <BookOpen className="w-5 h-5 text-emerald-200" />
                 </div>
                 <div>
                   <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <span>African Writers Guild (AfriBooks)</span>
-                    <span className="text-[10px] bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold px-1.5 py-0.2 rounded-full">
-                      No AI
+                    <span className="text-[10px] bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold px-2 py-0.5 rounded-full border border-emerald-400/30">
+                      🌿 100% No-AI
                     </span>
                   </div>
-                  <div className="text-xs text-slate-500">
+                  <div className="text-xs text-slate-500 dark:text-emerald-300/70 mt-0.5">
                     Serial chapters, author tips, paid books & 2-friend buddy reading
                   </div>
                 </div>
               </div>
-              <ChevronRight className="w-4 h-4 text-slate-400" />
+              <ChevronRight className="w-4 h-4 text-emerald-400 group-hover:translate-x-0.5 transition-transform shrink-0" />
             </button>
 
             {/* Phone Authentication & Change Number */}

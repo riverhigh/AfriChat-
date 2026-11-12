@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   X,
   Search,
@@ -329,46 +329,54 @@ export const ServicesBookingModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
-      <div className="w-full max-w-lg bg-white dark:bg-black text-slate-900 dark:text-white h-full sm:h-auto sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl border border-slate-200 dark:border-neutral-800 overflow-hidden">
-        {/* Top Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-neutral-800 bg-white dark:bg-black shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-2xl bg-purple-600 text-white flex items-center justify-center shadow-md">
-              <Wrench className="w-5 h-5" />
+    <div
+      onClick={() => { setIsServicesModalOpen(false); setIsArtisanModalOpen(false); }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in select-none"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-4xl bg-[#0c051a] text-white h-full sm:h-auto sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl border border-purple-500/25 overflow-hidden"
+      >
+        {/* Top Header - AfriChat African Purple Gradient */}
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-purple-500/15 bg-gradient-to-r from-purple-950 via-[#150a2e] to-indigo-950 text-white shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-purple-600/30">
+              <Wrench className="w-5 h-5 text-purple-200" />
             </div>
             <div>
-              <h2 className="text-base font-bold leading-tight font-display text-slate-900 dark:text-white flex items-center gap-1.5">
-                <span>Artisan Stations & Services</span>
-                <span className="text-[10px] font-mono bg-purple-100 dark:bg-purple-950/70 text-purple-700 dark:text-purple-300 font-bold px-1.5 py-0.2 rounded-full">
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-black leading-tight font-display text-white">
+                  Artisan Stations & Services Hub
+                </h2>
+                <span className="text-[10px] font-mono bg-purple-500/20 text-purple-300 border border-purple-400/30 font-bold px-2 py-0.5 rounded-full">
                   Verified Hub
                 </span>
-              </h2>
-              <p className="text-[11px] text-slate-500 dark:text-neutral-400">
-                Mechanics, tailoring, grooming, stations & apprentices
+              </div>
+              <p className="text-[11px] text-purple-200/70 mt-0.5">
+                Mechanics, tailoring, grooming, station registration & apprentice staff
               </p>
             </div>
           </div>
 
           <button
             onClick={() => { setIsServicesModalOpen(false); setIsArtisanModalOpen(false); }}
-            className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-neutral-200 rounded-full hover:bg-slate-100 dark:hover:bg-neutral-900 transition-colors"
+            className="p-1.5 text-purple-300/60 hover:text-white rounded-full hover:bg-white/10 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Tab Switcher */}
-        <div className="grid grid-cols-3 p-1.5 bg-slate-100 dark:bg-neutral-950 border-b border-slate-200 dark:border-neutral-800 text-xs font-semibold shrink-0">
+        <div className="grid grid-cols-3 p-1.5 bg-[#120726] border-b border-purple-500/15 text-xs font-semibold shrink-0">
           <button
             onClick={() => {
               setActiveTab('browse');
               setActiveProvider(null);
             }}
-            className={`py-2 rounded-xl transition-all ${
+            className={`py-2.5 rounded-xl transition-all ${
               activeTab === 'browse'
-                ? 'bg-white dark:bg-black text-purple-600 dark:text-purple-400 shadow-xs'
-                : 'text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold shadow-md shadow-purple-600/30'
+                : 'text-purple-200/70 hover:bg-purple-900/30 hover:text-white'
             }`}
           >
             Find Pros
@@ -379,14 +387,14 @@ export const ServicesBookingModal: React.FC = () => {
               setActiveTab('station_hub');
               setActiveProvider(null);
             }}
-            className={`py-2 rounded-xl transition-all relative flex items-center justify-center gap-1 ${
+            className={`py-2.5 rounded-xl transition-all relative flex items-center justify-center gap-1.5 ${
               activeTab === 'station_hub'
-                ? 'bg-white dark:bg-black text-purple-600 dark:text-purple-400 shadow-xs font-bold'
-                : 'text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold shadow-md shadow-purple-600/30'
+                : 'text-purple-200/70 hover:bg-purple-900/30 hover:text-white'
             }`}
           >
             <span>Station Hub</span>
-            <span className="px-1.5 py-0.2 text-[9px] font-mono bg-purple-600 text-white rounded-full">
+            <span className="px-1.5 py-0.2 text-[9px] font-mono bg-purple-500/40 text-purple-200 rounded-full border border-purple-400/30">
               ₦5k
             </span>
           </button>
@@ -396,15 +404,15 @@ export const ServicesBookingModal: React.FC = () => {
               setActiveTab('my_bookings');
               setActiveProvider(null);
             }}
-            className={`py-2 rounded-xl transition-all relative ${
+            className={`py-2.5 rounded-xl transition-all relative ${
               activeTab === 'my_bookings'
-                ? 'bg-white dark:bg-black text-purple-600 dark:text-purple-400 shadow-xs'
-                : 'text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold shadow-md shadow-purple-600/30'
+                : 'text-purple-200/70 hover:bg-purple-900/30 hover:text-white'
             }`}
           >
             <span>Bookings</span>
             {serviceBookings.length > 0 && (
-              <span className="ml-1.5 px-1.5 py-0.2 text-[10px] font-mono bg-purple-600 text-white rounded-full">
+              <span className="ml-1.5 px-2 py-0.5 text-[10px] font-mono bg-emerald-500 text-black font-bold rounded-full">
                 {serviceBookings.length}
               </span>
             )}
@@ -412,7 +420,7 @@ export const ServicesBookingModal: React.FC = () => {
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto bg-white dark:bg-black">
+        <div className="flex-1 overflow-y-auto bg-[#0e0722]">
           {/* TAB 1: BROWSE SPECIALISTS */}
           {activeTab === 'browse' && !activeProvider && (
             <div className="p-4 space-y-4">
