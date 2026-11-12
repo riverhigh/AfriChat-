@@ -5772,11 +5772,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [creatorFiles, setCreatorFiles] = useState<CreatorDigitalFile[]>(() => {
     try {
       const saved = localStorage.getItem('AGC_creator_files');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
     } catch (e) {
       console.warn('Failed to parse creator files:', e);
     }
-    return [];
+    return MOCK_CREATOR_FILES;
   });
 
   const buyCreatorFile = (fileId: string) => {

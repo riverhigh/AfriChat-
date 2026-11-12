@@ -1,4 +1,4 @@
-﻿import {
+import {
   ChatThread,
   ChatMessage,
   Product,
@@ -2317,6 +2317,31 @@ export const MOCK_GENERATED_CONTRACTS: GeneratedLegalContract[] = [
 // 25. African Creator System Mock Data (Fan Subscriptions, Shows & Direct Music)
 export const MOCK_CREATORS: CreatorProfile[] = [
   {
+    id: 'cr_davido',
+    name: 'Davido (O.B.O)',
+    handle: '@davido',
+    avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80',
+    banner: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80',
+    category: 'Music & Afrobeats',
+    subscribersCount: 88500,
+    monthlySubPrice: 3500,
+    currency: 'NGN',
+    bio: 'Baddest! All official concert tickets, unreleased acoustic stems, and VIP fan experiences drop here first.',
+    isVerified: true,
+    badge: '30BG Legend',
+    totalEarnings: 24500000,
+    isSubscribedByMe: false,
+    vipServices: {
+      voicePerMinute: 5000,
+      videoPerMinute: 15000,
+      bundle3MinVoice: 12000,
+      bundle5MinVoice: 20000,
+      bundle3MinVideo: 35000,
+      bundle5MinVideo: 50000,
+      vipDirectChat24h: 10000,
+    },
+  },
+  {
     id: 'cr_kelvin_vibe',
     name: 'Kelvin Afrobeat & The Fuji Boys',
     handle: '@kelvin_afro',
@@ -2442,6 +2467,26 @@ export const MOCK_CREATOR_POSTS: CreatorPost[] = [
 
 export const MOCK_CREATOR_SHOWS: CreatorShowTicket[] = [
   {
+    id: 'show_davido_timeless',
+    creatorId: 'cr_davido',
+    creatorName: 'Davido (O.B.O)',
+    creatorAvatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80',
+    title: 'Davido Timeless Arena Tour: Lagos Live Finale',
+    type: 'offline_concert',
+    date: 'Thursday, Dec 24, 2026',
+    time: '8:00 PM WAT',
+    venueOrStreamUrl: 'Eko Hotel Convention Centre, Victoria Island, Lagos',
+    price: 15000,
+    currency: 'NGN',
+    availableTickets: 250,
+    totalSold: 1750,
+    coverImage: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=700&auto=format&fit=crop&q=80',
+    description: 'Davido live in Lagos with the Compozers live band! 100% verified encrypted AGC Escrow Ticket with instant digital QR entry.',
+    ticketPin: 'TICK-OBO-2026',
+    isPurchasedByMe: false,
+    ticketQrCode: 'AFRI-TICKET-DAVIDO-OBO-VIP',
+  },
+  {
     id: 'show_01',
     creatorId: 'cr_kelvin_vibe',
     creatorName: 'Kelvin Afrobeat',
@@ -2500,6 +2545,23 @@ export const MOCK_CREATOR_SHOWS: CreatorShowTicket[] = [
 ];
 
 export const MOCK_CREATOR_SONGS: CreatorSong[] = [
+  {
+    id: 'song_davido_01',
+    artistId: 'cr_davido',
+    artistName: 'Davido (O.B.O)',
+    artistAvatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80',
+    title: 'Feel (Acoustic Unreleased Studio Leak)',
+    album: 'Timeless Unplugged EP',
+    coverArt: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300&auto=format&fit=crop&q=80',
+    price: 1000,
+    currency: 'NGN',
+    duration: '3:45',
+    genre: 'Afrobeats',
+    playsCount: 52100,
+    salesCount: 1420,
+    releaseDate: 'Yesterday',
+    isPurchasedByMe: false,
+  },
   {
     id: 'song_01',
     artistId: 'cr_kelvin_vibe',

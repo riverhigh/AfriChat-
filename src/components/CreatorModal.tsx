@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
   Ticket,
@@ -23,1033 +23,786 @@ import {
   FileText,
   Upload,
   Folder,
-  Sliders,
   Disc,
   Star,
-  ArrowRight,
-  ChevronRight,
-  Zap,
+  Share2,
+  Search,
+  Radio,
+  ExternalLink,
+  Volume2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { CreatorProfile, CreatorShowTicket, CreatorSong } from '../types';
+import { CreatorProfile, CreatorShowTicket, CreatorSong, CreatorDigitalFile } from '../types';
+import { supabase, isSupabaseConfigured } from '../services/supabase';
 
-// ─── Tab type ────────────────────────────────────────────────────────────────
-type CreatorTab = 'feed' | 'files' | 'vip_sessions' | 'shows' | 'music' | 'studio';
+type DropFilter = 'all' | 'ticket' | 'song' | 'call' | 'file';
 
-const TAB_CONFIG: { id: CreatorTab; label: string; icon: React.ElementType }[] = [
-  { id: 'feed',         label: 'VIP Feed',   icon: Lock },
-  { id: 'files',        label: 'Files',      icon: Folder },
-  { id: 'vip_sessions', label: 'VIP Calls',  icon: Phone },
-  { id: 'shows',        label: 'Tickets',    icon: Ticket },
-  { id: 'music',        label: 'Music',      icon: Music },
-  { id: 'studio',       label: 'Studio',     icon: TrendingUp },
-];
+interface CreatorDrop {
+  id: string;
+  type: 'ticket' | 'song' | 'call' | 'file';
+  creatorId: string;
+  creatorName: string;
+  creatorHandle: string;
+  creatorAvatar: string;
+  isVerified: boolean;
+  badge?: string;
+  timeAgo: string;
+  title: string;
+  description: string;
+  price: number;
+  coverImage?: string;
+  meta: {
+    badgeText: string;
+    subtext: string;
+    actionLabel: string;
+    icon: React.ElementType;
+  };
+  rawData: any;
+}
 
 export const CreatorModal: React.FC = () => {
   const {
     isCreatorModalOpen,
     setIsCreatorModalOpen,
     creators,
-    creatorPosts,
     creatorShows,
     creatorSongs,
-    subscribeToCreator,
-    toggleFollowCreator,
+    creatorFiles,
     buyShowTicket,
     buyCreatorSong,
-    createCreatorPost,
+    buyCreatorFile,
+    bookCreatorVipSession,
     createCreatorShow,
     createCreatorSong,
-    formatPrice,
-    currentUser,
-    upgradeVerificationBadge,
-    creatorFiles,
-    buyCreatorFile,
     uploadCreatorFile,
-    bookCreatorVipSession,
-    updateCreatorVipRates,
     wallet,
+    currentUser,
+    startCall,
+    setActiveTab,
+    setActiveChatId,
+    chats,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<CreatorTab>('feed');
-  const [selectedCreatorId, setSelectedCreatorId] = useState<string>('all');
+  const [activeFilter, setActiveFilter] = useState<DropFilter>('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [playingSongId, setPlayingSongId] = useState<string | null>(null);
-  const [playingLeakPostId, setPlayingLeakPostId] = useState<string | null>(null);
-  const [activeTicketQrModal, setActiveTicketQrModal] = useState<CreatorShowTicket | null>(null);
+  const [activeTicketQr, setActiveTicketQr] = useState<CreatorShowTicket | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+  const [showDropModal, setShowDropModal] = useState(false);
+  const [selectedDropType, setSelectedDropType] = useState<'ticket' | 'song' | 'file'>('ticket');
 
-  // VIP Session Booking
-  const [bookingVipCreator, setBookingVipCreator] = useState<CreatorProfile | null>(null);
-  const [vipSessionType, setVipSessionType] = useState<'voice' | 'video' | 'chat'>('voice');
-  const [vipDurationMinutes, setVipDurationMinutes] = useState<number>(3);
-  const [vipBookingProcessing, setVipBookingProcessing] = useState(false);
+  // New Drop Form State
+  const [newTitle, setNewTitle] = useState('');
+  const [newDesc, setNewDesc] = useState('');
+  const [newPrice, setNewPrice] = useState('5000');
+  const [newVenue, setNewVenue] = useState('Eko Hotel Convention Centre, Lagos');
+  const [newDate, setNewDate] = useState('Friday, Dec 25, 2026');
 
-  // File Category Filter
-  const [fileCategoryFilter, setFileCategoryFilter] = useState<string>('all');
+  // Live real-time drops state
+  const [liveDrops, setLiveDrops] = useState<CreatorDrop[]>([]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Studio Forms
-  const [showNewPostForm, setShowNewPostForm] = useState(false);
-  const [newPostContent, setNewPostContent] = useState('');
-  const [newPostIsLocked, setNewPostIsLocked] = useState(true);
-  const [newPostMediaType, setNewPostMediaType] = useState<'text' | 'image' | 'audio_leak'>('audio_leak');
+  const toast = (msg: string) => {
+    setSuccessToast(msg);
+    setTimeout(() => setSuccessToast(null), 3000);
+  };
 
-  const [showNewShowForm, setShowNewShowForm] = useState(false);
-  const [newShowTitle, setNewShowTitle] = useState('');
-  const [newShowType, setNewShowType] = useState<'online_stream' | 'offline_concert'>('offline_concert');
-  const [newShowDate, setNewShowDate] = useState('Saturday, Dec 26, 2026');
-  const [newShowTime, setNewShowTime] = useState('7:00 PM WAT');
-  const [newShowVenue, setNewShowVenue] = useState('Eko Hotel Convention Centre, Lagos');
-  const [newShowPrice, setNewShowPrice] = useState(15000);
+  // 🌐 Supabase Realtime Live Drop Listener
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    const dropChannel = supabase.channel('live_creator_drops', { config: { broadcast: { self: false } } });
+    dropChannel
+      .on('broadcast', { event: 'new_creator_drop' }, ({ payload }: any) => {
+        if (!payload?.drop) return;
+        setLiveDrops((prev) => [payload.drop, ...prev]);
+        toast(`✨ New Drop: ${payload.drop.creatorName} just released "${payload.drop.title}"!`);
+      })
+      .subscribe();
 
-  const [showNewSongForm, setShowNewSongForm] = useState(false);
-  const [newSongTitle, setNewSongTitle] = useState('');
-  const [newSongAlbum, setNewSongAlbum] = useState('Single Drop');
-  const [newSongGenre, setNewSongGenre] = useState('Afrobeats');
-  const [newSongPrice, setNewSongPrice] = useState(500);
-
-  const [showNewFileForm, setShowNewFileForm] = useState(false);
-  const [newFileTitle, setNewFileTitle] = useState('');
-  const [newFileCategory, setNewFileCategory] = useState<'ebook' | 'music_audio' | 'preset_lut' | 'video' | 'design_art' | 'code_software'>('ebook');
-  const [newFileDesc, setNewFileDesc] = useState('');
-  const [newFilePrice, setNewFilePrice] = useState('2000');
-  const [uploadedFileName, setUploadedFileName] = useState('');
-  const [uploadedFileSize, setUploadedFileSize] = useState('');
-  const [uploadedFileType, setUploadedFileType] = useState('');
-  const [uploadedFileDataUrl, setUploadedFileDataUrl] = useState('');
-
-  const [showRateSettings, setShowRateSettings] = useState(false);
-  const [rateVoicePerMin, setRateVoicePerMin] = useState('1500');
-  const [rateVideoPerMin, setRateVideoPerMin] = useState('3000');
-  const [rate3MinVoice, setRate3MinVoice] = useState('3500');
-  const [rate5MinVoice, setRate5MinVoice] = useState('5500');
-  const [rate3MinVideo, setRate3MinVideo] = useState('7500');
-  const [rate5MinVideo, setRate5MinVideo] = useState('12000');
-  const [rateVipChat, setRateVipChat] = useState('4000');
+    return () => {
+      dropChannel.unsubscribe();
+    };
+  }, []);
 
   if (!isCreatorModalOpen) return null;
 
-  const toast = (msg: string) => { setSuccessToast(msg); setTimeout(() => setSuccessToast(null), 4000); };
+  // Build unified feed items from all creator activities
+  const allFeedDrops: CreatorDrop[] = [
+    ...liveDrops,
+    // Tickets
+    ...creatorShows.map((show) => ({
+      id: `drop_show_${show.id}`,
+      type: 'ticket' as const,
+      creatorId: show.creatorId,
+      creatorName: show.creatorName,
+      creatorHandle: show.creatorName.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+      creatorAvatar: show.creatorAvatar || 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150',
+      isVerified: true,
+      badge: 'Concert Drop',
+      timeAgo: 'Just now',
+      title: show.title,
+      description: show.description,
+      price: show.price,
+      coverImage: show.coverImage,
+      meta: {
+        badgeText: show.type === 'online_stream' ? 'Live Stream Ticket' : 'Physical Concert Pass',
+        subtext: `📅 ${show.date} · 📍 ${show.venueOrStreamUrl}`,
+        actionLabel: show.isPurchasedByMe ? 'View My Ticket QR' : `Get Ticket (₦${show.price.toLocaleString()})`,
+        icon: Ticket,
+      },
+      rawData: show,
+    })),
+    // Songs & Audio Leaks
+    ...creatorSongs.map((song) => ({
+      id: `drop_song_${song.id}`,
+      type: 'song' as const,
+      creatorId: song.artistId,
+      creatorName: song.artistName,
+      creatorHandle: song.artistName.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+      creatorAvatar: song.artistAvatar || 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150',
+      isVerified: true,
+      badge: 'Exclusive Track',
+      timeAgo: '2 hours ago',
+      title: song.title,
+      description: `Exclusive single off ${song.album}. High fidelity master with 100% direct artist support.`,
+      price: song.price,
+      coverImage: song.coverArt,
+      meta: {
+        badgeText: `${song.genre} · ${song.duration}`,
+        subtext: `🎵 ${song.playsCount?.toLocaleString() || 5000}+ Streams · Direct to Phone`,
+        actionLabel: `Buy Song (₦${song.price.toLocaleString()})`,
+        icon: Music,
+      },
+      rawData: song,
+    })),
+    // VIP Calls
+    ...creators.map((c) => ({
+      id: `drop_call_${c.id}`,
+      type: 'call' as const,
+      creatorId: c.id,
+      creatorName: c.name,
+      creatorHandle: c.handle,
+      creatorAvatar: c.avatar,
+      isVerified: c.isVerified,
+      badge: c.badge || 'VIP Call',
+      timeAgo: 'Today',
+      title: `1-on-1 VIP Video/Voice Call Session with ${c.name}`,
+      description: `Book private consultation, music feedback, mentorship or personalized video shoutout directly with ${c.name}.`,
+      price: c.vipServices?.bundle3MinVoice || 3500,
+      coverImage: c.banner,
+      meta: {
+        badgeText: '1-on-1 Direct Access',
+        subtext: `📞 Verified Private Line · 3 to 15 Mins`,
+        actionLabel: `Book VIP Call (from ₦${(c.vipServices?.bundle3MinVoice || 3500).toLocaleString()})`,
+        icon: Phone,
+      },
+      rawData: c,
+    })),
+    // Digital Files & Packs
+    ...creatorFiles.map((file) => ({
+      id: `drop_file_${file.id}`,
+      type: 'file' as const,
+      creatorId: file.creatorId,
+      creatorName: file.creatorName,
+      creatorHandle: file.creatorName.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+      creatorAvatar: file.creatorAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      isVerified: true,
+      badge: 'Digital Pack',
+      timeAgo: file.createdAt || 'Recent',
+      title: file.title,
+      description: file.description,
+      price: file.price,
+      coverImage: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&auto=format&fit=crop&q=80',
+      meta: {
+        badgeText: `${file.category.toUpperCase()} · ${file.fileSize}`,
+        subtext: `📁 ${file.downloadsCount} Downloads · Instant Unlock`,
+        actionLabel: file.isPurchasedByMe ? 'Download File' : `Unlock & Download (₦${file.price.toLocaleString()})`,
+        icon: Folder,
+      },
+      rawData: file,
+    })),
+  ];
 
-  const handleSubscribe = (creator: CreatorProfile) => toast(subscribeToCreator(creator.id).message);
-  const handleBuyTicket = (show: CreatorShowTicket) => {
-    const res = buyShowTicket(show.id);
-    if (res.ticket) setActiveTicketQrModal(res.ticket);
-    toast(res.message);
+  // Filtering
+  const filteredDrops = allFeedDrops.filter((drop) => {
+    if (activeFilter !== 'all' && drop.type !== activeFilter) return false;
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return true;
+    return (
+      drop.title.toLowerCase().includes(q) ||
+      drop.creatorName.toLowerCase().includes(q) ||
+      drop.description.toLowerCase().includes(q)
+    );
+  });
+
+  const handleAction = (drop: CreatorDrop) => {
+    if (drop.type === 'ticket') {
+      const show: CreatorShowTicket = drop.rawData;
+      if (show.isPurchasedByMe) {
+        setActiveTicketQr(show);
+      } else {
+        const res = buyShowTicket(show.id);
+        if (res.ticket) setActiveTicketQr(res.ticket);
+        toast(res.message);
+      }
+    } else if (drop.type === 'song') {
+      const song: CreatorSong = drop.rawData;
+      const res = buyCreatorSong(song.id);
+      toast(res.message);
+    } else if (drop.type === 'call') {
+      const creator: CreatorProfile = drop.rawData;
+      const price = creator.vipServices?.bundle3MinVoice || 3500;
+      const res = bookCreatorVipSession(creator.id, 'voice', 3, price);
+      toast(res.message);
+      if (res.success) {
+        startCall(creator.name, '+2348000000000', creator.avatar, 'voice');
+      }
+    } else if (drop.type === 'file') {
+      const file: CreatorDigitalFile = drop.rawData;
+      if (file.isPurchasedByMe) {
+        toast(`📥 Downloading "${file.fileName}"...`);
+      } else {
+        const res = buyCreatorFile(file.id);
+        toast(res.message);
+      }
+    }
   };
-  const handleBuySong = (song: CreatorSong) => toast(buyCreatorSong(song.id).message);
 
-  const handleCreatePost = () => {
-    if (!newPostContent.trim()) return;
-    createCreatorPost(newPostContent, newPostIsLocked, newPostMediaType);
-    setNewPostContent('');
-    setShowNewPostForm(false);
-    toast('🌟 Exclusive Creator Post published!');
+  const handleChatCreator = (drop: CreatorDrop) => {
+    let target = chats.find(
+      (c) =>
+        c.name.toLowerCase().includes(drop.creatorName.toLowerCase()) ||
+        drop.creatorName.toLowerCase().includes(c.name.toLowerCase())
+    );
+    if (!target && chats.length > 0) target = chats[0];
+    setIsCreatorModalOpen(false);
+    setActiveTab('chats');
+    if (target) setActiveChatId(target.id);
   };
 
-  const handleCreateShow = () => {
-    if (!newShowTitle.trim()) return;
-    createCreatorShow({
-      creatorId: 'cr_self',
-      creatorName: currentUser.fullName || 'You',
-      creatorAvatar: currentUser.avatarUrl || '',
-      title: newShowTitle,
-      type: newShowType,
-      date: newShowDate,
-      time: newShowTime,
-      venueOrStreamUrl: newShowVenue,
-      price: Number(newShowPrice) || 5000,
-      currency: 'NGN',
-      availableTickets: 150,
-      coverImage: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=600&auto=format&fit=crop&q=80',
-      description: '100% revenue credited to creator AGC Wallet.',
-    });
-    setNewShowTitle('');
-    setShowNewShowForm(false);
-    toast('🎟️ Show & tickets listed on AfriCreator Hub!');
+  const handleShareDrop = (drop: CreatorDrop) => {
+    const text = `🔥 ${drop.creatorName} dropped "${drop.title}" on AfriChat (₦${drop.price.toLocaleString()})! Check it out: https://africhat.app/drops/${drop.id}`;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      alert('Drop link copied! Share with friends or WhatsApp groups.');
+    }
   };
 
-  const handleCreateSong = () => {
-    if (!newSongTitle.trim()) return;
-    createCreatorSong({
-      artistId: 'cr_self',
-      artistName: currentUser.fullName || 'You',
-      artistAvatar: currentUser.avatarUrl || '',
-      title: newSongTitle,
-      album: newSongAlbum,
-      genre: newSongGenre,
-      price: Number(newSongPrice) || 500,
-      currency: 'NGN',
-      duration: '3:15',
-      coverArt: 'https://images.unsplash.com/photo-1514565131-fce0801e5785?w=300&auto=format&fit=crop&q=80',
-      releaseDate: 'Today',
-    });
-    setNewSongTitle('');
-    setShowNewSongForm(false);
-    toast('🎵 Song dropped for direct fan purchase!');
-  };
-
-  const handleDeviceFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadedFileName(file.name);
-    setUploadedFileSize(`${(file.size / (1024 * 1024)).toFixed(1)} MB`);
-    setUploadedFileType(file.type || 'application/octet-stream');
-    const reader = new FileReader();
-    reader.onload = (ev) => { if (typeof ev.target?.result === 'string') setUploadedFileDataUrl(ev.target.result); };
-    reader.readAsDataURL(file);
-  };
-
-  const handleCreateDigitalFile = (e: React.FormEvent) => {
+  const handlePublishDrop = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newFileTitle.trim() || !uploadedFileName) { alert('Enter a title and select a file.'); return; }
-    uploadCreatorFile({
-      creatorId: 'cr_self',
-      creatorName: currentUser.fullName || 'You',
-      creatorAvatar: currentUser.avatarUrl || '',
-      title: newFileTitle.trim(),
-      description: newFileDesc.trim() || 'Exclusive creator digital asset.',
-      category: newFileCategory,
-      fileName: uploadedFileName,
-      fileSize: uploadedFileSize || '10 MB',
-      fileType: uploadedFileType || 'application/octet-stream',
-      fileDataUrl: uploadedFileDataUrl,
-      price: Number(newFilePrice) || 2000,
-      currency: 'NGN',
-    });
-    setNewFileTitle(''); setNewFileDesc(''); setUploadedFileName(''); setShowNewFileForm(false);
-    toast(`📁 "${newFileTitle}" listed for sale!`);
+    if (!newTitle.trim()) {
+      alert('Please enter a title');
+      return;
+    }
+
+    const priceNum = Number(newPrice) || 2000;
+
+    if (selectedDropType === 'ticket') {
+      createCreatorShow({
+        creatorId: 'cr_self',
+        creatorName: currentUser.fullName || 'Verified Artist',
+        creatorAvatar: currentUser.avatarUrl || 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150',
+        title: newTitle.trim(),
+        type: 'offline_concert',
+        date: newDate,
+        time: '8:00 PM WAT',
+        venueOrStreamUrl: newVenue,
+        price: priceNum,
+        currency: 'NGN',
+        availableTickets: 200,
+        coverImage: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=700&auto=format&fit=crop&q=80',
+        description: newDesc.trim() || 'Verified encrypted AGC Escrow Concert Ticket.',
+      });
+    } else if (selectedDropType === 'song') {
+      createCreatorSong({
+        artistId: 'cr_self',
+        artistName: currentUser.fullName || 'Verified Artist',
+        artistAvatar: currentUser.avatarUrl || 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150',
+        title: newTitle.trim(),
+        album: 'AfriChat Exclusive Single',
+        genre: 'Afrobeats',
+        price: priceNum,
+        currency: 'NGN',
+        duration: '3:30',
+        releaseDate: 'Today',
+        coverArt: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&auto=format&fit=crop&q=80',
+      });
+    } else {
+      uploadCreatorFile({
+        creatorId: 'cr_self',
+        creatorName: currentUser.fullName || 'Verified Artist',
+        creatorAvatar: currentUser.avatarUrl || 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150',
+        title: newTitle.trim(),
+        description: newDesc.trim() || 'Exclusive digital creative asset.',
+        category: 'music_audio',
+        fileName: `${newTitle.trim().replace(/\s+/g, '_')}.zip`,
+        fileSize: '45 MB',
+        fileType: 'application/zip',
+        price: priceNum,
+        currency: 'NGN',
+      });
+    }
+
+    // Broadcast live to all users via Supabase
+    if (isSupabaseConfigured) {
+      try {
+        const dropCh = supabase.channel('live_creator_drops', { config: { broadcast: { self: false } } });
+        dropCh.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            dropCh.send({
+              type: 'broadcast',
+              event: 'new_creator_drop',
+              payload: {
+                drop: {
+                  id: `live_${Date.now()}`,
+                  type: selectedDropType,
+                  creatorId: 'cr_self',
+                  creatorName: currentUser.fullName || 'Verified Artist',
+                  creatorHandle: '@you',
+                  creatorAvatar: currentUser.avatarUrl || 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150',
+                  isVerified: true,
+                  badge: 'New Release',
+                  timeAgo: 'Just now',
+                  title: newTitle.trim(),
+                  description: newDesc.trim() || 'New exclusive release on AfriCreator Hub.',
+                  price: priceNum,
+                  coverImage: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=700&auto=format&fit=crop&q=80',
+                  meta: {
+                    badgeText: selectedDropType.toUpperCase(),
+                    subtext: 'Direct to Fan · AGC Escrow Verified',
+                    actionLabel: `Get (₦${priceNum.toLocaleString()})`,
+                    icon: selectedDropType === 'ticket' ? Ticket : selectedDropType === 'song' ? Music : Folder,
+                  },
+                  rawData: {},
+                },
+              },
+            });
+          }
+        });
+      } catch (e) {}
+    }
+
+    setShowDropModal(false);
+    setNewTitle('');
+    setNewDesc('');
+    toast('🎉 New drop broadcasted live to the African Creator Feed!');
   };
-
-  const handleSaveVipRates = (e: React.FormEvent) => {
-    e.preventDefault();
-    updateCreatorVipRates('cr_self', {
-      voicePerMinute: Number(rateVoicePerMin) || 1500,
-      videoPerMinute: Number(rateVideoPerMin) || 3000,
-      bundle3MinVoice: Number(rate3MinVoice) || 3500,
-      bundle5MinVoice: Number(rate5MinVoice) || 5500,
-      bundle3MinVideo: Number(rate3MinVideo) || 7500,
-      bundle5MinVideo: Number(rate5MinVideo) || 12000,
-      vipDirectChat24h: Number(rateVipChat) || 4000,
-    });
-    setShowRateSettings(false);
-    toast('✅ VIP Session rates updated!');
-  };
-
-  const calculateVipPrice = (creator: CreatorProfile, type: 'voice' | 'video' | 'chat', mins: number) => {
-    const vip = creator.vipServices || { voicePerMinute: 1500, videoPerMinute: 3000, bundle3MinVoice: 3500, bundle5MinVoice: 5500, bundle3MinVideo: 7500, bundle5MinVideo: 12000, vipDirectChat24h: 4000 };
-    if (type === 'chat') return vip.vipDirectChat24h;
-    if (type === 'voice') return mins === 3 ? vip.bundle3MinVoice : mins === 5 ? vip.bundle5MinVoice : vip.voicePerMinute * mins;
-    return mins === 3 ? vip.bundle3MinVideo : mins === 5 ? vip.bundle5MinVideo : vip.videoPerMinute * mins;
-  };
-
-  const handleConfirmVipBooking = () => {
-    if (!bookingVipCreator) return;
-    setVipBookingProcessing(true);
-    setTimeout(() => {
-      setVipBookingProcessing(false);
-      const res = bookCreatorVipSession(bookingVipCreator.id, vipSessionType, vipDurationMinutes, calculateVipPrice(bookingVipCreator, vipSessionType, vipDurationMinutes));
-      setBookingVipCreator(null);
-      if (res.success) setIsCreatorModalOpen(false);
-      else alert(res.message);
-    }, 600);
-  };
-
-  const filteredPosts = creatorPosts.filter((p) => selectedCreatorId === 'all' || p.creatorId === selectedCreatorId);
-
-  // ─── Shared styles ──────────────────────────────────────────────────────────
-  const card = 'rounded-2xl border border-white/8 bg-white/4 p-4 space-y-3';
-  const inputCls = 'w-full px-3 py-2.5 text-sm bg-white/6 border border-white/10 rounded-xl text-white placeholder-white/30 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/40 transition-all';
-  const btnPrimary = 'flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-500 active:scale-[0.98] text-white font-bold text-sm shadow-lg shadow-purple-900/50 transition-all';
-  const btnOutline = 'flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-white/15 hover:border-purple-500/60 hover:bg-purple-500/8 text-white/70 hover:text-white font-semibold text-sm transition-all';
-  const label = 'text-[11px] font-bold uppercase tracking-widest text-white/40 block mb-1.5';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/90 backdrop-blur-sm animate-in fade-in">
-      {/* ── Sheet / Modal ────────────────────────────────────────────────────── */}
-      <div className="w-full max-w-md bg-[#060608] rounded-t-3xl sm:rounded-3xl border border-white/8 shadow-2xl flex flex-col max-h-[94vh] overflow-hidden">
+    <div
+      onClick={() => setIsCreatorModalOpen(false)}
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in select-none"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-lg bg-white dark:bg-[#10081d] rounded-t-3xl sm:rounded-3xl shadow-2xl max-h-[92vh] flex flex-col overflow-hidden border border-purple-500/25"
+      >
+        {/* Mobile grab bar */}
+        <div className="w-10 h-1 bg-slate-300 dark:bg-purple-900/60 rounded-full mx-auto my-2.5 shrink-0 sm:hidden" />
 
-        {/* ── Header ───────────────────────────────────────────────────────── */}
-        <div className="shrink-0 px-5 pt-5 pb-4 border-b border-white/8">
+        {/* Header - AfriChat Signature Purple Gradient */}
+        <div className="px-5 py-3.5 bg-gradient-to-r from-purple-900 via-indigo-950 to-[#10081d] border-b border-purple-500/20 text-white shrink-0">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              {/* Logo mark */}
-              <div className="w-9 h-9 rounded-xl bg-purple-600/15 border border-purple-500/30 flex items-center justify-center">
-                <Sparkles className="w-4.5 h-4.5 text-purple-400" />
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-2xl bg-purple-600/30 text-purple-300 flex items-center justify-center border border-purple-400/30 shadow-inner">
+                <Sparkles className="w-4 h-4 text-amber-300" />
               </div>
               <div>
-                <h2 className="text-base font-black text-white leading-none">AGC Creator Hub</h2>
-                <p className="text-[11px] text-purple-300 mt-0.5">Subscriptions & Exclusives for African Artists · Strictly Clean Content Only</p>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-sm text-white font-display">
+                    AfriCreator Hub & Live Drops
+                  </h3>
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-mono border border-emerald-400/30">
+                    <span className="relative flex h-1.5 w-1.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
+                    </span>
+                    LIVE
+                  </span>
+                </div>
+                <p className="text-[11px] text-purple-200/70">
+                  Exclusive tickets, songs, VIP calls & files from African artists
+                </p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setIsCreatorModalOpen(false)}
-              className="w-8 h-8 rounded-full border border-white/10 flex items-center justify-center text-white/40 hover:text-white hover:border-white/30 transition-all"
-            >
-              <X className="w-4 h-4" />
-            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDropModal(true)}
+                className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm transition-transform active:scale-95 border border-purple-400/30"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Drop</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsCreatorModalOpen(false)}
+                className="text-white/60 hover:text-white p-1 rounded-full hover:bg-white/10 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
-          {/* Toast */}
-          {successToast && (
-            <div className="mt-3 px-3 py-2 rounded-xl bg-purple-600/20 border border-purple-500/40 text-purple-200 text-xs font-semibold flex items-center gap-2 animate-in slide-in-from-top-2">
-              <Sparkles className="w-3.5 h-3.5 shrink-0 text-purple-400" />
-              <span>{successToast}</span>
-            </div>
-          )}
-        </div>
+          {/* Search Bar */}
+          <div className="relative flex items-center mt-3">
+            <Search className="w-4 h-4 absolute left-3 text-purple-400 pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search Davido, Burna Boy, concert tickets, songs..."
+              className="w-full pl-9 pr-3 py-1.5 bg-black/40 rounded-xl text-xs text-white placeholder-purple-300/50 focus:outline-none focus:ring-1 focus:ring-purple-400 border border-white/10"
+            />
+          </div>
 
-        {/* ── Tab Bar ──────────────────────────────────────────────────────── */}
-        <div className="shrink-0 flex items-center gap-0.5 px-3 py-2 border-b border-white/6 overflow-x-auto no-scrollbar">
-          {TAB_CONFIG.map((tab) => {
-            const Icon = tab.icon;
-            const active = activeTab === tab.id;
-            return (
+          {/* Clean 1-Row Filter Pills */}
+          <div className="flex gap-1.5 overflow-x-auto no-scrollbar pt-2.5 pb-0.5">
+            {[
+              { id: 'all', label: '🔥 All Drops', icon: Sparkles },
+              { id: 'ticket', label: '🎟️ Tickets', icon: Ticket },
+              { id: 'song', label: '🎵 Songs & Leaks', icon: Music },
+              { id: 'call', label: '📞 VIP Calls', icon: Phone },
+              { id: 'file', label: '📁 Digital Files', icon: Folder },
+            ].map((f) => (
               <button
-                key={tab.id}
+                key={f.id}
                 type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-bold whitespace-nowrap transition-all ${
-                  active
-                    ? 'bg-purple-600 text-white shadow-md shadow-purple-900/60'
-                    : 'text-white/40 hover:text-white/70 hover:bg-white/5'
+                onClick={() => setActiveFilter(f.id as any)}
+                className={`px-3 py-1 text-xs rounded-xl font-bold transition-all shrink-0 ${
+                  activeFilter === f.id
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'bg-white/10 text-purple-200 hover:bg-white/15'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" />
-                <span>{tab.label}</span>
+                {f.label}
               </button>
-            );
-          })}
+            ))}
+          </div>
         </div>
 
-        {/* ── Tab Body ─────────────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto px-4 py-5 space-y-5 text-white">
+        {/* Success Toast */}
+        {successToast && (
+          <div className="mx-4 mt-2 p-2.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold flex items-center gap-2 shadow-lg animate-in slide-in-from-top-2 z-10">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{successToast}</span>
+          </div>
+        )}
 
-          {/* ════════════════════════════════════════════════════════════════
-              TAB 1 · VIP FEED
-          ════════════════════════════════════════════════════════════════ */}
-          {activeTab === 'feed' && (
-            <div className="space-y-5">
-                            {/* Artist Hub Mission Banner */}
-              <div className="p-3 rounded-2xl bg-gradient-to-r from-purple-950/60 via-indigo-950/60 to-purple-950/60 border border-purple-500/40 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2.5">
-                  <span className="text-xl">🎨</span>
-                  <div>
-                    <strong className="text-white block font-bold">The Premier Fan Subscription Platform for African Artists</strong>
-                    <span className="text-[11px] text-purple-300/80">
-                      Direct monthly fan subscriptions for musicians, skit makers, painters & dancers. 100% clean, respectful creative expression — zero adult/NSFW content.
-                    </span>
-                  </div>
-                </div>
+        {/* Release Drop Modal Form */}
+        {showDropModal && (
+          <div className="fixed inset-0 z-60 bg-black/80 flex items-center justify-center p-4">
+            <div className="w-full max-w-sm bg-white dark:bg-[#160d26] rounded-3xl p-5 shadow-2xl space-y-3.5 border border-purple-500/30 text-slate-900 dark:text-white max-h-[85vh] overflow-y-auto">
+              <div className="flex justify-between items-center pb-2 border-b border-purple-500/20">
+                <h4 className="text-sm font-bold flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-purple-500" />
+                  Release Live Creator Drop
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setShowDropModal(false)}
+                  className="text-xs text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
 
-              {/* Creator filter chips */}
-              <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-                {(['all', ...creators.map((c) => c.id)] as string[]).map((id) => {
-                  const creator = id === 'all' ? null : creators.find((c) => c.id === id);
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => setSelectedCreatorId(id)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all ${
-                        selectedCreatorId === id
-                          ? 'bg-purple-600 text-white'
-                          : 'bg-white/6 text-white/50 hover:bg-white/10 hover:text-white/80 border border-white/8'
-                      }`}
-                    >
-                      {creator ? (
-                        <>
-                          <img src={creator.avatar} alt="" className="w-4 h-4 rounded-full object-cover" />
-                          <span>{creator.name.split(' ')[0]}</span>
-                          {creator.isSubscribedByMe && <span className="text-[9px] opacity-70">VIP</span>}
-                        </>
-                      ) : (
-                        <span>All Creators</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Creator spotlight */}
-              {selectedCreatorId !== 'all' && (() => {
-                const creator = creators.find((c) => c.id === selectedCreatorId);
-                if (!creator) return null;
-                return (
-                  <div className={card}>
-                    <div className="flex items-center gap-3">
-                      <img src={creator.avatar} alt={creator.name} className="w-12 h-12 rounded-full object-cover ring-2 ring-purple-500/40" />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-sm font-bold text-white">{creator.name}</span>
-                          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-bold">{creator.badge}</span>
-                        </div>
-                        <span className="text-[11px] text-white/40 font-mono">{creator.handle} · {creator.subscribersCount.toLocaleString()} fans</span>
-                      </div>
-                    </div>
-                    <p className="text-xs text-white/55 leading-relaxed">{creator.bio}</p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => { const r = toggleFollowCreator(creator.id); toast(r.isFollowed ? `✓ Following ${creator.name}` : `Unfollowed`); }}
-                        className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${creator.isFollowedByMe ? 'border-white/20 text-white/60' : 'border-white/15 text-white/70 hover:border-purple-500/50 hover:text-purple-300'}`}
-                      >
-                        {creator.isFollowedByMe ? '✓ Following' : '+ Follow'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSubscribe(creator)}
-                        className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${creator.isSubscribedByMe ? 'bg-white/8 text-white/60 border border-white/10' : 'bg-purple-600 hover:bg-purple-500 text-white shadow-md shadow-purple-900/50'}`}
-                      >
-                        {creator.isSubscribedByMe ? '✓ VIP Subscriber' : `Subscribe ${formatPrice(creator.monthlySubPrice, creator.currency)}/mo`}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Posts */}
-              <div className="space-y-3">
-                {filteredPosts.length === 0 && (
-                  <div className="py-16 flex flex-col items-center gap-3 text-center">
-                    <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/8 flex items-center justify-center">
-                      <Lock className="w-6 h-6 text-white/20" />
-                    </div>
-                    <p className="text-sm font-semibold text-white/40">No creator posts yet</p>
-                    <p className="text-xs text-white/25 max-w-xs">Follow & subscribe to creators to see their exclusive VIP drops here</p>
-                  </div>
-                )}
-                {filteredPosts.map((post) => {
-                  const creator = creators.find((c) => c.id === post.creatorId);
-                  const isUnlocked = !post.isLocked || creator?.isSubscribedByMe;
-                  return (
-                    <div key={post.id} className={card}>
-                      {/* Author row */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2.5">
-                          <img src={post.creatorAvatar} alt="" className="w-9 h-9 rounded-full object-cover ring-1 ring-purple-500/30" />
-                          <div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-xs font-bold text-white">{post.creatorName}</span>
-                              {post.isLocked && (
-                                <span className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-400 font-bold border border-purple-500/20">
-                                  <Lock className="w-2.5 h-2.5" />VIP
-                                </span>
-                              )}
-                            </div>
-                            <span className="text-[10px] text-white/35 font-mono">{post.creatorHandle} · {post.createdAt}</span>
-                          </div>
-                        </div>
-                        {creator && !creator.isSubscribedByMe && post.isLocked && (
-                          <button type="button" onClick={() => handleSubscribe(creator)} className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-bold">Unlock</button>
-                        )}
-                      </div>
-
-                      {/* Content */}
-                      {isUnlocked ? (
-                        <div className="space-y-2.5">
-                          <p className="text-xs text-white/70 leading-relaxed whitespace-pre-wrap">{post.content}</p>
-                          {post.mediaType === 'audio_leak' && (
-                            <div className="p-3 rounded-xl bg-purple-600/10 border border-purple-500/20 flex items-center gap-3">
-                              <button
-                                type="button"
-                                onClick={() => setPlayingLeakPostId(playingLeakPostId === post.id ? null : post.id)}
-                                className="w-9 h-9 rounded-full bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-md active:scale-95"
-                              >
-                                {playingLeakPostId === post.id ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
-                              </button>
-                              <div className="flex-1 min-w-0">
-                                <span className="text-xs font-semibold text-white/80 block">Studio Audio Leak · {post.audioDurationSec}s</span>
-                                <div className="flex items-end gap-0.5 mt-1.5 h-5">
-                                  {Array.from({ length: 28 }).map((_, i) => (
-                                    <div key={i} className={`flex-1 rounded-sm ${playingLeakPostId === post.id ? 'bg-purple-500 animate-pulse' : 'bg-white/15'}`} style={{ height: `${(i % 5) * 20 + 20}%` }} />
-                                  ))}
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="p-5 rounded-xl border border-white/8 bg-white/3 text-center space-y-2.5">
-                          <div className="w-10 h-10 rounded-full bg-purple-600/10 mx-auto flex items-center justify-center border border-purple-500/20">
-                            <Lock className="w-4.5 h-4.5 text-purple-400" />
-                          </div>
-                          <p className="text-xs text-white/50">Subscribers-only content</p>
-                          {creator && (
-                            <button type="button" onClick={() => handleSubscribe(creator)} className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold">
-                              Subscribe {formatPrice(creator.monthlySubPrice, creator.currency)}/mo
-                            </button>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Post actions */}
-                      <div className="flex items-center justify-between pt-2.5 border-t border-white/6 text-[11px] text-white/35">
-                        <button type="button" className="flex items-center gap-1.5 hover:text-rose-400 transition-colors">
-                          <Heart className="w-3.5 h-3.5" /><span>{post.likesCount}</span>
-                        </button>
-                        <button type="button" className="flex items-center gap-1.5 hover:text-purple-400 transition-colors">
-                          <MessageCircle className="w-3.5 h-3.5" /><span>{post.commentsCount}</span>
-                        </button>
-                        <button type="button" onClick={() => creator && toast(`💖 Sent ₦1,000 Tip to ${creator.name}!`)} className="font-bold text-amber-500/70 hover:text-amber-400 transition-colors">
-                          Tip Artist
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* ════════════════════════════════════════════════════════════════
-              TAB 2 · FILE SHOP
-          ════════════════════════════════════════════════════════════════ */}
-          {activeTab === 'files' && (
-            <div className="space-y-5">
-              {/* Category filters */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-                {['all', 'ebook', 'music_audio', 'preset_lut', 'video', 'design_art', 'code_software'].map((cat) => (
+              {/* Type Switcher */}
+              <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-100 dark:bg-purple-950/40 rounded-xl">
+                {[
+                  { id: 'ticket', label: '🎟️ Ticket' },
+                  { id: 'song', label: '🎵 Song' },
+                  { id: 'file', label: '📁 File' },
+                ].map((t) => (
                   <button
-                    key={cat}
-                    onClick={() => setFileCategoryFilter(cat)}
-                    className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all ${fileCategoryFilter === cat ? 'bg-purple-600 text-white' : 'bg-white/6 text-white/40 border border-white/8 hover:bg-white/10 hover:text-white/70'}`}
+                    key={t.id}
+                    type="button"
+                    onClick={() => setSelectedDropType(t.id as any)}
+                    className={`py-1.5 text-xs font-bold rounded-lg transition-all ${
+                      selectedDropType === t.id
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-purple-300'
+                    }`}
                   >
-                    {cat === 'all' ? 'All' : cat === 'ebook' ? 'Ebooks' : cat === 'music_audio' ? 'Beats' : cat === 'preset_lut' ? 'Presets' : cat === 'video' ? 'Video' : cat === 'design_art' ? 'Art' : 'Code'}
+                    {t.label}
                   </button>
                 ))}
               </div>
 
-              {/* File list */}
-              {creatorFiles.filter((f) => fileCategoryFilter === 'all' || f.category === fileCategoryFilter).length === 0 ? (
-                <div className="py-16 flex flex-col items-center gap-3 text-center">
-                  <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/8 flex items-center justify-center">
-                    <Folder className="w-6 h-6 text-white/20" />
-                  </div>
-                  <p className="text-sm font-semibold text-white/40">No files listed yet</p>
-                  <p className="text-xs text-white/25">Creators can sell any file directly — ebooks, beats, presets, videos & more</p>
+              <form onSubmit={handlePublishDrop} className="space-y-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-0.5">
+                    Drop Title
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={
+                      selectedDropType === 'ticket'
+                        ? 'e.g. Davido Timeless Concert Pass'
+                        : selectedDropType === 'song'
+                        ? 'e.g. Unreleased Acoustic Mix'
+                        : 'e.g. Afrobeats Master Drumkit'
+                    }
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-purple-950/30 border border-slate-200 dark:border-purple-900/50 rounded-xl text-xs outline-none focus:ring-1 focus:ring-purple-500"
+                  />
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  {creatorFiles.filter((f) => fileCategoryFilter === 'all' || f.category === fileCategoryFilter).map((file) => (
-                    <div key={file.id} className={card}>
-                      <div className="flex items-start gap-3">
-                        <div className="w-11 h-11 rounded-xl bg-purple-600/15 border border-purple-500/20 flex items-center justify-center shrink-0">
-                          {file.category === 'ebook' ? <FileText className="w-5 h-5 text-purple-400" /> : file.category === 'music_audio' ? <Music className="w-5 h-5 text-purple-400" /> : file.category === 'video' ? <Video className="w-5 h-5 text-purple-400" /> : <Folder className="w-5 h-5 text-purple-400" />}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-sm font-bold text-white line-clamp-1">{file.title}</h4>
-                          <p className="text-[10px] text-white/35 mt-0.5">{file.creatorName} · {file.fileSize} · {file.category.toUpperCase()}</p>
-                          <p className="text-xs text-white/50 mt-1 line-clamp-2">{file.description}</p>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <span className="text-sm font-black font-mono text-purple-400 block">₦{file.price.toLocaleString()}</span>
-                          <span className="text-[9px] text-white/30">{file.downloadsCount} sold</span>
-                        </div>
-                      </div>
-                      <div className="pt-3 border-t border-white/6 flex items-center justify-between">
-                        <span className="text-[10px] text-white/25 font-mono truncate">{file.fileName}</span>
-                        {file.isPurchasedByMe ? (
-                          <button type="button" onClick={() => alert(`Downloaded "${file.fileName}"`)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/8 hover:bg-white/12 text-white/70 text-xs font-bold transition-all">
-                            <Download className="w-3.5 h-3.5" />Download
-                          </button>
-                        ) : (
-                          <button type="button" onClick={() => { const r = buyCreatorFile(file.id); if (r.success) toast(r.message); else alert(r.message); }} className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all">
-                            Buy ₦{file.price.toLocaleString()}
-                          </button>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-0.5">
+                    Description & Highlights
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="Tell your fans what makes this drop special..."
+                    value={newDesc}
+                    onChange={(e) => setNewDesc(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-purple-950/30 border border-slate-200 dark:border-purple-900/50 rounded-xl text-xs outline-none focus:ring-1 focus:ring-purple-500"
+                  />
+                </div>
+
+                {selectedDropType === 'ticket' && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-0.5">
+                        Venue
+                      </label>
+                      <input
+                        type="text"
+                        value={newVenue}
+                        onChange={(e) => setNewVenue(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-purple-950/30 border border-slate-200 dark:border-purple-900/50 rounded-xl text-xs outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-0.5">
+                        Date
+                      </label>
+                      <input
+                        type="text"
+                        value={newDate}
+                        onChange={(e) => setNewDate(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-purple-950/30 border border-slate-200 dark:border-purple-900/50 rounded-xl text-xs outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-0.5">
+                    Price (NGN)
+                  </label>
+                  <input
+                    type="number"
+                    value={newPrice}
+                    onChange={(e) => setNewPrice(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-purple-950/30 border border-slate-200 dark:border-purple-900/50 rounded-xl text-xs font-mono outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md shadow-purple-600/30 active:scale-95 transition-transform"
+                >
+                  🚀 Broadcast Live to Feed
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Ticket QR Modal */}
+        {activeTicketQr && (
+          <div className="fixed inset-0 z-60 bg-black/85 flex items-center justify-center p-4">
+            <div className="w-full max-w-xs bg-white dark:bg-[#160d26] rounded-3xl p-5 shadow-2xl text-center space-y-3 border border-purple-500/30 text-slate-900 dark:text-white">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-purple-600 dark:text-purple-400">
+                  Verified AGC Ticket Pass
+                </span>
+                <button
+                  onClick={() => setActiveTicketQr(null)}
+                  className="text-xs text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 bg-white rounded-2xl shadow-inner border border-slate-200 inline-block">
+                <QrCode className="w-36 h-36 text-slate-900 mx-auto" />
+              </div>
+
+              <div>
+                <h4 className="font-bold text-sm leading-tight">{activeTicketQr.title}</h4>
+                <p className="text-xs text-slate-500 dark:text-purple-300/80 mt-1">
+                  PIN: <strong className="font-mono text-purple-600">{activeTicketQr.ticketPin || 'TICK-AFRI-2026'}</strong>
+                </p>
+                <p className="text-[11px] text-slate-400 mt-0.5">{activeTicketQr.venueOrStreamUrl}</p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  alert('Ticket saved to your phone passbook!');
+                  setActiveTicketQr(null);
+                }}
+                className="w-full py-2 bg-purple-600 text-white rounded-xl text-xs font-bold shadow-sm"
+              >
+                Save Ticket to Phone
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Main Unified Creator Feed */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/70 dark:bg-[#0c0617]">
+          {filteredDrops.map((drop) => {
+            const Icon = drop.meta.icon;
+
+            return (
+              <div
+                key={drop.id}
+                className="rounded-3xl bg-white dark:bg-[#140b22] border border-slate-200/80 dark:border-purple-900/30 overflow-hidden shadow-xs hover:border-purple-500/40 transition-all space-y-3 group"
+              >
+                {/* Creator Header Bar */}
+                <div className="p-4 pb-0 flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <img
+                      src={drop.creatorAvatar}
+                      alt={drop.creatorName}
+                      className="w-10 h-10 rounded-2xl object-cover border border-purple-500/20 shadow-2xs"
+                    />
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <h4 className="font-bold text-xs text-slate-900 dark:text-slate-100">
+                          {drop.creatorName}
+                        </h4>
+                        {drop.isVerified && (
+                          <span className="w-4 h-4 rounded-full bg-amber-400 text-slate-900 flex items-center justify-center text-[10px] font-bold">
+                            ★
+                          </span>
                         )}
                       </div>
+                      <p className="text-[11px] text-slate-400">
+                        {drop.creatorHandle} · {drop.timeAgo}
+                      </p>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ════════════════════════════════════════════════════════════════
-              TAB 3 · VIP CALLS
-          ════════════════════════════════════════════════════════════════ */}
-          {activeTab === 'vip_sessions' && (
-            <div className="space-y-4">
-              <div className="p-3.5 rounded-xl bg-white/4 border border-white/8">
-                <div className="flex items-center gap-2 text-xs font-bold text-purple-300">
-                  <Zap className="w-4 h-4" />
-                  <span>Book a 1-on-1 session with any creator</span>
-                </div>
-                <p className="text-[11px] text-white/35 mt-1">Voice, video or VIP chat per minute. Creator sets the rates.</p>
-              </div>
-
-              {creators.length === 0 ? (
-                <div className="py-16 flex flex-col items-center gap-3 text-center">
-                  <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/8 flex items-center justify-center">
-                    <Phone className="w-6 h-6 text-white/20" />
                   </div>
-                  <p className="text-sm font-semibold text-white/40">No creators available</p>
+
+                  {/* Drop Type Tag */}
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 border border-purple-300/40 dark:border-purple-800">
+                    <Icon className="w-3 h-3" />
+                    <span>{drop.badge || drop.meta.badgeText}</span>
+                  </span>
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  {creators.map((creator) => {
-                    const vip = creator.vipServices || { voicePerMinute: 1500, videoPerMinute: 3000, bundle3MinVoice: 3500, bundle5MinVoice: 5500, bundle3MinVideo: 7500, bundle5MinVideo: 12000, vipDirectChat24h: 4000 };
-                    return (
-                      <div key={creator.id} className={card}>
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <img src={creator.avatar} alt={creator.name} className="w-11 h-11 rounded-full object-cover ring-2 ring-purple-500/30" />
-                            <div>
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-sm font-bold text-white">{creator.name}</span>
-                                <span className="text-[9px] bg-amber-500/20 text-amber-400 font-bold px-1.5 py-0.5 rounded-full">{creator.badge}</span>
-                              </div>
-                              <span className="text-[11px] text-white/35 font-mono">{creator.category}</span>
-                            </div>
-                          </div>
-                          <button type="button" onClick={() => setBookingVipCreator(creator)} className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all">
-                            Book
-                          </button>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/6">
-                          {[
-                            { label: 'Voice', value: `₦${vip.voicePerMinute.toLocaleString()}/min` },
-                            { label: 'Video', value: `₦${vip.videoPerMinute.toLocaleString()}/min` },
-                            { label: '3-Min Bundle', value: `₦${vip.bundle3MinVoice.toLocaleString()}` },
-                          ].map((item) => (
-                            <div key={item.label} className="text-center">
-                              <span className="text-[9px] text-white/30 block">{item.label}</span>
-                              <span className="text-[11px] font-bold text-purple-300">{item.value}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
 
-              {/* VIP Booking Modal */}
-              {bookingVipCreator && (
-                <div className="fixed inset-0 z-60 bg-black/95 backdrop-blur flex items-end sm:items-center justify-center p-4">
-                  <div className="w-full max-w-sm bg-[#0a0a0f] rounded-3xl border border-white/10 shadow-2xl p-6 space-y-5">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <img src={bookingVipCreator.avatar} alt="" className="w-10 h-10 rounded-full object-cover ring-2 ring-purple-500/40" />
-                        <div>
-                          <span className="text-sm font-bold text-white">{bookingVipCreator.name}</span>
-                          <span className="text-[11px] text-white/35 block">VIP Session Booking</span>
-                        </div>
-                      </div>
-                      <button type="button" onClick={() => setBookingVipCreator(null)} className="w-7 h-7 rounded-full border border-white/10 flex items-center justify-center text-white/40 hover:text-white">
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-
-                    {/* Session type */}
-                    <div>
-                      <span className={label}>Session Type</span>
-                      <div className="grid grid-cols-3 gap-2">
-                        {(['voice', 'video', 'chat'] as const).map((type) => (
-                          <button key={type} type="button" onClick={() => setVipSessionType(type)} className={`py-2.5 rounded-xl text-xs font-bold flex flex-col items-center gap-1 transition-all border ${vipSessionType === type ? 'bg-purple-600 border-purple-500 text-white' : 'bg-white/4 border-white/8 text-white/50 hover:border-purple-500/40'}`}>
-                            {type === 'voice' ? <Phone className="w-4 h-4" /> : type === 'video' ? <Video className="w-4 h-4" /> : <MessageCircle className="w-4 h-4" />}
-                            <span className="capitalize">{type}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Duration */}
-                    {vipSessionType !== 'chat' && (
-                      <div>
-                        <span className={label}>Duration</span>
-                        <div className="grid grid-cols-3 gap-2">
-                          {[3, 5, 10].map((mins) => (
-                            <button key={mins} type="button" onClick={() => setVipDurationMinutes(mins)} className={`py-2.5 rounded-xl text-xs font-bold transition-all border ${vipDurationMinutes === mins ? 'bg-purple-600 border-purple-500 text-white' : 'bg-white/4 border-white/8 text-white/50 hover:border-purple-500/40'}`}>
-                              {mins} min
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Price */}
-                    <div className="p-3.5 rounded-xl bg-purple-600/10 border border-purple-500/20 flex items-center justify-between">
-                      <span className="text-xs text-white/50">Total</span>
-                      <span className="text-xl font-black text-purple-300 font-mono">
-                        ₦{calculateVipPrice(bookingVipCreator, vipSessionType, vipDurationMinutes).toLocaleString()}
-                      </span>
-                    </div>
-
-                    <button type="button" onClick={handleConfirmVipBooking} disabled={vipBookingProcessing} className={btnPrimary}>
-                      {vipBookingProcessing ? 'Booking…' : 'Confirm & Pay from Wallet'}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ════════════════════════════════════════════════════════════════
-              TAB 4 · TICKETS
-          ════════════════════════════════════════════════════════════════ */}
-          {activeTab === 'shows' && (
-            <div className="space-y-4">
-              {creatorShows.length === 0 ? (
-                <div className="py-16 flex flex-col items-center gap-3 text-center">
-                  <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/8 flex items-center justify-center">
-                    <Ticket className="w-6 h-6 text-white/20" />
-                  </div>
-                  <p className="text-sm font-semibold text-white/40">No shows listed yet</p>
-                  <p className="text-xs text-white/25 max-w-xs">Creators can list physical concerts and online livestream tickets here</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {creatorShows.map((show) => (
-                    <div key={show.id} className="rounded-2xl overflow-hidden border border-white/8">
-                      {/* Cover */}
-                      <div className="relative h-36">
-                        <img src={show.coverImage} alt={show.title} className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
-                        <span className={`absolute top-3 left-3 text-[10px] font-bold px-2.5 py-1 rounded-full ${show.type === 'online_stream' ? 'bg-rose-600 text-white' : 'bg-purple-600 text-white'}`}>
-                          {show.type === 'online_stream' ? '🔴 Livestream' : '🏛️ Concert'}
-                        </span>
-                        <div className="absolute bottom-3 left-3">
-                          <span className="text-[10px] text-purple-300 font-bold">{show.creatorName}</span>
-                          <h4 className="text-sm font-bold text-white leading-tight">{show.title}</h4>
-                        </div>
-                      </div>
-                      {/* Info */}
-                      <div className="p-4 space-y-3 bg-white/3">
-                        <div className="grid grid-cols-2 gap-2 text-[11px] text-white/40">
-                          <div className="flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5 text-purple-400" /><span>{show.date}</span></div>
-                          <div className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-rose-400" /><span className="truncate">{show.venueOrStreamUrl}</span></div>
-                        </div>
-                        <div className="flex items-center justify-between pt-2 border-t border-white/6">
-                          <div>
-                            <span className="text-[10px] text-white/30">Ticket</span>
-                            <span className="text-sm font-black text-purple-400 font-mono block">{formatPrice(show.price, show.currency)}</span>
-                          </div>
-                          {show.isPurchasedByMe ? (
-                            <button type="button" onClick={() => setActiveTicketQrModal(show)} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/8 text-white/70 text-xs font-bold border border-white/10">
-                              <QrCode className="w-3.5 h-3.5" />View QR
-                            </button>
+                {/* Cover Image / Visual Artwork Preview */}
+                {drop.coverImage && (
+                  <div className="px-4">
+                    <div className="relative rounded-2xl overflow-hidden max-h-56 bg-slate-900 border border-black/5 dark:border-white/5">
+                      <img
+                        src={drop.coverImage}
+                        alt={drop.title}
+                        className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                      />
+                      {drop.type === 'song' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPlayingSongId(playingSongId === drop.id ? null : drop.id);
+                            toast(playingSongId === drop.id ? 'Paused preview' : 'Playing 30s preview...');
+                          }}
+                          className="absolute inset-0 m-auto w-12 h-12 rounded-full bg-purple-600/90 text-white flex items-center justify-center shadow-lg hover:scale-110 transition-transform"
+                        >
+                          {playingSongId === drop.id ? (
+                            <Pause className="w-5 h-5 fill-current" />
                           ) : (
-                            <button type="button" onClick={() => handleBuyTicket(show)} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold">
-                              <Ticket className="w-3.5 h-3.5" />{show.availableTickets} left
-                            </button>
+                            <Play className="w-5 h-5 fill-current ml-0.5" />
                           )}
-                        </div>
-                      </div>
+                        </button>
+                      )}
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ════════════════════════════════════════════════════════════════
-              TAB 5 · MUSIC
-          ════════════════════════════════════════════════════════════════ */}
-          {activeTab === 'music' && (
-            <div className="space-y-4">
-              {creatorSongs.length === 0 ? (
-                <div className="py-16 flex flex-col items-center gap-3 text-center">
-                  <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/8 flex items-center justify-center">
-                    <Disc className="w-6 h-6 text-white/20" />
                   </div>
-                  <p className="text-sm font-semibold text-white/40">No music drops yet</p>
-                  <p className="text-xs text-white/25 max-w-xs">Artists sell songs directly to fans — 100% payout, no label cut</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {creatorSongs.map((song) => {
-                    const isPlaying = playingSongId === song.id;
-                    return (
-                      <div key={song.id} className={`${card} !space-y-0 flex items-center gap-3.5`}>
-                        {/* Cover */}
-                        <div className="relative w-14 h-14 rounded-xl overflow-hidden shrink-0 cursor-pointer" onClick={() => setPlayingSongId(isPlaying ? null : song.id)}>
-                          <img src={song.coverArt} alt={song.title} className="w-full h-full object-cover" />
-                          <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                            {isPlaying ? <Pause className="w-5 h-5 text-purple-400" /> : <Play className="w-5 h-5 text-white ml-0.5" />}
-                          </div>
-                        </div>
-                        {/* Info */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-sm font-bold text-white truncate">{song.title}</span>
-                            {song.isPurchasedByMe && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/8 text-white/40 font-bold shrink-0">Owned</span>}
-                          </div>
-                          <p className="text-[11px] text-white/35 truncate">{song.artistName} · {song.genre} · {song.duration}</p>
-                          <p className="text-[10px] text-white/25 font-mono mt-0.5">{song.playsCount.toLocaleString()} plays · {song.salesCount.toLocaleString()} sold</p>
-                        </div>
-                        {/* Action */}
-                        <div className="shrink-0">
-                          {song.isPurchasedByMe ? (
-                            <button type="button" onClick={() => alert(`Downloaded "${song.title}"`)} className="p-2.5 rounded-xl bg-white/6 hover:bg-white/10 text-white/50 hover:text-white border border-white/8">
-                              <Download className="w-4 h-4" />
-                            </button>
-                          ) : (
-                            <button type="button" onClick={() => handleBuySong(song)} className="px-3 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold">
-                              {formatPrice(song.price, song.currency)}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+                )}
 
-          {/* ════════════════════════════════════════════════════════════════
-              TAB 6 · STUDIO
-          ════════════════════════════════════════════════════════════════ */}
-          {activeTab === 'studio' && (
-            !currentUser.isCreator ? (
-              /* ── Upgrade CTA ─── */
-              <div className="space-y-4">
-                <div className="text-center space-y-2 py-4">
-                  <div className="w-16 h-16 rounded-2xl bg-purple-600/15 border border-purple-500/25 flex items-center justify-center mx-auto">
-                    <Crown className="w-8 h-8 text-purple-400" />
-                  </div>
-                  <h3 className="text-base font-black text-white">Become a Verified Creator</h3>
-                  <p className="text-xs text-white/40 max-w-xs mx-auto leading-relaxed">
-                    Sell music, list shows, run fan subscriptions & VIP sessions — all paid straight to your AGC Wallet.
+                {/* Drop Title & Description */}
+                <div className="px-4 space-y-1">
+                  <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 leading-snug">
+                    {drop.title}
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                    {drop.description}
                   </p>
+                  <div className="text-[11px] text-purple-600 dark:text-purple-400 font-medium pt-0.5">
+                    {drop.meta.subtext}
+                  </div>
                 </div>
 
-                {/* Gold plan */}
-                <div className={card}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-xs font-bold text-amber-400">Gold Creator</span>
-                      <span className="text-[10px] text-white/30 block mt-0.5">5% platform fee on earnings</span>
-                    </div>
-                    <span className="text-sm font-black font-mono text-white">₦11,000<span className="text-[11px] text-white/35">/mo</span></span>
+                {/* Action Row: Price & 1-Tap Purchase / Booking */}
+                <div className="p-4 pt-2 border-t border-slate-100 dark:border-purple-900/20 flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-bold text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1 rounded-xl border border-emerald-200 dark:border-emerald-900/50">
+                      ₦{drop.price.toLocaleString()}
+                    </span>
+                    <span className="text-[10px] text-purple-600 dark:text-purple-300 font-semibold hidden sm:inline">
+                      🛡️ AGC Escrow
+                    </span>
                   </div>
-                  <ul className="space-y-2 pt-1">
-                    {['Gold checkmark badge on profile & stories', 'Sell music, files & show tickets', 'Monthly fan subscriptions'].map((f) => (
-                      <li key={f} className="flex items-start gap-2 text-xs text-white/55">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />{f}
-                      </li>
-                    ))}
-                  </ul>
-                  <button type="button" onClick={() => { const r = upgradeVerificationBadge('gold'); r.success ? toast('🎉 Gold Creator Studio activated!') : alert(r.message); }} className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-[0.98] text-black font-bold text-sm shadow-lg shadow-amber-900/40 transition-all">
-                    <Crown className="w-4 h-4" />Activate Gold Creator · ₦11k/mo
-                  </button>
-                </div>
 
-                {/* Creator Plus plan */}
-                <div className={`${card} border-purple-500/30 relative overflow-hidden`}>
-                  <div className="absolute top-3 right-3">
-                    <span className="text-[9px] font-bold bg-purple-600 text-white px-2 py-0.5 rounded-full">Best Value</span>
-                  </div>
-                  <div>
-                    <span className="text-xs font-bold text-purple-300">Creator Plus Plan</span>
-                    <span className="text-[10px] text-white/30 block mt-0.5">Only 2% platform fee on earnings</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <ul className="space-y-2 pt-1">
-                      {['Keep 98% of all revenue', 'Priority placement in Updates & Town', 'Unlimited Ajo groups at 2% fee'].map((f) => (
-                        <li key={f} className="flex items-start gap-2 text-xs text-white/55">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-purple-400 shrink-0 mt-0.5" />{f}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div className="flex items-center justify-between pt-2 border-t border-white/6">
-                    <span className="text-sm font-black font-mono text-white">₦25,000<span className="text-[11px] text-white/35">/mo</span></span>
-                    <button type="button" onClick={() => { const r = upgradeVerificationBadge('creator_plus'); r.success ? toast('🌟 Creator Plus activated — lowest 2% fee!') : alert(r.message); }} className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 active:scale-[0.98] text-white text-xs font-bold shadow-lg shadow-purple-900/50 transition-all">
-                      <Sparkles className="w-3.5 h-3.5" />Activate Plus
+                  <div className="flex items-center gap-1.5">
+                    {/* Share */}
+                    <button
+                      type="button"
+                      onClick={() => handleShareDrop(drop)}
+                      className="p-2 text-slate-400 hover:text-purple-500 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-950/40 transition-colors"
+                      title="Share Drop"
+                    >
+                      <Share2 className="w-4 h-4" />
+                    </button>
+
+                    {/* Chat Artist */}
+                    <button
+                      type="button"
+                      onClick={() => handleChatCreator(drop)}
+                      className="px-3 py-1.5 bg-slate-100 dark:bg-purple-950/40 hover:bg-slate-200 text-slate-700 dark:text-purple-200 rounded-xl text-xs font-bold transition-colors"
+                    >
+                      💬 Chat
+                    </button>
+
+                    {/* Primary Drop Action */}
+                    <button
+                      type="button"
+                      onClick={() => handleAction(drop)}
+                      className="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-sm active:scale-95 transition-all border border-purple-400/30"
+                    >
+                      {drop.meta.actionLabel}
                     </button>
                   </div>
                 </div>
               </div>
-            ) : (
-              /* ── Creator Dashboard ─── */
-              <div className="space-y-5">
-                {/* Stats */}
-                <div className="grid grid-cols-2 gap-3">
-                  {[
-                    { label: 'Wallet Balance', value: `₦${wallet.availableBalance.toLocaleString()}`, sub: 'Available', color: 'text-purple-300' },
-                    { label: 'VIP Subscribers', value: `${creators.reduce((a, c) => a + c.subscribersCount, 0).toLocaleString()}`, sub: 'Monthly fans', color: 'text-white' },
-                  ].map((s) => (
-                    <div key={s.label} className={`${card} !space-y-0.5`}>
-                      <span className="text-[10px] text-white/30 uppercase tracking-widest">{s.label}</span>
-                      <span className={`text-xl font-black font-mono ${s.color}`}>{s.value}</span>
-                      <span className="text-[10px] text-white/25">{s.sub}</span>
-                    </div>
-                  ))}
-                </div>
+            );
+          })}
 
-                {/* Action buttons */}
-                <div className="space-y-2.5">
-                  <span className={label}>Drop New Content</span>
-
-                  <button type="button" onClick={() => setShowNewPostForm(!showNewPostForm)} className={btnPrimary}>
-                    <Plus className="w-4 h-4" />New Exclusive Fan Post
-                  </button>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <button type="button" onClick={() => setShowNewShowForm(!showNewShowForm)} className={btnOutline}>
-                      <Ticket className="w-4 h-4" />Sell Tickets
-                    </button>
-                    <button type="button" onClick={() => setShowNewSongForm(!showNewSongForm)} className={btnOutline}>
-                      <Music className="w-4 h-4" />Drop Song
-                    </button>
-                  </div>
-
-                  <button type="button" onClick={() => setShowNewFileForm(!showNewFileForm)} className={btnOutline}>
-                    <Upload className="w-4 h-4" />Sell Any File from Device
-                  </button>
-
-                  <button type="button" onClick={() => setShowRateSettings(!showRateSettings)} className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-amber-500/20 hover:border-amber-500/50 hover:bg-amber-500/5 text-amber-500/70 hover:text-amber-400 font-semibold text-xs transition-all">
-                    <Sliders className="w-3.5 h-3.5" />Set VIP Call & Chat Rates
-                  </button>
-                </div>
-
-                {/* ── New Post Form ─────────────────────────────────── */}
-                {showNewPostForm && (
-                  <div className={`${card} animate-in zoom-in-98`}>
-                    <span className={label}>New Creator Post</span>
-                    <textarea
-                      value={newPostContent}
-                      onChange={(e) => setNewPostContent(e.target.value)}
-                      placeholder="Share a message, studio notes, or exclusive content..."
-                      rows={3}
-                      className={inputCls}
-                    />
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-white/40">VIP Only?</span>
-                        <button type="button" onClick={() => setNewPostIsLocked(!newPostIsLocked)} className={`w-10 h-5 rounded-full transition-all relative ${newPostIsLocked ? 'bg-purple-600' : 'bg-white/15'}`}>
-                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${newPostIsLocked ? 'left-5' : 'left-0.5'}`} />
-                        </button>
-                      </div>
-                      <div className="flex gap-2">
-                        <button type="button" onClick={() => setShowNewPostForm(false)} className="px-3 py-1.5 rounded-lg border border-white/10 text-white/40 text-xs">Cancel</button>
-                        <button type="button" onClick={handleCreatePost} className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold">Publish</button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* ── New Show Form ─────────────────────────────────── */}
-                {showNewShowForm && (
-                  <div className={`${card} animate-in zoom-in-98 space-y-3`}>
-                    <span className={label}>List a Show</span>
-                    <input value={newShowTitle} onChange={(e) => setNewShowTitle(e.target.value)} placeholder="Show title" className={inputCls} />
-                    <div className="grid grid-cols-2 gap-2">
-                      {(['offline_concert', 'online_stream'] as const).map((t) => (
-                        <button key={t} type="button" onClick={() => setNewShowType(t)} className={`py-2 rounded-lg text-xs font-bold border transition-all ${newShowType === t ? 'bg-purple-600 border-purple-500 text-white' : 'bg-white/4 border-white/8 text-white/50'}`}>
-                          {t === 'offline_concert' ? '🏛 Concert' : '🔴 Livestream'}
-                        </button>
-                      ))}
-                    </div>
-                    <input value={newShowDate} onChange={(e) => setNewShowDate(e.target.value)} placeholder="Date" className={inputCls} />
-                    <input value={newShowVenue} onChange={(e) => setNewShowVenue(e.target.value)} placeholder="Venue / Stream URL" className={inputCls} />
-                    <input type="number" value={newShowPrice} onChange={(e) => setNewShowPrice(Number(e.target.value))} placeholder="Ticket price (₦)" className={inputCls} />
-                    <div className="flex gap-2 pt-1">
-                      <button type="button" onClick={() => setShowNewShowForm(false)} className="flex-1 py-2 rounded-lg border border-white/10 text-white/40 text-xs">Cancel</button>
-                      <button type="button" onClick={handleCreateShow} className="flex-1 py-2 rounded-lg bg-purple-600 text-white text-xs font-bold">List Show</button>
-                    </div>
-                  </div>
-                )}
-
-                {/* ── New Song Form ─────────────────────────────────── */}
-                {showNewSongForm && (
-                  <div className={`${card} animate-in zoom-in-98 space-y-3`}>
-                    <span className={label}>Drop a Song</span>
-                    <input value={newSongTitle} onChange={(e) => setNewSongTitle(e.target.value)} placeholder="Song title" className={inputCls} />
-                    <div className="grid grid-cols-2 gap-2">
-                      <input value={newSongGenre} onChange={(e) => setNewSongGenre(e.target.value)} placeholder="Genre" className={inputCls} />
-                      <input value={newSongAlbum} onChange={(e) => setNewSongAlbum(e.target.value)} placeholder="Album / Single" className={inputCls} />
-                    </div>
-                    <input type="number" value={newSongPrice} onChange={(e) => setNewSongPrice(Number(e.target.value))} placeholder="Price (₦)" className={inputCls} />
-                    <div className="flex gap-2 pt-1">
-                      <button type="button" onClick={() => setShowNewSongForm(false)} className="flex-1 py-2 rounded-lg border border-white/10 text-white/40 text-xs">Cancel</button>
-                      <button type="button" onClick={handleCreateSong} className="flex-1 py-2 rounded-lg bg-purple-600 text-white text-xs font-bold">Drop Song</button>
-                    </div>
-                  </div>
-                )}
-
-                {/* ── New File Form ─────────────────────────────────── */}
-                {showNewFileForm && (
-                  <form onSubmit={handleCreateDigitalFile} className={`${card} animate-in zoom-in-98 space-y-3`}>
-                    <span className={label}>Sell a File</span>
-                    <input value={newFileTitle} onChange={(e) => setNewFileTitle(e.target.value)} placeholder="Product title" className={inputCls} />
-                    <select value={newFileCategory} onChange={(e) => setNewFileCategory(e.target.value as typeof newFileCategory)} className={inputCls}>
-                      <option value="ebook">Ebook / PDF</option>
-                      <option value="music_audio">Beat / Sample Pack</option>
-                      <option value="preset_lut">Preset / LUT</option>
-                      <option value="video">Video</option>
-                      <option value="design_art">Design / Art</option>
-                      <option value="code_software">Code / Software</option>
-                    </select>
-                    <textarea value={newFileDesc} onChange={(e) => setNewFileDesc(e.target.value)} placeholder="Description" rows={2} className={inputCls} />
-                    <input type="number" value={newFilePrice} onChange={(e) => setNewFilePrice(e.target.value)} placeholder="Price (₦)" className={inputCls} />
-                    <label className="block">
-                      <div className={`${card} !p-3 cursor-pointer border-dashed flex items-center gap-2.5`}>
-                        <Upload className="w-4 h-4 text-purple-400 shrink-0" />
-                        <span className="text-xs text-white/40">{uploadedFileName || 'Choose file from device'}</span>
-                      </div>
-                      <input type="file" className="hidden" onChange={handleDeviceFileUpload} />
-                    </label>
-                    <div className="flex gap-2 pt-1">
-                      <button type="button" onClick={() => setShowNewFileForm(false)} className="flex-1 py-2 rounded-lg border border-white/10 text-white/40 text-xs">Cancel</button>
-                      <button type="submit" className="flex-1 py-2 rounded-lg bg-purple-600 text-white text-xs font-bold">List for Sale</button>
-                    </div>
-                  </form>
-                )}
-
-                {/* ── VIP Rate Settings ─────────────────────────────── */}
-                {showRateSettings && (
-                  <form onSubmit={handleSaveVipRates} className={`${card} animate-in zoom-in-98 space-y-3`}>
-                    <span className={label}>Set Your VIP Rates</span>
-                    {[
-                      { label: 'Voice / min (₦)', val: rateVoicePerMin, set: setRateVoicePerMin },
-                      { label: 'Video / min (₦)', val: rateVideoPerMin, set: setRateVideoPerMin },
-                      { label: '3-Min Voice Bundle (₦)', val: rate3MinVoice, set: setRate3MinVoice },
-                      { label: '5-Min Voice Bundle (₦)', val: rate5MinVoice, set: setRate5MinVoice },
-                      { label: '3-Min Video Bundle (₦)', val: rate3MinVideo, set: setRate3MinVideo },
-                      { label: '5-Min Video Bundle (₦)', val: rate5MinVideo, set: setRate5MinVideo },
-                      { label: 'VIP Chat 24h (₦)', val: rateVipChat, set: setRateVipChat },
-                    ].map((r) => (
-                      <div key={r.label}>
-                        <span className="text-[10px] text-white/35 block mb-1">{r.label}</span>
-                        <input type="number" value={r.val} onChange={(e) => r.set(e.target.value)} className={inputCls} />
-                      </div>
-                    ))}
-                    <div className="flex gap-2 pt-1">
-                      <button type="button" onClick={() => setShowRateSettings(false)} className="flex-1 py-2 rounded-lg border border-white/10 text-white/40 text-xs">Cancel</button>
-                      <button type="submit" className="flex-1 py-2 rounded-lg bg-purple-600 text-white text-xs font-bold">Save Rates</button>
-                    </div>
-                  </form>
-                )}
-              </div>
-            )
+          {filteredDrops.length === 0 && (
+            <div className="p-12 text-center text-xs text-slate-400 space-y-2">
+              <Sparkles className="w-8 h-8 mx-auto text-purple-400/40" />
+              <p className="font-semibold text-slate-500">
+                No creator drops found for this filter.
+              </p>
+              <button
+                type="button"
+                onClick={() => setActiveFilter('all')}
+                className="px-3 py-1 text-xs text-purple-600 font-bold hover:underline"
+              >
+                View all live drops →
+              </button>
+            </div>
           )}
         </div>
       </div>
-
-      {/* ── Ticket QR Modal ─────────────────────────────────────────────────── */}
-      {activeTicketQrModal && (
-        <div className="fixed inset-0 z-70 bg-black/95 flex items-center justify-center p-6">
-          <div className="bg-[#0a0a0f] rounded-3xl border border-white/10 p-6 w-full max-w-xs space-y-4 text-center">
-            <div className="w-12 h-12 rounded-2xl bg-purple-600/15 border border-purple-500/25 flex items-center justify-center mx-auto">
-              <Ticket className="w-6 h-6 text-purple-400" />
-            </div>
-            <div>
-              <h4 className="text-sm font-bold text-white">{activeTicketQrModal.title}</h4>
-              <p className="text-[11px] text-white/35 mt-1">Ticket #{activeTicketQrModal.id}</p>
-            </div>
-            <div className="w-32 h-32 rounded-2xl bg-white mx-auto flex items-center justify-center">
-              <QrCode className="w-20 h-20 text-black" />
-            </div>
-            <p className="text-[10px] text-white/25 font-mono">AFRI-PASS-{activeTicketQrModal.id.toUpperCase()}</p>
-            <button type="button" onClick={() => setActiveTicketQrModal(null)} className={btnOutline}>Close</button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
