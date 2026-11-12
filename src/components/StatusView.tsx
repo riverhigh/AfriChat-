@@ -587,6 +587,98 @@ export const StatusView: React.FC = () => {
         </div>
       )}
 
+      {/* 5. Creator VIP Drops Feed (preserved from original — rich post cards) */}
+      {creatorPosts.filter((p) => {
+        const c = creators.find((cr) => cr.id === p.creatorId);
+        return c?.isSubscribedByMe || c?.isFollowedByMe;
+      }).length > 0 && (
+        <div className="mt-4 px-3 pb-2 border-t border-slate-100 dark:border-neutral-800 pt-4 space-y-3">
+          <div className="flex items-center justify-between px-1 mb-1">
+            <span className="text-xs font-semibold text-slate-500 dark:text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
+              <Crown className="w-3.5 h-3.5 text-amber-500" />
+              <span>VIP Creator Drops</span>
+            </span>
+            <button
+              onClick={() => setIsCreatorModalOpen(true)}
+              className="text-xs text-purple-600 dark:text-purple-400 font-bold hover:underline"
+            >
+              Open Hub →
+            </button>
+          </div>
+
+          {creatorPosts
+            .filter((p) => {
+              const c = creators.find((cr) => cr.id === p.creatorId);
+              return c?.isSubscribedByMe || c?.isFollowedByMe;
+            })
+            .map((post) => {
+              const creator = creators.find((c) => c.id === post.creatorId);
+              return (
+                <div
+                  key={post.id}
+                  onClick={() => setIsCreatorModalOpen(true)}
+                  className="p-3.5 rounded-3xl bg-gradient-to-br from-purple-950/20 via-slate-50 to-pink-950/10 dark:from-purple-950/40 dark:via-neutral-900 dark:to-neutral-950 border border-purple-500/30 cursor-pointer shadow-2xs hover:shadow-md transition-all space-y-2.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="relative">
+                        <img
+                          src={creator?.avatar || post.creatorAvatar}
+                          alt={post.creatorName}
+                          className="w-9 h-9 rounded-full object-cover border border-purple-500/40"
+                        />
+                        <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-amber-500 text-white flex items-center justify-center">
+                          <Crown className="w-2 h-2" />
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-slate-900 dark:text-white">
+                            {post.creatorName}
+                          </span>
+                          <span className="text-[9px] font-mono font-bold bg-amber-500/20 text-amber-600 dark:text-amber-400 px-1 py-0.5 rounded-full">
+                            {creator?.isSubscribedByMe ? 'VIP Story' : 'Creator Story'}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {post.createdAt} · Verified African Creator
+                        </span>
+                      </div>
+                    </div>
+
+                    <span className="text-[10px] font-mono font-bold text-purple-600 dark:text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full">
+                      {post.mediaType === 'audio_leak' ? '🎵 Studio Leak' : '🌟 VIP Drop'}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed font-medium">
+                    {post.content}
+                  </p>
+
+                  {post.mediaUrl && (
+                    <div className="rounded-2xl overflow-hidden max-h-48 border border-purple-500/20">
+                      <img
+                        src={post.mediaUrl}
+                        alt="VIP Post Media"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono pt-1 border-t border-slate-100 dark:border-neutral-800">
+                    <span className="text-purple-600 dark:text-purple-400 font-semibold">
+                      Tap to open VIP Hub & Leaks
+                    </span>
+                    <span className="flex items-center gap-1 text-rose-500">
+                      <Heart className="w-3 h-3 fill-rose-500" /> {post.likesCount}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+      )}
+
       {/* Floating Action Buttons (FABs) - WhatsApp Signature */}
       <div className="fixed bottom-24 right-5 flex flex-col items-center gap-3 z-30">
         <button
