@@ -21,6 +21,7 @@ import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import { useApp } from '../context/AppContext';
 import { DeviceContact } from '../types';
+import { supabase, isSupabaseConfigured } from '../services/supabase';
 
 export const ScanQrModal: React.FC = () => {
   const {
@@ -55,17 +56,12 @@ export const ScanQrModal: React.FC = () => {
   useEffect(() => {
     if (!currentUser.phoneNumber) return;
 
-    const contactPayload = encodeURIComponent(
-      JSON.stringify({
-        app: 'AGC',
-        name: currentUser.fullName,
-        phone: currentUser.phoneNumber,
-        avatar: currentUser.avatarUrl,
-        timestamp: Date.now(),
-      })
-    );
-
-    const qrPayload = `${window.location.origin}/#contact=${contactPayload}`;
+    const cleanPhone = currentUser.phoneNumber;
+    const cleanName = currentUser.fullName || 'AGC User';
+    const avatarParam = currentUser.avatarUrl && currentUser.avatarUrl.startsWith('http')
+      ? `&avatar=${encodeURIComponent(currentUser.avatarUrl)}`
+      : '';
+    const qrPayload = `${window.location.origin}/?contact=${encodeURIComponent(cleanPhone)}&name=${encodeURIComponent(cleanName)}${avatarParam}`;
 
     QRCode.toDataURL(qrPayload, {
       width: 320,
@@ -169,80 +165,98 @@ export const ScanQrModal: React.FC = () => {
   const handleDecodedQr = (rawText: string) => {
     try {
       const text = rawText.trim();
+      let extractedPhone = '';
+      let extractedName = '';
+      let extractedAvatar = '';
 
-      // 1. URL with #contact=... or ?contact=...
-      if (text.includes('contact=')) {
-        const match = text.match(/contact=([^&#]+)/);
-        if (match) {
-          const jsonStr = decodeURIComponent(match[1]);
-          const parsed = JSON.parse(jsonStr);
+      // 1. URL with query params or hash parameters: ?contact=...&name=... or ?phone=...
+      try {
+        const urlToParse = text.startsWith('http://') || text.startsWith('https://')
+          ? text
+          : `https://fake.url/${text.startsWith('/') ? text.slice(1) : text}`;
+        const urlObj = new URL(urlToParse);
+        const searchP = urlObj.searchParams;
+        const hashStr = urlObj.hash.replace(/^#/, '');
+        const hashP = new URLSearchParams(hashStr.includes('?') ? hashStr.split('?')[1] : hashStr);
+
+        extractedPhone = searchP.get('contact') || searchP.get('phone') || hashP.get('contact') || hashP.get('phone') || '';
+        extractedName = searchP.get('name') || hashP.get('name') || '';
+        extractedAvatar = searchP.get('avatar') || hashP.get('avatar') || '';
+
+        // Check if param is JSON encoded
+        if (extractedPhone && extractedPhone.startsWith('{')) {
+          try {
+            const j = JSON.parse(extractedPhone);
+            if (j.phone) {
+              extractedPhone = j.phone;
+              extractedName = j.name || extractedName;
+              extractedAvatar = j.avatar || extractedAvatar;
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+
+      // 2. Raw JSON format: { app: 'AGC', phone: ..., name: ... }
+      if (!extractedPhone && text.startsWith('{') && text.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(text);
           if (parsed.phone) {
-            const contact = addNewDeviceContact(
-              parsed.name || 'AGC User',
-              parsed.phone,
-              'Scanned via AGC QR',
-              true,
-              parsed.avatar
-            );
-            setScanResult({
-              name: contact.name,
-              phone: contact.normalizedPhoneNumber,
-              avatar: contact.avatar,
-            });
-            stopCamera();
-            return;
+            extractedPhone = parsed.phone;
+            extractedName = parsed.name || 'AGC User';
+            extractedAvatar = parsed.avatar || '';
           }
+        } catch (_) {}
+      }
+
+      // 3. Fallback phone regex
+      if (!extractedPhone) {
+        const phoneMatch = text.match(/\+?\d{10,14}/);
+        if (phoneMatch) {
+          extractedPhone = phoneMatch[0];
+          extractedName = `Contact ${extractedPhone.slice(-4)}`;
         }
       }
 
-      // 2. URL with #call=... or #user=... or ?phone=...
-      if (text.includes('call=') || text.includes('user=') || text.includes('phone=')) {
-        const match = text.match(/(?:call|user|phone)=([^&#]+)/);
-        if (match) {
-          const phone = decodeURIComponent(match[1]);
-          const contact = addNewDeviceContact(`Contact ${phone.slice(-4)}`, phone, 'Added via AGC QR', true);
-          setScanResult({
-            name: contact.name,
-            phone: contact.normalizedPhoneNumber,
-            avatar: contact.avatar,
-          });
-          stopCamera();
-          return;
-        }
-      }
+      if (extractedPhone) {
+        const contact = addNewDeviceContact(
+          extractedName || 'AGC User',
+          extractedPhone,
+          'Scanned via AGC QR',
+          true,
+          extractedAvatar
+        );
 
-      // 3. Raw JSON format
-      if (text.startsWith('{') && text.endsWith('}')) {
-        const parsed = JSON.parse(text);
-        if (parsed.phone) {
-          const contact = addNewDeviceContact(
-            parsed.name || 'AGC User',
-            parsed.phone,
-            'Scanned via AGC QR',
-            true,
-            parsed.avatar
-          );
-          setScanResult({
-            name: contact.name,
-            phone: contact.normalizedPhoneNumber,
-            avatar: contact.avatar,
-          });
-          stopCamera();
-          return;
-        }
-      }
-
-      // 4. Try phone regex match
-      const phoneMatch = text.match(/\+?\d{10,14}/);
-      if (phoneMatch) {
-        const phone = phoneMatch[0];
-        const contact = addNewDeviceContact(`Contact ${phone.slice(-4)}`, phone, 'Added via QR Scanner', true);
         setScanResult({
           name: contact.name,
           phone: contact.normalizedPhoneNumber,
           avatar: contact.avatar,
         });
         stopCamera();
+
+        // Cross-device profile hydration from Supabase
+        if (isSupabaseConfigured) {
+          const digits = extractedPhone.replace(/\D/g, '');
+          const last9 = digits.slice(-9);
+          supabase
+            .from('agc_phone_registry')
+            .select('username, avatar_url')
+            .or(`phone_digits.eq.${last9},full_phone.eq.${extractedPhone}`)
+            .limit(1)
+            .maybeSingle()
+            .then(({ data }) => {
+              if (data?.username) {
+                setScanResult((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        name: data.username,
+                        avatar: data.avatar_url || prev.avatar,
+                      }
+                    : prev
+                );
+              }
+            });
+        }
         return;
       }
 
@@ -282,16 +296,12 @@ export const ScanQrModal: React.FC = () => {
   };
 
   const handleCopyLink = () => {
-    const contactPayload = encodeURIComponent(
-      JSON.stringify({
-        app: 'AGC',
-        name: currentUser.fullName,
-        phone: currentUser.phoneNumber,
-        avatar: currentUser.avatarUrl,
-        timestamp: Date.now(),
-      })
-    );
-    const link = `${window.location.origin}/#contact=${contactPayload}`;
+    const cleanPhone = currentUser.phoneNumber;
+    const cleanName = currentUser.fullName || 'AGC User';
+    const avatarParam = currentUser.avatarUrl && currentUser.avatarUrl.startsWith('http')
+      ? `&avatar=${encodeURIComponent(currentUser.avatarUrl)}`
+      : '';
+    const link = `${window.location.origin}/?contact=${encodeURIComponent(cleanPhone)}&name=${encodeURIComponent(cleanName)}${avatarParam}`;
     navigator.clipboard?.writeText?.(link);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);

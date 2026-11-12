@@ -2322,6 +2322,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
           }
         });
+
+      // 1b. Fetch all registered users from agc_phone_registry so any user created on any device appears
+      supabase
+        .from('agc_phone_registry')
+        .select('phone_digits, full_phone, username, avatar_url')
+        .then(({ data }) => {
+          if (data && Array.isArray(data) && data.length > 0) {
+            setDeviceContacts((prev) => {
+              const map = new Map<string, DeviceContact>();
+              prev.forEach((c) => map.set(c.normalizedPhoneNumber, c));
+              const myClean = (currentUser.phoneNumber || '').replace(/\D/g, '');
+              data.forEach((row: any) => {
+                const rowClean = (row.full_phone || row.phone_digits || '').replace(/\D/g, '');
+                if (rowClean && rowClean !== myClean) {
+                  const norm = row.full_phone || `+${rowClean}`;
+                  const existing = map.get(norm);
+                  map.set(norm, {
+                    id: existing?.id || `cnt_${row.phone_digits || rowClean}`,
+                    name: row.username || existing?.name || 'AGC Contact',
+                    rawPhoneNumber: row.full_phone || norm,
+                    normalizedPhoneNumber: norm,
+                    about: 'Available · Using AGC',
+                    avatar: row.avatar_url || existing?.avatar || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+                    isRegisteredOnAGC: true,
+                  });
+                }
+              });
+              const merged = Array.from(map.values());
+              try { localStorage.setItem('AGC_device_contacts', JSON.stringify(merged)); } catch (_) {}
+              return merged;
+            });
+          }
+        });
     }
 
     // 2. Fetch from local server registry if available
@@ -4788,6 +4821,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // 4a. Write to agc_phone_registry — no-RLS public table for cross-device duplicate detection
       const phoneDigits = cleanPhone;
       const last9 = phoneDigits.length >= 9 ? phoneDigits.slice(-9) : phoneDigits;
+
+      // Hydrate username and avatar from agc_phone_registry if logging in on a new device
+      supabase
+        .from('agc_phone_registry')
+        .select('username, avatar_url, full_phone')
+        .or(`phone_digits.eq.${last9},full_phone.eq.${updatedUser.phoneNumber},full_phone.eq.${phoneDigits}`)
+        .limit(1)
+        .maybeSingle()
+        .then(({ data: regData }) => {
+          if (regData?.username && (updatedUser.fullName === 'AGC User' || !updatedUser.fullName || regData.username !== 'AGC User')) {
+            setCurrentUser((prev) => {
+              const enriched: UserProfile = {
+                ...prev,
+                fullName: regData.username || prev.fullName,
+                avatarUrl: regData.avatar_url || prev.avatarUrl,
+              };
+              try {
+                localStorage.setItem('AGC_user_profile_v2', JSON.stringify(enriched));
+              } catch (_) {}
+              return enriched;
+            });
+          }
+        });
+
+      // Keep avatar payload safe (<3000 chars) to prevent HTTP 413
+      const safeAvatar = (updatedUser.avatarUrl && updatedUser.avatarUrl.length < 3000)
+        ? updatedUser.avatarUrl
+        : (updatedUser.avatarUrl?.startsWith('http') ? updatedUser.avatarUrl : '');
+
       supabase
         .from('agc_phone_registry')
         .upsert(
@@ -4795,7 +4857,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             phone_digits: last9,
             full_phone: updatedUser.phoneNumber,
             username: updatedUser.fullName,
-            avatar_url: updatedUser.avatarUrl || '',
+            avatar_url: safeAvatar,
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'phone_digits' }
@@ -6778,23 +6840,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsAdminModalOpen(true);
       }
 
-      // Handle universal AGC QR contact link: #contact={json}
-      if (hash.includes('contact=')) {
+      // Handle universal AGC QR contact link: ?contact=... or #contact=... or #addcontact
+      if (search.includes('contact=') || search.includes('phone=') || hash.includes('contact=') || hash.includes('phone=') || hash.includes('addcontact')) {
         try {
-          const match = hash.match(/contact=([^&#]+)/);
-          if (match) {
-            const data = JSON.parse(decodeURIComponent(match[1]));
-            if (data.phone) {
-              const c = addNewDeviceContact(
-                data.name || 'AGC User',
-                data.phone,
-                'Added via AGC QR',
-                true,
-                data.avatar
-              );
-              startChatWithContact(c);
-              window.history.replaceState(null, '', window.location.pathname);
+          const searchParams = new URLSearchParams(window.location.search);
+          const hashString = hash.replace(/^#/, '');
+          const hashParams = new URLSearchParams(hashString.includes('?') ? hashString.split('?')[1] : hashString);
+
+          let phone = searchParams.get('contact') || searchParams.get('phone') || hashParams.get('contact') || hashParams.get('phone');
+          let name = searchParams.get('name') || hashParams.get('name');
+          let avatar = searchParams.get('avatar') || hashParams.get('avatar');
+
+          // If param is a JSON string
+          if (phone && phone.startsWith('{')) {
+            try {
+              const j = JSON.parse(decodeURIComponent(phone));
+              if (j.phone) {
+                phone = j.phone;
+                name = j.name || name;
+                avatar = j.avatar || avatar;
+              }
+            } catch (_) {}
+          } else if (hash.includes('contact=')) {
+            const rawMatch = hash.match(/contact=([^&#]+)/);
+            if (rawMatch && rawMatch[1].startsWith('%7B')) {
+              try {
+                const j = JSON.parse(decodeURIComponent(rawMatch[1]));
+                if (j.phone) {
+                  phone = j.phone;
+                  name = j.name || name;
+                  avatar = j.avatar || avatar;
+                }
+              } catch (_) {}
             }
+          }
+
+          if (phone) {
+            const c = addNewDeviceContact(
+              name || 'AGC User',
+              phone,
+              'Added via AGC QR',
+              true,
+              avatar || undefined
+            );
+            startChatWithContact(c);
+            window.history.replaceState(null, '', window.location.pathname);
           }
         } catch (_) {}
       }

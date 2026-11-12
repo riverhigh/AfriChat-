@@ -94,6 +94,7 @@ export const ContactsModal: React.FC = () => {
     const cleaned = raw.replace(/[\s\-().+]/g, '');
     if (cleaned.startsWith('0')) return '+234' + cleaned.slice(1);
     if (cleaned.startsWith('234')) return '+' + cleaned;
+    if (cleaned.length === 10 && /^[789]/.test(cleaned)) return '+234' + cleaned;
     if (cleaned.startsWith('+')) return cleaned;
     return '+' + cleaned;
   };
@@ -112,6 +113,7 @@ export const ContactsModal: React.FC = () => {
     // Check if user entered their own number -> Message Yourself
     const myClean = (currentUser.phoneNumber || '').replace(/\D/g, '');
     const enteredClean = clean.replace(/\D/g, '');
+    const enteredLast9 = enteredClean.length >= 9 ? enteredClean.slice(-9) : enteredClean;
     const isSelfNumber = Boolean(
       myClean &&
       enteredClean &&
@@ -130,31 +132,67 @@ export const ContactsModal: React.FC = () => {
       return;
     }
 
-    // 1. Check live Gateway server / Vite endpoint registry
-    try {
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const endpoints = [
-        `/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
-        `/api/users/lookup?phone=${encodeURIComponent(enteredClean)}`,
-        `http://${socketHost}:3002/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
-      ];
-      for (const ep of endpoints) {
+    // 1. Check Supabase agc_phone_registry FIRST (cross-device source of truth)
+    if (isSupabaseConfigured) {
+      try {
+        const { data: reg } = await supabase
+          .from('agc_phone_registry')
+          .select('username, avatar_url, full_phone, phone_digits')
+          .or(`phone_digits.eq.${enteredLast9},phone_digits.eq.${enteredClean},full_phone.eq.${normalized},full_phone.eq.${clean},full_phone.eq.+${enteredClean}`)
+          .limit(1)
+          .maybeSingle();
+
+        if (reg) {
+          foundName = reg.username || 'AGC User';
+          foundAvatar = reg.avatar_url || ICON_AVATAR;
+        }
+      } catch (err) {
+        console.warn('Supabase agc_phone_registry check notice:', err);
+      }
+
+      // Direct fallback by phone_digits
+      if (!foundName) {
         try {
-          const res = await fetch(ep);
-          if (res.ok) {
-            const json = await res.json();
-            if (json.found && json.user) {
-              foundName = json.user.fullName || json.user.name;
-              foundAvatar = json.user.avatarUrl;
-              break;
-            }
+          const { data: direct } = await supabase
+            .from('agc_phone_registry')
+            .select('username, avatar_url, full_phone')
+            .eq('phone_digits', enteredLast9)
+            .limit(1)
+            .maybeSingle();
+          if (direct) {
+            foundName = direct.username || 'AGC User';
+            foundAvatar = direct.avatar_url || ICON_AVATAR;
           }
         } catch (_) {}
       }
-    } catch (_) {}
+    }
 
-    // 2. Check local persistent registered phones registry (all created users)
-    const enteredLast9 = enteredClean.length >= 9 ? enteredClean.slice(-9) : enteredClean;
+    // 2. Check live Gateway server / Vite endpoint registry
+    if (!foundName) {
+      try {
+        const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+        const endpoints = [
+          `/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
+          `/api/users/lookup?phone=${encodeURIComponent(enteredClean)}`,
+          `http://${socketHost}:3002/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
+        ];
+        for (const ep of endpoints) {
+          try {
+            const res = await fetch(ep);
+            if (res.ok) {
+              const json = await res.json();
+              if (json.found && json.user) {
+                foundName = json.user.fullName || json.user.name;
+                foundAvatar = json.user.avatarUrl;
+                break;
+              }
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+
+    // 3. Check local persistent registered phones registry (all created users)
     if (!foundName) {
       try {
         const raw = localStorage.getItem('AGC_registered_phones');
