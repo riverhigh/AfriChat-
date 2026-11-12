@@ -3691,6 +3691,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
+    const isDeviceOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+
     // 1. BroadcastChannel (instant same-computer tab/window sync)
     try {
       const bc = new BroadcastChannel('AGC_chats_sync');
@@ -3698,6 +3700,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       bc.close();
     } catch (e) {
       console.warn('BroadcastChannel error:', e);
+    }
+
+    if (!isDeviceOnline) {
+      // Offline: Keep as 1 check (sent). Will automatically flush and double check once data is on.
+      return;
+    }
+
+    // If online, transition single check ('sent') -> double check ('delivered')
+    if (msg.status === 'sent') {
+      msg.status = 'delivered';
+      setMessages((prev) => {
+        const list = prev[chatId] || [];
+        const updated = list.map((m) => (m.id === msg.id ? { ...m, status: 'delivered' as const } : m));
+        try {
+          localStorage.setItem('AGC_messages_v2', JSON.stringify({ ...prev, [chatId]: updated }));
+        } catch (_) {}
+        return { ...prev, [chatId]: updated };
+      });
     }
 
     // 2. Socket.io Live WebSocket Relay
@@ -3830,6 +3850,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }) => {
     if (!text.trim()) return;
 
+    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    const initialStatus: 'sent' | 'delivered' = isOnline ? 'delivered' : 'sent';
+
     const newMsg: ChatMessage = {
       id: `msg_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       chatId,
@@ -3849,7 +3872,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
       type: 'text',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      status: 'sent',
+      status: initialStatus,
     };
 
     // 1. Update local state and persist
@@ -6500,6 +6523,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (sbTownFeed) sbTownFeed.unsubscribe();
     };
   }, [currentUser, activeChatId, handleIncomingMessage]);
+
+  // Offline/Online Reconnection Sync (Flushes pending 1-check messages to 2-check delivered)
+  useEffect(() => {
+    const handleOnline = () => {
+      setMessages((prev) => {
+        let hasPending = false;
+        const updated = { ...prev };
+        Object.keys(updated).forEach((chatId) => {
+          updated[chatId] = updated[chatId].map((msg) => {
+            if (msg.sender === 'user' && msg.status === 'sent') {
+              hasPending = true;
+              broadcastLiveMessage(chatId, { ...msg, status: 'delivered' });
+              return { ...msg, status: 'delivered' as const };
+            }
+            return msg;
+          });
+        });
+        if (hasPending) {
+          try {
+            localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+          } catch (_) {}
+          return updated;
+        }
+        return prev;
+      });
+    };
+
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, []);
 
   // Join active chat room when switching chats (Socket.io + Supabase Realtime)
   useEffect(() => {

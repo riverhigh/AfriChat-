@@ -111,11 +111,11 @@ export const StatusViewerModal: React.FC = () => {
 
   const handleReshare = () => {
     const caption = status.caption
-      ? `Reshared from ${status.userName}: "${status.caption}"`
-      : `Reshared from ${status.userName}`;
+      ? `Reshared: "${status.caption}"`
+      : 'Reshared';
     addStatus(caption, status.mediaUrl);
     setReshared(true);
-    setReshareNotice(`Reshared ${status.userName}'s status to your 24h updates!`);
+    setReshareNotice('Reshared to your 24h updates!');
     setTimeout(() => {
       setReshared(false);
       setReshareNotice(null);

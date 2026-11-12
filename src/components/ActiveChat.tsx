@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   ArrowLeft,
   Phone,
@@ -11,6 +11,7 @@ import {
   Play,
   Pause,
   CheckCheck,
+  Check,
   ShoppingBag,
   Lock,
   Store,
@@ -924,11 +925,19 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   </div>
                 )}
 
-                {/* Timestamp & Read ticks */}
+                {/* Timestamp & WhatsApp-Style Delivery Ticks (Single grey = sent/offline, Double grey = delivered, Double colored = read) */}
                 <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-slate-500 dark:text-slate-400 font-mono">
                   <span>{msg.timestamp}</span>
                   {isUser && (
-                    <CheckCheck className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-300" />
+                    <span title={msg.status === 'read' ? 'Read' : msg.status === 'delivered' ? 'Delivered' : 'Sent (1 check until delivered)'}>
+                      {msg.status === 'read' ? (
+                        <CheckCheck className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                      ) : msg.status === 'delivered' ? (
+                        <CheckCheck className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
+                      ) : (
+                        <Check className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
+                      )}
+                    </span>
                   )}
                 </div>
               </div>
