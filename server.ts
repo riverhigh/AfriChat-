@@ -174,11 +174,37 @@ app.get('/api/users/check-phone', (req: Request, res: Response) => {
   const rawPhone = (req.query.phone as string || '');
   const clean = rawPhone.replace(/\D/g, '');
   if (!clean) return res.status(400).json({ error: 'Phone required' });
-  const existing = usersByPhone.get(clean);
+  let existing = usersByPhone.get(clean);
+  if (!existing) {
+    for (const [phone, u] of usersByPhone.entries()) {
+      if (phone.endsWith(clean) || clean.endsWith(phone)) {
+        existing = u;
+        break;
+      }
+    }
+  }
   if (existing) {
-    return res.json({ registered: true, name: existing.fullName, avatarUrl: existing.avatarUrl });
+    return res.json({
+      registered: true,
+      name: existing.fullName,
+      avatarUrl: existing.avatarUrl,
+      sessionToken: (existing as any).sessionToken,
+    });
   }
   return res.json({ registered: false });
+});
+
+// REST: Check if username is already taken (unique handle verification)
+app.get('/api/users/check-username', (req: Request, res: Response) => {
+  const rawUsername = (req.query.username as string || '').trim().toLowerCase().replace(/^@/, '');
+  if (!rawUsername) return res.status(400).json({ error: 'Username required' });
+  for (const user of usersByPhone.values()) {
+    const uName = (user.fullName || '').toLowerCase().replace(/^@/, '').trim();
+    if (uName === rawUsername) {
+      return res.json({ taken: true, username: rawUsername });
+    }
+  }
+  return res.json({ taken: false, username: rawUsername });
 });
 
 // REST: User lookup by phone number

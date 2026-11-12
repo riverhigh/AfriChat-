@@ -596,7 +596,7 @@ const AGC_DATA_VERSION = 'v3_clean_2026';
   if (typeof window === 'undefined') return;
   const stored = localStorage.getItem('AGC_data_version');
   if (stored !== AGC_DATA_VERSION) {
-    const keepKeys = new Set(['AGC_data_version', 'AGC_font_size', 'AGC_low_data_mode', 'AGC_language', 'AGC_currency', 'AGC_hide_phone_town', 'AGC_user_profile_v2', 'AGC_is_authenticated', 'AGC_device_contacts', 'AGC_registered_users_cache']);
+    const keepKeys = new Set(['AGC_data_version', 'AGC_font_size', 'AGC_low_data_mode', 'AGC_language', 'AGC_currency', 'AGC_hide_phone_town', 'AGC_user_profile_v2', 'AGC_is_authenticated', 'AGC_device_contacts', 'AGC_registered_users_cache', 'AGC_registered_phones', 'AGC_taken_usernames', 'AGC_session_token']);
     const toRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);

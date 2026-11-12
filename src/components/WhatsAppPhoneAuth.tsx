@@ -53,6 +53,12 @@ const AVATAR_PALETTES = [
 
 const AVATAR_PRESETS = AVATAR_PALETTES.map((p) => makeIconAvatar(p.bg, p.fg));
 
+const RESERVED_USERNAMES = new Set([
+  'admin', 'administrator', 'root', 'support', 'help', 'system',
+  'africhat', 'agc', 'official', 'bot', 'moderator', 'security',
+  'davido', 'burnaboy', 'wizkid', 'asake', 'tiwasavage', 'rema',
+]);
+
 export const WhatsAppPhoneAuth: React.FC = () => {
   const { loginWithPhone } = useApp();
 
@@ -73,8 +79,11 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   const [showLegalModal, setShowLegalModal] = useState(false);
   // Existing session info found during pre-check (shown in conflict screen)
   const [existingSessionInfo, setExistingSessionInfo] = useState<{ name: string; avatarUrl?: string } | null>(null);
+  const [isExistingAccount, setIsExistingAccount] = useState(false);
+  const [usernameAvailability, setUsernameAvailability] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
 
   const otpInputsRef = useRef<(HTMLInputElement | null)[]>([]);
+  const usernameCheckTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const fullNormalizedNumber = `${selectedCountry.code}${phoneNumber.replace(/^0+/, '').replace(/\s+/g, '')}`;
 
@@ -98,6 +107,78 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     return () => clearInterval(interval);
   }, [step, resendTimer]);
 
+  // Username live uniqueness checker
+  const checkUsernameAvailable = async (candidate: string): Promise<'available' | 'taken'> => {
+    const clean = candidate.trim().toLowerCase().replace(/^@/, '');
+    if (clean.length < 3) return 'idle' as any;
+    if (RESERVED_USERNAMES.has(clean)) return 'taken';
+
+    // 1. Local storage checks
+    try {
+      const takenRaw = localStorage.getItem('AGC_taken_usernames');
+      if (takenRaw) {
+        const list: string[] = JSON.parse(takenRaw);
+        if (list.map((u) => u.toLowerCase().replace(/^@/, '')).includes(clean)) {
+          return 'taken';
+        }
+      }
+      const regRaw = localStorage.getItem('AGC_registered_phones');
+      if (regRaw) {
+        const reg = JSON.parse(regRaw);
+        for (const val of Object.values(reg) as any[]) {
+          const u = (val.fullName || val.username || '').toLowerCase().replace(/^@/, '');
+          if (u === clean) return 'taken';
+        }
+      }
+    } catch (_) {}
+
+    // 2. Local REST server check
+    try {
+      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const resp = await fetch(`http://${socketHost}:3002/api/users/check-username?username=${encodeURIComponent(clean)}`).catch(() => null);
+      if (resp && resp.ok) {
+        const data = await resp.json();
+        if (data.taken) return 'taken';
+      }
+    } catch (_) {}
+
+    // 3. Supabase profiles check
+    if (isSupabaseConfigured) {
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .or(`full_name.ilike.${clean},full_name.ilike.@${clean}`)
+          .limit(1)
+          .maybeSingle();
+        if (data?.full_name) return 'taken';
+      } catch (_) {}
+    }
+
+    return 'available';
+  };
+
+  const handleUsernameChange = (val: string) => {
+    const clean = val.toLowerCase().replace(/[^a-z0-9_.]/g, '');
+    setFullName(clean);
+    setErrorMessage(null);
+
+    if (usernameCheckTimerRef.current) {
+      clearTimeout(usernameCheckTimerRef.current);
+    }
+
+    if (clean.length < 3) {
+      setUsernameAvailability('idle');
+      return;
+    }
+
+    setUsernameAvailability('checking');
+    usernameCheckTimerRef.current = setTimeout(async () => {
+      const status = await checkUsernameAvailable(clean);
+      setUsernameAvailability(status);
+    }, 300);
+  };
+
   // Handle phone submit — move to number-confirmation dialog
   const handlePhoneSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -111,14 +192,14 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   };
 
   // Called when user taps "Yes, Send Code" on the confirmation dialog.
-  // Checks Supabase/server for an existing active session on another device first.
+  // Checks Supabase/server/localStorage for an existing account on another device.
   const handleProceedToSendOtp = async () => {
     setIsCheckingDevice(true);
     setErrorMessage(null);
     const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
 
-    // ── Check for existing active session on another device ───────────────────
-    let sessionAlreadyActive = false;
+    // ── Check if phone number was already used before ───────────────────
+    let phoneAlreadyUsed = false;
     let foundName: string | undefined;
     let foundAvatar: string | undefined;
 
@@ -128,38 +209,68 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       const resp = await fetch(`http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`).catch(() => null);
       if (resp && resp.ok) {
         const data = await resp.json();
-        if (data.registered && data.sessionToken) {
-          sessionAlreadyActive = true;
+        if (data.registered) {
+          phoneAlreadyUsed = true;
           foundName = data.name;
           foundAvatar = data.avatarUrl;
         }
       }
     } catch (_) {}
 
-    // 2. Check Supabase profiles for an existing session_token
-    if (!sessionAlreadyActive && isSupabaseConfigured) {
+    // 2. Check Supabase profiles table
+    if (!phoneAlreadyUsed && isSupabaseConfigured) {
       try {
         const { data: profile } = await supabase
           .from('profiles')
-          .select('full_name, avatar_url, session_token')
-          .eq('phone_number', fullNormalizedNumber)
+          .select('full_name, avatar_url, phone_number, session_token')
+          .or(`phone_number.eq.${fullNormalizedNumber},phone_number.eq.${cleanPhone},phone_number.ilike.%${cleanPhone.slice(-9)}%`)
+          .limit(1)
           .maybeSingle();
-        if (profile?.session_token) {
-          sessionAlreadyActive = true;
+
+        if (profile && (profile.full_name || profile.phone_number)) {
+          phoneAlreadyUsed = true;
           foundName = profile.full_name;
           foundAvatar = profile.avatar_url;
         }
       } catch (_) {}
     }
 
+    // 3. Check localStorage persistent registry
+    if (!phoneAlreadyUsed) {
+      try {
+        const regRaw = localStorage.getItem('AGC_registered_phones');
+        if (regRaw) {
+          const reg = JSON.parse(regRaw);
+          const found = reg[cleanPhone] || reg[fullNormalizedNumber];
+          if (found && (found.fullName || found.username)) {
+            phoneAlreadyUsed = true;
+            foundName = found.fullName || found.username;
+            foundAvatar = found.avatarUrl;
+          }
+        }
+        const lastUserRaw = localStorage.getItem('AGC_user_profile_v2');
+        if (lastUserRaw) {
+          const lastUser = JSON.parse(lastUserRaw);
+          const lastClean = (lastUser.phoneNumber || '').replace(/\D/g, '');
+          if (lastClean && (lastClean === cleanPhone || lastUser.phoneNumber === fullNormalizedNumber)) {
+            phoneAlreadyUsed = true;
+            foundName = foundName || lastUser.fullName;
+            foundAvatar = foundAvatar || lastUser.avatarUrl;
+          }
+        }
+      } catch (_) {}
+    }
+
     setIsCheckingDevice(false);
 
-    if (sessionAlreadyActive) {
-      // Show "another device is logged in" warning before proceeding
-      setExistingSessionInfo({ name: foundName || 'Your account', avatarUrl: foundAvatar });
+    if (phoneAlreadyUsed) {
+      // Prompt: This number has been logged on another device. Do you want to continue login?
+      setIsExistingAccount(true);
+      setExistingSessionInfo({ name: foundName || 'AGC User', avatarUrl: foundAvatar });
       setStep('device_conflict');
     } else {
-      // No active session — proceed straight to OTP
+      setIsExistingAccount(false);
+      setExistingSessionInfo(null);
       await sendOtp();
     }
   };
@@ -220,7 +331,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     setErrorMessage(null);
 
     setTimeout(async () => {
-      // Strict: code must match the generated OTP exactly (no "accept any 6 digits" backdoor)
+      // Strict: code must match the generated OTP exactly
       const isValid = codeToVerify === generatedOtp;
 
       if (!isValid) {
@@ -229,10 +340,17 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         return;
       }
 
-      // ✅ OTP valid — now check if this number is already registered
+      // ✅ OTP valid — check if this number already has an account
       const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
 
-      // Check local REST server
+      // 1. If flagged as existing account from pre-check:
+      if (isExistingAccount && existingSessionInfo?.name) {
+        setIsVerifying(false);
+        loginWithPhone(fullNormalizedNumber, existingSessionInfo.name, existingSessionInfo.avatarUrl, 'Available · Using AGC');
+        return;
+      }
+
+      // 2. Check local REST server
       try {
         const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
         const checkUrl = `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`;
@@ -247,13 +365,14 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         }
       } catch (_) {}
 
-      // Check Supabase if configured
+      // 3. Check Supabase if configured
       if (isSupabaseConfigured) {
         try {
           const { data: profile } = await supabase
             .from('profiles')
             .select('full_name, avatar_url')
-            .eq('phone_number', fullNormalizedNumber)
+            .or(`phone_number.eq.${fullNormalizedNumber},phone_number.eq.${cleanPhone}`)
+            .limit(1)
             .maybeSingle();
           if (profile?.full_name) {
             setIsVerifying(false);
@@ -263,26 +382,76 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         } catch (_) {}
       }
 
-      // New user — go to profile setup
+      // 4. Check localStorage registry
+      try {
+        const regRaw = localStorage.getItem('AGC_registered_phones');
+        if (regRaw) {
+          const reg = JSON.parse(regRaw);
+          const found = reg[cleanPhone] || reg[fullNormalizedNumber];
+          if (found && (found.fullName || found.username)) {
+            setIsVerifying(false);
+            loginWithPhone(fullNormalizedNumber, found.fullName || found.username, found.avatarUrl, 'Available · Using AGC');
+            return;
+          }
+        }
+      } catch (_) {}
+
+      // Genuinely new user — proceed to username selection
       setIsVerifying(false);
       setStep('profile');
     }, 600);
   };
 
-  // Complete profile setup
-  const handleProfileSubmit = (e: React.FormEvent) => {
+  // Complete profile setup with unique username
+  const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!fullName.trim()) {
-      setErrorMessage('Please enter your full name or nickname');
+    const cleanUser = fullName.trim().toLowerCase().replace(/^@/, '');
+
+    if (!cleanUser) {
+      setErrorMessage('Please choose a username');
+      return;
+    }
+    if (cleanUser.length < 3) {
+      setErrorMessage('Username must be at least 3 characters long');
+      return;
+    }
+    if (!/^[a-z0-9_.]+$/.test(cleanUser)) {
+      setErrorMessage('Username can only contain lowercase letters, numbers, underscores, and dots');
       return;
     }
 
+    // Verify uniqueness
+    setIsVerifying(true);
+    setErrorMessage(null);
+    const avail = await checkUsernameAvailable(cleanUser);
+    if (avail === 'taken') {
+      setIsVerifying(false);
+      setUsernameAvailability('taken');
+      setErrorMessage(`Username "@${cleanUser}" is already taken. Please choose another username.`);
+      return;
+    }
+
+    // Persist unique username and phone claim
+    try {
+      const taken = JSON.parse(localStorage.getItem('AGC_taken_usernames') || '[]');
+      if (!taken.includes(cleanUser)) {
+        taken.push(cleanUser);
+        localStorage.setItem('AGC_taken_usernames', JSON.stringify(taken));
+      }
+      const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
+      const reg = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
+      reg[cleanPhone] = { fullName: cleanUser, avatarUrl: selectedAvatar, phoneNumber: fullNormalizedNumber };
+      reg[fullNormalizedNumber] = { fullName: cleanUser, avatarUrl: selectedAvatar, phoneNumber: fullNormalizedNumber };
+      localStorage.setItem('AGC_registered_phones', JSON.stringify(reg));
+    } catch (_) {}
+
+    setIsVerifying(false);
     setStep('initializing');
 
     setTimeout(() => {
       loginWithPhone(
         fullNormalizedNumber,
-        fullName.trim(),
+        cleanUser,
         selectedAvatar,
         'Available · Using AGC'
       );
@@ -567,54 +736,61 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         )}
 
         {/* ========================================================================= */}
-        {/* DEVICE CONFLICT WARNING — another device is already logged in            */}
+        {/* DEVICE CONFLICT WARNING — phone number has been logged on another device  */}
         {/* ========================================================================= */}
         {step === 'device_conflict' && (
           <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-6">
-            <div className="w-full max-w-xs bg-[#1a0a0a] rounded-3xl p-6 shadow-2xl border border-rose-500/40 space-y-5 animate-in zoom-in-95">
+            <div className="w-full max-w-sm bg-[#160a27] rounded-3xl p-6 shadow-2xl border border-purple-500/40 space-y-5 animate-in zoom-in-95">
               {/* Warning icon */}
               <div className="flex flex-col items-center gap-2 text-center">
-                <div className="w-14 h-14 rounded-2xl bg-rose-500/10 text-rose-400 flex items-center justify-center border border-rose-500/30">
-                  <Lock className="w-7 h-7" />
+                <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 flex items-center justify-center border border-amber-500/30">
+                  <Smartphone className="w-7 h-7" />
                 </div>
-                <h3 className="text-base font-black text-white mt-1">Already Logged In</h3>
-                <p className="text-xs text-rose-300/80 leading-relaxed">
-                  <strong className="text-white">{existingSessionInfo?.name || 'Your account'}</strong> is currently
-                  active on another device.
+                <h3 className="text-base font-black text-white mt-1">
+                  Active Account Detected
+                </h3>
+                <p className="text-sm font-semibold text-purple-200/95 leading-snug">
+                  This phone number has been logged on another device. Do you want to continue login?
                 </p>
               </div>
 
-              {/* Account avatar if available */}
-              {existingSessionInfo?.avatarUrl && (
-                <div className="flex justify-center">
-                  <img
-                    src={existingSessionInfo.avatarUrl}
-                    alt="Account"
-                    className="w-16 h-16 rounded-full border-2 border-rose-500/40 object-cover"
-                  />
+              {/* Account avatar & info */}
+              <div className="flex items-center gap-3 p-3 bg-purple-950/50 border border-purple-500/30 rounded-2xl">
+                <img
+                  src={existingSessionInfo?.avatarUrl || AVATAR_PRESETS[0]}
+                  alt="Account"
+                  className="w-12 h-12 rounded-full border-2 border-purple-500/40 object-cover shrink-0"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-white truncate">
+                    @{existingSessionInfo?.name || 'account'}
+                  </p>
+                  <p className="text-xs text-purple-300/70 font-mono">
+                    {fullNormalizedNumber}
+                  </p>
                 </div>
-              )}
+              </div>
 
-              {/* What will happen */}
-              <div className="p-3.5 bg-rose-500/8 border border-rose-500/20 rounded-2xl space-y-2">
-                <p className="text-xs font-bold text-rose-300 text-center">What happens next:</p>
+              {/* Security Details */}
+              <div className="p-3.5 bg-purple-500/10 border border-purple-500/20 rounded-2xl space-y-2">
+                <p className="text-xs font-bold text-purple-300">What happens if you continue:</p>
                 <ul className="text-xs text-slate-300 space-y-1.5">
                   <li className="flex items-start gap-2">
                     <span className="text-amber-400 mt-0.5 shrink-0">1.</span>
-                    <span>We will send a verification code to <strong className="font-mono text-white">{fullNormalizedNumber}</strong></span>
+                    <span>We will send a 6-digit SMS verification code to <strong className="font-mono text-white">{fullNormalizedNumber}</strong></span>
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-amber-400 mt-0.5 shrink-0">2.</span>
-                    <span>Once you verify, the <strong>other device will be logged out</strong> immediately</span>
+                    <span>Once verified, the <strong>other device will be logged out</strong> automatically</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-amber-400 mt-0.5 shrink-0">3.</span>
-                    <span>AGC allows only <strong>one active session</strong> per number for your security</span>
+                    <span>You will be safely logged into this device without creating a new account</span>
                   </li>
                 </ul>
               </div>
 
-              <div className="flex gap-2.5">
+              <div className="flex gap-2.5 pt-1">
                 <button
                   type="button"
                   onClick={() => setStep('phone')}
@@ -625,9 +801,10 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                 <button
                   type="button"
                   onClick={sendOtp}
-                  className="flex-1 py-3 text-xs font-bold bg-gradient-to-r from-rose-600 to-red-700 text-white rounded-xl shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                  className="flex-1 py-3 text-xs font-bold bg-gradient-to-r from-purple-600 via-purple-700 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl shadow-lg shadow-purple-900/40 transition-all active:scale-95 flex items-center justify-center gap-1.5"
                 >
-                  <span>Log Out Other Device</span>
+                  <span>Continue Login</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
@@ -727,17 +904,17 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         )}
 
         {/* ========================================================================= */}
-        {/* STEP 3: PROFILE INFO (NAME & PHOTO) */}
+        {/* STEP 3: USERNAME & AVATAR PICKER */}
         {/* ========================================================================= */}
         {step === 'profile' && (
           <form onSubmit={handleProfileSubmit} className="flex-1 flex flex-col justify-between p-6 overflow-y-auto">
             <div className="space-y-6">
               <div className="text-center pt-2">
                 <h1 className="text-2xl font-black text-white tracking-tight font-display">
-                  Create Your Profile
+                  Choose Your Username
                 </h1>
-                <p className="text-xs text-purple-200/70 mt-1">
-                  Choose your display avatar and full name for AGC
+                <p className="text-xs text-purple-200/70 mt-1 max-w-xs mx-auto">
+                  Pick your unique username and avatar. You can add your full name in your profile later.
                 </p>
               </div>
 
@@ -802,26 +979,52 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                 </div>
               </div>
 
-              {/* Full Name Input */}
-              <div className="space-y-1">
-                <label className="text-[11px] font-bold uppercase tracking-wider text-purple-300/80">
-                  Your Full Name
-                </label>
-                <div className="bg-[#140b2b] border border-purple-500/30 focus-within:border-purple-500 focus-within:ring-2 focus-within:ring-purple-500/30 rounded-2xl px-3.5 py-3 transition-all">
+              {/* Username Input Field */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-purple-300/90">
+                    Choose Username
+                  </label>
+                  {usernameAvailability === 'checking' && (
+                    <span className="text-[10px] text-purple-400 font-semibold flex items-center gap-1">
+                      <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Checking...
+                    </span>
+                  )}
+                  {usernameAvailability === 'available' && fullName.length >= 3 && (
+                    <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" /> Available
+                    </span>
+                  )}
+                  {usernameAvailability === 'taken' && (
+                    <span className="text-[10px] text-rose-400 font-bold">
+                      ✕ Already taken
+                    </span>
+                  )}
+                </div>
+
+                <div className={`relative flex items-center bg-[#140b2b] border rounded-2xl px-3.5 py-3 transition-all ${
+                  usernameAvailability === 'taken'
+                    ? 'border-rose-500/60 focus-within:ring-2 focus-within:ring-rose-500/30'
+                    : usernameAvailability === 'available' && fullName.length >= 3
+                    ? 'border-emerald-500/60 focus-within:ring-2 focus-within:ring-emerald-500/30'
+                    : 'border-purple-500/30 focus-within:border-purple-500 focus-within:ring-2 focus-within:ring-purple-500/30'
+                }`}>
+                  <span className="text-sm font-bold text-purple-400 select-none pr-1">@</span>
                   <input
                     type="text"
                     value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    placeholder="e.g. Babatunde Adeleke"
+                    onChange={(e) => handleUsernameChange(e.target.value)}
+                    placeholder="e.g. babatunde, afri_king, amaka_dev"
                     autoFocus
                     required
-                    maxLength={35}
+                    maxLength={30}
                     className="w-full bg-transparent text-sm font-bold text-white placeholder-purple-300/40 focus:outline-none"
                   />
                 </div>
-                <div className="flex items-center justify-between text-[10px] text-purple-300/60 px-1 pt-1">
-                  <span>Visible to your contacts and trading partners</span>
-                  <span>{fullName.length}/35</span>
+
+                <div className="flex items-center justify-between text-[10px] text-purple-300/60 px-1 pt-0.5">
+                  <span>Unique handle for your chats & payments. You can add your full name in profile later.</span>
+                  <span>{fullName.length}/30</span>
                 </div>
               </div>
             </div>
@@ -830,7 +1033,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
             <div className="pt-8 space-y-2">
               <button
                 type="submit"
-                disabled={!fullName.trim()}
+                disabled={!fullName.trim() || fullName.length < 3 || usernameAvailability === 'taken' || usernameAvailability === 'checking' || isVerifying}
                 className="w-full py-4 bg-gradient-to-r from-purple-600 via-purple-700 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-sm rounded-2xl shadow-lg shadow-purple-700/30 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
               >
                 <span>Complete Setup & Enter</span>
