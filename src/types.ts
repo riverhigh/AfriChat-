@@ -78,7 +78,9 @@ export interface AudioSpaceSpeaker {
   id: string;
   name: string;
   avatar: string;
-  role: 'host' | 'co-host' | 'speaker';
+  role: 'host' | 'co-host' | 'speaker' | 'sponsor';
+  sponsorBrand?: string;
+  sponsorTagline?: string;
   isSpeaking: boolean;
   isMuted: boolean;
 }
@@ -95,6 +97,19 @@ export interface AudioSpace {
   isLive: boolean;
   category: 'Tech & Hustle' | 'Afrobeats & Music' | 'Football Banter' | 'Market Townhall';
   isLowBandwidthMode: boolean;
+  pinnedAnnouncement?: string;
+  sponsorBanner?: {
+    brandName: string;
+    tagline: string;
+    avatar?: string;
+    badge?: string;
+  };
+  raisedHands?: {
+    id: string;
+    name: string;
+    avatar: string;
+    time: string;
+  }[];
 }
 
 export interface ScamEntity {

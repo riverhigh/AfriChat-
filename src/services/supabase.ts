@@ -300,8 +300,52 @@ export async function createTownCommunityInDb(comm: {
   description?: string;
   avatar?: string;
   members_count?: number;
+  members?: string[];
+  tags?: string[];
 }) {
-  return supabase.from('town_communities').insert(comm).select().maybeSingle();
+  const tags: string[] = Array.isArray(comm.tags) ? [...comm.tags] : [];
+  if (comm.type && !tags.some((t) => t.startsWith('type:'))) {
+    tags.push(`type:${comm.type}`);
+  }
+  if (comm.members && comm.members.length > 0) {
+    tags.push(`members:${JSON.stringify(comm.members)}`);
+  }
+
+  // Only insert columns that exist on town_communities schema in Supabase
+  const payload = {
+    name: comm.name,
+    description: comm.description || null,
+    category: comm.category || 'Tech & Hustle',
+    avatar: comm.avatar || null,
+    members_count: comm.members_count || 1,
+    tags,
+    is_live: true,
+  };
+
+  return supabase.from('town_communities').insert(payload).select().maybeSingle();
+}
+
+export async function updateTownCommunityInDb(nameOrId: string, updates: {
+  members_count?: number;
+  members?: string[];
+  tags?: string[];
+  description?: string;
+}) {
+  const tags: string[] = Array.isArray(updates.tags) ? [...updates.tags] : [];
+  if (updates.members && updates.members.length > 0) {
+    tags.push(`members:${JSON.stringify(updates.members)}`);
+  }
+
+  const payload: any = {};
+  if (updates.members_count !== undefined) payload.members_count = updates.members_count;
+  if (updates.description !== undefined) payload.description = updates.description;
+  if (tags.length > 0) payload.tags = tags;
+
+  // Try updating by UUID or name
+  if (nameOrId.includes('-') && nameOrId.length >= 32) {
+    return supabase.from('town_communities').update(payload).eq('id', nameOrId);
+  }
+  return supabase.from('town_communities').update(payload).eq('name', nameOrId);
 }
 
 // ─── Live Audio Spaces (Street Radio / Spaces) ───────────────────────────────

@@ -32,6 +32,7 @@ import {
   mapProfileToUser,
   fetchLiveTownCommunities,
   createTownCommunityInDb,
+  updateTownCommunityInDb,
   fetchLiveAudioSpaces,
   createAudioSpaceInDb,
   fetchLiveArtisanStations,
@@ -1013,18 +1014,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const map = new Map<string, TownCommunity>();
               prev.forEach((c) => map.set(c.id, c));
               data.forEach((row: any) => {
+                const tags: string[] = Array.isArray(row.tags) ? row.tags : [];
+                const typeTag = tags.find((t: string) => t.startsWith('type:'));
+                const commType = typeTag ? (typeTag.replace('type:', '') as 'group' | 'channel') : (row.category === 'Broadcast' ? 'channel' : 'group');
+                const membersTag = tags.find((t: string) => t.startsWith('members:'));
+                let parsedMembers: string[] = [];
+                if (membersTag) {
+                  try { parsedMembers = JSON.parse(membersTag.replace('members:', '')); } catch (_) {}
+                }
+                const actualCount = row.members_count || (parsedMembers.length > 0 ? parsedMembers.length + 1 : 1);
+
                 map.set(row.id, {
                   id: row.id,
                   name: row.name,
-                  type: row.type || (row.category === 'Broadcast' ? 'channel' : 'group'),
+                  type: commType,
                   category: row.category || 'Tech & Hustle',
                   description: row.description || '',
-                  membersCount: row.members_count || 1,
+                  membersCount: actualCount,
                   avatar: row.avatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(row.name)}&backgroundColor=581c87&textColor=ffffff`,
                   isVerified: row.is_live || false,
                   isJoined: true,
-                  recentActivity: 'Active community',
+                  recentActivity: parsedMembers.length > 0 ? `${parsedMembers.length} members connected` : 'Active community',
                   adminName: 'AGC Admin',
+                });
+
+                // Sync corresponding chat thread in chats state
+                const chatId = `town_comm_${row.id}`;
+                setChats((cPrev) => {
+                  const existingIdx = cPrev.findIndex((c) => c.id === chatId || c.name === row.name);
+                  if (existingIdx !== -1) {
+                    const cExisting = cPrev[existingIdx];
+                    const updatedChat: ChatThread = {
+                      ...cExisting,
+                      membersCount: actualCount,
+                      members: parsedMembers.length > 0 ? parsedMembers : cExisting.members,
+                    };
+                    const updated = [...cPrev];
+                    updated[existingIdx] = updatedChat;
+                    try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
+                    return updated;
+                  }
+                  return cPrev;
                 });
               });
               const merged = Array.from(map.values());
@@ -1099,6 +1129,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
             return updated;
           });
+        })
+        .on('broadcast', { event: 'members_updated' }, ({ payload }: any) => {
+          if (!payload?.chatName) return;
+          setTownCommunities((prev) =>
+            prev.map((c) =>
+              c.name === payload.chatName ? { ...c, membersCount: payload.membersCount } : c
+            )
+          );
+          setChats((prev) =>
+            prev.map((c) =>
+              c.name === payload.chatName
+                ? {
+                    ...c,
+                    membersCount: payload.membersCount,
+                    members: payload.members || c.members,
+                  }
+                : c
+            )
+          );
         })
         .subscribe();
     }
@@ -3674,6 +3723,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
+    // Update townCommunities state & Supabase
+    const chatName = targetChat?.name;
+    const currentMembersList = (targetChat as any)?.members || [];
+    const updatedMembersList = Array.from(new Set([...currentMembersList, ...memberNames]));
+    const newMembersCount = updatedMembersList.length + 1;
+
+    setTownCommunities((prev) => {
+      const updated = prev.map((tc) => {
+        if (tc.name === chatName || `town_comm_${tc.id}` === chatId || tc.id === chatId) {
+          return {
+            ...tc,
+            membersCount: newMembersCount,
+            recentActivity: `Added ${memberNames.join(', ')}`,
+          };
+        }
+        return tc;
+      });
+      try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+      return updated;
+    });
+
+    if (chatName && isSupabaseConfigured) {
+      updateTownCommunityInDb(chatName, {
+        members_count: newMembersCount,
+        members: updatedMembersList,
+      }).catch((err) => console.warn('Supabase member count update notice:', err));
+
+      try {
+        const commCh = supabase.channel('live_town_communities', { config: { broadcast: { self: false } } });
+        commCh.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            commCh.send({
+              type: 'broadcast',
+              event: 'members_updated',
+              payload: { chatName, membersCount: newMembersCount, members: updatedMembersList }
+            });
+          }
+        });
+      } catch (_) {}
+    }
+
     const sysMsg: ChatMessage = {
       id: `msg_sys_${Date.now()}`,
       chatId,
@@ -3755,6 +3845,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (_) {}
 
     if (isSupabaseConfigured) {
+      createTownCommunityInDb({
+        name,
+        type: 'group',
+        category: 'Tech & Hustle',
+        description: description || 'Community group',
+        avatar: newThread.avatar,
+        members_count: memberNamesOrPhones.length + 1,
+        members: memberNamesOrPhones,
+      }).catch((e) => console.warn('Supabase group persist notice:', e));
+
       try {
         const sbChannel = supabase.channel('town_community_feed', { config: { broadcast: { self: false } } });
         sbChannel.subscribe((st) => {
