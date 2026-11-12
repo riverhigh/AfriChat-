@@ -16,6 +16,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
+  Download,
+  Wallet,
+  ExternalLink,
+  Sparkles,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
@@ -295,6 +299,57 @@ export const ScanQrModal: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
+  const [copiedHandle, setCopiedHandle] = useState(false);
+  const [walletAddedToast, setWalletAddedToast] = useState(false);
+
+  const cleanHandle = (currentUser.fullName || 'user')
+    .toLowerCase()
+    .replace(/^@/, '')
+    .replace(/[^a-z0-9_.]/g, '_');
+  const personalHandleLink = `https://agc.chat/@${cleanHandle}`;
+
+  const handleCopyHandleLink = () => {
+    navigator.clipboard?.writeText?.(personalHandleLink);
+    setCopiedHandle(true);
+    setTimeout(() => setCopiedHandle(false), 2000);
+  };
+
+  const handleDownloadVcf = () => {
+    const fullName = currentUser.fullName || 'AGC User';
+    const phone = currentUser.phoneNumber || '';
+    const note = `AfriChat (AGC) Verified Peer · @${cleanHandle}`;
+    const vcard = [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      `FN:${fullName}`,
+      `N:${fullName};;;;`,
+      `NICKNAME:@${cleanHandle}`,
+      `TEL;TYPE=CELL,VOICE,PREF:${phone}`,
+      `NOTE:${note}`,
+      'ORG:AfriChat (AGC) Network',
+      `URL:${personalHandleLink}`,
+      'CATEGORIES:AfriChat,Friends,Contacts',
+      'END:VCARD',
+    ].join('\r\n');
+
+    const blob = new Blob([vcard], { type: 'text/vcard;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${cleanHandle}_agc_contact.vcf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleAddToWallet = () => {
+    // Generate Pass & prompt native pass addition / download
+    handleDownloadVcf();
+    setWalletAddedToast(true);
+    setTimeout(() => setWalletAddedToast(false), 3500);
+  };
+
   const handleCopyLink = () => {
     const cleanPhone = currentUser.phoneNumber;
     const cleanName = currentUser.fullName || 'AGC User';
@@ -491,93 +546,140 @@ export const ScanQrModal: React.FC = () => {
               </div>
             </div>
           ) : (
-            /* My Unique QR Code Card */
-            <div className="flex flex-col items-center">
-              <div className="w-full max-w-[320px] p-5 rounded-3xl bg-gradient-to-b from-purple-950/40 via-[#160a2b] to-[#110624] border border-purple-500/30 shadow-2xl flex flex-col items-center text-center relative">
-                {/* User Avatar */}
-                <div className="relative mb-2">
-                  <img
-                    src={currentUser.avatarUrl}
-                    alt={currentUser.fullName}
-                    className="w-16 h-16 rounded-full object-cover border-2 border-purple-500 shadow-lg"
-                  />
-                  <span className="absolute bottom-0 right-0 w-5 h-5 bg-gradient-to-br from-purple-600 to-indigo-600 text-white rounded-full flex items-center justify-center text-[10px] shadow-xs">
-                    ✓
-                  </span>
+            /* My Unique QR Code Card - African Kente/Adinkra Digital Wallet Pass */
+            <div className="flex flex-col items-center space-y-4">
+              {/* Wallet Toast Feedback */}
+              {walletAddedToast && (
+                <div className="w-full max-w-[340px] p-2.5 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-200 text-xs font-semibold flex items-center gap-2 animate-in slide-in-from-top-2">
+                  <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>Card exported! Ready to add to Apple / Google Contacts & Wallet.</span>
                 </div>
+              )}
 
-                <h4 className="text-base font-bold text-white leading-tight font-display">
-                  {currentUser.fullName || 'AGC User'}
-                </h4>
-                <p className="text-xs font-mono font-semibold text-purple-300/80 mt-0.5">
-                  {currentUser.phoneNumber}
-                </p>
+              {/* Glowing African Kente / Adinkra Border Container */}
+              <div className="relative w-full max-w-[340px] rounded-[32px] p-[2.5px] bg-gradient-to-b from-amber-400/50 via-purple-600 to-indigo-600/70 shadow-[0_0_40px_rgba(168,85,247,0.3)]">
+                {/* Ambient background glow */}
+                <div className="absolute -inset-1 rounded-[34px] bg-gradient-to-r from-purple-600/30 via-amber-500/20 to-indigo-600/30 blur-lg pointer-events-none" />
 
-                {/* Real Dynamic Unique QR Code */}
-                <div className="p-3 bg-white rounded-2xl shadow-xl my-4 flex items-center justify-center">
-                  {qrDataUrl ? (
+                {/* Digital Pass Body */}
+                <div className="relative w-full rounded-[30px] bg-gradient-to-b from-[#1c0838] via-[#120524] to-[#0a0216] border border-purple-500/30 p-5 flex flex-col items-center text-center overflow-hidden">
+                  {/* Subtle Kente Geometric Motif Ribbon Header */}
+                  <div className="w-full flex items-center justify-between pb-3 mb-3 border-b border-purple-500/20 text-[10px] tracking-wider uppercase font-mono">
+                    <div className="flex items-center gap-1.5 text-amber-400 font-bold">
+                      <Wallet className="w-3.5 h-3.5" />
+                      <span>AfriPass · Digital ID</span>
+                    </div>
+                    <div className="flex items-center gap-1 text-purple-300/70 font-semibold tracking-widest text-[9px]">
+                      <span>◈ ❖ ◈</span>
+                    </div>
+                  </div>
+
+                  {/* User Avatar & Online Indicator */}
+                  <div className="relative mb-2.5">
                     <img
-                      src={qrDataUrl}
-                      alt="My Unique QR"
-                      className="w-48 h-48 object-contain rounded-lg"
+                      src={currentUser.avatarUrl}
+                      alt={currentUser.fullName}
+                      className="w-16 h-16 rounded-full object-cover border-2 border-amber-400/80 shadow-lg shadow-purple-950/80"
                     />
+                    <span className="absolute bottom-0 right-0 w-5 h-5 bg-gradient-to-br from-emerald-500 to-teal-600 text-white rounded-full flex items-center justify-center text-[10px] shadow-sm font-bold border-2 border-[#1c0838]">
+                      ✓
+                    </span>
+                  </div>
+
+                  <h4 className="text-base font-bold text-white leading-tight font-display">
+                    {currentUser.fullName || 'AGC User'}
+                  </h4>
+
+                  {/* 1-Click Personal Handle Pill: agc.chat/@username */}
+                  <button
+                    type="button"
+                    onClick={handleCopyHandleLink}
+                    title="Click to copy your personal AGC web handle"
+                    className="mt-1.5 px-3 py-1 bg-purple-950/80 hover:bg-purple-900/60 border border-purple-500/40 rounded-full text-xs font-mono text-purple-200 flex items-center gap-1.5 transition-colors group cursor-pointer"
+                  >
+                    <span className="text-amber-400 font-bold">@</span>
+                    <span>{cleanHandle}</span>
+                    <span className="text-[10px] text-purple-400 group-hover:text-amber-300">
+                      {copiedHandle ? '✓ copied!' : '· copy link'}
+                    </span>
+                  </button>
+
+                  <p className="text-[11px] font-mono text-purple-300/70 mt-1">
+                    {currentUser.phoneNumber}
+                  </p>
+
+                  {/* Real Dynamic High-Contrast QR Code */}
+                  <div className="p-3 bg-white rounded-2xl shadow-2xl my-3.5 flex items-center justify-center border-4 border-purple-500/20">
+                    {qrDataUrl ? (
+                      <img
+                        src={qrDataUrl}
+                        alt="My Unique QR"
+                        className="w-44 h-44 object-contain rounded-lg"
+                      />
+                    ) : (
+                      <div className="w-44 h-44 flex items-center justify-center">
+                        <Loader2 className="w-6 h-6 animate-spin text-purple-600" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Verified Peer / Admin Badge Footer */}
+                  {isAdmin ? (
+                    <div className="w-full bg-purple-950/60 border border-purple-500/40 py-1.5 px-3 rounded-xl flex items-center justify-between font-mono text-xs">
+                      <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider">
+                        Admin View · UID:
+                      </span>
+                      <span className="text-white font-mono text-[11px] truncate max-w-[170px]">
+                        {currentUser.id}
+                      </span>
+                    </div>
                   ) : (
-                    <div className="w-48 h-48 flex items-center justify-center">
-                      <Loader2 className="w-6 h-6 animate-spin text-purple-600" />
+                    <div className="w-full bg-purple-950/50 border border-purple-500/20 py-1.5 px-3 rounded-xl flex items-center justify-between text-xs">
+                      <span className="text-purple-300/80 text-[11px] font-medium flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-amber-400" />
+                        <span>Kente Edition Pass</span>
+                      </span>
+                      <span className="text-emerald-400 font-mono text-[11px] font-bold flex items-center gap-1">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>Verified Peer</span>
+                      </span>
                     </div>
                   )}
                 </div>
-
-                {/* Only admin can see UID. Regular users cannot see UID! */}
-                {isAdmin ? (
-                  <div className="w-full bg-purple-950/60 border border-purple-500/40 py-2 px-3 rounded-xl flex items-center justify-between font-mono text-xs">
-                    <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider">
-                      Admin View · UID:
-                    </span>
-                    <span className="text-white font-mono text-[11px] truncate max-w-[170px]">
-                      {currentUser.id}
-                    </span>
-                  </div>
-                ) : (
-                  <div className="w-full bg-purple-950/30 border border-purple-500/20 py-2 px-3 rounded-xl flex items-center justify-between text-xs">
-                    <span className="text-purple-300 text-[11px] font-medium">AGC Digital ID</span>
-                    <span className="text-emerald-400 font-mono text-[11px] font-bold flex items-center gap-1">
-                      <ShieldCheck className="w-3.5 h-3.5" />
-                      <span>Verified Peer</span>
-                    </span>
-                  </div>
-                )}
               </div>
 
-              {/* Action Buttons */}
-              <div className="w-full max-w-[320px] grid grid-cols-2 gap-2.5 mt-4">
+              {/* Native Actions: 1-Click .vcf & Apple / Google Wallet */}
+              <div className="w-full max-w-[340px] space-y-2">
+                {/* 1-Click .vcf Phone Contacts Export */}
                 <button
                   type="button"
-                  onClick={handleCopyLink}
-                  className="py-3 px-3 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-transform active:scale-95 shadow-md shadow-purple-900/40"
+                  onClick={handleDownloadVcf}
+                  className="w-full py-3 px-4 rounded-2xl bg-gradient-to-r from-amber-500 via-purple-600 to-indigo-600 hover:from-amber-400 hover:to-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-98 shadow-lg shadow-purple-950/80 border border-amber-400/30"
                 >
-                  {copiedLink ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
-                  <span>{copiedLink ? 'Copied!' : 'Copy Link'}</span>
+                  <Download className="w-4 h-4 text-amber-200" />
+                  <span>Save to Native Contacts (.vcf)</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (navigator.share) {
-                      navigator.share({
-                        title: 'Connect with me on AGC',
-                        text: `Scan my AGC QR code or call me at ${currentUser.phoneNumber}`,
-                        url: window.location.origin,
-                      }).catch(() => {});
-                    } else {
-                      handleCopyLink();
-                    }
-                  }}
-                  className="py-3 px-3 rounded-2xl border border-purple-500/30 hover:bg-purple-900/20 text-purple-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <Share2 className="w-4 h-4" />
-                  <span>Share QR</span>
-                </button>
+                {/* Digital Wallet / Pass Buttons */}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleAddToWallet}
+                    className="py-2.5 px-3 rounded-xl bg-purple-950/60 hover:bg-purple-900/60 border border-purple-500/30 text-purple-200 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <Wallet className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Apple / Google Pass</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleCopyLink}
+                    className="py-2.5 px-3 rounded-xl bg-purple-950/60 hover:bg-purple-900/60 border border-purple-500/30 text-purple-200 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-purple-300" />}
+                    <span>{copiedLink ? 'Copied Link!' : 'Copy Link'}</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}

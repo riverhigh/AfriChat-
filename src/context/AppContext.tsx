@@ -344,6 +344,11 @@ interface AppContextType {
   syncDeviceContacts: () => void;
   startChatWithContact: (contact: DeviceContact) => void;
   addNewDeviceContact: (name: string, phone: string, about?: string, isRegistered?: boolean, avatar?: string) => DeviceContact;
+  // Live Supabase Presence & Typing Indicators
+  onlineUserKeys: Set<string>;
+  isUserOnline: (phoneOrIdentifier?: string) => boolean;
+  typingUsers: Record<string, string[]>;
+  sendTypingIndicator: (chatId: string, isTyping: boolean) => void;
   // 10. User Uploaded Memes & GIFs + In-Chat Drawer
   userMemes: UserUploadedMeme[];
   addUserMeme: (meme: Omit<UserUploadedMeme, 'id' | 'createdAt'>) => void;
@@ -2393,6 +2398,127 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .catch(() => {});
     } catch (_) {}
   }, [isAuthenticated, currentUser.id, currentUser.phoneNumber]);
+
+  // ─── Realtime Presence & Live Typing Indicators (Supabase Channel) ────────
+  const [onlineUserKeys, setOnlineUserKeys] = useState<Set<string>>(new Set());
+  const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({});
+
+  const isUserOnline = useCallback(
+    (identifier?: string): boolean => {
+      if (!identifier) return false;
+      const clean = identifier.replace(/\D/g, '');
+      const last9 = clean.length >= 9 ? clean.slice(-9) : clean;
+      for (const k of onlineUserKeys) {
+        if (k === identifier) return true;
+        const kc = k.replace(/\D/g, '');
+        if (kc && (kc === clean || (last9.length >= 7 && (kc.endsWith(last9) || clean.endsWith(kc.slice(-9)))))) {
+          return true;
+        }
+      }
+      return false;
+    },
+    [onlineUserKeys]
+  );
+
+  const sendTypingIndicator = useCallback(
+    (chatId: string, isTyping: boolean) => {
+      if (!isSupabaseConfigured || !currentUser?.phoneNumber) return;
+      try {
+        const ch = supabase.channel('online_presence');
+        ch.send({
+          type: 'broadcast',
+          event: 'typing_indicator',
+          payload: {
+            chatId,
+            senderPhone: currentUser.phoneNumber,
+            senderName: currentUser.fullName || 'AGC User',
+            isTyping,
+          },
+        });
+      } catch (_) {}
+    },
+    [currentUser]
+  );
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !isAuthenticated || !currentUser?.phoneNumber) return;
+
+    const myCleanPhone = currentUser.phoneNumber.replace(/\D/g, '');
+    const myLast9 = myCleanPhone.length >= 9 ? myCleanPhone.slice(-9) : myCleanPhone;
+    const presenceKey = myLast9 || myCleanPhone || currentUser.id;
+
+    const presenceChannel = supabase.channel('online_presence', {
+      config: { presence: { key: presenceKey } },
+    });
+
+    presenceChannel
+      .on('presence', { event: 'sync' }, () => {
+        const state = presenceChannel.presenceState();
+        const keys = new Set<string>();
+        Object.keys(state).forEach((k) => keys.add(k));
+        Object.values(state).forEach((presences: any) => {
+          if (Array.isArray(presences)) {
+            presences.forEach((p) => {
+              if (p.phone) keys.add(p.phone);
+              if (p.cleanPhone) keys.add(p.cleanPhone);
+              if (p.last9) keys.add(p.last9);
+            });
+          }
+        });
+        setOnlineUserKeys(keys);
+      })
+      .on('presence', { event: 'join' }, ({ key, newPresences }) => {
+        setOnlineUserKeys((prev) => {
+          const next = new Set(prev);
+          next.add(key);
+          newPresences?.forEach((p: any) => {
+            if (p.phone) next.add(p.phone);
+            if (p.cleanPhone) next.add(p.cleanPhone);
+            if (p.last9) next.add(p.last9);
+          });
+          return next;
+        });
+      })
+      .on('presence', { event: 'leave' }, ({ key }) => {
+        setOnlineUserKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      })
+      .on('broadcast', { event: 'typing_indicator' }, ({ payload }) => {
+        if (!payload || payload.senderPhone === currentUser.phoneNumber) return;
+        const { chatId, senderName, isTyping } = payload;
+        setTypingUsers((prev) => {
+          const currentList = prev[chatId] || [];
+          if (isTyping) {
+            if (!currentList.includes(senderName)) {
+              return { ...prev, [chatId]: [...currentList, senderName] };
+            }
+            return prev;
+          } else {
+            const filtered = currentList.filter((n) => n !== senderName);
+            return { ...prev, [chatId]: filtered };
+          }
+        });
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await presenceChannel.track({
+            userId: currentUser.id,
+            phone: currentUser.phoneNumber,
+            cleanPhone: myCleanPhone,
+            last9: myLast9,
+            name: currentUser.fullName,
+            onlineAt: new Date().toISOString(),
+          });
+        }
+      });
+
+    return () => {
+      presenceChannel.unsubscribe();
+    };
+  }, [isAuthenticated, currentUser?.phoneNumber, currentUser?.id, currentUser?.fullName]);
 
   // Status Feed: fetch existing statuses from contacts + subscribe to live updates
   useEffect(() => {
@@ -7201,6 +7327,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         syncDeviceContacts,
         startChatWithContact,
         addNewDeviceContact,
+        // Live Supabase Presence & Typing Indicators
+        onlineUserKeys,
+        isUserOnline,
+        typingUsers,
+        sendTypingIndicator,
         // 10. User Uploaded Memes & GIFs + In-Chat Drawer
         userMemes,
         addUserMeme,

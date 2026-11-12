@@ -252,6 +252,7 @@ export interface ChatThread {
   catalog: Product[];
   isOnline: boolean;
   phone?: string;
+  phoneNumber?: string;
   isGroup?: boolean;
   isChannel?: boolean;
   membersCount?: number;

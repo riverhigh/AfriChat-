@@ -24,6 +24,8 @@ export const ChatList: React.FC = () => {
     setIsContactsModalOpen,
     statuses,
     setActiveViewingStatus,
+    isUserOnline,
+    typingUsers,
   } = useApp();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<
@@ -209,7 +211,7 @@ export const ChatList: React.FC = () => {
                   </span>
                 )}
 
-                {chat.isOnline && !chat.isScamFlagged && !hasRecentStatus && (
+                {(chat.isOnline || isUserOnline(chat.phoneNumber || chat.name)) && !chat.isScamFlagged && !hasRecentStatus && (
                   <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white dark:border-black rounded-full" />
                 )}
                 {chat.isScamFlagged && (
@@ -271,7 +273,7 @@ export const ChatList: React.FC = () => {
                   {chat.isScamFlagged && (
                     <span className="text-rose-500 font-bold shrink-0">[⚠️ SCAM REPORTED]</span>
                   )}
-                  <span className="truncate">{chat.lastMessage}</span>
+                  {typingUsers[chat.id]?.length ? (<span className="text-purple-400 font-semibold italic animate-pulse">typing...</span>) : (<span className="truncate">{chat.lastMessage}</span>)}
                 </p>
 
                 {chat.unreadCount > 0 && (

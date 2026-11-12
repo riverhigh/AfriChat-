@@ -32,6 +32,7 @@ export const ContactsModal: React.FC = () => {
     currentUser,
     createGroup,
     createChannel,
+    isUserOnline,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -791,20 +792,39 @@ export const ContactsModal: React.FC = () => {
                       className="w-full h-full object-cover"
                     />
                   </div>
-                  {contact.isRegisteredOnAGC && (
-                    <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white dark:border-[#120a21]" />
-                  )}
+                  {contact.isRegisteredOnAGC && (() => {
+                    const online = isUserOnline(contact.normalizedPhoneNumber);
+                    return online ? (
+                      <span
+                        title="Online now"
+                        className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-400 rounded-full border-2 border-white dark:border-[#120a21] shadow-sm shadow-emerald-400 animate-pulse"
+                      />
+                    ) : (
+                      <span
+                        title="Offline"
+                        className="absolute bottom-0 right-0 w-3 h-3 bg-slate-400 dark:bg-purple-700/60 rounded-full border-2 border-white dark:border-[#120a21]"
+                      />
+                    );
+                  })()}
                 </div>
 
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <h4 className="font-semibold text-xs text-slate-900 dark:text-slate-100 truncate">
                       {contact.name}
                     </h4>
                     {contact.isRegisteredOnAGC && (
-                      <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/20 border border-emerald-500/30 px-1.5 py-0.2 rounded-full font-bold">
-                        AGC User
-                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/20 border border-emerald-500/30 px-1.5 py-0.2 rounded-full font-bold">
+                          AGC User
+                        </span>
+                        {isUserOnline(contact.normalizedPhoneNumber) && (
+                          <span className="text-[9px] font-mono text-emerald-300 bg-emerald-500/30 border border-emerald-500/50 px-1.5 py-0.2 rounded-full font-bold flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            <span>Online</span>
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
                   <div className="text-[11px] font-mono text-slate-500 dark:text-purple-300/60">

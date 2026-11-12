@@ -95,6 +95,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     statuses,
     setActiveViewingStatus,
     currentUser,
+    isUserOnline,
+    typingUsers,
+    sendTypingIndicator,
   } = useApp();
 
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
@@ -158,6 +161,17 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   };
 
   const [inputText, setInputText] = useState('');
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleInputChange = (val: string) => {
+    setInputText(val);
+    if (!activeChatId) return;
+    sendTypingIndicator(activeChatId, true);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      sendTypingIndicator(activeChatId, false);
+    }, 2200);
+  };
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [voiceProgress, setVoiceProgress] = useState<Record<string, number>>({});
   const [showCatalogDrawer, setShowCatalogDrawer] = useState(false);
@@ -252,6 +266,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
   const handleSend = () => {
     if (!inputText.trim() || !activeChatId) return;
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    sendTypingIndicator(activeChatId, false);
     const replyMeta = replyingTo
       ? {
           id: replyingTo.id,
@@ -404,9 +420,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     </span>
                   )}
 
-                  {currentChat.isOnline && !currentChat.isScamFlagged && !hasRecentStatus && (
-                    <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-purple-950 dark:border-black rounded-full" />
-                  )}
+                  {(() => {
+                    const isPeerOnline = currentChat.isOnline || isUserOnline(currentChat.phoneNumber || currentChat.name);
+                    return isPeerOnline && !currentChat.isScamFlagged && !hasRecentStatus ? (
+                      <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-400 border-2 border-purple-950 dark:border-black rounded-full shadow-sm shadow-emerald-400 animate-pulse" />
+                    ) : null;
+                  })()}
                   {currentChat.isScamFlagged && (
                     <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white rounded-full flex items-center justify-center text-[10px] font-bold">
                       !
@@ -442,15 +461,39 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     )}
                   </div>
                   <div className="text-[11px] text-indigo-200/80 leading-tight truncate">
-                    {currentChat.isScamFlagged ? (
-                      <span className="text-rose-400 font-bold">⚠️ Flagged Scammer ({currentChat.scamReportsCount} reports)</span>
-                    ) : hasRecentStatus ? (
-                      <span className="text-pink-300 font-medium">✨ new story update</span>
-                    ) : currentChat.isOnline ? (
-                      <span className="text-emerald-400 font-medium">online</span>
-                    ) : (
-                      'last seen recently'
-                    )}
+                    {(() => {
+                      const currentTyping = typingUsers[currentChat.id] || [];
+                      const isTypingNow = currentTyping.length > 0;
+                      const isPeerOnline = currentChat.isOnline || isUserOnline(currentChat.phoneNumber || currentChat.name);
+
+                      if (currentChat.isScamFlagged) {
+                        return <span className="text-rose-400 font-bold">⚠️ Flagged Scammer ({currentChat.scamReportsCount} reports)</span>;
+                      }
+                      if (isTypingNow) {
+                        return (
+                          <span className="text-purple-300 font-semibold flex items-center gap-1 animate-pulse">
+                            <span>{currentTyping.join(', ')} typing</span>
+                            <span className="inline-flex gap-0.5">
+                              <span className="w-1 h-1 bg-purple-300 rounded-full animate-bounce [animation-delay:0ms]" />
+                              <span className="w-1 h-1 bg-purple-300 rounded-full animate-bounce [animation-delay:150ms]" />
+                              <span className="w-1 h-1 bg-purple-300 rounded-full animate-bounce [animation-delay:300ms]" />
+                            </span>
+                          </span>
+                        );
+                      }
+                      if (hasRecentStatus) {
+                        return <span className="text-pink-300 font-medium">✨ new story update</span>;
+                      }
+                      if (isPeerOnline) {
+                        return (
+                          <span className="text-emerald-400 font-medium flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            <span>online now</span>
+                          </span>
+                        );
+                      }
+                      return 'last seen recently';
+                    })()}
                   </div>
                 </div>
               </div>
@@ -1438,7 +1481,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           <input
             type="text"
             value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
+            onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
             placeholder="Message"
             className="flex-1 min-w-0 px-2 py-1 bg-transparent text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none"
