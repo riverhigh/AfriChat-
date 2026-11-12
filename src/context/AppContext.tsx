@@ -2192,6 +2192,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser.phoneNumber, currentUser.id]);
 
+  // 🌐 LIVE SYSTEM: Realtime Live Job Board Broadcast channel
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    const jobCh = supabase.channel('live_job_board', { config: { broadcast: { self: false } } });
+    jobCh
+      .on('broadcast', { event: 'new_job_posted' }, ({ payload }: any) => {
+        if (!payload?.job) return;
+        const incoming: JobPosting = payload.job;
+        setJobPostings((prev) => {
+          if (prev.some((j) => j.id === incoming.id)) return prev;
+          const updated = [incoming, ...prev];
+          try {
+            localStorage.setItem('AGC_job_postings', JSON.stringify(updated));
+          } catch (e) {}
+          return updated;
+        });
+      })
+      .subscribe();
+
+    return () => {
+      jobCh.unsubscribe();
+    };
+  }, [isSupabaseConfigured]);
+
   // 🌐 LIVE SYSTEM: Hydrate and listen for live Store Subscriptions
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -2574,11 +2599,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [jobPostings, setJobPostings] = useState<JobPosting[]>(() => {
     try {
       const saved = localStorage.getItem('AGC_job_postings');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
     } catch (e) {
       console.warn('Failed to parse jobs:', e);
     }
-    return [];
+    return MOCK_JOB_POSTINGS;
   });
   const [isJobBoardModalOpen, setIsJobBoardModalOpen] = useState(false);
   const [isPostJobModalOpen, setIsPostJobModalOpen] = useState(false);
@@ -4987,6 +5015,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
+    // 🌐 Broadcast to all live users via Supabase Realtime
+    if (isSupabaseConfigured) {
+      try {
+        const jobCh = supabase.channel('live_job_board', { config: { broadcast: { self: false } } });
+        jobCh.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            jobCh.send({
+              type: 'broadcast',
+              event: 'new_job_posted',
+              payload: { job: newJob },
+            });
+          }
+        });
+      } catch (e) {
+        console.warn('Failed to broadcast new job:', e);
+      }
+    }
+
     setIsPostJobModalOpen(false);
     return {
       success: true,
@@ -5021,6 +5067,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       availableBalance: prev.availableBalance - applyFee,
       transactions: [newTx, ...prev.transactions],
     }));
+
+    // Inject application notification message directly into chat with employer
+    const employerChat = chats.find((c) => c.phone === job.contactPhone || c.name.toLowerCase().includes(job.company.toLowerCase())) || chats[0];
+    if (employerChat) {
+      const appMsg: ChatMessage = {
+        id: `msg_app_${Date.now()}`,
+        chatId: employerChat.id,
+        sender: 'user',
+        senderName: currentUser.fullName || 'AGC Applicant',
+        senderPhone: currentUser.phoneNumber,
+        senderAvatar: currentUser.avatarUrl,
+        text: `📄 Job Application Submitted: "${job.title}" at ${job.company}.\nApplicant: ${currentUser.fullName || 'AGC Member'} (${currentUser.phoneNumber || 'Verified Phone'}).\n₦50 application fee escrow verified. Ready to discuss!`,
+        type: 'text',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        status: 'sent',
+      };
+      setMessages((prev) => ({
+        ...prev,
+        [employerChat.id]: [...(prev[employerChat.id] || []), appMsg],
+      }));
+    }
 
     return {
       success: true,
