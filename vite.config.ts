@@ -24,6 +24,7 @@ function agcApiPlugin(): Plugin {
 
   return {
     name: 'agc-api-plugin',
+    apply: 'serve' as const,
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         if (!req.url || !req.url.startsWith('/api/users')) {

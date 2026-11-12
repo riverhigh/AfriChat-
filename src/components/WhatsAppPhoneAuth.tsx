@@ -322,7 +322,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   };
 
   // Handle phone submit — immediately check if phone number has been used before!
-  const handlePhoneSubmit = (e: React.FormEvent) => {
+  const handlePhoneSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     const cleanNumber = phoneNumber.replace(/[\s-]/g, '');
@@ -331,7 +331,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       return;
     }
 
-    // Intercept immediately: If number exists on any device/session, prompt device conflict!
+    // 1. Quick localStorage check (instant)
     const existing = findExistingAccount(phoneNumber, selectedCountry.code);
     if (existing) {
       setIsExistingAccount(true);
@@ -339,6 +339,33 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       setStep('device_conflict');
       return;
     }
+
+    // 2. Check server registry (data_users.json via Vite /api endpoint)
+    setIsCheckingDevice(true);
+    try {
+      const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
+      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const endpoints = [
+        `/api/users/check-phone?phone=${cleanPhone}`,
+        `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`,
+      ];
+      for (const ep of endpoints) {
+        try {
+          const resp = await fetch(ep);
+          if (resp && resp.ok) {
+            const data = await resp.json();
+            if (data.registered) {
+              setIsCheckingDevice(false);
+              setIsExistingAccount(true);
+              setExistingSessionInfo({ name: data.name || 'AGC User', avatarUrl: data.avatarUrl });
+              setStep('device_conflict');
+              return;
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+    setIsCheckingDevice(false);
 
     setStep('confirm_dialog');
   };
@@ -390,7 +417,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       try {
         const { data: profile } = await supabase
           .from('profiles')
-          .select('full_name, avatar_url, phone_number, session_token')
+          .select('full_name, avatar_url, phone_number')
           .or(`phone_number.eq.${fullNormalizedNumber},phone_number.eq.${cleanPhone},phone_number.ilike.%${cleanPhone.slice(-9)}%`)
           .limit(1)
           .maybeSingle();
