@@ -91,6 +91,7 @@ export interface AudioSpace {
   hostAvatar: string;
   listenersCount: number;
   speakers: AudioSpaceSpeaker[];
+  listeners?: { id: string; name: string; avatar: string; isMuted?: boolean; isSpeaking?: boolean }[];
   isLive: boolean;
   category: 'Tech & Hustle' | 'Afrobeats & Music' | 'Football Banter' | 'Market Townhall';
   isLowBandwidthMode: boolean;
@@ -219,6 +220,8 @@ export interface ChatMessage {
   imageUrl?: string;
   imageLoaded?: boolean;
   mediaSizeKB?: number;
+  /** One-time view: image disappears after first tap */
+  oneTimeView?: boolean;
   voiceNote?: VoiceNoteMeta;
   product?: Product;
   order?: EscrowOrder;
@@ -306,11 +309,15 @@ export interface UserStatus {
   videoUrl?: string;
   caption: string;
   createdAt: string;
+  /** ISO-8601 for precise live countdown e.g. 2026-11-12T14:00:00.000Z */
+  createdAtISO?: string;
   expiresInHours: number;
   viewsCount: number;
   likesCount: number;
   viewers: StatusViewer[];
   hasLikedByMe?: boolean;
+  /** True when reshared from another user's post */
+  isReshared?: boolean;
 }
 
 export interface UserProfile {

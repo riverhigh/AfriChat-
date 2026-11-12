@@ -194,7 +194,7 @@ interface AppContextType {
   removeMemberFromGroup: (chatId: string, memberName: string) => void;
   deleteMessage: (chatId: string, messageId: string) => void;
   reactToMessage: (chatId: string, messageId: string, emoji: string) => void;
-  sendImageMessage: (chatId: string, imageUrl: string, caption?: string) => void;
+  sendImageMessage: (chatId: string, imageUrl: string, caption?: string, oneTimeView?: boolean) => void;
   blockedUserIds: string[];
   toggleBlockUser: (idOrPhone: string) => boolean;
   CURRENCY_SYMBOLS: Record<CurrencyCode, string>;
@@ -3221,6 +3221,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       mediaUrl: mediaUrl || '/src/assets/images/african_textiles_wax_1794210824926.jpg',
       caption: caption || 'New post on AGC 24h Status!',
       createdAt: 'Just now',
+      createdAtISO: new Date().toISOString(),
+      isReshared: caption.startsWith('Reshared') || false,
       expiresInHours: 24,
       viewsCount: 0,
       likesCount: 0,
@@ -3251,6 +3253,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       thoughtBg: themeBg || 'from-indigo-600 via-purple-600 to-pink-600',
       caption: thoughtText,
       createdAt: 'Just now',
+      createdAtISO: new Date().toISOString(),
       expiresInHours: 24,
       viewsCount: 0,
       likesCount: 0,
@@ -3289,6 +3292,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       videoUrl: mediaType === 'video' ? finalMediaUrl : undefined,
       caption: caption || (mediaType === 'video' ? 'Video Status 🎥' : 'Photo Status 📸'),
       createdAt: 'Just now',
+      createdAtISO: new Date().toISOString(),
       expiresInHours: 24,
       viewsCount: 0,
       likesCount: 0,
@@ -3483,7 +3487,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const bc = new BroadcastChannel('AGC_phone_calls');
         bc.postMessage({ targetPhone: cleanTargetPhone, event: 'incoming_call', data: callPayload });
-        bc.close();
+        setTimeout(() => { try { bc.close(); } catch (_) {} }, 4000);
       } catch (_) {}
 
       // 3. Supabase Realtime
@@ -3509,6 +3513,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       time: 'Just now',
     };
     setCalls((prev) => [newCallItem, ...prev]);
+
+    // Auto-cancel outgoing call after 45 seconds if still ringing / not answered
+    if (isInitiator) {
+      const ringSafeTimeout = setTimeout(() => {
+        setActiveCall((current) => {
+          if (!current) return null; // already ended
+          // Only cancel if we're still in the same call room
+          if (current.roomId !== generatedRoomId) return current;
+          return null; // hang up
+        });
+        // Log as missed for the other side
+        try {
+          setCalls((prev) => {
+            const idx = prev.findIndex((c) => c.id === newCallItem.id);
+            if (idx === -1) return prev;
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], direction: 'missed' };
+            return updated;
+          });
+        } catch (_) {}
+      }, 45_000);
+      return () => clearTimeout(ringSafeTimeout);
+    }
   };
 
   const acceptIncomingCall = () => {
@@ -3530,7 +3557,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const bc = new BroadcastChannel('AGC_phone_calls');
         bc.postMessage({ targetPhone: cleanCallerPhone, event: 'call_declined', data: { roomId: incomingCall.roomId } });
-        bc.close();
+        setTimeout(() => { try { bc.close(); } catch (_) {} }, 3000);
       } catch (_) {}
 
       // 3. Supabase Realtime
@@ -4009,7 +4036,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const sendImageMessage = async (chatId: string, imageUrl: string, caption?: string) => {
+  const sendImageMessage = async (chatId: string, imageUrl: string, caption?: string, oneTimeView?: boolean) => {
     // Ensure image data URL fits comfortably within Supabase 256KB Realtime payload
     let finalImageUrl = imageUrl;
     if (imageUrl.startsWith('data:image') && imageUrl.length > 250000) {
@@ -4028,6 +4055,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'image',
       imageUrl: finalImageUrl,
       text: caption || '',
+      oneTimeView: Boolean(oneTimeView),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'sent',
     };
@@ -4463,7 +4491,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const joinAudioSpace = (space: AudioSpace) => {
-    setActiveAudioSpace(space);
+    const isAlreadyMember = space.speakers?.some((s) => s.id === currentUser.id) ||
+      space.listeners?.some((l) => l.id === currentUser.id);
+
+    const updatedSpace: AudioSpace = {
+      ...space,
+      listenersCount: isAlreadyMember ? space.listenersCount : (space.listenersCount || 0) + 1,
+      listeners: isAlreadyMember
+        ? space.listeners
+        : [
+            ...(space.listeners || []),
+            {
+              id: currentUser.id,
+              name: currentUser.fullName || 'You',
+              avatar: currentUser.avatarUrl || 'https://api.dicebear.com/7.x/thumbs/svg?seed=me',
+              isMuted: true,
+              isSpeaking: false,
+            },
+          ],
+    };
+
+    setActiveAudioSpace(updatedSpace);
+    setAudioSpaces((prev) => prev.map((s) => (s.id === space.id ? updatedSpace : s)));
     joinLiveSpace(space.id, {
       id: currentUser.id,
       name: currentUser.fullName,
@@ -7186,10 +7235,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         clearChat,
         updateChat,
         addMembersToGroup,
+        removeMemberFromGroup,
         createGroup,
         createChannel,
         toggleMemberAdmin,
-        removeMemberFromGroup,
         deleteMessage,
         reactToMessage,
         sendImageMessage,

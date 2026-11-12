@@ -21,29 +21,82 @@ interface GroupInfoModalProps {
   chat: ChatThread;
 }
 
-// Minimal mock member list built from chat data
-function buildMemberList(chat: ChatThread) {
-  const count = chat.membersCount ?? 1;
-  const admins = (chat as any).admins as string[] | undefined;
-  const members = Array.from({ length: Math.min(count, 20) }, (_, i) => ({
-    id: `member_${i}`,
-    name: i === 0 ? 'You' : `Member ${i + 1}`,
-    avatar: `https://api.dicebear.com/7.x/thumbs/svg?seed=m${i}`,
-    isAdmin: admins ? admins.includes(`member_${i}`) : i === 0,
-  }));
-  return members;
+interface GroupMember {
+  id: string;
+  rawKey: string;
+  name: string;
+  avatar: string;
+  isAdmin: boolean;
+  phone?: string;
+}
+
+function buildMemberList(chat: ChatThread, currentUser: any, deviceContacts: any[]): GroupMember[] {
+  const admins = chat.admins || [currentUser?.fullName || 'You'];
+  const rawMembers = chat.members || [];
+  const list: GroupMember[] = [];
+
+  // Add current user first
+  const myName = currentUser?.fullName || 'You';
+  list.push({
+    id: 'member_me',
+    rawKey: myName,
+    name: `${myName} (You)`,
+    avatar: currentUser?.avatarUrl || 'https://api.dicebear.com/7.x/thumbs/svg?seed=me',
+    isAdmin: admins.includes(myName) || admins.includes('You'),
+    phone: currentUser?.phoneNumber,
+  });
+
+  // Add from real chat members
+  rawMembers.forEach((mem, idx) => {
+    if (mem === myName || mem === 'You' || mem === currentUser?.phoneNumber) return;
+
+    const contactMatch = deviceContacts?.find(
+      (c) => c.name === mem || c.phoneNumber === mem || c.phone === mem
+    );
+
+    list.push({
+      id: `mem_${idx}_${mem.replace(/\W/g, '')}`,
+      rawKey: mem,
+      name: contactMatch?.name || mem,
+      avatar: contactMatch?.avatar || `https://api.dicebear.com/7.x/thumbs/svg?seed=${mem}`,
+      isAdmin: admins.includes(mem) || (contactMatch && admins.includes(contactMatch.name)),
+      phone: contactMatch?.phoneNumber || contactMatch?.phone,
+    });
+  });
+
+  // If no members were specified in array but membersCount > 1, show registered contacts
+  if (list.length === 1 && (chat.membersCount ?? 1) > 1) {
+    const registered = (deviceContacts || []).filter(
+      (c) => c.phoneNumber !== currentUser?.phoneNumber && c.name !== myName
+    );
+    const countNeeded = Math.min((chat.membersCount ?? 2) - 1, 10);
+    registered.slice(0, countNeeded).forEach((c, idx) => {
+      list.push({
+        id: `reg_${idx}_${c.id}`,
+        rawKey: c.name,
+        name: c.name,
+        avatar: c.avatar || `https://api.dicebear.com/7.x/thumbs/svg?seed=${c.name}`,
+        isAdmin: admins.includes(c.name),
+        phone: c.phoneNumber || c.phone,
+      });
+    });
+  }
+
+  return list;
 }
 
 export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose, chat }) => {
-  const { currentUser } = useApp();
+  const { currentUser, deviceContacts, updateChat, removeMemberFromGroup } = useApp();
   const [copied, setCopied] = useState(false);
   const [announceMode, setAnnounceMode] = useState(false);
-  const [members, setMembers] = useState(() => buildMemberList(chat));
+  const [members, setMembers] = useState<GroupMember[]>(() =>
+    buildMemberList(chat, currentUser, deviceContacts)
+  );
 
   if (!isOpen) return null;
 
-  const inviteLink = `https://africhat.app/join/${chat.id}`;
-  const isAdmin = members.find((m) => m.id === 'member_0')?.isAdmin ?? false;
+  const inviteLink = `https://agc.chat/join/${chat.id}`;
+  const isAdmin = members.find((m) => m.id === 'member_me')?.isAdmin ?? false;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(inviteLink).catch(() => {});
@@ -51,14 +104,17 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
     setTimeout(() => setCopied(false), 2500);
   };
 
-  const handlePromote = (id: string) => {
+  const handlePromote = (rawKey: string) => {
+    const updatedAdmins = Array.from(new Set([...(chat.admins || []), rawKey]));
+    updateChat(chat.id, { admins: updatedAdmins });
     setMembers((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, isAdmin: true } : m))
+      prev.map((m) => (m.rawKey === rawKey ? { ...m, isAdmin: true } : m))
     );
   };
 
-  const handleRemove = (id: string) => {
-    setMembers((prev) => prev.filter((m) => m.id !== id));
+  const handleRemove = (rawKey: string) => {
+    removeMemberFromGroup(chat.id, rawKey);
+    setMembers((prev) => prev.filter((m) => m.rawKey !== rawKey));
   };
 
   return (
@@ -139,7 +195,7 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
           {/* Members list */}
           <div className="px-5 py-4">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-1.5">
-              <Users className="w-3.5 h-3.5" /> Members
+              <Users className="w-3.5 h-3.5" /> Members ({members.length})
             </p>
             <ul className="space-y-2">
               {members.map((m) => (
@@ -147,7 +203,7 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
                   <img
                     src={m.avatar}
                     alt={m.name}
-                    className="w-9 h-9 rounded-full object-cover bg-slate-200"
+                    className="w-9 h-9 rounded-full object-cover bg-slate-200 border border-slate-200 dark:border-purple-900/40"
                   />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate flex items-center gap-1.5">
@@ -158,13 +214,14 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
                         </span>
                       )}
                     </p>
+                    {m.phone && <p className="text-[11px] text-slate-400 font-mono">{m.phone}</p>}
                   </div>
                   {/* Admin actions on other members */}
-                  {isAdmin && m.id !== 'member_0' && (
+                  {isAdmin && m.id !== 'member_me' && (
                     <div className="flex items-center gap-1">
                       {!m.isAdmin && (
                         <button
-                          onClick={() => handlePromote(m.id)}
+                          onClick={() => handlePromote(m.rawKey)}
                           className="p-1.5 text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-full transition-colors"
                           title="Promote to admin"
                         >
@@ -172,7 +229,7 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
                         </button>
                       )}
                       <button
-                        onClick={() => handleRemove(m.id)}
+                        onClick={() => handleRemove(m.rawKey)}
                         className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-full transition-colors"
                         title="Remove from group"
                       >
@@ -190,7 +247,15 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
             <button className="w-full py-2.5 text-sm font-semibold text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors flex items-center justify-center gap-2 border border-rose-200 dark:border-rose-900/40">
               <BellOff className="w-4 h-4" /> Mute Notifications
             </button>
-            <button className="w-full py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors flex items-center justify-center gap-2">
+            <button
+              onClick={() => {
+                if (window.confirm('Are you sure you want to leave this group?')) {
+                  removeMemberFromGroup(chat.id, currentUser?.fullName || 'You');
+                  onClose();
+                }
+              }}
+              className="w-full py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors flex items-center justify-center gap-2"
+            >
               <ShieldAlert className="w-4 h-4" /> Leave Group
             </button>
           </div>

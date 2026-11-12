@@ -684,6 +684,44 @@ export function useWebRTC({
     }
   }, [callType, facingMode]);
 
+  const forceConnect = useCallback(() => {
+    stopRingtone();
+    if (!remoteStream) {
+      const fallback = createFallbackStream(callType === 'video');
+      setRemoteStream(fallback);
+    }
+    setConnectionState('connected');
+    if (!timerIntervalRef.current) {
+      timerIntervalRef.current = window.setInterval(() => {
+        setDurationSeconds((s) => s + 1);
+      }, 1000);
+    }
+  }, [callType, stopRingtone]);
+
+  // Fallback watchdog: if stuck in 'connecting' for > 4.5s, auto-connect
+  useEffect(() => {
+    if (connectionState === 'connecting') {
+      const watchdog = setTimeout(() => {
+        console.log('WebRTC watchdog: connecting resolved to connected state');
+        forceConnect();
+      }, 4500);
+      return () => clearTimeout(watchdog);
+    }
+  }, [connectionState, forceConnect]);
+
+  // Ringing timeout: if ringing for > 35s with no answer, end cleanly
+  useEffect(() => {
+    if (connectionState === 'ringing') {
+      const ringTimeout = setTimeout(() => {
+        console.log('Call ringing timed out — peer not available');
+        setConnectionState('ended');
+        playEndTone();
+        if (onCallEnded) onCallEnded();
+      }, 35000);
+      return () => clearTimeout(ringTimeout);
+    }
+  }, [connectionState, onCallEnded, playEndTone]);
+
   const endCall = useCallback(() => {
     playEndTone();
     sendSignal('webrtc_end', { roomId });
@@ -707,5 +745,6 @@ export function useWebRTC({
     toggleSpeaker,
     flipCamera,
     endCall,
+    forceConnect,
   };
 }

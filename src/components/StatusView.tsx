@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Plus,
   Eye,
@@ -113,6 +113,51 @@ export const StatusView: React.FC = () => {
 
   const myStatuses = useMemo(() => statuses.filter((s) => s.isMe), [statuses]);
   const otherStatuses = useMemo(() => statuses.filter((s) => !s.isMe), [statuses]);
+
+  // Live countdown â€” re-compute every 60 s
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const getStatusTimeLeft = (s: { id?: string; createdAtISO?: string; createdAt?: string; expiresInHours?: number }): string => {
+    const expiresInHours = s.expiresInHours ?? 24;
+    let createdMs = 0;
+    if (s.createdAtISO) {
+      createdMs = new Date(s.createdAtISO).getTime();
+    } else if (s.id) {
+      const match = s.id.match(/\d{12,14}/);
+      if (match) {
+        createdMs = parseInt(match[0], 10);
+      }
+    }
+    if (!createdMs && s.createdAt) {
+      const parsed = Date.parse(s.createdAt);
+      if (!isNaN(parsed)) {
+        createdMs = parsed;
+      }
+    }
+    if (!createdMs) {
+      return '23h left';
+    }
+    const expiresAt = createdMs + expiresInHours * 3_600_000;
+    const ms = expiresAt - nowMs;
+    if (ms <= 0) return 'Expired';
+    const totalMins = Math.floor(ms / 60_000);
+    if (totalMins < 1) return '< 1m left';
+    const h = Math.floor(totalMins / 60);
+    const m = totalMins % 60;
+    return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
+  };
+
+  /** Status reshare preview must show ONLY "reshared" */
+  const formatStatusCaption = (st: UserStatus): string => {
+    if (st.isReshared || st.caption?.toLowerCase().includes('reshared')) {
+      return 'reshared';
+    }
+    return st.caption || (st.statusType === 'thought' ? '💭 Thought' : 'Photo update');
+  };
 
   // Helper to determine if a status has been viewed by the current user
   const isStatusViewedByMe = (st: UserStatus) =>
@@ -381,10 +426,10 @@ export const StatusView: React.FC = () => {
 
                   <div className="text-left">
                     <div className="text-xs font-bold text-slate-800 dark:text-neutral-200 truncate max-w-[90px]">
-                      {st.caption || (st.statusType === 'thought' ? 'Thought Bubble' : 'Story')}
+                      {formatStatusCaption(st)}
                     </div>
                     <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
-                      <span>{st.createdAt}</span>
+                      <span>{getStatusTimeLeft(st)}</span>
                       <span>·</span>
                       <span className="flex items-center gap-0.5 text-purple-600 dark:text-purple-400">
                         <Eye className="w-3 h-3" /> {st.viewsCount}
@@ -455,11 +500,10 @@ export const StatusView: React.FC = () => {
                       )}
                     </div>
                     <p className="text-xs text-slate-500 dark:text-neutral-400 truncate mt-0.5">
-                      {group.latestStatus.caption ||
-                        (group.latestStatus.statusType === 'thought' ? '💭 Thought' : 'Photo update')}
+                      {formatStatusCaption(group.latestStatus)}
                     </p>
                     <span className="text-[11px] text-slate-400 font-mono mt-0.5 block">
-                      {group.latestStatus.createdAt}
+                      {getStatusTimeLeft(group.latestStatus)}
                     </span>
                   </div>
                 </div>
@@ -519,8 +563,11 @@ export const StatusView: React.FC = () => {
                           </span>
                         )}
                       </div>
+                      <p className="text-xs text-slate-500 dark:text-neutral-400 truncate mt-0.5">
+                        {formatStatusCaption(group.latestStatus)}
+                      </p>
                       <span className="text-[11px] text-slate-400 font-mono mt-0.5 block">
-                        {group.latestStatus.createdAt}
+                        {getStatusTimeLeft(group.latestStatus)}
                       </span>
                     </div>
                   </div>

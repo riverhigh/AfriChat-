@@ -30,6 +30,44 @@ export const StatusViewerModal: React.FC = () => {
   const [reshareNotice, setReshareNotice] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
 
+  // Live countdown: re-compute every minute
+  const [nowMs, setNowMs] = React.useState(Date.now());
+  React.useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  /** Returns "Xh Ym left" or "< 1m left" or "Expired" for a status */
+  const getTimeLeft = (s: { id?: string; createdAtISO?: string; createdAt?: string; expiresInHours: number }): string => {
+    let createdMs = 0;
+    if (s.createdAtISO) {
+      createdMs = new Date(s.createdAtISO).getTime();
+    } else if (s.id) {
+      const match = s.id.match(/\d{12,14}/);
+      if (match) createdMs = parseInt(match[0], 10);
+    }
+    if (!createdMs && s.createdAt) {
+      const parsed = Date.parse(s.createdAt);
+      if (!isNaN(parsed)) createdMs = parsed;
+    }
+    if (!createdMs) return `${s.expiresInHours}h left`;
+    const expiresAt = createdMs + s.expiresInHours * 3600_000;
+    const ms = expiresAt - nowMs;
+    if (ms <= 0) return 'Expired';
+    const totalMins = Math.floor(ms / 60_000);
+    if (totalMins < 1) return '< 1m left';
+    const h = Math.floor(totalMins / 60);
+    const m = totalMins % 60;
+    return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
+  };
+
+  const getDisplayCaption = (st: { isReshared?: boolean; caption?: string }): string => {
+    if (st.isReshared || st.caption?.toLowerCase().includes('reshared')) {
+      return 'reshared';
+    }
+    return st.caption || '';
+  };
+
   // Group all stacked stories belonging to the user currently being viewed
   const userStories = useMemo(() => {
     if (!activeViewingStatus) return [];
@@ -110,10 +148,8 @@ export const StatusViewerModal: React.FC = () => {
   };
 
   const handleReshare = () => {
-    const caption = status.caption
-      ? `Reshared: "${status.caption}"`
-      : 'Reshared';
-    addStatus(caption, status.mediaUrl);
+    // Always post "reshared" as caption â€” never chain original text/names
+    addStatus('reshared', status.mediaUrl);
     setReshared(true);
     setReshareNotice('Reshared to your 24h updates!');
     setTimeout(() => {
@@ -190,7 +226,7 @@ export const StatusViewerModal: React.FC = () => {
                 <span>·</span>
                 <span className="text-amber-400 font-semibold flex items-center gap-1">
                   <Clock className="w-3 h-3" />
-                  <span>Expires in {status.expiresInHours}h</span>
+                  <span>{getTimeLeft(status)}</span>
                 </span>
               </div>
             </div>
@@ -284,7 +320,7 @@ export const StatusViewerModal: React.FC = () => {
               )
             )}
             <div className="mt-4 px-4 py-3 bg-black/60 backdrop-blur-md text-white rounded-2xl max-w-sm text-center text-sm leading-relaxed border border-white/10">
-              {status.caption}
+              {getDisplayCaption(status)}
             </div>
           </div>
         )}

@@ -26,6 +26,8 @@ import {
   Sparkles,
   Download,
   CheckCircle2,
+  Maximize2,
+  Eye,
   AlertTriangle,
   Camera,
   Users,
@@ -106,6 +108,37 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [toastNotice, setToastNotice] = useState<string | null>(null);
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
 
+  // Fullscreen image lightbox
+  const [lightboxImg, setLightboxImg] = useState<{
+    url: string;
+    caption?: string;
+    isOneTime?: boolean;
+    msgId?: string;
+  } | null>(null);
+
+  // Disappearing 1-Time View Photo mode toggle
+  const [isOneTimeViewEnabled, setIsOneTimeViewEnabled] = useState(false);
+
+  // Persistence for viewed one-time images
+  const [openedOneTimeImages, setOpenedOneTimeImages] = useState<Record<string, boolean>>(() => {
+    try {
+      const stored = localStorage.getItem('AGC_opened_one_time_images');
+      return stored ? JSON.parse(stored) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const markOneTimeAsOpened = (msgId: string) => {
+    setOpenedOneTimeImages((prev) => {
+      const updated = { ...prev, [msgId]: true };
+      try {
+        localStorage.setItem('AGC_opened_one_time_images', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
+
   // Group chat helpers
   const GROUP_COLORS = [
     'text-pink-500','text-violet-500','text-sky-500','text-emerald-500',
@@ -145,17 +178,18 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     setShowAttachMenu(false);
     try {
       const compressedDataUrl = await compressImageFile(file, 1200, 0.75);
-      sendImageMessage(activeChatId, compressedDataUrl);
+      sendImageMessage(activeChatId, compressedDataUrl, undefined, isOneTimeViewEnabled);
     } catch (err) {
       console.warn('Image compression fallback:', err);
       const reader = new FileReader();
       reader.onload = () => {
         if (typeof reader.result === 'string') {
-          sendImageMessage(activeChatId, reader.result);
+          sendImageMessage(activeChatId, reader.result, undefined, isOneTimeViewEnabled);
         }
       };
       reader.readAsDataURL(file);
     } finally {
+      setIsOneTimeViewEnabled(false);
       e.target.value = '';
     }
   };
@@ -889,21 +923,76 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     </div>
                   )}
 
-                {/* Image Message */}
+                {/* Image Message (with Click-to-Enlarge Lightbox & Disappearing One-Time View) */}
                 {msg.type === 'image' && (
-                  <div className="space-y-1">
-                    <div className="overflow-hidden rounded-xl">
-                      <img
-                        src={msg.imageUrl}
-                        alt="Shared media"
-                        referrerPolicy="no-referrer"
-                        className="w-full max-h-64 object-cover"
-                      />
+                  msg.oneTimeView ? (
+                    openedOneTimeImages[msg.id] ? (
+                      /* Disappeared / Already Opened Card */
+                      <div className="flex items-center gap-2.5 p-3 rounded-xl bg-black/10 dark:bg-white/5 border border-dashed border-slate-300 dark:border-neutral-700 select-none opacity-75">
+                        <div className="w-7 h-7 rounded-full border border-slate-400 dark:border-neutral-500 flex items-center justify-center font-bold text-xs text-slate-400 dark:text-neutral-500">
+                          1
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-slate-500 dark:text-neutral-400">Photo</div>
+                          <div className="text-[10px] text-slate-400 font-mono italic">Opened · Disappeared</div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Unopened 1-Time View Card */
+                      <div
+                        onClick={() => {
+                          if (msg.imageUrl) {
+                            setLightboxImg({
+                              url: msg.imageUrl,
+                              caption: msg.text,
+                              isOneTime: true,
+                              msgId: msg.id,
+                            });
+                            markOneTimeAsOpened(msg.id);
+                          }
+                        }}
+                        className="flex items-center gap-3 p-3 bg-gradient-to-r from-purple-600/15 to-indigo-600/15 hover:from-purple-600/25 hover:to-indigo-600/25 rounded-2xl border border-purple-500/40 cursor-pointer transition-all shadow-xs group"
+                        title="Tap to view 1-time photo"
+                      >
+                        <div className="w-9 h-9 rounded-full border-2 border-dashed border-purple-500 flex items-center justify-center font-black text-sm text-purple-600 dark:text-purple-400 bg-white/20 dark:bg-purple-950/40 group-hover:scale-105 transition-transform">
+                          1
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-bold text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                            <span>1-Time View Photo</span>
+                            <Eye className="w-3.5 h-3.5 text-purple-500" />
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-neutral-400 font-mono">
+                            Tap to view once · Disappears after closing
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    /* Regular Click-to-Enlarge Image */
+                    <div className="space-y-1">
+                      <div
+                        onClick={() => msg.imageUrl && setLightboxImg({ url: msg.imageUrl, caption: msg.text })}
+                        className="overflow-hidden rounded-xl cursor-pointer group relative shadow-xs"
+                        title="Tap to enlarge"
+                      >
+                        <img
+                          src={msg.imageUrl}
+                          alt="Shared media"
+                          referrerPolicy="no-referrer"
+                          className="w-full max-h-64 object-cover group-hover:scale-102 transition-transform duration-200"
+                        />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center pointer-events-none">
+                          <span className="p-2 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-xs shadow-md">
+                            <Maximize2 className="w-4 h-4" />
+                          </span>
+                        </div>
+                      </div>
+                      {msg.text && (
+                        <p className="text-sm leading-relaxed pt-1">{msg.text}</p>
+                      )}
                     </div>
-                    {msg.text && (
-                      <p className="text-sm leading-relaxed pt-1">{msg.text}</p>
-                    )}
-                  </div>
+                  )
                 )}
 
                 {/* Voice Note Message */}
@@ -1258,6 +1347,29 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             <span className="text-[10px] leading-tight font-bold text-emerald-600 dark:text-emerald-400">Photos</span>
           </button>
 
+          {/* 0.5. Disappearing One-Time View Toggle */}
+          <button
+            type="button"
+            onClick={() => {
+              setIsOneTimeViewEnabled(!isOneTimeViewEnabled);
+              setToastNotice(!isOneTimeViewEnabled ? '1-Time View enabled for next photo' : '1-Time View disabled');
+              setTimeout(() => setToastNotice(null), 2500);
+            }}
+            className={`flex flex-col items-center p-2 rounded-xl transition-all ${
+              isOneTimeViewEnabled
+                ? 'bg-purple-600 text-white ring-2 ring-purple-400 shadow-md shadow-purple-600/30'
+                : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
+            }`}
+            title="Toggle Disappearing 1-Time View"
+          >
+            <div className="w-9 h-9 rounded-full border-2 border-dashed border-current flex items-center justify-center font-black text-xs mb-1">
+              1
+            </div>
+            <span className="text-[10px] leading-tight font-bold">
+              {isOneTimeViewEnabled ? '1-Time: ON' : '1-Time View'}
+            </span>
+          </button>
+
                     {/* Errand & Market Shopping */}
           <button
             type="button"
@@ -1478,6 +1590,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             <Smile className="w-5 h-5" />
           </button>
 
+          {isOneTimeViewEnabled && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-600 text-white text-[10px] font-bold shrink-0 animate-pulse">
+              <span>(1) 1-Time View</span>
+              <button type="button" onClick={() => setIsOneTimeViewEnabled(false)}><X className="w-3 h-3" /></button>
+            </span>
+          )}
           <input
             type="text"
             value={inputText}
@@ -1538,6 +1656,76 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         onClose={() => setIsContactProfileOpen(false)}
         onOpenThemeModal={() => setIsDisplayModalOpen(true)}
       />
+
+      {/* Fullscreen Lightbox Modal (Click to Enlarge / Disappearing Photo Viewer) */}
+      {lightboxImg && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/95 backdrop-blur-md flex flex-col justify-between p-4 animate-in fade-in select-none text-white"
+          onClick={() => setLightboxImg(null)}
+        >
+          {/* Top Bar */}
+          <div
+            className="flex items-center justify-between z-10 px-2"
+            style={{ paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 8px), 14px)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2">
+              {lightboxImg.isOneTime && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-600 text-white text-xs font-bold shadow-lg shadow-purple-600/40">
+                  <span className="w-4 h-4 rounded-full border border-white flex items-center justify-center text-[10px] font-bold">1</span>
+                  <span>1-Time View · Disappears after closing</span>
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              {!lightboxImg.isOneTime && (
+                <a
+                  href={lightboxImg.url}
+                  download="agc-image.jpg"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+                  title="Download photo"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Download className="w-5 h-5" />
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={() => setLightboxImg(null)}
+                className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Center Enlarged Image */}
+          <div
+            className="flex-1 flex items-center justify-center p-2 relative overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={lightboxImg.url}
+              alt={lightboxImg.caption || 'Enlarged photo'}
+              className="max-h-[82vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl animate-in zoom-in-95 duration-200"
+            />
+          </div>
+
+          {/* Bottom Caption */}
+          {lightboxImg.caption && (
+            <div
+              className="max-w-md mx-auto px-4 py-2.5 bg-black/75 backdrop-blur-md text-white rounded-2xl text-center text-sm border border-white/10 mb-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {lightboxImg.caption}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

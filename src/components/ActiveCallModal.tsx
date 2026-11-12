@@ -42,6 +42,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
     toggleSpeaker,
     flipCamera,
     endCall: endWebRTCCall,
+    forceConnect,
   } = useWebRTC({
     roomId: activeCall.roomId || `call_${activeCall.phone.replace(/\D/g, '') || 'room'}`,
     callType: activeCall.type || 'voice',
@@ -212,6 +213,19 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-400 bg-rose-500/15 px-3 py-1 rounded-full border border-rose-500/30">
               Call ended
             </span>
+          )}
+
+          {(connectionState === 'ringing' || connectionState === 'connecting') && (
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={forceConnect}
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/30 transition-all active:scale-95 border border-emerald-400/40"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Connect Live Call Now</span>
+              </button>
+            </div>
           )}
         </div>
       </div>
