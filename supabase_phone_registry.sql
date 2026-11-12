@@ -1,36 +1,88 @@
 -- ============================================================
--- AGC Phone Registry — Cross-Device Duplicate Detection
--- Run this in: Supabase Dashboard → SQL Editor
--- Project: https://supabase.com/dashboard/project/sejiretcywvqbzbqalbg/sql
+-- AGC Cross-Device Phone Duplicate Check
+-- Run ALL of this in Supabase Dashboard → SQL Editor:
+-- https://supabase.com/dashboard/project/sejiretcywvqbzbqalbg/sql/new
 -- ============================================================
 
--- 1. Create a lightweight public phone registry table
+-- ── STEP 1: Public phone registry table (no RLS) ───────────────────────────
 CREATE TABLE IF NOT EXISTS public.agc_phone_registry (
-  phone_digits   TEXT PRIMARY KEY,          -- last-9 digits of phone (normalized)
-  full_phone     TEXT NOT NULL,             -- full E.164 phone e.g. +2348031234567
-  username       TEXT NOT NULL DEFAULT '',  -- @username they chose
+  phone_digits   TEXT PRIMARY KEY,
+  full_phone     TEXT NOT NULL,
+  username       TEXT NOT NULL DEFAULT '',
   avatar_url     TEXT DEFAULT '',
   registered_at  TIMESTAMPTZ DEFAULT NOW(),
   updated_at     TIMESTAMPTZ DEFAULT NOW()
 );
-
--- 2. Disable RLS entirely on this table — it's a public phone lookup registry
 ALTER TABLE public.agc_phone_registry DISABLE ROW LEVEL SECURITY;
-
--- 3. Grant anon (public) read + write access
 GRANT SELECT, INSERT, UPDATE ON public.agc_phone_registry TO anon;
 GRANT SELECT, INSERT, UPDATE ON public.agc_phone_registry TO authenticated;
 
--- 4. Also open SELECT on profiles so phone lookup works there too
--- (keeps the existing profiles table as a secondary source)
+-- ── STEP 2: RPC function (SECURITY DEFINER — bypasses RLS on profiles) ─────
+CREATE OR REPLACE FUNCTION public.check_phone_registered(
+  p_phone TEXT,
+  p_last9 TEXT DEFAULT ''
+)
+RETURNS JSON
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_row RECORD;
+BEGIN
+  -- Check agc_phone_registry first (fastest)
+  SELECT username, avatar_url INTO v_row
+  FROM public.agc_phone_registry
+  WHERE phone_digits = p_last9
+     OR full_phone = p_phone
+  LIMIT 1;
+
+  IF FOUND THEN
+    RETURN json_build_object(
+      'registered', true,
+      'username', COALESCE(v_row.username, ''),
+      'avatar_url', COALESCE(v_row.avatar_url, '')
+    );
+  END IF;
+
+  -- Fallback: check profiles table
+  SELECT full_name, avatar_url INTO v_row
+  FROM public.profiles
+  WHERE phone_number = p_phone
+     OR phone_number ILIKE ('%' || p_last9)
+  LIMIT 1;
+
+  IF FOUND THEN
+    RETURN json_build_object(
+      'registered', true,
+      'username', COALESCE(v_row.full_name, ''),
+      'avatar_url', COALESCE(v_row.avatar_url, '')
+    );
+  END IF;
+
+  RETURN json_build_object('registered', false, 'username', '', 'avatar_url', '');
+END;
+$$;
+
+-- Allow anon to call the RPC
+GRANT EXECUTE ON FUNCTION public.check_phone_registered(TEXT, TEXT) TO anon;
+GRANT EXECUTE ON FUNCTION public.check_phone_registered(TEXT, TEXT) TO authenticated;
+
+-- ── STEP 3: Allow public SELECT on profiles (phone lookup) ─────────────────
 DROP POLICY IF EXISTS "Public phone lookup" ON public.profiles;
 CREATE POLICY "Public phone lookup"
   ON public.profiles
   FOR SELECT
   USING (true);
 
--- 5. Index for fast last-9-digit lookup
-CREATE INDEX IF NOT EXISTS idx_agc_phone_registry_full ON public.agc_phone_registry (full_phone);
+-- ── STEP 4: Allow anon INSERT on profiles (new registrations) ──────────────
+DROP POLICY IF EXISTS "Allow new profile insert" ON public.profiles;
+CREATE POLICY "Allow new profile insert"
+  ON public.profiles
+  FOR INSERT
+  WITH CHECK (true);
 
--- Done! The app will now write to agc_phone_registry on every signup
--- and check it cross-device before sending OTP.
+-- ── Done ───────────────────────────────────────────────────────────────────
+-- After running this, ANY device can:
+--   READ:  check if a phone is already registered
+--   WRITE: register a new phone (on signup completion)

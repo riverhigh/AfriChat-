@@ -327,34 +327,46 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     normalizedPhone: string
   ): Promise<{ found: boolean; username?: string; avatarUrl?: string }> => {
     if (!isSupabaseConfigured) return { found: false };
-    try {
-      const digits = normalizedPhone.replace(/\D/g, '');
-      const last9 = digits.length >= 9 ? digits.slice(-9) : digits;
+    const digits = normalizedPhone.replace(/\D/g, '');
+    const last9 = digits.length >= 9 ? digits.slice(-9) : digits;
 
-      // Primary: check agc_phone_registry (no RLS table)
+    // 1. Try agc_phone_registry (no-RLS table — requires SQL to have been run)
+    try {
       const { data: regRow, error: regErr } = await supabase
         .from('agc_phone_registry')
         .select('username, avatar_url, full_phone')
         .or(`phone_digits.eq.${last9},full_phone.eq.${normalizedPhone},full_phone.eq.${digits}`)
         .limit(1)
         .maybeSingle();
-
       if (!regErr && regRow) {
         return { found: true, username: regRow.username, avatarUrl: regRow.avatar_url };
       }
+    } catch (_) {}
 
-      // Fallback: check profiles table (may work if RLS policy was applied)
+    // 2. Try Supabase RPC check_phone_registered (SECURITY DEFINER — bypasses RLS)
+    try {
+      const { data: rpcData } = await supabase.rpc('check_phone_registered', {
+        p_phone: normalizedPhone,
+        p_last9: last9,
+      });
+      if (rpcData && rpcData.registered) {
+        return { found: true, username: rpcData.username, avatarUrl: rpcData.avatar_url };
+      }
+    } catch (_) {}
+
+    // 3. Try profiles table direct select (works if public SELECT policy is on)
+    try {
       const { data: profile } = await supabase
         .from('profiles')
         .select('full_name, avatar_url, phone_number')
         .or(`phone_number.eq.${normalizedPhone},phone_number.eq.${digits},phone_number.ilike.%${last9}%`)
         .limit(1)
         .maybeSingle();
-
       if (profile?.phone_number) {
         return { found: true, username: profile.full_name, avatarUrl: profile.avatar_url };
       }
     } catch (_) {}
+
     return { found: false };
   };
 
@@ -381,7 +393,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     } catch (_) {}
   };
 
-  // Handle phone submit — immediately check if phone number has been used before!
+  // Handle phone submit — check cross-device Supabase registry FIRST, then localStorage
   const handlePhoneSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -391,17 +403,9 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       return;
     }
 
-    // 1. Quick localStorage check (instant — same device)
-    const existing = findExistingAccount(phoneNumber, selectedCountry.code);
-    if (existing) {
-      setIsExistingAccount(true);
-      setExistingSessionInfo({ name: existing.name, avatarUrl: existing.avatarUrl });
-      setStep('device_conflict');
-      return;
-    }
-
-    // 2. Cross-device check: Supabase agc_phone_registry (no RLS — works from any device)
     setIsCheckingDevice(true);
+
+    // ── 1. SUPABASE FIRST (cross-device — works on any phone/browser/device) ──
     const supabaseCheck = await checkPhoneInSupabaseRegistry(fullNormalizedNumber);
     if (supabaseCheck.found) {
       setIsCheckingDevice(false);
@@ -414,7 +418,17 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       return;
     }
 
-    // 3. Check local server registry (data_users.json via Vite /api — same-LAN fallback)
+    // ── 2. localStorage (same device, offline fallback) ──────────────────────
+    const existing = findExistingAccount(phoneNumber, selectedCountry.code);
+    if (existing) {
+      setIsCheckingDevice(false);
+      setIsExistingAccount(true);
+      setExistingSessionInfo({ name: existing.name, avatarUrl: existing.avatarUrl });
+      setStep('device_conflict');
+      return;
+    }
+
+    // ── 3. Local dev-server registry (data_users.json — same-LAN only) ───────
     try {
       const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
       const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
@@ -444,22 +458,12 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   };
 
   // Called when user taps "Yes, Send Code" on the confirmation dialog.
-  // Final gate: checks all registries before actually sending OTP.
+  // Final gate — Supabase FIRST, then localStorage, then local server.
   const handleProceedToSendOtp = async () => {
     setIsCheckingDevice(true);
     setErrorMessage(null);
 
-    // 1. localStorage (same device)
-    const existing = findExistingAccount(phoneNumber, selectedCountry.code);
-    if (existing) {
-      setIsCheckingDevice(false);
-      setIsExistingAccount(true);
-      setExistingSessionInfo({ name: existing.name, avatarUrl: existing.avatarUrl });
-      setStep('device_conflict');
-      return;
-    }
-
-    // 2. Supabase agc_phone_registry — CROSS-DEVICE primary source of truth
+    // 1. Supabase cross-device check (primary — works from any device worldwide)
     const supabaseCheck = await checkPhoneInSupabaseRegistry(fullNormalizedNumber);
     if (supabaseCheck.found) {
       setIsCheckingDevice(false);
@@ -468,6 +472,16 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         name: supabaseCheck.username || 'AGC User',
         avatarUrl: supabaseCheck.avatarUrl,
       });
+      setStep('device_conflict');
+      return;
+    }
+
+    // 2. localStorage (same device offline fallback)
+    const existing = findExistingAccount(phoneNumber, selectedCountry.code);
+    if (existing) {
+      setIsCheckingDevice(false);
+      setIsExistingAccount(true);
+      setExistingSessionInfo({ name: existing.name, avatarUrl: existing.avatarUrl });
       setStep('device_conflict');
       return;
     }
