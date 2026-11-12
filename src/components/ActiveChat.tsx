@@ -35,6 +35,12 @@ import {
   Reply,
   Copy,
   X,
+  Share2,
+  Star,
+  CheckSquare,
+  Bell,
+  Volume2,
+  Search,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
@@ -156,7 +162,58 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [voiceProgress, setVoiceProgress] = useState<Record<string, number>>({});
   const [showCatalogDrawer, setShowCatalogDrawer] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
-  const [translatedMessages, setTranslatedMessages] = useState<Record<string, LanguageCode>>({});
+  const [translatedMessages, setTranslatedMessages] = useState<Record<string, boolean>>({});
+  const [activeMenuMsgId, setActiveMenuMsgId] = useState<string | null>(null);
+
+  const getTranslatedContent = (msg: ChatMessage): string => {
+    if (msg.translatedText) {
+      if (msg.translatedText[language] && msg.translatedText[language] !== msg.text) {
+        return msg.translatedText[language];
+      }
+      const altLang = language === 'en' ? 'pcm' : 'en';
+      if (msg.translatedText[altLang] && msg.translatedText[altLang] !== msg.text) {
+        return msg.translatedText[altLang];
+      }
+      for (const l of ['pcm', 'en', 'sw', 'yo', 'ha', 'fr'] as LanguageCode[]) {
+        if (msg.translatedText[l] && msg.translatedText[l] !== msg.text) {
+          return msg.translatedText[l];
+        }
+      }
+    }
+
+    const phraseMap: [RegExp, string][] = [
+      [/\bhow far\b/i, 'Hello, how are you?'],
+      [/\bhow body\b/i, 'How are you feeling today?'],
+      [/\bi dey\b/i, 'I am doing well'],
+      [/\bxiexie\b/i, 'Thank you very much.'],
+      [/\babeg\b/i, 'please'],
+      [/\bwetin dey\b/i, "what's going on?"],
+      [/\bno wahala\b/i, 'No problem at all.'],
+      [/\bkedu\b/i, 'How are you?'],
+      [/\bbawo ni\b/i, 'How is everything?'],
+      [/\bjambo\b/i, 'Hello!'],
+      [/\basante\b/i, 'Thank you.'],
+    ];
+
+    const raw = msg.text || '';
+    for (const [re, rep] of phraseMap) {
+      if (re.test(raw)) {
+        return raw.replace(re, rep);
+      }
+    }
+
+    if (/\b(dey|don|wetin|abeg|fit|na)\b/i.test(raw)) {
+      return raw
+        .replace(/\bdey\b/gi, 'is')
+        .replace(/\bdon\b/gi, 'has')
+        .replace(/\babeg\b/gi, 'please')
+        .replace(/\bwetin\b/gi, 'what')
+        .replace(/\bfit\b/gi, 'can')
+        .replace(/\bna\b/gi, 'is');
+    }
+
+    return `Translated (${language.toUpperCase()}): "${raw}"`;
+  };
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
@@ -240,10 +297,10 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     setPlayingVoiceId(msgId);
   };
 
-  const toggleTranslation = (msgId: string, targetLang: LanguageCode) => {
+  const toggleTranslation = (msgId: string) => {
     setTranslatedMessages((prev) => ({
       ...prev,
-      [msgId]: prev[msgId] === targetLang ? (language === targetLang ? 'en' : language) : targetLang,
+      [msgId]: !prev[msgId],
     }));
   };
 
@@ -519,6 +576,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       {/* Message Feed */}
       <div
         ref={chatContainerRef}
+        onClick={() => setActiveMenuMsgId(null)}
         className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-2 space-y-2.5 overscroll-contain w-full min-w-0"
       >
         {/* Date Divider */}
@@ -561,107 +619,232 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             );
           }
 
-          const activeTransLang = translatedMessages[msg.id] || language;
-          const translatedBody = msg.translatedText?.[activeTransLang] || msg.text;
-
           return (
             <div
               key={msg.id}
-              className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
+              className={`flex items-start gap-2.5 my-2.5 w-full ${isUser ? 'justify-end' : 'justify-start'}`}
             >
-              <div
-                className={`group max-w-[85%] sm:max-w-[75%] rounded-2xl px-3.5 py-2 shadow-2xs transition-all relative break-words break-all [overflow-wrap:anywhere] min-w-0 ${
-                  isUser
-                    ? 'bg-[#e0e7ff] dark:bg-[#312e81] text-[#1e1b4b] dark:text-white rounded-tr-none'
-                    : 'bg-white dark:bg-[#1a172e] text-slate-900 dark:text-slate-100 rounded-tl-none border border-slate-200/60 dark:border-slate-800'
-                }`}
-              >
-                {/* Group sender name (colored per sender) */}
-                {currentChat?.isGroup && !isUser && msg.senderName && (
-                  <div className={`text-[11px] font-bold mb-0.5 ${getSenderColor(msg.senderName)}`}>
-                    {msg.senderName}
-                  </div>
-                )}
+              {/* Contact Avatar (WeChat style Left) */}
+              {!isUser && (
+                <img
+                  src={msg.senderAvatar || currentChat?.avatar || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(msg.senderName || 'contact')}`}
+                  alt={msg.senderName || currentChat?.name || 'Contact'}
+                  className="w-9 h-9 rounded-xl object-cover shrink-0 mt-0.5 border border-slate-200/80 dark:border-white/10 shadow-2xs select-none"
+                />
+              )}
 
-                {/* Quoted Reply Preview */}
-                {msg.replyTo && (
-                  <div className="mb-2 p-2 rounded-xl bg-black/10 dark:bg-white/10 border-l-3 border-purple-500 text-xs">
-                    <div className="font-bold text-purple-700 dark:text-purple-300 text-[10px]">
-                      {msg.replyTo.sender}
-                    </div>
-                    <div className="text-slate-600 dark:text-slate-300 truncate text-[11px] break-words break-all [overflow-wrap:anywhere]">
-                      {msg.replyTo.text}
-                    </div>
-                  </div>
-                )}
-
-                {/* Message Quick Action Menu (Hover on desktop / tap on mobile) */}
-                <div className={`absolute -top-3.5 ${isUser ? 'right-0' : 'left-0'} hidden group-hover:flex items-center gap-1 bg-white dark:bg-[#1a172e] px-2 py-0.5 rounded-full shadow-md border border-slate-200 dark:border-slate-800 z-10 animate-in fade-in`}>
-                  {['👍', '❤️', '😂', '🔥'].map((em) => (
-                    <button
-                      key={em}
-                      type="button"
-                      onClick={() => activeChatId && reactToMessage(activeChatId, msg.id, em)}
-                      className="p-0.5 hover:scale-125 transition-transform text-xs"
-                    >
-                      {em}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => setReplyingTo(msg)}
-                    className="p-1 text-slate-400 hover:text-purple-500 hover:scale-110 transition-all"
-                    title="Reply"
+              {/* Message Bubble + Floating Context Menu Container */}
+              <div className="relative max-w-[76%] sm:max-w-[70%] min-w-0">
+                {/* WeChat-style Floating Context Menu (opens on highlight / click) */}
+                {activeMenuMsgId === msg.id && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className={`absolute -top-26 z-40 ${isUser ? 'right-0' : 'left-0'} bg-[#242428]/95 dark:bg-[#1a1a1e]/95 text-white backdrop-blur-md rounded-2xl p-2 shadow-2xl border border-white/15 w-64 animate-in zoom-in-95 duration-150 select-none`}
                   >
-                    <Reply className="w-3 h-3" />
-                  </button>
-                  {msg.text && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(msg.text || '');
-                        setToastNotice('Message copied!');
-                        setTimeout(() => setToastNotice(null), 2000);
-                      }}
-                      className="p-1 text-slate-400 hover:text-indigo-500 hover:scale-110 transition-all"
-                      title="Copy"
-                    >
-                      <Copy className="w-3 h-3" />
-                    </button>
-                  )}
-                  {isUser && (
-                    <button
-                      type="button"
-                      onClick={() => activeChatId && deleteMessage(activeChatId, msg.id)}
-                      className="p-1 text-slate-400 hover:text-rose-500 hover:scale-110 transition-all"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-                {/* Text Message */}
-                {msg.type === 'text' && (
-                  <div>
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap break-words break-all [overflow-wrap:anywhere] min-w-0">
-                      {translatedBody}
-                    </p>
-
-                    {msg.translatedText && (
-                      <div className="mt-1 flex items-center justify-start text-[10px] text-slate-500 dark:text-slate-400">
+                    {/* Row 1: Copy, Forward, Favorite, Delete, Select */}
+                    <div className="grid grid-cols-5 gap-1 text-center pb-1.5 border-b border-white/10">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (msg.text) navigator.clipboard.writeText(msg.text);
+                          setToastNotice('Copied!');
+                          setTimeout(() => setToastNotice(null), 1800);
+                          setActiveMenuMsgId(null);
+                        }}
+                        className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-white/10 transition-colors"
+                      >
+                        <Copy className="w-3.5 h-3.5 text-slate-200" />
+                        <span className="text-[10px] text-slate-300">Copy</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReplyingTo(msg);
+                          setActiveMenuMsgId(null);
+                        }}
+                        className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-white/10 transition-colors"
+                      >
+                        <Share2 className="w-3.5 h-3.5 text-slate-200" />
+                        <span className="text-[10px] text-slate-300">Forward</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setToastNotice('Saved to Favorites ⭐');
+                          setTimeout(() => setToastNotice(null), 1800);
+                          setActiveMenuMsgId(null);
+                        }}
+                        className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-white/10 transition-colors"
+                      >
+                        <Star className="w-3.5 h-3.5 text-amber-300" />
+                        <span className="text-[10px] text-slate-300">Favorite</span>
+                      </button>
+                      {isUser ? (
                         <button
-                          onClick={() => toggleTranslation(msg.id, language === 'pcm' ? 'en' : 'pcm')}
-                          className="flex items-center gap-1 hover:underline"
+                          type="button"
+                          onClick={() => {
+                            if (activeChatId) deleteMessage(activeChatId, msg.id);
+                            setActiveMenuMsgId(null);
+                          }}
+                          className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-rose-500/20 transition-colors"
                         >
-                          <Languages className="w-3 h-3" />
-                          <span>
-                            {activeTransLang === 'pcm' ? 'English' : 'Pidgin translation'}
-                          </span>
+                          <Trash2 className="w-3.5 h-3.5 text-rose-300" />
+                          <span className="text-[10px] text-rose-300">Delete</span>
                         </button>
-                      </div>
-                    )}
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReplyingTo(msg);
+                            setActiveMenuMsgId(null);
+                          }}
+                          className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-white/10 transition-colors"
+                        >
+                          <Reply className="w-3.5 h-3.5 text-slate-200" />
+                          <span className="text-[10px] text-slate-300">Reply</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setToastNotice('Message Selected');
+                          setTimeout(() => setToastNotice(null), 1800);
+                          setActiveMenuMsgId(null);
+                        }}
+                        className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-white/10 transition-colors"
+                      >
+                        <CheckSquare className="w-3.5 h-3.5 text-slate-200" />
+                        <span className="text-[10px] text-slate-300">Select</span>
+                      </button>
+                    </div>
+
+                    {/* Row 2: Reminder, Read, Translate, Search */}
+                    <div className="grid grid-cols-4 gap-1 text-center pt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setToastNotice('Reminder set for 1 hour');
+                          setTimeout(() => setToastNotice(null), 1800);
+                          setActiveMenuMsgId(null);
+                        }}
+                        className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-white/10 transition-colors"
+                      >
+                        <Bell className="w-3.5 h-3.5 text-slate-200" />
+                        <span className="text-[10px] text-slate-300">Reminder</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (msg.text && 'speechSynthesis' in window) {
+                            window.speechSynthesis.cancel();
+                            const u = new SpeechSynthesisUtterance(msg.text);
+                            window.speechSynthesis.speak(u);
+                          }
+                          setActiveMenuMsgId(null);
+                        }}
+                        className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-white/10 transition-colors"
+                      >
+                        <Volume2 className="w-3.5 h-3.5 text-slate-200" />
+                        <span className="text-[10px] text-slate-300">Read</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          toggleTranslation(msg.id);
+                          setActiveMenuMsgId(null);
+                        }}
+                        className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-purple-600/30 transition-colors text-purple-300 font-bold"
+                      >
+                        <Languages className="w-3.5 h-3.5 text-purple-400" />
+                        <span className="text-[10px] text-purple-300">Translate</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          window.open(`https://www.google.com/search?q=${encodeURIComponent(msg.text || '')}`, '_blank');
+                          setActiveMenuMsgId(null);
+                        }}
+                        className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-white/10 transition-colors"
+                      >
+                        <Search className="w-3.5 h-3.5 text-slate-200" />
+                        <span className="text-[10px] text-slate-300">Search</span>
+                      </button>
+                    </div>
+
+                    {/* Speech Pointer Arrow */}
+                    <div className={`w-3 h-3 bg-[#242428]/95 dark:bg-[#1a1a1e]/95 border-r border-b border-white/15 transform rotate-45 ${isUser ? 'ml-auto mr-4' : 'ml-4'} -mb-3 mt-0.5`} />
                   </div>
                 )}
+
+                {/* Main Speech Bubble */}
+                <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveMenuMsgId(activeMenuMsgId === msg.id ? null : msg.id);
+                  }}
+                  onMouseUp={(e) => {
+                    const sel = window.getSelection()?.toString();
+                    if (sel && sel.trim().length > 0) {
+                      e.stopPropagation();
+                      setActiveMenuMsgId(msg.id);
+                    }
+                  }}
+                  className={`rounded-2xl px-3.5 py-2.5 shadow-xs transition-all relative break-words break-all [overflow-wrap:anywhere] min-w-0 cursor-pointer ${
+                    isUser
+                      ? 'bg-purple-600 dark:bg-purple-600 text-white rounded-tr-xs'
+                      : 'bg-white dark:bg-[#2c2c2e] text-slate-900 dark:text-slate-100 rounded-tl-xs border border-slate-200/80 dark:border-white/10'
+                  }`}
+                >
+                  {/* Group sender name (colored per sender) */}
+                  {currentChat?.isGroup && !isUser && msg.senderName && (
+                    <div className={`text-[11px] font-bold mb-1 ${getSenderColor(msg.senderName)}`}>
+                      {msg.senderName}
+                    </div>
+                  )}
+
+                  {/* Quoted Reply Preview */}
+                  {msg.replyTo && (
+                    <div className={`mb-2 p-2 rounded-xl border-l-3 text-xs ${
+                      isUser
+                        ? 'bg-black/15 border-white text-purple-100'
+                        : 'bg-black/5 dark:bg-white/10 border-purple-500 text-slate-700 dark:text-slate-300'
+                    }`}>
+                      <div className="font-bold text-[10px] opacity-90">
+                        {msg.replyTo.sender}
+                      </div>
+                      <div className="truncate text-[11px] opacity-80 break-words break-all [overflow-wrap:anywhere]">
+                        {msg.replyTo.text}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Text Message */}
+                  {msg.type === 'text' && (
+                    <div>
+                      <p className="text-sm leading-relaxed whitespace-pre-wrap break-words break-all [overflow-wrap:anywhere] min-w-0 select-text">
+                        {msg.text}
+                      </p>
+
+                      {/* WeChat-style Translated Sub-Card (Only appears when user highlights/taps Translate) */}
+                      {translatedMessages[msg.id] && (
+                        <div className={`mt-2 pt-2 border-t select-text text-left animate-in fade-in duration-150 ${
+                          isUser
+                            ? 'border-white/20 text-purple-100'
+                            : 'border-slate-200 dark:border-white/10 text-slate-700 dark:text-slate-200'
+                        }`}>
+                          <p className="text-sm font-medium leading-relaxed">
+                            {getTranslatedContent(msg)}
+                          </p>
+                          <div className={`flex items-center gap-1.5 mt-1 text-[10px] font-mono ${
+                            isUser ? 'text-purple-200' : 'text-slate-400 dark:text-slate-500'
+                          }`}>
+                            <CheckCircle2 className="w-3.5 h-3.5 text-purple-400 fill-purple-400/20" />
+                            <span>Translated by AfriChat</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                 {/* Image Message */}
                 {msg.type === 'image' && (
@@ -710,7 +893,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     </div>
 
                     <div className="pt-1 border-t border-black/5 dark:border-white/5 text-xs text-slate-600 dark:text-slate-300 italic">
-                      &ldquo;{msg.voiceNote.translations[activeTransLang] || msg.voiceNote.transcript}&rdquo;
+                      &ldquo;{translatedMessages[msg.id] && msg.voiceNote.translations ? (msg.voiceNote.translations[language] || msg.voiceNote.translations.en || msg.voiceNote.transcript) : msg.voiceNote.transcript}&rdquo;
                     </div>
                   </div>
                 )}
@@ -984,23 +1167,35 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   </div>
                 )}
 
-                {/* Timestamp & WhatsApp-Style Delivery Ticks (Single grey = sent/offline, Double grey = delivered, Double colored = read) */}
-                <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                {/* Timestamp & Delivery Ticks */}
+                <div className={`flex items-center justify-end gap-1 mt-1 text-[10px] font-mono ${
+                  isUser ? 'text-purple-200' : 'text-slate-400 dark:text-slate-500'
+                }`}>
                   <span>{msg.timestamp}</span>
                   {isUser && (
-                    <span title={msg.status === 'read' ? 'Read' : msg.status === 'delivered' ? 'Delivered' : 'Sent (1 check until delivered)'}>
+                    <span title={msg.status === 'read' ? 'Read' : msg.status === 'delivered' ? 'Delivered' : 'Sent'}>
                       {msg.status === 'read' ? (
-                        <CheckCheck className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                        <CheckCheck className="w-3.5 h-3.5 text-white" />
                       ) : msg.status === 'delivered' ? (
-                        <CheckCheck className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
+                        <CheckCheck className="w-3.5 h-3.5 text-purple-200/80" />
                       ) : (
-                        <Check className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
+                        <Check className="w-3.5 h-3.5 text-purple-200/80" />
                       )}
                     </span>
                   )}
                 </div>
               </div>
             </div>
+
+            {/* User Avatar (WeChat style Right) */}
+            {isUser && (
+              <img
+                src={currentUser.avatarUrl || 'https://api.dicebear.com/7.x/thumbs/svg?seed=user'}
+                alt={currentUser.fullName || 'You'}
+                className="w-9 h-9 rounded-xl object-cover shrink-0 mt-0.5 border border-purple-500/30 shadow-2xs select-none"
+              />
+            )}
+          </div>
           );
         })}
       </div>
