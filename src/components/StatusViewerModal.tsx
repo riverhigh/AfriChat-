@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   Heart,
@@ -6,17 +6,19 @@ import {
   Send,
   Clock,
   ChevronUp,
-  MessageSquare,
   Repeat,
   Check,
+  Trash2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const StatusViewerModal: React.FC = () => {
   const {
+    statuses,
     activeViewingStatus,
     setActiveViewingStatus,
     likeStatus,
+    deleteStatus,
     addStatus,
     sendMessage,
     setActiveChatId,
@@ -26,6 +28,86 @@ export const StatusViewerModal: React.FC = () => {
   const [replyText, setReplyText] = useState('');
   const [reshared, setReshared] = useState(false);
   const [reshareNotice, setReshareNotice] = useState<string | null>(null);
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  // Group all stacked stories belonging to the user currently being viewed
+  const userStories = useMemo(() => {
+    if (!activeViewingStatus) return [];
+    if (activeViewingStatus.isMe) {
+      // Sort oldest to newest so they play in chronological order
+      return statuses.filter((s) => s.isMe).sort((a, b) => a.id.localeCompare(b.id));
+    }
+    return statuses
+      .filter(
+        (s) =>
+          !s.isMe &&
+          (s.userId === activeViewingStatus.userId ||
+            (s.userPhone && activeViewingStatus.userPhone && s.userPhone === activeViewingStatus.userPhone))
+      )
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }, [statuses, activeViewingStatus]);
+
+  // Synchronize current index when opening a new status
+  useEffect(() => {
+    if (activeViewingStatus && userStories.length > 0) {
+      const idx = userStories.findIndex((s) => s.id === activeViewingStatus.id);
+      setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+  }, [activeViewingStatus?.id]);
+
+  const currentStory = userStories[currentIndex] || activeViewingStatus;
+
+  // Auto-advance every 6 seconds for image/thought (unless paused by viewer drawer)
+  useEffect(() => {
+    if (!activeViewingStatus || showViewersSheet) return;
+    if (currentStory?.statusType === 'video' || Boolean(currentStory?.videoUrl)) return;
+
+    const timer = setTimeout(() => {
+      if (currentIndex < userStories.length - 1) {
+        setCurrentIndex((prev) => prev + 1);
+      } else {
+        setActiveViewingStatus(null);
+      }
+    }, 6000);
+
+    return () => clearTimeout(timer);
+  }, [currentIndex, userStories.length, activeViewingStatus, showViewersSheet, currentStory?.id]);
+
+  if (!activeViewingStatus || !currentStory) return null;
+
+  const status = currentStory;
+  const isMe = status.isMe;
+
+  const handleNext = () => {
+    if (currentIndex < userStories.length - 1) {
+      setCurrentIndex((prev) => prev + 1);
+    } else {
+      setActiveViewingStatus(null);
+    }
+  };
+
+  const handlePrev = () => {
+    if (currentIndex > 0) {
+      setCurrentIndex((prev) => prev - 1);
+    }
+  };
+
+  const handleDelete = () => {
+    if (!status?.id) return;
+    const confirmDelete = window.confirm('Delete this story slide?');
+    if (!confirmDelete) return;
+
+    deleteStatus(status.id);
+    if (userStories.length <= 1) {
+      setActiveViewingStatus(null);
+    } else if (currentIndex >= userStories.length - 1) {
+      setCurrentIndex((prev) => Math.max(0, prev - 1));
+    }
+  };
+
+  const handleLike = () => {
+    likeStatus(status.id);
+  };
 
   const handleReshare = () => {
     const caption = status.caption
@@ -38,15 +120,6 @@ export const StatusViewerModal: React.FC = () => {
       setReshared(false);
       setReshareNotice(null);
     }, 3000);
-  };
-
-  if (!activeViewingStatus) return null;
-
-  const status = activeViewingStatus;
-  const isMe = status.isMe;
-
-  const handleLike = () => {
-    likeStatus(status.id);
   };
 
   const handleSendReply = (e: React.FormEvent) => {
@@ -64,7 +137,7 @@ export const StatusViewerModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black flex flex-col justify-between animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-50 bg-black flex flex-col justify-between animate-in fade-in duration-150 select-none">
       {/* Top Segmented Story Progress Bar */}
       <div
         className="px-3.5 pb-0 z-20 space-y-2"
@@ -74,11 +147,27 @@ export const StatusViewerModal: React.FC = () => {
           paddingRight: 'max(env(safe-area-inset-right, 0px), 14px)',
         }}
       >
-        <div className="w-full bg-white/20 h-1 rounded-full overflow-hidden">
-          <div className="bg-white h-full w-full animate-in slide-in-from-left duration-500" />
+        {/* Segmented Bars (WhatsApp / Instagram Stories Style) */}
+        <div className="flex items-center gap-1.5 w-full">
+          {userStories.map((storyItem, idx) => (
+            <div
+              key={storyItem.id || idx}
+              className="flex-1 bg-white/25 h-1 rounded-full overflow-hidden"
+            >
+              <div
+                className={`h-full bg-white transition-all duration-300 ${
+                  idx < currentIndex
+                    ? 'w-full'
+                    : idx === currentIndex
+                    ? 'w-full animate-in slide-in-from-left duration-500'
+                    : 'w-0'
+                }`}
+              />
+            </div>
+          ))}
         </div>
 
-        {/* User Info Bar */}
+        {/* User Info & Actions Bar */}
         <div className="flex items-center justify-between text-white">
           <div className="flex items-center gap-2.5">
             <img
@@ -88,8 +177,13 @@ export const StatusViewerModal: React.FC = () => {
               className="w-10 h-10 rounded-full object-cover border border-white/30"
             />
             <div>
-              <div className="font-semibold text-sm leading-tight">
-                {status.userName}
+              <div className="font-semibold text-sm leading-tight flex items-center gap-2">
+                <span>{status.userName}</span>
+                {userStories.length > 1 && (
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 bg-white/20 rounded-full text-white/90">
+                    {currentIndex + 1} / {userStories.length}
+                  </span>
+                )}
               </div>
               <div className="text-[11px] text-white/70 flex items-center gap-1.5 font-mono">
                 <span>{status.createdAt}</span>
@@ -102,19 +196,45 @@ export const StatusViewerModal: React.FC = () => {
             </div>
           </div>
 
-          <button
-            onClick={() => setActiveViewingStatus(null)}
-            className="p-1.5 text-white/80 hover:text-white rounded-full bg-black/40 backdrop-blur-xs"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {isMe && (
+              <button
+                type="button"
+                onClick={handleDelete}
+                className="p-1.5 text-white/80 hover:text-rose-400 rounded-full bg-black/40 backdrop-blur-xs transition-colors"
+                title="Delete this story slide"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={() => setActiveViewingStatus(null)}
+              className="p-1.5 text-white/80 hover:text-white rounded-full bg-black/40 backdrop-blur-xs"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Main Status Media & Caption Area */}
       <div className="flex-1 flex flex-col items-center justify-center p-4 relative">
+        {/* Left Tap Zone (Previous Story) */}
+        <div
+          onClick={handlePrev}
+          className="absolute left-0 top-0 bottom-0 w-1/3 z-10 cursor-pointer"
+          title="Previous story"
+        />
+
+        {/* Right Tap Zone (Next Story) */}
+        <div
+          onClick={handleNext}
+          className="absolute right-0 top-0 bottom-0 w-2/3 z-10 cursor-pointer"
+          title="Next story"
+        />
+
         {status.statusType === 'thought' ? (
-          <div className="w-full max-w-sm flex flex-col items-center justify-center animate-in zoom-in-95 duration-200">
+          <div className="w-full max-w-sm flex flex-col items-center justify-center animate-in zoom-in-95 duration-200 z-0">
             {/* Thought Cloud Bubble */}
             <div
               className={`w-full p-8 rounded-3xl bg-gradient-to-br ${
@@ -140,7 +260,7 @@ export const StatusViewerModal: React.FC = () => {
             </div>
           </div>
         ) : (
-          <div className="w-full max-w-sm flex flex-col items-center justify-center">
+          <div className="w-full max-w-sm flex flex-col items-center justify-center z-0">
             {status.videoUrl || status.statusType === 'video' ? (
               <div className="relative w-full max-h-[65vh] flex items-center justify-center rounded-2xl overflow-hidden bg-black shadow-2xl">
                 <video
@@ -168,10 +288,20 @@ export const StatusViewerModal: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* Reshare Notice Toast */}
+        {reshareNotice && (
+          <div className="absolute top-4 mx-auto px-4 py-2 bg-emerald-600 text-white text-xs font-bold rounded-full shadow-lg animate-in fade-in z-30">
+            {reshareNotice}
+          </div>
+        )}
       </div>
 
       {/* Bottom Bar: If Me, show views/likes sheet trigger; if Other, show Like + Reply */}
-      <div className="p-4 z-20 bg-gradient-to-t from-black via-black/80 to-transparent" style={{ paddingBottom: 'max(calc(env(safe-area-inset-bottom, 0px) + 12px), 16px)' }}>
+      <div
+        className="p-4 z-20 bg-gradient-to-t from-black via-black/80 to-transparent"
+        style={{ paddingBottom: 'max(calc(env(safe-area-inset-bottom, 0px) + 12px), 16px)' }}
+      >
         {isMe ? (
           /* Viewers & Likes Drawer Trigger for My Status */
           <div className="space-y-2">
@@ -264,36 +394,42 @@ export const StatusViewerModal: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60 py-2">
-              {status.viewers.map((viewer) => (
-                <div
-                  key={viewer.id}
-                  className="py-2.5 flex items-center justify-between"
-                >
-                  <div className="flex items-center gap-3">
-                    <img
-                      src={viewer.avatar}
-                      alt={viewer.name}
-                      referrerPolicy="no-referrer"
-                      className="w-10 h-10 rounded-full object-cover"
-                    />
-                    <div>
-                      <div className="font-semibold text-xs text-slate-900 dark:text-slate-100">
-                        {viewer.name}
-                      </div>
-                      <div className="text-[10px] text-slate-400 font-mono">
-                        Viewed {viewer.timeViewed}
+              {status.viewers.length === 0 ? (
+                <div className="text-center py-8 text-xs text-slate-400">
+                  No views yet. Your contacts will appear here once they see this status.
+                </div>
+              ) : (
+                status.viewers.map((viewer) => (
+                  <div
+                    key={viewer.id}
+                    className="py-2.5 flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={viewer.avatar}
+                        alt={viewer.name}
+                        referrerPolicy="no-referrer"
+                        className="w-10 h-10 rounded-full object-cover"
+                      />
+                      <div>
+                        <div className="font-semibold text-xs text-slate-900 dark:text-slate-100">
+                          {viewer.name}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          Viewed {viewer.timeViewed}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  {viewer.hasLiked && (
-                    <span className="flex items-center gap-1 text-[11px] text-rose-500 font-bold bg-rose-50 dark:bg-rose-950/40 px-2 py-0.5 rounded-full">
-                      <Heart className="w-3 h-3 fill-rose-500" />
-                      <span>Liked</span>
-                    </span>
-                  )}
-                </div>
-              ))}
+                    {viewer.hasLiked && (
+                      <span className="flex items-center gap-1 text-[11px] text-rose-500 font-bold bg-rose-50 dark:bg-rose-950/40 px-2 py-0.5 rounded-full">
+                        <Heart className="w-3 h-3 fill-rose-500" />
+                        <span>Liked</span>
+                      </span>
+                    )}
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>

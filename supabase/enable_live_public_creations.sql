@@ -116,7 +116,43 @@ CREATE POLICY "allow_all_read_messages" ON public.messages
 CREATE POLICY "allow_all_insert_messages" ON public.messages
   FOR INSERT WITH CHECK (true);
 
--- 8. Add tables to Supabase Realtime publication (safely ignores already added tables)
+-- 8. User Statuses (24h Stories: Photo, Video, Thought)
+CREATE TABLE IF NOT EXISTS public.user_statuses (
+  id              text primary key,
+  user_id         text not null,
+  user_phone      text,
+  user_name       text not null,
+  user_avatar     text,
+  status_type     text default 'thought',
+  thought_bg      text,
+  media_url       text,
+  video_url       text,
+  caption         text,
+  views_count     int default 0,
+  likes_count     int default 0,
+  expires_at      timestamptz default (now() + interval '24 hours'),
+  created_at      timestamptz default now()
+);
+
+ALTER TABLE public.user_statuses ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "allow_all_read_statuses" ON public.user_statuses;
+DROP POLICY IF EXISTS "allow_all_insert_statuses" ON public.user_statuses;
+DROP POLICY IF EXISTS "allow_all_update_statuses" ON public.user_statuses;
+DROP POLICY IF EXISTS "allow_all_delete_statuses" ON public.user_statuses;
+
+CREATE POLICY "allow_all_read_statuses" ON public.user_statuses
+  FOR SELECT USING (true);
+
+CREATE POLICY "allow_all_insert_statuses" ON public.user_statuses
+  FOR INSERT WITH CHECK (true);
+
+CREATE POLICY "allow_all_update_statuses" ON public.user_statuses
+  FOR UPDATE USING (true) WITH CHECK (true);
+
+CREATE POLICY "allow_all_delete_statuses" ON public.user_statuses
+  FOR DELETE USING (true);
+
+-- 9. Add tables to Supabase Realtime publication (safely ignores already added tables)
 DO $$
 DECLARE
   tbl text;
@@ -129,7 +165,8 @@ BEGIN
       'public.store_subscriptions',
       'public.service_providers',
       'public.products',
-      'public.chat_threads'
+      'public.chat_threads',
+      'public.user_statuses'
     ])
   LOOP
     BEGIN

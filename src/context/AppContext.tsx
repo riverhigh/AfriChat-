@@ -211,6 +211,7 @@ interface AppContextType {
   addThoughtStatus: (thoughtText: string, themeBg: string) => void;
   addDeviceMediaStatus: (caption: string, mediaUrl: string, mediaType?: 'image' | 'video') => void;
   addDeviceVideoStatus: (caption: string, videoUrl: string, thumbnail?: string) => void;
+  deleteStatus: (statusId: string) => void;
   wallet: UserWallet;
   isWalletModalOpen: boolean;
   setIsWalletModalOpen: (val: boolean) => void;
@@ -2304,7 +2305,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isAuthenticated || !currentUser?.phoneNumber) return;
     const myCleanPhone = currentUser.phoneNumber.replace(/\D/g, '');
 
-    // Fetch contact statuses from Supabase (last 24h)
+    // 1. Fetch contact statuses from Supabase (active 24h stories)
     if (isSupabaseConfigured) {
       supabase
         .from('user_statuses')
@@ -2316,8 +2317,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (!data || !Array.isArray(data)) return;
           const incoming = data
             .filter((row: any) => {
+              const isDifferentUser = row.user_id ? row.user_id !== currentUser.id : true;
               const rp = (row.user_phone || '').replace(/\D/g, '');
-              return rp && rp !== myCleanPhone;
+              const isDifferentPhone = myCleanPhone ? (!rp || rp !== myCleanPhone) : true;
+              return isDifferentUser && isDifferentPhone;
             })
             .map((row: any): UserStatus => ({
               id: row.id,
@@ -2331,7 +2334,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               videoUrl: row.video_url || undefined,
               thoughtBg: row.thought_bg || undefined,
               caption: row.caption || '',
-              createdAt: row.created_at || 'Recently',
+              createdAt: row.created_at ? new Date(row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently',
               expiresInHours: 24,
               viewsCount: row.views_count || 0,
               likesCount: row.likes_count || 0,
@@ -2341,9 +2344,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (incoming.length > 0) {
             setStatuses((prev) => {
               const myStatuses = prev.filter((s) => s.isMe);
-              const existingIds = new Set(prev.map((s) => s.id));
+              const otherStatuses = prev.filter((s) => !s.isMe);
+              const existingIds = new Set(otherStatuses.map((s) => s.id));
               const newOnes = incoming.filter((s) => !existingIds.has(s.id));
-              return [...myStatuses, ...newOnes];
+              return [...myStatuses, ...newOnes, ...otherStatuses];
             });
           }
         });
@@ -2358,8 +2362,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (Array.isArray(serverStatuses) && serverStatuses.length > 0) {
             const incoming = serverStatuses
               .filter((s: any) => {
+                const isDifferentUser = s.userId ? s.userId !== currentUser.id : true;
                 const rp = (s.userPhone || s.phoneNumber || '').replace(/\D/g, '');
-                return rp && rp !== myCleanPhone;
+                const isDifferentPhone = myCleanPhone ? (!rp || rp !== myCleanPhone) : true;
+                return isDifferentUser && isDifferentPhone;
               })
               .map((s: any) => ({ ...s, isMe: false }));
             if (incoming.length > 0) {
@@ -2374,12 +2380,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .catch(() => {});
     } catch (_) {}
 
-    // 3. Real-Time Socket.io Status Listeners
+    // 3. Multi-Tab / Same Machine BroadcastChannel Sync
+    let bcStatus: BroadcastChannel | null = null;
+    try {
+      bcStatus = new BroadcastChannel('AGC_statuses_sync');
+      bcStatus.onmessage = (e) => {
+        if (e.data?.type === 'new_status' && e.data.status) {
+          const incoming: UserStatus = e.data.status;
+          if (incoming.userId === currentUser.id) return;
+          const senderPhone = (incoming.userPhone || '').replace(/\D/g, '');
+          if (myCleanPhone && senderPhone && senderPhone === myCleanPhone) return;
+          setStatuses((prev) => {
+            if (prev.some((s) => s.id === incoming.id)) return prev;
+            return [{ ...incoming, isMe: false }, ...prev];
+          });
+        } else if (e.data?.type === 'delete_status' && e.data.statusId) {
+          setStatuses((prev) => prev.filter((s) => s.id !== e.data.statusId));
+        }
+      };
+    } catch (_) {}
+
+    // 4. Real-Time Socket.io Status Listeners
     const socket = getSocket();
     const onSocketNewStatus = ({ status }: any) => {
       if (!status) return;
+      if (status.userId && status.userId === currentUser.id) return;
       const senderPhone = (status.userPhone || '').replace(/\D/g, '');
-      if (!senderPhone || senderPhone === myCleanPhone) return;
+      if (myCleanPhone && senderPhone && senderPhone === myCleanPhone) return;
       setStatuses((prev) => {
         if (prev.some((s) => s.id === status.id)) return prev;
         return [{ ...status, isMe: false }, ...prev];
@@ -2411,23 +2438,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket?.on('status_viewed', onSocketViewed);
     socket?.on('status_liked', onSocketLiked);
 
-    // 4. Subscribe to real-time status feed via Supabase
+    // 5. Subscribe to real-time status feed via Supabase (Broadcast + Postgres CDC)
     if (!isSupabaseConfigured) return () => {
+      if (bcStatus) bcStatus.close();
       socket?.off('new_status', onSocketNewStatus);
       socket?.off('status_viewed', onSocketViewed);
       socket?.off('status_liked', onSocketLiked);
     };
+
     const statusSub = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
     statusSub
       .on('broadcast', { event: 'new_status' }, ({ payload }: any) => {
         if (!payload?.status) return;
         const incoming: UserStatus = payload.status;
+        if (incoming.userId === currentUser.id) return;
         const senderPhone = (incoming.userPhone || '').replace(/\D/g, '');
-        if (!senderPhone || senderPhone === myCleanPhone) return;
+        if (myCleanPhone && senderPhone && senderPhone === myCleanPhone) return;
         setStatuses((prev) => {
           if (prev.some((s) => s.id === incoming.id)) return prev;
           return [{ ...incoming, isMe: false }, ...prev];
         });
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'user_statuses' }, (payload: any) => {
+        if (!payload?.new) return;
+        const row = payload.new;
+        if (row.user_id === currentUser.id) return;
+        const rp = (row.user_phone || '').replace(/\D/g, '');
+        if (myCleanPhone && rp && rp === myCleanPhone) return;
+        const incoming: UserStatus = {
+          id: row.id,
+          userId: row.user_id,
+          userPhone: row.user_phone,
+          userName: row.user_name || 'AGC User',
+          userAvatar: row.user_avatar || '',
+          isMe: false,
+          statusType: row.status_type || 'thought',
+          mediaUrl: row.media_url || undefined,
+          videoUrl: row.video_url || undefined,
+          thoughtBg: row.thought_bg || undefined,
+          caption: row.caption || '',
+          createdAt: 'Just now',
+          expiresInHours: 24,
+          viewsCount: row.views_count || 0,
+          likesCount: row.likes_count || 0,
+          hasLikedByMe: false,
+          viewers: [],
+        };
+        setStatuses((prev) => {
+          if (prev.some((s) => s.id === incoming.id)) return prev;
+          return [incoming, ...prev];
+        });
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'user_statuses' }, (payload: any) => {
+        if (!payload?.old?.id) return;
+        setStatuses((prev) => prev.filter((s) => s.id !== payload.old.id));
       })
       .on('broadcast', { event: 'status_viewed' }, ({ payload }: any) => {
         if (!payload?.statusId || !payload?.viewer) return;
@@ -2451,6 +2515,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .subscribe();
 
     return () => {
+      if (bcStatus) bcStatus.close();
       if (statusSub) statusSub.unsubscribe();
       socket?.off('new_status', onSocketNewStatus);
       socket?.off('status_viewed', onSocketViewed);
@@ -2827,9 +2892,94 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  // Multi-Transport Live Status Broadcaster (BroadcastChannel + Socket.io + Supabase Realtime + DB)
+  const publishStatusLive = (newStatus: UserStatus) => {
+    const cleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    const outgoingStatus = {
+      ...newStatus,
+      userPhone: cleanPhone,
+      isMe: false,
+    };
+
+    // 1. BroadcastChannel (same machine / multi-tab live sync)
+    try {
+      const bc = new BroadcastChannel('AGC_statuses_sync');
+      bc.postMessage({ type: 'new_status', status: outgoingStatus });
+      bc.close();
+    } catch (_) {}
+
+    // 2. Socket.io Relay
+    emitPostStatus(outgoingStatus);
+
+    // 3. Supabase Database Persistence + Realtime Broadcast
+    if (isSupabaseConfigured) {
+      supabase
+        .from('user_statuses')
+        .upsert({
+          id: newStatus.id,
+          user_id: currentUser.id,
+          user_phone: cleanPhone,
+          user_name: currentUser.fullName || 'AGC User',
+          user_avatar: currentUser.avatarUrl || '',
+          status_type: newStatus.statusType || 'thought',
+          media_url: newStatus.mediaUrl || null,
+          video_url: newStatus.videoUrl || null,
+          thought_bg: newStatus.thoughtBg || null,
+          caption: newStatus.caption || '',
+          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          views_count: 0,
+          likes_count: 0,
+        })
+        .then(({ error }) => {
+          if (error) console.warn('Status DB upsert notice:', error.message);
+        });
+
+      try {
+        const statusFeedCh = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
+        statusFeedCh.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            statusFeedCh.send({
+              type: 'broadcast',
+              event: 'new_status',
+              payload: { status: outgoingStatus },
+            });
+          }
+        });
+      } catch (err) {
+        console.warn('Status Realtime broadcast notice:', err);
+      }
+    }
+  };
+
+  const deleteStatus = (statusId: string) => {
+    setStatuses((prev) => {
+      const updated = prev.filter((s) => s.id !== statusId);
+      try {
+        localStorage.setItem('AGC_statuses_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    if (activeViewingStatus?.id === statusId) {
+      setActiveViewingStatus(null);
+    }
+
+    try {
+      const bc = new BroadcastChannel('AGC_statuses_sync');
+      bc.postMessage({ type: 'delete_status', statusId });
+      bc.close();
+    } catch (_) {}
+
+    if (isSupabaseConfigured) {
+      supabase.from('user_statuses').delete().eq('id', statusId).then(({ error }) => {
+        if (error) console.warn('Status delete notice:', error?.message);
+      });
+    }
+  };
+
   const addStatus = (caption: string, mediaUrl?: string) => {
     const newStatus: UserStatus = {
-      id: `status_${Date.now()}`,
+      id: `status_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
       userName: currentUser.fullName,
       userAvatar: currentUser.avatarUrl,
@@ -2845,43 +2995,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       viewers: [],
     };
 
-    setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
+    // Stack new status with existing ones without deleting older ones
+    setStatuses((prev) => {
+      const updated = [newStatus, ...prev.filter((s) => s.id !== newStatus.id)];
+      try {
+        localStorage.setItem('AGC_statuses_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
 
-    // Publish to Supabase so contacts can see this status
-    if (isSupabaseConfigured) {
-      supabase.from('user_statuses').upsert({
-        id: newStatus.id,
-        user_id: currentUser.id,
-        user_phone: currentUser.phoneNumber?.replace(/\D/g, '') || '',
-        user_name: currentUser.fullName,
-        user_avatar: currentUser.avatarUrl || '',
-        status_type: newStatus.statusType || 'thought',
-        media_url: newStatus.mediaUrl || null,
-        video_url: newStatus.videoUrl || null,
-        thought_bg: newStatus.thoughtBg || null,
-        caption: newStatus.caption,
-        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        views_count: 0,
-        likes_count: 0,
-      }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
-
-      emitPostStatus({ ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false });
-      const statusFeedCh = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
-      statusFeedCh.subscribe((st) => {
-        if (st === 'SUBSCRIBED') {
-          statusFeedCh.send({
-            type: 'broadcast',
-            event: 'new_status',
-            payload: { status: { ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false } },
-          });
-        }
-      });
-    }
+    publishStatusLive(newStatus);
   };
 
   const addThoughtStatus = (thoughtText: string, themeBg: string) => {
     const newStatus: UserStatus = {
-      id: `status_thought_${Date.now()}`,
+      id: `status_thought_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
       userName: currentUser.fullName,
       userAvatar: currentUser.avatarUrl,
@@ -2896,50 +3024,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hasLikedByMe: false,
       viewers: [],
     };
-    setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
 
-    // Publish to Supabase so contacts can see this status
-    if (isSupabaseConfigured) {
-      supabase.from('user_statuses').upsert({
-        id: newStatus.id,
-        user_id: currentUser.id,
-        user_phone: currentUser.phoneNumber?.replace(/\D/g, '') || '',
-        user_name: currentUser.fullName,
-        user_avatar: currentUser.avatarUrl || '',
-        status_type: newStatus.statusType || 'thought',
-        media_url: newStatus.mediaUrl || null,
-        video_url: newStatus.videoUrl || null,
-        thought_bg: newStatus.thoughtBg || null,
-        caption: newStatus.caption,
-        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        views_count: 0,
-        likes_count: 0,
-      }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
+    // Stack new status with existing ones without deleting older ones
+    setStatuses((prev) => {
+      const updated = [newStatus, ...prev.filter((s) => s.id !== newStatus.id)];
+      try {
+        localStorage.setItem('AGC_statuses_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
 
-      emitPostStatus({ ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false });
-      const statusFeedCh = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
-      statusFeedCh.subscribe((st) => {
-        if (st === 'SUBSCRIBED') {
-          statusFeedCh.send({
-            type: 'broadcast',
-            event: 'new_status',
-            payload: { status: { ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false } },
-          });
-        }
-      });
-    }
+    publishStatusLive(newStatus);
   };
 
-  const addDeviceMediaStatus = (caption: string, mediaUrl: string, mediaType: 'image' | 'video' = 'image') => {
+  const addDeviceMediaStatus = async (caption: string, mediaUrl: string, mediaType: 'image' | 'video' = 'image') => {
+    let finalMediaUrl = mediaUrl;
+    if (mediaType === 'image' && mediaUrl.startsWith('data:image') && mediaUrl.length > 250000) {
+      try {
+        finalMediaUrl = await downsampleDataUrl(mediaUrl, 1200, 0.75);
+      } catch (_) {}
+    }
+
     const newStatus: UserStatus = {
-      id: `status_media_${Date.now()}`,
+      id: `status_media_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
       userName: currentUser.fullName,
       userAvatar: currentUser.avatarUrl,
       isMe: true,
       statusType: mediaType,
-      mediaUrl,
-      videoUrl: mediaType === 'video' ? mediaUrl : undefined,
+      mediaUrl: finalMediaUrl,
+      videoUrl: mediaType === 'video' ? finalMediaUrl : undefined,
       caption: caption || (mediaType === 'video' ? 'Video Status 🎥' : 'Photo Status 📸'),
       createdAt: 'Just now',
       expiresInHours: 24,
@@ -2948,43 +3062,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hasLikedByMe: false,
       viewers: [],
     };
-    setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
 
-    // Publish to Supabase so contacts can see this status
-    if (isSupabaseConfigured) {
-      supabase.from('user_statuses').upsert({
-        id: newStatus.id,
-        user_id: currentUser.id,
-        user_phone: currentUser.phoneNumber?.replace(/\D/g, '') || '',
-        user_name: currentUser.fullName,
-        user_avatar: currentUser.avatarUrl || '',
-        status_type: newStatus.statusType || 'thought',
-        media_url: newStatus.mediaUrl || null,
-        video_url: newStatus.videoUrl || null,
-        thought_bg: newStatus.thoughtBg || null,
-        caption: newStatus.caption,
-        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        views_count: 0,
-        likes_count: 0,
-      }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
+    // Stack new status with existing ones without deleting older ones
+    setStatuses((prev) => {
+      const updated = [newStatus, ...prev.filter((s) => s.id !== newStatus.id)];
+      try {
+        localStorage.setItem('AGC_statuses_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
 
-      emitPostStatus({ ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false });
-      const statusFeedCh = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
-      statusFeedCh.subscribe((st) => {
-        if (st === 'SUBSCRIBED') {
-          statusFeedCh.send({
-            type: 'broadcast',
-            event: 'new_status',
-            payload: { status: { ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false } },
-          });
-        }
-      });
-    }
+    publishStatusLive(newStatus);
   };
 
   const addDeviceVideoStatus = (caption: string, videoUrl: string, thumbnail?: string) => {
     const newStatus: UserStatus = {
-      id: `status_vid_${Date.now()}`,
+      id: `status_vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
       userName: currentUser.fullName,
       userAvatar: currentUser.avatarUrl,
@@ -3000,38 +3093,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hasLikedByMe: false,
       viewers: [],
     };
-    setStatuses((prev) => { const myStatuses = prev.filter((s) => s.isMe); if (myStatuses.length >= 20) return prev; return [newStatus, ...prev]; });
 
-    // Publish to Supabase so contacts can see this status
-    if (isSupabaseConfigured) {
-      supabase.from('user_statuses').upsert({
-        id: newStatus.id,
-        user_id: currentUser.id,
-        user_phone: currentUser.phoneNumber?.replace(/\D/g, '') || '',
-        user_name: currentUser.fullName,
-        user_avatar: currentUser.avatarUrl || '',
-        status_type: newStatus.statusType || 'thought',
-        media_url: newStatus.mediaUrl || null,
-        video_url: newStatus.videoUrl || null,
-        thought_bg: newStatus.thoughtBg || null,
-        caption: newStatus.caption,
-        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        views_count: 0,
-        likes_count: 0,
-      }).then(({ error }) => { if (error) console.warn('Status upsert:', error.message); });
+    // Stack new status with existing ones without deleting older ones
+    setStatuses((prev) => {
+      const updated = [newStatus, ...prev.filter((s) => s.id !== newStatus.id)];
+      try {
+        localStorage.setItem('AGC_statuses_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
 
-      emitPostStatus({ ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false });
-      const statusFeedCh = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
-      statusFeedCh.subscribe((st) => {
-        if (st === 'SUBSCRIBED') {
-          statusFeedCh.send({
-            type: 'broadcast',
-            event: 'new_status',
-            payload: { status: { ...newStatus, userPhone: currentUser.phoneNumber?.replace(/\D/g, '') || '', isMe: false } },
-          });
-        }
-      });
-    }
+    publishStatusLive(newStatus);
   };
 
   // ── Multi-Transport Incoming Call Listener (Socket.io + BroadcastChannel + Supabase)
@@ -6676,6 +6748,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addThoughtStatus,
         addDeviceMediaStatus,
         addDeviceVideoStatus,
+        deleteStatus,
         wallet,
         isWalletModalOpen,
         setIsWalletModalOpen,

@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { UserStatus } from '../types';
+import { compressImageFile } from '../utils/imageUtils';
+import { Trash2 } from 'lucide-react';
 
 const THOUGHT_THEMES = [
   { name: 'Indigo Dusk', bg: 'from-indigo-600 via-purple-600 to-pink-600' },
@@ -39,6 +41,7 @@ export const StatusView: React.FC = () => {
     addDeviceMediaStatus,
     addDeviceVideoStatus,
     addThoughtStatus,
+    deleteStatus,
     currentUser,
     creators,
     creatorPosts,
@@ -53,20 +56,45 @@ export const StatusView: React.FC = () => {
   const [thoughtText, setThoughtText] = useState('');
   const [selectedTheme, setSelectedTheme] = useState(THOUGHT_THEMES[0]);
 
-  const myStatus = statuses.find((s) => s.isMe);
+  const myStatuses = statuses.filter((s) => s.isMe);
+  const myStatus = myStatuses[0] ?? null;
   const otherStatuses = statuses.filter((s) => !s.isMe);
 
-  const handleDeviceFileUpload = (e: React.ChangeEvent<HTMLInputElement>, isVideo: boolean = false) => {
+  const totalMyViews = myStatuses.reduce((acc, s) => acc + (s.viewsCount || 0), 0);
+  const totalMyLikes = myStatuses.reduce((acc, s) => acc + (s.likesCount || 0), 0);
+
+  const handleDeviceFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isVideo: boolean = false) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      if (typeof event.target?.result === 'string') {
-        setDeviceMediaPreview(event.target.result);
+    if (isVideo) {
+      if (file.size > 20 * 1024 * 1024) {
+        alert('Video exceeds 20MB limit. Please choose a shorter clip.');
+        return;
       }
-    };
-    reader.readAsDataURL(file);
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (typeof event.target?.result === 'string') {
+          setDeviceMediaPreview(event.target.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    } else {
+      // Compress photo client-side so it fits comfortably within Supabase 256KB Realtime payload
+      try {
+        const compressed = await compressImageFile(file, 1200, 0.75);
+        setDeviceMediaPreview(compressed);
+      } catch (err) {
+        console.warn('Image compression fallback:', err);
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          if (typeof event.target?.result === 'string') {
+            setDeviceMediaPreview(event.target.result);
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+    }
   };
 
   const handlePostDevicePhoto = (e: React.FormEvent) => {
@@ -126,12 +154,13 @@ export const StatusView: React.FC = () => {
         </span>
       </div>
 
-      {/* My Status Section */}
+      {/* My Status Section (Stacked Stories Support) */}
       <div className="p-3 border-b border-slate-100 dark:border-neutral-800">
         <div
           onClick={() => {
-            if (myStatus) {
-              setActiveViewingStatus(myStatus);
+            if (myStatuses.length > 0) {
+              // Open starting with the earliest story to play sequentially
+              setActiveViewingStatus(myStatuses[myStatuses.length - 1] || myStatuses[0]);
             } else {
               setShowAddStoryMenu(true);
             }
@@ -140,7 +169,13 @@ export const StatusView: React.FC = () => {
         >
           <div className="flex items-center gap-3.5">
             <div className="relative">
-              <div className="w-14 h-14 rounded-full p-0.5 border-2 border-purple-600">
+              <div className={`w-14 h-14 rounded-full p-0.5 border-2 ${
+                myStatuses.length > 1
+                  ? 'border-amber-500 ring-2 ring-purple-600/40'
+                  : myStatuses.length === 1
+                  ? 'border-purple-600'
+                  : 'border-slate-300 dark:border-neutral-700'
+              }`}>
                 <img
                   src={currentUser.avatarUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"}
                   alt="My status"
@@ -155,7 +190,7 @@ export const StatusView: React.FC = () => {
                   setShowAddStoryMenu(true);
                 }}
                 className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center border-2 border-white dark:border-black shadow-xs transition-transform active:scale-95"
-                title="Add Photo, Video or Thought"
+                title="Add another Photo, Video or Thought Story"
               >
                 <Plus className="w-3.5 h-3.5" />
               </button>
@@ -166,6 +201,11 @@ export const StatusView: React.FC = () => {
                 <h3 className="font-semibold text-sm text-slate-900 dark:text-white">
                   {t('myStatus')}
                 </h3>
+                {myStatuses.length > 1 && (
+                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 rounded-full border border-purple-200 dark:border-purple-800">
+                    {myStatuses.length} Stories Active
+                  </span>
+                )}
                 {currentUser.verificationBadge && (
                   <span
                     className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full ${
@@ -179,25 +219,23 @@ export const StatusView: React.FC = () => {
                   </span>
                 )}
               </div>
-              {myStatus ? (
+              {myStatuses.length > 0 ? (
                 <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
                   <span className="flex items-center gap-1 text-purple-600 dark:text-purple-400 font-medium">
-                    <Eye className="w-3.5 h-3.5" /> {myStatus.viewsCount} views
+                    <Eye className="w-3.5 h-3.5" /> {totalMyViews} views
                   </span>
                   <span>·</span>
                   <span className="flex items-center gap-1 text-rose-500 font-medium">
-                    <Heart className="w-3.5 h-3.5 fill-rose-500" /> {myStatus.likesCount} likes
+                    <Heart className="w-3.5 h-3.5 fill-rose-500" /> {totalMyLikes} likes
                   </span>
-                  {myStatus.videoUrl && (
-                    <>
-                      <span>·</span>
-                      <span className="text-[10px] font-mono text-purple-600 font-bold">VIDEO</span>
-                    </>
-                  )}
+                  <span>·</span>
+                  <span className="text-purple-600 dark:text-purple-400 font-medium">
+                    Tap to play all stories
+                  </span>
                 </div>
               ) : (
                 <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
-                  Tap plus sign to add a Photo, Video or Thought Bubble
+                  Tap plus sign to add a Photo, Video or Thought Story
                 </p>
               )}
             </div>
@@ -210,6 +248,61 @@ export const StatusView: React.FC = () => {
             </span>
           )}
         </div>
+
+        {/* Stacked Stories Reel Preview */}
+        {myStatuses.length > 0 && (
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 mt-2.5 pt-2 border-t border-slate-100 dark:border-neutral-800/80 no-scrollbar">
+            {myStatuses.map((st, i) => (
+              <div
+                key={st.id || i}
+                onClick={() => setActiveViewingStatus(st)}
+                className="shrink-0 flex items-center gap-2 p-1.5 pr-2.5 bg-slate-100/80 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl hover:border-purple-500/50 cursor-pointer transition-all group"
+              >
+                <div className="w-7 h-7 rounded-lg overflow-hidden bg-purple-600/10 flex items-center justify-center shrink-0">
+                  {st.statusType === 'thought' ? (
+                    <div className={`w-full h-full bg-gradient-to-br ${st.thoughtBg || 'from-indigo-600 to-purple-600'} flex items-center justify-center text-[10px]`}>
+                      💭
+                    </div>
+                  ) : st.videoUrl || st.statusType === 'video' ? (
+                    <div className="w-full h-full bg-slate-900 flex items-center justify-center text-white text-[10px]">
+                      🎥
+                    </div>
+                  ) : st.mediaUrl ? (
+                    <img src={st.mediaUrl} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-[10px]">📸</span>
+                  )}
+                </div>
+
+                <div className="text-left">
+                  <div className="text-[11px] font-bold text-slate-800 dark:text-neutral-200 truncate max-w-[100px]">
+                    {st.caption || (st.statusType === 'thought' ? 'Thought Bubble' : 'Story')}
+                  </div>
+                  <div className="text-[10px] text-slate-500 dark:text-neutral-400 font-mono flex items-center gap-1.5">
+                    <span>{st.createdAt}</span>
+                    <span>·</span>
+                    <span className="flex items-center gap-0.5 text-purple-600 dark:text-purple-400">
+                      <Eye className="w-3 h-3" /> {st.viewsCount}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const confirmDel = window.confirm('Delete this story?');
+                    if (confirmDel) deleteStatus(st.id);
+                  }}
+                  className="p-1 text-slate-400 hover:text-rose-500 transition-colors ml-1"
+                  title="Delete this story"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Subscribed & Followed Creators + Friends Updates Tray */}
