@@ -1,4 +1,4 @@
-﻿export type CurrencyCode = 'NGN' | 'KES' | 'GHS' | 'ZAR';
+export type CurrencyCode = 'NGN' | 'KES' | 'GHS' | 'ZAR';
 
 export type LanguageCode = 'en' | 'pcm' | 'sw' | 'yo' | 'ha' | 'fr';
 
@@ -193,6 +193,7 @@ export interface VoiceNoteMeta {
   waveform: number[];
   transcript: string;
   translations: Record<LanguageCode, string>;
+  audioDataUrl?: string; // ephemeral blob URL -- never persisted to DB
 }
 
 export interface ChatMessage {

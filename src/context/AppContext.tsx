@@ -22,7 +22,7 @@ export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
   }
   return '';
 };
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
 import { downsampleDataUrl } from '../utils/imageUtils';
 import {
@@ -233,7 +233,7 @@ interface AppContextType {
   isDarkMode: boolean;
   toggleDarkMode: () => void;
   sendMessage: (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }) => void;
-  sendVoiceNote: (chatId: string, durationSeconds: number, transcript: string) => void;
+  sendVoiceNote: (chatId: string, durationSeconds: number, transcript: string, audioDataUrl?: string) => void;
   sendProductCard: (chatId: string, product: Product) => void;
   loadImage: (chatId: string, messageId: string) => void;
   createEscrowOrder: (
@@ -682,6 +682,8 @@ const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Persistent Supabase channel ref for status feed (avoids channel leak on every like/view)
+  const statusFeedChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   // ── Feature Flags System (Wallet as Master Hub) ──────────────────────────
   const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(() => {
     try {
@@ -2446,7 +2448,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket?.off('status_liked', onSocketLiked);
     };
 
-    const statusSub = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
+    const statusSub = supabase.channel('status_feed', { config: { broadcast: { self: true } } });
+    statusFeedChannelRef.current = statusSub;
     statusSub
       .on('broadcast', { event: 'new_status' }, ({ payload }: any) => {
         if (!payload?.status) return;
@@ -2492,6 +2495,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'user_statuses' }, (payload: any) => {
         if (!payload?.old?.id) return;
         setStatuses((prev) => prev.filter((s) => s.id !== payload.old.id));
+      })
+      // Cross-device sync: catch views_count / likes_count DB updates from other devices
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_statuses' }, (payload: any) => {
+        if (!payload?.new?.id) return;
+        const row = payload.new;
+        setStatuses((prev) =>
+          prev.map((s) => {
+            if (s.id !== row.id) return s;
+            return {
+              ...s,
+              viewsCount: row.views_count ?? s.viewsCount,
+              likesCount: row.likes_count ?? s.likesCount,
+            };
+          })
+        );
       })
       .on('broadcast', { event: 'status_viewed' }, ({ payload }: any) => {
         if (!payload?.statusId || !payload?.viewer) return;
@@ -2822,21 +2840,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 1. Broadcast like via Socket.io
     emitLikeStatus(statusId, newLiked, currentUser.id, currentUser.fullName);
 
-    // 2. Broadcast like to status_feed so owner sees updated count
+    // 2. Broadcast like via persistent status_feed channel (no channel leak)
     if (isSupabaseConfigured) {
-      setTimeout(() => {
-        const ch = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
-        ch.subscribe((st) => {
-          if (st === 'SUBSCRIBED') {
-            ch.send({
-              type: 'broadcast',
-              event: 'status_liked',
-              payload: { statusId, liked: newLiked, likerId: currentUser.id, likerName: currentUser.fullName },
-            });
-            supabase.from('user_statuses').update({ likes_count: newCount }).eq('id', statusId).then(() => {});
-          }
+      const ch = statusFeedChannelRef.current;
+      if (ch) {
+        ch.send({
+          type: 'broadcast',
+          event: 'status_liked',
+          payload: { statusId, liked: newLiked, likerId: currentUser.id, likerName: currentUser.fullName },
         });
-      }, 0);
+      }
+      // Persist to DB
+      supabase.from('user_statuses').update({ likes_count: newCount }).eq('id', statusId).then(() => {});
     }
   };
 
@@ -2868,19 +2883,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return s;
       })
     );
+    // Broadcast view via persistent channel ref (no channel leak)
     if (isSupabaseConfigured) {
-      setTimeout(() => {
-        const ch = supabase.channel('status_feed', { config: { broadcast: { self: false } } });
-        ch.subscribe((st) => {
-          if (st === 'SUBSCRIBED') {
-            ch.send({
-              type: 'broadcast',
-              event: 'status_viewed',
-              payload: { statusId, viewer },
-            });
-          }
+      const ch = statusFeedChannelRef.current;
+      if (ch) {
+        ch.send({
+          type: 'broadcast',
+          event: 'status_viewed',
+          payload: { statusId, viewer },
         });
-      }, 0);
+      }
     }
   };
 
@@ -3907,7 +3919,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastLiveMessage(chatId, newMsg);
   };
 
-  const sendVoiceNote = (chatId: string, durationSeconds: number, transcript: string) => {
+  const sendVoiceNote = (chatId: string, durationSeconds: number, transcript: string, audioDataUrl?: string) => {
     const newMsg: ChatMessage = {
       id: `msg_vn_${Date.now()}`,
       chatId,
@@ -3925,6 +3937,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ha: transcript,
           fr: transcript,
         },
+        audioDataUrl, // ephemeral -- never sent to Supabase
       },
       mediaSizeKB: Math.round(durationSeconds * 4.5),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),

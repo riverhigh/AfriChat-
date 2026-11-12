@@ -43,7 +43,7 @@ export const StoreRegistrationModal: React.FC = () => {
   if (!isStoreRegModalOpen) return null;
 
   const currentTier = storeSubscription?.tier || 'none';
-  const fee = selectedTier === 'starter_30' ? 3000 : 7000;
+  const fee = selectedTier === 'starter_30' ? 2199 : 7000;
   const itemLimit = selectedTier === 'starter_30' ? 30 : 100;
 
   const handleSubscribe = (e: React.FormEvent) => {

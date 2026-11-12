@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   X,
   Smartphone,
@@ -241,10 +241,25 @@ export const AuthModal: React.FC = () => {
     setStep('profile');
   };
 
-  const handleCompleteProfile = () => {
+  const handleCompleteProfile = async () => {
     if (!fullName.trim()) {
-      alert('Please provide your name or business name');
+      alert('Please choose a username (e.g. chioma_trades)');
       return;
+    }
+    // Duplicate phone guard
+    if (isSupabaseConfigured) {
+      try {
+        const { data: existing } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('phone_number', fullNormalizedNumber.replace(/\D/g, ''))
+          .maybeSingle();
+        if (existing?.id) {
+          alert('This phone number already has an account. Please sign in instead.');
+          setStep('input');
+          return;
+        }
+      } catch (_) {}
     }
     loginWithPhone(fullNormalizedNumber, fullName, avatarUrl, about);
     setStep('input');
@@ -593,13 +608,13 @@ export const AuthModal: React.FC = () => {
                   <div className="space-y-3">
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        Display Name / Store Name
+                        Username
                       </label>
                       <input
                         type="text"
                         value={fullName}
                         onChange={(e) => setFullName(e.target.value)}
-                        placeholder="e.g. Chioma Adebayo"
+                        placeholder="e.g. chioma_trades or @amaka"
                         required
                         className="w-full px-3 py-2 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-purple-500"
                       />

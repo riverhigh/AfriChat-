@@ -2756,7 +2756,7 @@ export const MOCK_REFERRAL_PROGRAM: ReferralProgram = {
 // 24. Store Subscriptions (3k/mo for 30 items, 7k/mo for 100 items limit)
 export const MOCK_STORE_SUBSCRIPTION: StoreSubscription = {
   tier: 'starter_30',
-  monthlyFee: 3000,
+  monthlyFee: 2199,
   itemLimit: 30,
   itemsCount: 12,
   storeName: 'Adebayo Luxury Fabrics & Trade',

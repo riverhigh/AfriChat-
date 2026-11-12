@@ -42,6 +42,7 @@ import { EmojiMemeDrawer } from './EmojiMemeDrawer';
 import { DisplayWallpaperModal } from './DisplayWallpaperModal';
 import { ContactProfileModal } from './ContactProfileModal';
 import { compressImageFile } from '../utils/imageUtils';
+import { GroupInfoModal } from './GroupInfoModal';
 
 interface ActiveChatProps {
   onOpenVoiceRecorder: () => void;
@@ -87,12 +88,25 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     setIsErrandsModalOpen,
     statuses,
     setActiveViewingStatus,
+    currentUser,
   } = useApp();
 
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
   const [isContactProfileOpen, setIsContactProfileOpen] = useState(false);
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [toastNotice, setToastNotice] = useState<string | null>(null);
+  const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
+
+  // Group chat helpers
+  const GROUP_COLORS = [
+    'text-pink-500','text-violet-500','text-sky-500','text-emerald-500',
+    'text-orange-400','text-rose-400','text-teal-400','text-amber-400',
+  ];
+  const getSenderColor = (name: string) => {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffff;
+    return GROUP_COLORS[h % GROUP_COLORS.length];
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Swipe from left to right to go back to chats
   const touchStartX = useRef<number | null>(null);
@@ -147,6 +161,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   const currentChat = chats.find((c) => c.id === activeChatId);
+  const isGroupAdmin = currentUser && currentChat?.isGroup &&
+    (currentChat as any).adminIds?.includes(currentUser.id);
+  const isChannelAdmin = currentUser && currentChat?.isChannel &&
+    (currentChat as any).adminIds?.includes(currentUser.id);
+  const isChannelMember = currentChat?.isChannel && !isChannelAdmin;
   const currentMessages = activeChatId ? messages[activeChatId] || [] : [];
 
   useEffect(() => {
@@ -188,8 +207,37 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     setReplyingTo(null);
   };
 
-  const toggleVoicePlayback = (msgId: string) => {
-    setPlayingVoiceId((prev) => (prev === msgId ? null : msgId));
+  // Real audio playback ref map (msgId -> HTMLAudioElement)
+  const audioRefs = useRef<Record<string, HTMLAudioElement>>({});
+
+  const toggleVoicePlayback = (msgId: string, audioDataUrl?: string) => {
+    const existing = audioRefs.current[msgId];
+
+    if (existing && !existing.paused) {
+      existing.pause();
+      existing.currentTime = 0;
+      setPlayingVoiceId(null);
+      return;
+    }
+
+    // Create or reuse audio element
+    if (!existing && audioDataUrl) {
+      const audio = new Audio(audioDataUrl);
+      audioRefs.current[msgId] = audio;
+      audio.onended = () => {
+        setPlayingVoiceId(null);
+        setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
+      };
+      audio.ontimeupdate = () => {
+        const pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
+        setVoiceProgress((prev) => ({ ...prev, [msgId]: pct }));
+      };
+      audio.play().catch(() => {});
+    } else if (existing) {
+      existing.play().catch(() => {});
+    }
+
+    setPlayingVoiceId(msgId);
   };
 
   const toggleTranslation = (msgId: string, targetLang: LanguageCode) => {
@@ -327,9 +375,13 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       </span>
                     )}
                     {currentChat.isGroup && (
-                      <span className="text-[10px] font-mono bg-white/15 px-1.5 py-0.2 rounded font-normal">
+                      <button
+                        onClick={() => setIsGroupInfoOpen(true)}
+                        className="text-[10px] font-mono bg-white/15 hover:bg-white/25 px-1.5 py-0.2 rounded font-normal transition-colors"
+                        title="Group info"
+                      >
                         {currentChat.membersCount} members
-                      </span>
+                      </button>
                     )}
                   </div>
                   <div className="text-[11px] text-indigo-200/80 leading-tight truncate">
@@ -524,6 +576,13 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     : 'bg-white dark:bg-[#1a172e] text-slate-900 dark:text-slate-100 rounded-tl-none border border-slate-200/60 dark:border-slate-800'
                 }`}
               >
+                {/* Group sender name (colored per sender) */}
+                {currentChat?.isGroup && !isUser && msg.senderName && (
+                  <div className={`text-[11px] font-bold mb-0.5 ${getSenderColor(msg.senderName)}`}>
+                    {msg.senderName}
+                  </div>
+                )}
+
                 {/* Quoted Reply Preview */}
                 {msg.replyTo && (
                   <div className="mb-2 p-2 rounded-xl bg-black/10 dark:bg-white/10 border-l-3 border-purple-500 text-xs">
@@ -626,7 +685,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   <div className="space-y-2 min-w-[220px]">
                     <div className="flex items-center gap-3">
                       <button
-                        onClick={() => toggleVoicePlayback(msg.id)}
+                        onClick={() => toggleVoicePlayback(msg.id, msg.voiceNote?.audioDataUrl)}
                         className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shrink-0 transition-colors shadow-xs"
                         aria-label="Play voice note"
                       >
@@ -1160,7 +1219,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         </div>
       )}
 
-      {/* Input Bar */}
+      {/* Input Bar / Channel Read-only Banner */}
+      {isChannelMember ? (
+        <div className="px-4 py-3 bg-slate-100 dark:bg-neutral-900 shrink-0 flex items-center justify-center border-t border-slate-200 dark:border-neutral-800">
+          <span className="text-xs text-slate-400 dark:text-slate-500">🔇 Only admins can post in this channel</span>
+        </div>
+      ) : (
       <div className="px-2 py-2 bg-transparent shrink-0 flex items-center gap-1.5 z-20">
         <div className="flex-1 flex items-center bg-slate-100 dark:bg-neutral-900 rounded-full px-3 py-1.5 shadow-2xs border border-slate-200/60 dark:border-neutral-800">
           <button
@@ -1212,11 +1276,22 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         )}
       </div>
 
+      )}
+
       {/* Display & Chat Wallpaper Modal */}
       <DisplayWallpaperModal
         isOpen={isDisplayModalOpen}
         onClose={() => setIsDisplayModalOpen(false)}
       />
+
+      {/* Group Info Modal (WhatsApp-style) */}
+      {currentChat?.isGroup && (
+        <GroupInfoModal
+          isOpen={isGroupInfoOpen}
+          onClose={() => setIsGroupInfoOpen(false)}
+          chat={currentChat}
+        />
+      )}
 
       {/* AGC Contact Info Profile Modal */}
       <ContactProfileModal

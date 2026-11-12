@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Mic, Square, Send, X, AlertCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -16,6 +16,7 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
 
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<number | null>(null);
 
   const sampleTranscripts: Record<string, string[]> = {
@@ -106,7 +107,11 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
       try {
         const recorder = new MediaRecorder(stream);
         mediaRecorderRef.current = recorder;
-        recorder.start();
+        audioChunksRef.current = [];
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) audioChunksRef.current.push(e.data);
+        };
+        recorder.start(250); // collect chunks every 250ms
       } catch {
         // MediaRecorder fallback
       }
@@ -131,7 +136,14 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
   const handleSend = () => {
     if (!activeChatId) return;
     const dur = Math.max(2, seconds);
-    sendVoiceNote(activeChatId, dur, transcriptPreview || 'Voice note');
+    // Build ephemeral blob URL from recorded chunks (never saved to DB)
+    let audioDataUrl: string | undefined;
+    if (audioChunksRef.current.length > 0) {
+      const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      audioDataUrl = URL.createObjectURL(blob);
+    }
+    sendVoiceNote(activeChatId, dur, transcriptPreview || 'Voice note', audioDataUrl);
+    audioChunksRef.current = [];
     stopAllMediaTracks();
     onClose();
   };
