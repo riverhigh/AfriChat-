@@ -116,11 +116,28 @@ CREATE POLICY "allow_all_read_messages" ON public.messages
 CREATE POLICY "allow_all_insert_messages" ON public.messages
   FOR INSERT WITH CHECK (true);
 
--- 8. Add all relevant tables to Supabase Realtime publication
-ALTER PUBLICATION supabase_realtime ADD TABLE public.town_communities;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.audio_spaces;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.artisan_stations;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.store_subscriptions;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.service_providers;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.products;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_threads;
+-- 8. Add tables to Supabase Realtime publication (safely ignores already added tables)
+DO $$
+DECLARE
+  tbl text;
+BEGIN
+  FOR tbl IN
+    SELECT unnest(ARRAY[
+      'public.town_communities',
+      'public.audio_spaces',
+      'public.artisan_stations',
+      'public.store_subscriptions',
+      'public.service_providers',
+      'public.products',
+      'public.chat_threads'
+    ])
+  LOOP
+    BEGIN
+      EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE %s', tbl);
+    EXCEPTION
+      WHEN duplicate_object THEN
+        -- Table is already a member of publication, ignore
+        NULL;
+    END;
+  END LOOP;
+END $$;
