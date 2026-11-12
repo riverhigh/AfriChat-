@@ -29,6 +29,15 @@ import {
   isSupabaseConfigured,
   fetchProfile,
   mapProfileToUser,
+  fetchLiveTownCommunities,
+  createTownCommunityInDb,
+  fetchLiveAudioSpaces,
+  createAudioSpaceInDb,
+  fetchLiveArtisanStations,
+  createArtisanStationInDb,
+  fetchLiveStoreSubscriptions,
+  createStoreSubscriptionInDb,
+  fetchServiceProviders,
 } from '../services/supabase';
 import {
   FeatureFlags,
@@ -257,6 +266,12 @@ interface AppContextType {
   activeAudioSpace: AudioSpace | null;
   joinAudioSpace: (space: AudioSpace) => void;
   leaveAudioSpace: () => void;
+  createAudioSpace: (
+    title: string,
+    topic: string,
+    category: AudioSpace['category'],
+    isLowBandwidth?: boolean
+  ) => AudioSpace;
   toggleAudioSpaceMute: () => void;
   toggleSpaceLowBandwidth: () => void;
   // 3. Scam Alert & Reputation Checker
@@ -1045,8 +1060,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     socket?.on('community_created', handleCommunityCreated);
 
+    // 4. Supabase Realtime live_town_communities broadcast listener across devices
+    let commCh: ReturnType<typeof supabase.channel> | null = null;
+    if (isSupabaseConfigured) {
+      commCh = supabase.channel('live_town_communities', { config: { broadcast: { self: false } } });
+      commCh
+        .on('broadcast', { event: 'community_created' }, ({ payload }) => {
+          if (!payload || !payload.id) return;
+          handleCommunityCreated(payload);
+          // Also register corresponding chat thread
+          const chatId = `town_comm_${payload.id}`;
+          setChats((prev) => {
+            if (prev.some((c) => c.id === chatId)) return prev;
+            const newThread: ChatThread = {
+              id: chatId,
+              name: payload.name,
+              avatar: payload.avatar,
+              isGroup: true,
+              membersCount: payload.membersCount || 1,
+              verifiedStore: false,
+              location: `${payload.type === 'channel' ? 'Broadcast Channel' : 'Town Group'} · ${payload.category}`,
+              unreadCount: 0,
+              lastMessage: payload.description || 'Community live',
+              lastMessageTime: 'Just now',
+              catalog: [],
+              isOnline: true,
+            };
+            const updated = [newThread, ...prev];
+            try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
+            return updated;
+          });
+        })
+        .subscribe();
+    }
+
     return () => {
       socket?.off('community_created', handleCommunityCreated);
+      if (commCh) commCh.unsubscribe();
     };
   }, []);
 
@@ -1079,6 +1129,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (e) {}
       return updated;
     });
+
+    // 🌐 LIVE SYSTEM: Persist to Supabase and broadcast to all devices in real-time
+    if (isSupabaseConfigured) {
+      createTownCommunityInDb({
+        name: newCommunity.name,
+        type: newCommunity.type,
+        category: newCommunity.category,
+        description: newCommunity.description,
+        avatar: newCommunity.avatar,
+        members_count: 1,
+      }).catch((e) => console.warn('Supabase community create notice:', e));
+
+      try {
+        const commCh = supabase.channel('live_town_communities', { config: { broadcast: { self: false } } });
+        commCh.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            commCh.send({ type: 'broadcast', event: 'community_created', payload: newCommunity });
+          }
+        });
+      } catch (_) {}
+    }
 
     // Create corresponding ChatThread so the group/channel appears in chat list
     const communityChatId = `town_comm_${newCommunity.id}`;
@@ -1494,7 +1565,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setArtisanStation(newStation);
     localStorage.setItem('AGC_artisan_station', JSON.stringify(newStation));
-    return { success: true, message: 'Artisan Station successfully registered and approved for ₦5,000!', station: newStation };
+
+    // 🌐 LIVE SYSTEM: Publish Artisan Station to Supabase and broadcast live to network
+    if (isSupabaseConfigured) {
+      createArtisanStationInDb({
+        station_name: newStation.stationName,
+        category: newStation.category,
+        category_label: newStation.categoryLabel,
+        location: newStation.location,
+        workshop_address: newStation.workshopAddress,
+        about: newStation.about,
+        avatar: newStation.avatar,
+        is_approved: true,
+        registration_fee_paid: true,
+        operating_hours: newStation.operatingHours as any,
+      }).catch((e) => console.warn('Supabase create station notice:', e));
+
+      try {
+        const artCh = supabase.channel('live_artisan_stations', { config: { broadcast: { self: false } } });
+        artCh.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            artCh.send({ type: 'broadcast', event: 'station_registered', payload: newStation });
+          }
+        });
+      } catch (_) {}
+    }
+
+    return { success: true, message: 'Artisan Station successfully registered and live on AGC Network!', station: newStation };
   };
 
   const addArtisanListing = (
@@ -1864,6 +1961,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [audioSpaces]);
   const [activeAudioSpace, setActiveAudioSpace] = useState<AudioSpace | null>(null);
 
+  // 🌐 LIVE SYSTEM: Hydrate and listen for live Audio Spaces across devices
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    fetchLiveAudioSpaces().then(({ data }) => {
+      if (data && Array.isArray(data) && data.length > 0) {
+        setAudioSpaces((prev) => {
+          const map = new Map<string, AudioSpace>();
+          prev.forEach((s) => map.set(s.id, s));
+          data.forEach((row: any) => {
+            map.set(row.id, {
+              id: row.id,
+              title: row.title,
+              topic: row.topic || '',
+              category: row.category || 'Tech & Hustle',
+              hostName: row.host_name || 'Host',
+              hostAvatar: row.host_avatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(row.title)}&backgroundColor=581c87&textColor=ffffff`,
+              listenersCount: row.listeners_count || 1,
+              isLive: row.is_live,
+              isLowBandwidthMode: row.is_low_bandwidth_mode ?? true,
+              speakers: Array.isArray(row.speakers) ? row.speakers : [
+                { id: 'host', name: row.host_name || 'Host', avatar: row.host_avatar || '', role: 'host', isSpeaking: true, isMuted: false }
+              ],
+            });
+          });
+          const merged = Array.from(map.values());
+          try { localStorage.setItem('AGC_audio_spaces_v2', JSON.stringify(merged)); } catch (_) {}
+          return merged;
+        });
+      }
+    });
+
+    const spaceCh = supabase.channel('live_audio_spaces', { config: { broadcast: { self: false } } });
+    spaceCh
+      .on('broadcast', { event: 'space_started' }, ({ payload }) => {
+        if (!payload || !payload.id) return;
+        setAudioSpaces((prev) => {
+          const updated = [payload, ...prev.filter((s) => s.id !== payload.id)];
+          try { localStorage.setItem('AGC_audio_spaces_v2', JSON.stringify(updated)); } catch (_) {}
+          return updated;
+        });
+      })
+      .on('broadcast', { event: 'space_ended' }, ({ payload }) => {
+        if (!payload?.id) return;
+        setAudioSpaces((prev) => prev.filter((s) => s.id !== payload.id));
+      })
+      .subscribe();
+
+    return () => {
+      spaceCh.unsubscribe();
+    };
+  }, []);
+
+
+
   // 3. Scam Alert & Reputation Checker State
   const [scamDatabase, setScamDatabase] = useState<Record<string, ScamEntity>>(MOCK_SCAM_DATABASE);
   const [isScamCheckerModalOpen, setIsScamCheckerModalOpen] = useState(false);
@@ -1957,6 +2109,111 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isKickedOut, setIsKickedOut] = useState(false);
+
+  // 🌐 LIVE SYSTEM: Hydrate and listen for live Artisan Stations & Service Providers
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    fetchLiveArtisanStations().then(({ data }) => {
+      if (data && Array.isArray(data) && data.length > 0) {
+        const myStationRow = data.find((row: any) => row.owner_phone === currentUser.phoneNumber || row.owner_id === currentUser.id);
+        if (myStationRow) {
+          const loadedStation: ArtisanStation = {
+            id: myStationRow.id,
+            ownerId: myStationRow.owner_id || currentUser.id,
+            ownerName: myStationRow.owner_name || currentUser.fullName,
+            ownerPhone: myStationRow.owner_phone || currentUser.phoneNumber,
+            stationName: myStationRow.station_name,
+            category: myStationRow.category,
+            categoryLabel: myStationRow.category_label || 'Master Artisan',
+            location: myStationRow.location,
+            workshopAddress: myStationRow.workshop_address || '',
+            about: myStationRow.about || '',
+            avatar: myStationRow.avatar || currentUser.avatarUrl,
+            isApproved: myStationRow.is_approved ?? true,
+            registrationFeePaid: myStationRow.registration_fee_paid ?? true,
+            registrationFeeAmount: 5000,
+            registrationPaymentMethod: 'wallet',
+            registeredAt: myStationRow.created_at || 'Just now',
+            operatingHours: myStationRow.operating_hours || {
+              days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+              startTime: '08:00 AM',
+              endTime: '07:00 PM',
+              breakTime: '01:00 PM - 02:00 PM',
+            },
+            listings: myStationRow.listings || [],
+            staff: myStationRow.staff || [],
+            tasks: myStationRow.tasks || [],
+          };
+          setArtisanStation(loadedStation);
+          try { localStorage.setItem('AGC_artisan_station', JSON.stringify(loadedStation)); } catch (_) {}
+        }
+      }
+    });
+
+    const artCh = supabase.channel('live_artisan_stations', { config: { broadcast: { self: false } } });
+    artCh
+      .on('broadcast', { event: 'station_registered' }, ({ payload }) => {
+        if (!payload || !payload.id) return;
+        const newProvider: ServiceProvider = {
+          id: payload.id,
+          name: payload.ownerName || 'Verified Artisan',
+          businessName: payload.stationName,
+          avatar: payload.avatar,
+          category: payload.category,
+          categoryLabel: payload.categoryLabel,
+          rating: 5.0,
+          reviewCount: 1,
+          hourlyRate: 5000,
+          currency: 'NGN',
+          location: payload.location,
+          about: payload.about,
+          experienceYears: 5,
+          phone: payload.ownerPhone,
+          isVerified: true,
+          badge: 'Master Artisan Station',
+          availability: {
+            days: payload.operatingHours?.days || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+            timeSlots: ['09:00 AM', '12:00 PM', '03:00 PM', '05:30 PM'],
+          },
+          servicesOffered: payload.listings || [],
+          portfolioImages: [],
+        };
+        setServiceProviders((prev) => [newProvider, ...prev.filter((p) => p.id !== payload.id)]);
+      })
+      .subscribe();
+
+    return () => {
+      artCh.unsubscribe();
+    };
+  }, [currentUser.phoneNumber, currentUser.id]);
+
+  // 🌐 LIVE SYSTEM: Hydrate and listen for live Store Subscriptions
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    fetchLiveStoreSubscriptions().then(({ data }) => {
+      if (data && Array.isArray(data) && data.length > 0) {
+        const myStore = data.find((row: any) => row.user_id === currentUser.id || row.user_phone === currentUser.phoneNumber);
+        if (myStore) {
+          const loadedSub: StoreSubscription = {
+            tier: myStore.tier || 'starter_30',
+            monthlyFee: myStore.tier === 'pro_100' ? 7000 : 3000,
+            itemLimit: myStore.items_limit || (myStore.tier === 'pro_100' ? 100 : 30),
+            itemsCount: myStore.items_used || 0,
+            storeName: myStore.store_name,
+            description: myStore.description || '',
+            category: myStore.category || 'General Trade',
+            active: myStore.is_active ?? true,
+            expiresAt: 'In 30 days',
+            paymentMethod: (myStore.payment_method as any) || 'wallet',
+          };
+          setStoreSubscription(loadedSub);
+          try { localStorage.setItem('AGC_store_sub', JSON.stringify(loadedSub)); } catch (_) {}
+        }
+      }
+    });
+  }, [currentUser.id, currentUser.phoneNumber]);
 
   // 9. Contact Synchronization & Discovery State
   const [deviceContacts, setDeviceContacts] = useState<DeviceContact[]>(() => {
@@ -3815,6 +4072,70 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
   };
 
   // 2. Live Audio Spaces / Street Radio Handlers
+  const createAudioSpace = (
+    title: string,
+    topic: string,
+    category: AudioSpace['category'],
+    isLowBandwidth: boolean = true
+  ): AudioSpace => {
+    const spaceId = `space_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const myName = currentUser.fullName || 'Host';
+    const myAvatar = currentUser.avatarUrl || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(myName)}&backgroundColor=581c87&textColor=ffffff`;
+
+    const newSpace: AudioSpace = {
+      id: spaceId,
+      title: title.trim(),
+      topic: topic.trim() || 'Live community discussion',
+      category: category || 'Tech & Hustle',
+      hostName: myName,
+      hostAvatar: myAvatar,
+      listenersCount: 1,
+      isLive: true,
+      isLowBandwidthMode: isLowBandwidth,
+      speakers: [
+        {
+          id: currentUser.id || `sp_${Date.now()}`,
+          name: myName,
+          avatar: myAvatar,
+          role: 'host',
+          isSpeaking: true,
+          isMuted: false,
+        },
+      ],
+    };
+
+    setAudioSpaces((prev) => {
+      const updated = [newSpace, ...prev.filter((s) => s.id !== spaceId)];
+      try { localStorage.setItem('AGC_audio_spaces_v2', JSON.stringify(updated)); } catch (_) {}
+      return updated;
+    });
+
+    setActiveAudioSpace(newSpace);
+
+    // 🌐 LIVE SYSTEM: Persist to Supabase and broadcast live across all devices
+    if (isSupabaseConfigured) {
+      createAudioSpaceInDb({
+        title: newSpace.title,
+        topic: newSpace.topic,
+        category: newSpace.category,
+        is_live: true,
+        is_low_bandwidth_mode: newSpace.isLowBandwidthMode,
+        listeners_count: 1,
+      }).catch((e) => console.warn('Supabase space create notice:', e));
+
+      try {
+        const spaceCh = supabase.channel('live_audio_spaces', { config: { broadcast: { self: false } } });
+        spaceCh.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            spaceCh.send({ type: 'broadcast', event: 'space_started', payload: newSpace });
+          }
+        });
+      } catch (_) {}
+    }
+
+    return newSpace;
+  };
+
   const joinAudioSpace = (space: AudioSpace) => {
     setActiveAudioSpace(space);
     joinLiveSpace(space.id, {
@@ -5246,9 +5567,31 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
     setStoreSubscription(updatedSub);
     localStorage.setItem('AGC_store_sub', JSON.stringify(updatedSub));
 
+    // 🌐 LIVE SYSTEM: Publish Store Subscription to Supabase and broadcast live to network
+    if (isSupabaseConfigured) {
+      createStoreSubscriptionInDb({
+        store_name: updatedSub.storeName,
+        description: updatedSub.description,
+        category: updatedSub.category,
+        tier: updatedSub.tier,
+        items_limit: updatedSub.itemLimit,
+        is_active: true,
+        payment_method: updatedSub.paymentMethod,
+      }).catch((e) => console.warn('Supabase store create notice:', e));
+
+      try {
+        const storeCh = supabase.channel('live_store_subscriptions', { config: { broadcast: { self: false } } });
+        storeCh.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            storeCh.send({ type: 'broadcast', event: 'store_registered', payload: updatedSub });
+          }
+        });
+      } catch (_) {}
+    }
+
     return {
       success: true,
-      message: `🎉 Store successfully registered under ${tier === 'starter_30' ? 'Starter (30 Items Limit - ₦3k/mo)' : 'Pro (100 Items Limit - ₦7k/mo)'}!`,
+      message: `🎉 Store successfully registered live under ${tier === 'starter_30' ? 'Starter (30 Items Limit - ₦3k/mo)' : 'Pro (100 Items Limit - ₦7k/mo)'}!`,
     };
   };
 
@@ -6367,6 +6710,7 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
         activeAudioSpace,
         joinAudioSpace,
         leaveAudioSpace,
+        createAudioSpace,
         toggleAudioSpaceMute,
         toggleSpaceLowBandwidth,
         // 3. Scam Alert & Reputation Checker

@@ -1,4 +1,4 @@
-﻿import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
 import type { UserProfile } from '../types';
 
 const supabaseUrl: string =
@@ -278,3 +278,95 @@ export async function fetchActiveBroadcast() {
     .limit(1)
     .maybeSingle();
 }
+
+// ─── Live Town Communities (Groups & Channels) ────────────────────────────────
+
+export async function fetchLiveTownCommunities() {
+  return supabase
+    .from('town_communities')
+    .select('*')
+    .order('created_at', { ascending: false });
+}
+
+export async function createTownCommunityInDb(comm: {
+  name: string;
+  type?: string;
+  category?: string;
+  description?: string;
+  avatar?: string;
+  members_count?: number;
+}) {
+  return supabase.from('town_communities').insert(comm).select().maybeSingle();
+}
+
+// ─── Live Audio Spaces (Street Radio / Spaces) ───────────────────────────────
+
+export async function fetchLiveAudioSpaces() {
+  return supabase
+    .from('audio_spaces')
+    .select('*')
+    .eq('is_live', true)
+    .order('started_at', { ascending: false });
+}
+
+export async function createAudioSpaceInDb(space: {
+  title: string;
+  topic?: string;
+  category: string;
+  is_live: boolean;
+  is_low_bandwidth_mode?: boolean;
+  listeners_count?: number;
+}) {
+  return supabase.from('audio_spaces').insert(space).select().maybeSingle();
+}
+
+export async function updateAudioSpaceInDb(id: string, updates: Record<string, unknown>) {
+  return supabase.from('audio_spaces').update(updates).eq('id', id);
+}
+
+// ─── Live Artisan Stations & Workshop Hub ─────────────────────────────────────
+
+export async function fetchLiveArtisanStations() {
+  return supabase
+    .from('artisan_stations')
+    .select('*')
+    .order('created_at', { ascending: false });
+}
+
+export async function createArtisanStationInDb(station: {
+  station_name: string;
+  category: string;
+  category_label?: string;
+  location: string;
+  workshop_address?: string;
+  about?: string;
+  avatar?: string;
+  is_approved?: boolean;
+  registration_fee_paid?: boolean;
+  operating_hours?: Record<string, unknown>;
+}) {
+  return supabase.from('artisan_stations').insert(station).select().maybeSingle();
+}
+
+// ─── Live Merchant Store Subscriptions ────────────────────────────────────────
+
+export async function fetchLiveStoreSubscriptions() {
+  return supabase
+    .from('store_subscriptions')
+    .select('*')
+    .eq('is_active', true)
+    .order('registered_at', { ascending: false });
+}
+
+export async function createStoreSubscriptionInDb(sub: {
+  store_name: string;
+  description?: string;
+  category?: string;
+  tier: string;
+  items_limit: number;
+  is_active: boolean;
+  payment_method?: string;
+}) {
+  return supabase.from('store_subscriptions').insert(sub).select().maybeSingle();
+}
+

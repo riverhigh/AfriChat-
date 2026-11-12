@@ -29,6 +29,7 @@ export const TownView: React.FC = () => {
     currentUser,
     audioSpaces,
     joinAudioSpace,
+    createAudioSpace,
     setActiveChatId,
     chats,
   } = useApp();
@@ -81,7 +82,7 @@ export const TownView: React.FC = () => {
     setJoinCodeInput('');
   };
   const [newCommunityName, setNewCommunityName] = useState('');
-  const [newCommunityType, setNewCommunityType] = useState<'group' | 'channel'>('group');
+  const [newCommunityType, setNewCommunityType] = useState<'group' | 'channel' | 'space'>('group');
   const [newCommunityCategory, setNewCommunityCategory] = useState<TownCommunity['category']>('Tech & Hustle');
   const [newCommunityDesc, setNewCommunityDesc] = useState('');
 
@@ -374,6 +375,32 @@ export const TownView: React.FC = () => {
           </div>
         )}
 
+        {/* Empty State for Spaces Filter */}
+        {activeFilter === 'spaces' && liveSpaces.length === 0 && (
+          <div className="py-12 px-4 text-center bg-white dark:bg-neutral-900 rounded-3xl border border-dashed border-purple-300/80 dark:border-purple-800/40">
+            <div className="w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-500 flex items-center justify-center mx-auto mb-3">
+              <Radio className="w-6 h-6 animate-pulse" />
+            </div>
+            <h4 className="font-bold text-sm text-slate-800 dark:text-white font-display">
+              No live audio spaces right now
+            </h4>
+            <p className="text-xs text-slate-400 dark:text-neutral-500 mt-1 max-w-xs mx-auto">
+              Start your own Live Space and broadcast to listeners across Africa in real time!
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setNewCommunityType('space');
+                setShowCreateModal(true);
+              }}
+              className="mt-4 px-4 py-2 bg-gradient-to-r from-purple-600 to-rose-600 hover:from-purple-500 hover:to-rose-500 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-md shadow-purple-600/20 inline-flex items-center gap-1.5"
+            >
+              <Radio className="w-3.5 h-3.5" />
+              <span>Start Live Space</span>
+            </button>
+          </div>
+        )}
+
         {/* 2. Channels & Discussion Groups List */}
         {activeFilter !== 'spaces' && (
           <div className="space-y-2.5">
@@ -532,28 +559,39 @@ export const TownView: React.FC = () => {
                 <label className="text-[11px] font-semibold text-slate-700 dark:text-neutral-300 block mb-1">
                   Community Type
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-1.5">
                   <button
                     type="button"
                     onClick={() => setNewCommunityType('group')}
-                    className={`py-2 px-3 rounded-xl text-xs font-bold border transition-colors ${
+                    className={`py-2 px-2 rounded-xl text-xs font-bold border transition-colors ${
                       newCommunityType === 'group'
                         ? 'bg-purple-600 text-white border-purple-600'
                         : 'border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-400'
                     }`}
                   >
-                    Group (Discussion)
+                    Group
                   </button>
                   <button
                     type="button"
                     onClick={() => setNewCommunityType('channel')}
-                    className={`py-2 px-3 rounded-xl text-xs font-bold border transition-colors ${
+                    className={`py-2 px-2 rounded-xl text-xs font-bold border transition-colors ${
                       newCommunityType === 'channel'
                         ? 'bg-purple-600 text-white border-purple-600'
                         : 'border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-400'
                     }`}
                   >
-                    Channel (Broadcast)
+                    Channel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewCommunityType('space')}
+                    className={`py-2 px-2 rounded-xl text-xs font-bold border transition-colors ${
+                      newCommunityType === 'space'
+                        ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                        : 'border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-400'
+                    }`}
+                  >
+                    Live Space 🎙️
                   </button>
                 </div>
               </div>
@@ -610,14 +648,22 @@ export const TownView: React.FC = () => {
                 type="button"
                 onClick={() => {
                   if (!newCommunityName.trim()) return;
-                  addTownCommunity(newCommunityName, newCommunityType, newCommunityCategory, newCommunityDesc);
+                  if (newCommunityType === 'space') {
+                    createAudioSpace(newCommunityName, newCommunityDesc, newCommunityCategory as any);
+                  } else {
+                    addTownCommunity(newCommunityName, newCommunityType, newCommunityCategory, newCommunityDesc);
+                  }
                   setShowCreateModal(false);
                   setNewCommunityName('');
                   setNewCommunityDesc('');
                 }}
-                className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md transition-colors"
+                className={`w-full py-2.5 rounded-xl text-white font-bold text-xs shadow-md transition-colors ${
+                  newCommunityType === 'space'
+                    ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/30'
+                    : 'bg-purple-600 hover:bg-purple-700 shadow-purple-600/30'
+                }`}
               >
-                Publish to Town
+                {newCommunityType === 'space' ? 'Go Live Now 🎙️' : 'Publish to Town'}
               </button>
             </div>
           </div>
