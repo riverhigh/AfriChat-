@@ -3183,9 +3183,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
       .subscribe();
 
-    // 4. Polling heartbeat for session enforcement across remote devices
+    // 4. Polling heartbeat for session enforcement across remote devices (zero-waste, tab-aware)
     const sessionHeartbeat = setInterval(async () => {
       if (!isSupabaseConfigured || !currentUser?.phoneNumber) return;
+      if (typeof document !== 'undefined' && document.hidden) return; // Pause when tab is inactive
       const myToken = localStorage.getItem('AGC_session_token');
       if (!myToken) return;
       try {
@@ -3198,7 +3199,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           triggerForceLogout();
         }
       } catch (_) {}
-    }, 5000);
+    }, 60000);
 
     return () => {
       socket?.off('incoming_call', handleIncomingCall);

@@ -145,12 +145,13 @@ export async function fetchWalletTransactions(userId: string, limit = 50) {
 
 // ─── Products Helpers ─────────────────────────────────────────────────────────
 
-export async function fetchProducts(category?: string, search?: string) {
+export async function fetchProducts(category?: string, search?: string, limit = 60) {
   let query = supabase
     .from('products')
     .select('*')
     .eq('is_active', true)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(limit);
 
   if (category && category !== 'all') {
     query = query.eq('category', category);
@@ -163,12 +164,13 @@ export async function fetchProducts(category?: string, search?: string) {
 
 // ─── Service Providers ────────────────────────────────────────────────────────
 
-export async function fetchServiceProviders(category?: string) {
+export async function fetchServiceProviders(category?: string, limit = 60) {
   let query = supabase
     .from('service_providers')
     .select('*')
     .eq('is_active', true)
-    .order('rating', { ascending: false });
+    .order('rating', { ascending: false })
+    .limit(limit);
 
   if (category && category !== 'all') {
     query = query.eq('category', category);
@@ -178,12 +180,13 @@ export async function fetchServiceProviders(category?: string) {
 
 // ─── Escrow Orders ────────────────────────────────────────────────────────────
 
-export async function fetchEscrowOrders(userId: string) {
+export async function fetchEscrowOrders(userId: string, limit = 50) {
   return supabase
     .from('escrow_orders')
     .select('*')
     .or(`buyer_id.eq.${userId},seller_id.eq.${userId}`)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(limit);
 }
 
 // ─── Messages / Realtime ──────────────────────────────────────────────────────
@@ -238,7 +241,7 @@ export function subscribeToBroadcasts(
 
 // ─── Courses ──────────────────────────────────────────────────────────────────
 
-export async function fetchCourses(category?: string, search?: string) {
+export async function fetchCourses(category?: string, search?: string, limit = 60) {
   let query = supabase
     .from('courses')
     .select(`
@@ -248,7 +251,8 @@ export async function fetchCourses(category?: string, search?: string) {
       )
     `)
     .eq('is_published', true)
-    .order('enrolled_students_count', { ascending: false });
+    .order('enrolled_students_count', { ascending: false })
+    .limit(limit);
 
   if (category && category !== 'all') {
     query = query.eq('category', category);
@@ -281,11 +285,12 @@ export async function fetchActiveBroadcast() {
 
 // ─── Live Town Communities (Groups & Channels) ────────────────────────────────
 
-export async function fetchLiveTownCommunities() {
+export async function fetchLiveTownCommunities(limit = 100) {
   return supabase
     .from('town_communities')
     .select('*')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(limit);
 }
 
 export async function createTownCommunityInDb(comm: {
@@ -301,12 +306,13 @@ export async function createTownCommunityInDb(comm: {
 
 // ─── Live Audio Spaces (Street Radio / Spaces) ───────────────────────────────
 
-export async function fetchLiveAudioSpaces() {
+export async function fetchLiveAudioSpaces(limit = 60) {
   return supabase
     .from('audio_spaces')
     .select('*')
     .eq('is_live', true)
-    .order('started_at', { ascending: false });
+    .order('started_at', { ascending: false })
+    .limit(limit);
 }
 
 export async function createAudioSpaceInDb(space: {
@@ -326,11 +332,12 @@ export async function updateAudioSpaceInDb(id: string, updates: Record<string, u
 
 // ─── Live Artisan Stations & Workshop Hub ─────────────────────────────────────
 
-export async function fetchLiveArtisanStations() {
+export async function fetchLiveArtisanStations(limit = 100) {
   return supabase
     .from('artisan_stations')
     .select('*')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(limit);
 }
 
 export async function createArtisanStationInDb(station: {
@@ -350,12 +357,13 @@ export async function createArtisanStationInDb(station: {
 
 // ─── Live Merchant Store Subscriptions ────────────────────────────────────────
 
-export async function fetchLiveStoreSubscriptions() {
+export async function fetchLiveStoreSubscriptions(limit = 100) {
   return supabase
     .from('store_subscriptions')
     .select('*')
     .eq('is_active', true)
-    .order('registered_at', { ascending: false });
+    .order('registered_at', { ascending: false })
+    .limit(limit);
 }
 
 export async function createStoreSubscriptionInDb(sub: {
