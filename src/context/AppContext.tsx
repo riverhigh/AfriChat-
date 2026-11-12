@@ -596,7 +596,7 @@ const AGC_DATA_VERSION = 'v3_clean_2026';
   if (typeof window === 'undefined') return;
   const stored = localStorage.getItem('AGC_data_version');
   if (stored !== AGC_DATA_VERSION) {
-    const keepKeys = new Set(['AGC_data_version', 'AGC_font_size', 'AGC_low_data_mode', 'AGC_language', 'AGC_currency', 'AGC_hide_phone_town', 'AGC_user_profile_v2', 'AGC_is_authenticated', 'AGC_device_contacts', 'AGC_registered_users_cache', 'AGC_registered_phones', 'AGC_taken_usernames', 'AGC_session_token']);
+    const keepKeys = new Set(['AGC_data_version', 'AGC_font_size', 'AGC_low_data_mode', 'AGC_language', 'AGC_currency', 'AGC_hide_phone_town', 'AGC_user_profile_v2', 'AGC_is_authenticated', 'AGC_device_contacts', 'AGC_registered_users_cache', 'AGC_registered_phones', 'AGC_taken_usernames', 'AGC_session_token', 'AGC_all_registered_users']);
     const toRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -4682,6 +4682,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 1. LocalStorage Persistence (Never wiped)
     localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
     localStorage.setItem('AGC_is_authenticated', 'true');
+
+    // Register phone in persistent registry for duplicate detection
+    try {
+      const regMap = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
+      const entry = {
+        phoneNumber: updatedUser.phoneNumber,
+        fullName: updatedUser.fullName,
+        avatarUrl: updatedUser.avatarUrl,
+        registeredAt: new Date().toISOString(),
+      };
+      regMap[cleanPhone] = entry;
+      regMap[updatedUser.phoneNumber] = entry;
+      const core = cleanPhone.replace(/^234|^233|^254|^27|^256|^250|^225|^255|^237|^20|^44|^1/, '').replace(/^0+/, '');
+      if (core) {
+        regMap[core] = entry;
+        if (core.length >= 9) regMap[core.slice(-9)] = entry;
+      }
+      localStorage.setItem('AGC_registered_phones', JSON.stringify(regMap));
+
+      const allUsers: UserProfile[] = JSON.parse(localStorage.getItem('AGC_all_registered_users') || '[]');
+      const filtered = allUsers.filter(u => u.phoneNumber !== updatedUser.phoneNumber);
+      filtered.push(updatedUser);
+      localStorage.setItem('AGC_all_registered_users', JSON.stringify(filtered));
+
+      const cleanUser = (updatedUser.fullName || '').toLowerCase().replace(/^@/, '').trim();
+      const takenList: string[] = JSON.parse(localStorage.getItem('AGC_taken_usernames') || '[]');
+      if (cleanUser && !takenList.includes(cleanUser)) {
+        takenList.push(cleanUser);
+        localStorage.setItem('AGC_taken_usernames', JSON.stringify(takenList));
+      }
+    } catch (_) {}
+
     requestNotificationPermission().catch(() => {});
     setIsAuthModalOpen(false);
 

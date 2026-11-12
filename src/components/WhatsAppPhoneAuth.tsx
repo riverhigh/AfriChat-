@@ -59,6 +59,120 @@ const RESERVED_USERNAMES = new Set([
   'davido', 'burnaboy', 'wizkid', 'asake', 'tiwasavage', 'rema',
 ]);
 
+const extractCoreDigits = (raw: string): string => {
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return '';
+  const stripped = digits.replace(/^(234|233|254|27|256|250|225|255|237|20|44|1)/, '');
+  const core = stripped.replace(/^0+/, '');
+  return core || digits;
+};
+
+const findExistingAccount = (
+  rawInput: string,
+  countryCode: string
+): { name: string; avatarUrl?: string; phone: string } | null => {
+  const inputDigits = rawInput.replace(/\D/g, '');
+  if (!inputDigits || inputDigits.length < 7) return null;
+  const inputCore = extractCoreDigits(rawInput);
+  const inputLast9 = inputCore.length >= 9 ? inputCore.slice(-9) : inputCore;
+
+  const matchesPhone = (candidatePhone: string): boolean => {
+    if (!candidatePhone) return false;
+    const candDigits = candidatePhone.replace(/\D/g, '');
+    if (!candDigits) return false;
+    if (candDigits === inputDigits) return true;
+    const candCore = extractCoreDigits(candidatePhone);
+    if (candCore && inputCore && candCore === inputCore) return true;
+    const candLast9 = candCore.length >= 9 ? candCore.slice(-9) : candCore;
+    if (candLast9 && inputLast9 && candLast9 === inputLast9) return true;
+    return false;
+  };
+
+  // 1. Check AGC_registered_phones map in localStorage
+  try {
+    const raw = localStorage.getItem('AGC_registered_phones');
+    if (raw) {
+      const reg = JSON.parse(raw);
+      for (const [key, val] of Object.entries(reg) as [string, any][]) {
+        if (matchesPhone(key) || (val?.phoneNumber && matchesPhone(val.phoneNumber))) {
+          return {
+            name: val.fullName || val.username || 'AGC User',
+            avatarUrl: val.avatarUrl,
+            phone: val.phoneNumber || key,
+          };
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 2. Check AGC_all_registered_users array in localStorage
+  try {
+    const raw = localStorage.getItem('AGC_all_registered_users');
+    if (raw) {
+      const users: any[] = JSON.parse(raw);
+      for (const u of users) {
+        if (u?.phoneNumber && matchesPhone(u.phoneNumber)) {
+          return {
+            name: u.fullName || 'AGC User',
+            avatarUrl: u.avatarUrl,
+            phone: u.phoneNumber,
+          };
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 3. Check active or last user profile (AGC_user_profile_v2) in localStorage
+  try {
+    const raw = localStorage.getItem('AGC_user_profile_v2');
+    if (raw) {
+      const u = JSON.parse(raw);
+      if (u?.phoneNumber && matchesPhone(u.phoneNumber)) {
+        return {
+          name: u.fullName || 'AGC User',
+          avatarUrl: u.avatarUrl,
+          phone: u.phoneNumber,
+        };
+      }
+    }
+  } catch (_) {}
+
+  // 4. Exhaustive search across all other localStorage keys
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      const valStr = localStorage.getItem(k);
+      if (!valStr || !valStr.includes(inputLast9)) continue;
+      try {
+        const parsed = JSON.parse(valStr);
+        if (parsed && typeof parsed === 'object') {
+          if (parsed.phoneNumber && matchesPhone(parsed.phoneNumber)) {
+            return {
+              name: parsed.fullName || 'AGC User',
+              avatarUrl: parsed.avatarUrl,
+              phone: parsed.phoneNumber,
+            };
+          }
+          if (Array.isArray(parsed)) {
+            for (const item of parsed) {
+              if (item?.phoneNumber && matchesPhone(item.phoneNumber)) {
+                return {
+                  name: item.fullName || 'AGC User',
+                  avatarUrl: item.avatarUrl,
+                  phone: item.phoneNumber,
+                };
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+
+  return null;
+};
+
 export const WhatsAppPhoneAuth: React.FC = () => {
   const { loginWithPhone } = useApp();
 
@@ -85,7 +199,19 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   const otpInputsRef = useRef<(HTMLInputElement | null)[]>([]);
   const usernameCheckTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const fullNormalizedNumber = `${selectedCountry.code}${phoneNumber.replace(/^0+/, '').replace(/\s+/g, '')}`;
+  // Normalized number format: country dial code + clean core subscriber digits
+  const formatFullNormalizedNumber = (phone: string, countryCode: string): string => {
+    const digits = phone.replace(/\D/g, '');
+    const dial = countryCode.replace(/\D/g, '');
+    let core = digits;
+    if (digits.startsWith(dial)) {
+      core = digits.slice(dial.length);
+    }
+    core = core.replace(/^0+/, '');
+    return `${countryCode}${core}`;
+  };
+
+  const fullNormalizedNumber = formatFullNormalizedNumber(phoneNumber, selectedCountry.code);
 
   // Step index for progress bar
   const stepIndex = step === 'phone' || step === 'confirm_dialog' || step === 'device_conflict' ? 1 : step === 'otp' ? 2 : 3;
@@ -127,6 +253,14 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         const reg = JSON.parse(regRaw);
         for (const val of Object.values(reg) as any[]) {
           const u = (val.fullName || val.username || '').toLowerCase().replace(/^@/, '');
+          if (u === clean) return 'taken';
+        }
+      }
+      const allUsersRaw = localStorage.getItem('AGC_all_registered_users');
+      if (allUsersRaw) {
+        const users: any[] = JSON.parse(allUsersRaw);
+        for (const val of users) {
+          const u = (val.fullName || '').toLowerCase().replace(/^@/, '');
           if (u === clean) return 'taken';
         }
       }
@@ -179,7 +313,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     }, 300);
   };
 
-  // Handle phone submit — move to number-confirmation dialog
+  // Handle phone submit — immediately check if phone number has been used before!
   const handlePhoneSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -188,6 +322,16 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       setErrorMessage('Please enter a valid phone number (at least 7 digits)');
       return;
     }
+
+    // Intercept immediately: If number exists on any device/session, prompt device conflict!
+    const existing = findExistingAccount(phoneNumber, selectedCountry.code);
+    if (existing) {
+      setIsExistingAccount(true);
+      setExistingSessionInfo({ name: existing.name, avatarUrl: existing.avatarUrl });
+      setStep('device_conflict');
+      return;
+    }
+
     setStep('confirm_dialog');
   };
 
@@ -196,29 +340,37 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   const handleProceedToSendOtp = async () => {
     setIsCheckingDevice(true);
     setErrorMessage(null);
+
+    // Double check existing
+    const existing = findExistingAccount(phoneNumber, selectedCountry.code);
+    if (existing) {
+      setIsCheckingDevice(false);
+      setIsExistingAccount(true);
+      setExistingSessionInfo({ name: existing.name, avatarUrl: existing.avatarUrl });
+      setStep('device_conflict');
+      return;
+    }
+
     const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
 
-    // ── Check if phone number was already used before ───────────────────
-    let phoneAlreadyUsed = false;
-    let foundName: string | undefined;
-    let foundAvatar: string | undefined;
-
-    // 1. Check local REST server
+    // Check local REST server
     try {
       const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const resp = await fetch(`http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`).catch(() => null);
       if (resp && resp.ok) {
         const data = await resp.json();
         if (data.registered) {
-          phoneAlreadyUsed = true;
-          foundName = data.name;
-          foundAvatar = data.avatarUrl;
+          setIsCheckingDevice(false);
+          setIsExistingAccount(true);
+          setExistingSessionInfo({ name: data.name || 'AGC User', avatarUrl: data.avatarUrl });
+          setStep('device_conflict');
+          return;
         }
       }
     } catch (_) {}
 
-    // 2. Check Supabase profiles table
-    if (!phoneAlreadyUsed && isSupabaseConfigured) {
+    // Check Supabase profiles table
+    if (isSupabaseConfigured) {
       try {
         const { data: profile } = await supabase
           .from('profiles')
@@ -228,51 +380,19 @@ export const WhatsAppPhoneAuth: React.FC = () => {
           .maybeSingle();
 
         if (profile && (profile.full_name || profile.phone_number)) {
-          phoneAlreadyUsed = true;
-          foundName = profile.full_name;
-          foundAvatar = profile.avatar_url;
-        }
-      } catch (_) {}
-    }
-
-    // 3. Check localStorage persistent registry
-    if (!phoneAlreadyUsed) {
-      try {
-        const regRaw = localStorage.getItem('AGC_registered_phones');
-        if (regRaw) {
-          const reg = JSON.parse(regRaw);
-          const found = reg[cleanPhone] || reg[fullNormalizedNumber];
-          if (found && (found.fullName || found.username)) {
-            phoneAlreadyUsed = true;
-            foundName = found.fullName || found.username;
-            foundAvatar = found.avatarUrl;
-          }
-        }
-        const lastUserRaw = localStorage.getItem('AGC_user_profile_v2');
-        if (lastUserRaw) {
-          const lastUser = JSON.parse(lastUserRaw);
-          const lastClean = (lastUser.phoneNumber || '').replace(/\D/g, '');
-          if (lastClean && (lastClean === cleanPhone || lastUser.phoneNumber === fullNormalizedNumber)) {
-            phoneAlreadyUsed = true;
-            foundName = foundName || lastUser.fullName;
-            foundAvatar = foundAvatar || lastUser.avatarUrl;
-          }
+          setIsCheckingDevice(false);
+          setIsExistingAccount(true);
+          setExistingSessionInfo({ name: profile.full_name || 'AGC User', avatarUrl: profile.avatar_url });
+          setStep('device_conflict');
+          return;
         }
       } catch (_) {}
     }
 
     setIsCheckingDevice(false);
-
-    if (phoneAlreadyUsed) {
-      // Prompt: This number has been logged on another device. Do you want to continue login?
-      setIsExistingAccount(true);
-      setExistingSessionInfo({ name: foundName || 'AGC User', avatarUrl: foundAvatar });
-      setStep('device_conflict');
-    } else {
-      setIsExistingAccount(false);
-      setExistingSessionInfo(null);
-      await sendOtp();
-    }
+    setIsExistingAccount(false);
+    setExistingSessionInfo(null);
+    await sendOtp();
   };
 
   // Send the OTP code and move to OTP entry screen
@@ -340,17 +460,17 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         return;
       }
 
-      // ✅ OTP valid — check if this number already has an account
-      const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
-
-      // 1. If flagged as existing account from pre-check:
-      if (isExistingAccount && existingSessionInfo?.name) {
+      // ✅ OTP valid — check if this number was registered
+      const existing = existingSessionInfo || findExistingAccount(phoneNumber, selectedCountry.code);
+      if (isExistingAccount || existing) {
         setIsVerifying(false);
-        loginWithPhone(fullNormalizedNumber, existingSessionInfo.name, existingSessionInfo.avatarUrl, 'Available · Using AGC');
+        loginWithPhone(fullNormalizedNumber, existing?.name || 'AGC User', existing?.avatarUrl, 'Available · Using AGC');
         return;
       }
 
-      // 2. Check local REST server
+      const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
+
+      // Check local REST server
       try {
         const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
         const checkUrl = `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`;
@@ -365,7 +485,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         }
       } catch (_) {}
 
-      // 3. Check Supabase if configured
+      // Check Supabase if configured
       if (isSupabaseConfigured) {
         try {
           const { data: profile } = await supabase
@@ -382,20 +502,6 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         } catch (_) {}
       }
 
-      // 4. Check localStorage registry
-      try {
-        const regRaw = localStorage.getItem('AGC_registered_phones');
-        if (regRaw) {
-          const reg = JSON.parse(regRaw);
-          const found = reg[cleanPhone] || reg[fullNormalizedNumber];
-          if (found && (found.fullName || found.username)) {
-            setIsVerifying(false);
-            loginWithPhone(fullNormalizedNumber, found.fullName || found.username, found.avatarUrl, 'Available · Using AGC');
-            return;
-          }
-        }
-      } catch (_) {}
-
       // Genuinely new user — proceed to username selection
       setIsVerifying(false);
       setStep('profile');
@@ -405,6 +511,14 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   // Complete profile setup with unique username
   const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Guard: If account exists, log in directly without allowing re-registration
+    const existing = findExistingAccount(phoneNumber, selectedCountry.code);
+    if (existing) {
+      loginWithPhone(fullNormalizedNumber, existing.name, existing.avatarUrl, 'Available · Using AGC');
+      return;
+    }
+
     const cleanUser = fullName.trim().toLowerCase().replace(/^@/, '');
 
     if (!cleanUser) {
@@ -440,8 +554,14 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       }
       const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
       const reg = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
-      reg[cleanPhone] = { fullName: cleanUser, avatarUrl: selectedAvatar, phoneNumber: fullNormalizedNumber };
-      reg[fullNormalizedNumber] = { fullName: cleanUser, avatarUrl: selectedAvatar, phoneNumber: fullNormalizedNumber };
+      const entry = { fullName: cleanUser, avatarUrl: selectedAvatar, phoneNumber: fullNormalizedNumber };
+      reg[cleanPhone] = entry;
+      reg[fullNormalizedNumber] = entry;
+      const core = cleanPhone.replace(/^234|^233|^254|^27|^256|^250|^225|^255|^237|^20|^44|^1/, '').replace(/^0+/, '');
+      if (core) {
+        reg[core] = entry;
+        if (core.length >= 9) reg[core.slice(-9)] = entry;
+      }
       localStorage.setItem('AGC_registered_phones', JSON.stringify(reg));
     } catch (_) {}
 
@@ -914,7 +1034,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                   Choose Your Username
                 </h1>
                 <p className="text-xs text-purple-200/70 mt-1 max-w-xs mx-auto">
-                  Pick your unique username and avatar. You can add your full name in your profile later.
+                  Pick your unique username and avatar
                 </p>
               </div>
 
@@ -1022,8 +1142,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                   />
                 </div>
 
-                <div className="flex items-center justify-between text-[10px] text-purple-300/60 px-1 pt-0.5">
-                  <span>Unique handle for your chats & payments. You can add your full name in profile later.</span>
+                <div className="flex items-center justify-end text-[10px] text-purple-300/60 px-1 pt-0.5">
                   <span>{fullName.length}/30</span>
                 </div>
               </div>
