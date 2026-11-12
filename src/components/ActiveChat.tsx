@@ -40,6 +40,7 @@ import { ChatMessage, Product, LanguageCode } from '../types';
 import { EmojiMemeDrawer } from './EmojiMemeDrawer';
 import { DisplayWallpaperModal } from './DisplayWallpaperModal';
 import { ContactProfileModal } from './ContactProfileModal';
+import { compressImageFile } from '../utils/imageUtils';
 
 interface ActiveChatProps {
   onOpenVoiceRecorder: () => void;
@@ -114,18 +115,25 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     touchStartY.current = null;
   };
 
-  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !activeChatId) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        sendImageMessage(activeChatId, reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
     setShowAttachMenu(false);
+    try {
+      const compressedDataUrl = await compressImageFile(file, 1200, 0.75);
+      sendImageMessage(activeChatId, compressedDataUrl);
+    } catch (err) {
+      console.warn('Image compression fallback:', err);
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          sendImageMessage(activeChatId, reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    } finally {
+      e.target.value = '';
+    }
   };
 
   const [inputText, setInputText] = useState('');

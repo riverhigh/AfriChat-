@@ -24,6 +24,7 @@ export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
 };
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
+import { downsampleDataUrl } from '../utils/imageUtils';
 import {
   supabase,
   isSupabaseConfigured,
@@ -3599,7 +3600,98 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const sendImageMessage = (chatId: string, imageUrl: string, caption?: string) => {
+  // Unified Multi-Transport Live Message Broadcaster
+  const broadcastLiveMessage = (chatId: string, msg: ChatMessage) => {
+    const currentChat = chats.find((c) => c.id === chatId);
+    const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    let targetCleanPhone = currentChat?.phone?.replace(/\D/g, '');
+
+    if (!targetCleanPhone && chatId.startsWith('dm_')) {
+      const parts = chatId.replace('dm_', '').split('_');
+      targetCleanPhone = parts.find((p) => p !== myCleanPhone) || parts[0];
+    }
+
+    if (!targetCleanPhone && currentChat?.id) {
+      const contactMatch = deviceContacts.find((ct) => ct.id === currentChat.id || ct.name === currentChat.name);
+      if (contactMatch?.rawPhoneNumber) {
+        targetCleanPhone = contactMatch.rawPhoneNumber.replace(/\D/g, '');
+      }
+    }
+
+    // 1. BroadcastChannel (instant same-computer tab/window sync)
+    try {
+      const bc = new BroadcastChannel('AGC_chats_sync');
+      bc.postMessage({ chatId, message: msg, senderId: currentUser.id, targetPhone: targetCleanPhone });
+      bc.close();
+    } catch (e) {
+      console.warn('BroadcastChannel error:', e);
+    }
+
+    // 2. Socket.io Live WebSocket Relay
+    emitLiveMessage(chatId, msg, targetCleanPhone);
+
+    // 3. Supabase Realtime (Cross-device & background inbox channel)
+    if (isSupabaseConfigured) {
+      try {
+        const sbChannel = supabase.channel(`chat_${chatId}`, {
+          config: { broadcast: { self: false } },
+        });
+        sbChannel.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            sbChannel.send({
+              type: 'broadcast',
+              event: 'new_message',
+              payload: { chatId, message: msg, senderId: currentUser.id },
+            });
+          }
+        });
+
+        // Directly broadcast to recipient's personal inbox channel
+        if (targetCleanPhone) {
+          const inboxChannel = supabase.channel(`inbox_${targetCleanPhone}`, {
+            config: { broadcast: { self: false } },
+          });
+          inboxChannel.subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+              inboxChannel.send({
+                type: 'broadcast',
+                event: 'new_message',
+                payload: { chatId, message: msg, senderId: currentUser.id },
+              });
+            }
+          });
+        }
+
+        // If town community, broadcast to town feed
+        if (chatId.startsWith('town_comm_')) {
+          const townFeed = supabase.channel('town_community_feed', {
+            config: { broadcast: { self: false } },
+          });
+          townFeed.subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+              townFeed.send({
+                type: 'broadcast',
+                event: 'new_message',
+                payload: { chatId, message: msg, senderId: currentUser.id },
+              });
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('Supabase chat broadcast notice:', e);
+      }
+    }
+  };
+
+  const sendImageMessage = async (chatId: string, imageUrl: string, caption?: string) => {
+    // Ensure image data URL fits comfortably within Supabase 256KB Realtime payload
+    let finalImageUrl = imageUrl;
+    if (imageUrl.startsWith('data:image') && imageUrl.length > 250000) {
+      try {
+        finalImageUrl = await downsampleDataUrl(imageUrl, 1200, 0.75);
+      } catch (_) {}
+    }
+
     const newMsg: ChatMessage = {
       id: 'msg_img_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
       chatId,
@@ -3608,7 +3700,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderPhone: currentUser.phoneNumber,
       senderAvatar: currentUser.avatarUrl,
       type: 'image',
-      imageUrl,
+      imageUrl: finalImageUrl,
       text: caption || '',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'sent',
@@ -3628,7 +3720,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         c.id === chatId
           ? {
               ...c,
-              lastMessage: '📷 Photo',
+              lastMessage: caption ? `📷 ${caption}` : '📷 Photo',
               lastMessageTime: newMsg.timestamp,
             }
           : c
@@ -3638,6 +3730,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
       return updated;
     });
+
+    // Broadcast live across all transports (Socket.io, BroadcastChannel, Supabase Realtime)
+    broadcastLiveMessage(chatId, newMsg);
   };
 
   const clearChat = (chatId: string) => {
@@ -3659,17 +3754,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }) => {
+  const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }) => {
     if (!text.trim()) return;
-
-    const currentChat = chats.find((c) => c.id === chatId);
-    const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
-    let targetCleanPhone = currentChat?.phone?.replace(/\D/g, '');
-
-    if (!targetCleanPhone && chatId.startsWith('dm_')) {
-      const parts = chatId.replace('dm_', '').split('_');
-      targetCleanPhone = parts.find((p) => p !== myCleanPhone) || parts[0];
-    }
 
     const newMsg: ChatMessage = {
       id: `msg_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -3721,69 +3807,8 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
       return updated;
     });
 
-    // 2. Broadcast via BroadcastChannel (instant same-computer tab/window sync)
-    try {
-      const bc = new BroadcastChannel('AGC_chats_sync');
-      bc.postMessage({ chatId, message: newMsg, senderId: currentUser.id, targetPhone: targetCleanPhone });
-      bc.close();
-    } catch (e) {
-      console.warn('BroadcastChannel error:', e);
-    }
-
-    // 3. Broadcast via Socket.io
-    emitLiveMessage(chatId, newMsg, targetCleanPhone);
-
-    // 4. Broadcast via Supabase Realtime to chat room, recipient inbox & town feed
-    if (isSupabaseConfigured) {
-      try {
-        const sbChannel = supabase.channel(`chat_${chatId}`, {
-          config: { broadcast: { self: false } },
-        });
-        sbChannel.subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-            sbChannel.send({
-              type: 'broadcast',
-              event: 'new_message',
-              payload: { chatId, message: newMsg, senderId: currentUser.id },
-            });
-          }
-        });
-
-        // Directly broadcast to recipient's personal inbox channel
-        if (targetCleanPhone) {
-          const inboxChannel = supabase.channel(`inbox_${targetCleanPhone}`, {
-            config: { broadcast: { self: false } },
-          });
-          inboxChannel.subscribe((status) => {
-            if (status === 'SUBSCRIBED') {
-              inboxChannel.send({
-                type: 'broadcast',
-                event: 'new_message',
-                payload: { chatId, message: newMsg, senderId: currentUser.id },
-              });
-            }
-          });
-        }
-
-        // If town community, broadcast to town feed
-        if (chatId.startsWith('town_comm_')) {
-          const townFeed = supabase.channel('town_community_feed', {
-            config: { broadcast: { self: false } },
-          });
-          townFeed.subscribe((status) => {
-            if (status === 'SUBSCRIBED') {
-              townFeed.send({
-                type: 'broadcast',
-                event: 'new_message',
-                payload: { chatId, message: newMsg, senderId: currentUser.id },
-              });
-            }
-          });
-        }
-      } catch (e) {
-        console.warn('Supabase chat broadcast notice:', e);
-      }
-    }
+    // 2. Broadcast live
+    broadcastLiveMessage(chatId, newMsg);
   };
 
   const sendVoiceNote = (chatId: string, durationSeconds: number, transcript: string) => {
@@ -3827,39 +3852,8 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
       )
     );
 
-    // --- Multi-transport broadcast (same as sendMessage) ---
-    const currentChat = chats.find((c) => c.id === chatId);
-    const targetCleanPhone = currentChat?.phone?.replace(/\D/g, '');
-
-    // 2. BroadcastChannel (same-computer tab sync)
-    try {
-      const bc = new BroadcastChannel('AGC_chats_sync');
-      bc.postMessage({ chatId, message: newMsg, senderId: currentUser?.id, targetPhone: targetCleanPhone });
-      bc.close();
-    } catch (e) {
-      console.warn('BroadcastChannel voice note error:', e);
-    }
-
-    // 3. Socket.io
-    emitLiveMessage(chatId, newMsg, targetCleanPhone);
-
-    // 4. Supabase Realtime
-    try {
-      const sbChannel = supabase.channel(`chat_${chatId}`, {
-        config: { broadcast: { self: false } },
-      });
-      sbChannel.subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          sbChannel.send({
-            type: 'broadcast',
-            event: 'new_message',
-            payload: { chatId, message: newMsg, senderId: currentUser?.id },
-          });
-        }
-      });
-    } catch (e) {
-      console.warn('Supabase voice note broadcast error:', e);
-    }
+    // Broadcast live
+    broadcastLiveMessage(chatId, newMsg);
   };
 
   const sendProductCard = (chatId: string, product: Product) => {
@@ -4069,6 +4063,8 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
           : c
       )
     );
+
+    broadcastLiveMessage(chatId, newMsg);
   };
 
   // 2. Live Audio Spaces / Street Radio Handlers
@@ -4811,6 +4807,7 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
     );
 
     setIsEmojiMemeDrawerOpen(false);
+    broadcastLiveMessage(chatId, newMsg);
   };
 
   // 11. Dispatch Handlers
@@ -6311,7 +6308,15 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
             (otherCleanPhone && c.phone && c.phone.replace(/\D/g, '') === otherCleanPhone)
         );
 
-        const msgText = message.text || (message.type === 'voice' ? '🎤 Voice message' : '📎 Attachment');
+        const msgText =
+          message.text ||
+          (message.type === 'image'
+            ? '📷 Photo'
+            : message.type === 'voice'
+            ? '🎤 Voice message'
+            : message.type === 'meme_sticker'
+            ? '🎭 Sticker'
+            : '📎 Attachment');
 
         if (index >= 0) {
           const updated = [...prev];
@@ -6352,7 +6357,7 @@ const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; send
       if (activeChatId !== resolvedChatId && activeChatId !== chatId) {
         showLocalNotification(
           `💬 ${message.senderName || 'AGC User'}`,
-          message.text || 'Sent you an attachment',
+          message.text || (message.type === 'image' ? '📷 Sent a photo' : 'Sent you an attachment'),
           message.senderAvatar || '/icon-192.png'
         );
       }
