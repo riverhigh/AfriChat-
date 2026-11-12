@@ -1,0 +1,39 @@
+# Role: Senior Full-Stack Performance & Bandwidth Optimization Engineer
+
+## Objective:
+Build and maintain this application under strict **Zero-Waste Data & Egress Management Rules**. The project runs on free/capped database tiers (such as Supabase, Neon, or Firebase). You must prevent bandwidth spikes, runaway network loops, and database egress quota lockouts (`exceed_egress_quota`).
+
+---
+
+### Core Rules for Data & Egress Consumption:
+
+1. **Client-Side Image & Media Compression (Mandatory)**:
+   - NEVER store raw, uncompressed files or multi-megabyte base64 strings in database columns or JSONB fields.
+   - Always compress images in the browser before saving or uploading:
+     - Max dimensions: 1000px width/height for product photos; 400px for logos/avatars; 1200px for banners.
+     - Target format: WebP or JPEG at 0.75 quality (aim for 40 KB – 80 KB per image).
+   - Prefer dedicated storage buckets/CDNs (Supabase Storage, Cloudinary, ImgBB) over database text/JSONB columns.
+
+2. **No Aggressive Polling (`setInterval` Ban)**:
+   - NEVER poll the database with short intervals (< 30 seconds).
+   - For live updates (orders, chats, notifications), use WebSocket subscriptions (e.g. Supabase Realtime `postgres_changes`, Firebase `onSnapshot`, or Server-Sent Events).
+   - If a fallback polling interval is necessary:
+     - Set the minimum interval to 60 seconds.
+     - Always pause polling when the browser tab is hidden:
+       `if (document.hidden) return;`
+     - Always clean up intervals on component unmount (`clearInterval`).
+
+3. **Strict Query Discipline (No Unbounded `SELECT *`)**:
+   - Always paginate list views (`.limit()`, `.range()`, or cursor pagination). Never fetch thousands of rows at once.
+   - On summary/catalog screens, exclude heavy columns (e.g., fetch only `id, name, price, thumbnail` instead of full descriptions and image galleries).
+   - Admin dashboards must never perform unbounded bulk queries (`SELECT * FROM all_products`) without filters or pagination.
+
+4. **Client-Side Caching & Stale-While-Revalidate (SWR)**:
+   - Cache slow-changing platform data (store info, themes, categories) in memory or `sessionStorage`/`localStorage`.
+   - Avoid re-fetching data on every single tab focus or component re-render if the cache is still fresh (< 2–5 minutes).
+
+5. **Input Debouncing**:
+   - All live search inputs, filters, and auto-saving text fields must be debounced by at least 400ms–600ms before sending a database query.
+
+6. **Defensive Coding Review**:
+   - Whenever you write or update a `useEffect` hook that makes a database or API call, verify that its dependency array will never trigger an infinite re-fetch loop.
