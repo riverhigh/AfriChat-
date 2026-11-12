@@ -321,6 +321,66 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     }, 300);
   };
 
+  // ─── Cross-device phone registry helper ────────────────────────────────────
+  // Checks agc_phone_registry table in Supabase (no RLS — readable from any device)
+  const checkPhoneInSupabaseRegistry = async (
+    normalizedPhone: string
+  ): Promise<{ found: boolean; username?: string; avatarUrl?: string }> => {
+    if (!isSupabaseConfigured) return { found: false };
+    try {
+      const digits = normalizedPhone.replace(/\D/g, '');
+      const last9 = digits.length >= 9 ? digits.slice(-9) : digits;
+
+      // Primary: check agc_phone_registry (no RLS table)
+      const { data: regRow, error: regErr } = await supabase
+        .from('agc_phone_registry')
+        .select('username, avatar_url, full_phone')
+        .or(`phone_digits.eq.${last9},full_phone.eq.${normalizedPhone},full_phone.eq.${digits}`)
+        .limit(1)
+        .maybeSingle();
+
+      if (!regErr && regRow) {
+        return { found: true, username: regRow.username, avatarUrl: regRow.avatar_url };
+      }
+
+      // Fallback: check profiles table (may work if RLS policy was applied)
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('full_name, avatar_url, phone_number')
+        .or(`phone_number.eq.${normalizedPhone},phone_number.eq.${digits},phone_number.ilike.%${last9}%`)
+        .limit(1)
+        .maybeSingle();
+
+      if (profile?.phone_number) {
+        return { found: true, username: profile.full_name, avatarUrl: profile.avatar_url };
+      }
+    } catch (_) {}
+    return { found: false };
+  };
+
+  // ─── Write to cross-device registry on successful registration ─────────────
+  const registerPhoneInSupabaseRegistry = async (
+    normalizedPhone: string,
+    username: string,
+    avatarUrl: string
+  ) => {
+    if (!isSupabaseConfigured) return;
+    try {
+      const digits = normalizedPhone.replace(/\D/g, '');
+      const last9 = digits.length >= 9 ? digits.slice(-9) : digits;
+      await supabase.from('agc_phone_registry').upsert(
+        {
+          phone_digits: last9,
+          full_phone: normalizedPhone,
+          username,
+          avatar_url: avatarUrl,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'phone_digits' }
+      );
+    } catch (_) {}
+  };
+
   // Handle phone submit — immediately check if phone number has been used before!
   const handlePhoneSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -331,7 +391,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       return;
     }
 
-    // 1. Quick localStorage check (instant)
+    // 1. Quick localStorage check (instant — same device)
     const existing = findExistingAccount(phoneNumber, selectedCountry.code);
     if (existing) {
       setIsExistingAccount(true);
@@ -340,8 +400,21 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       return;
     }
 
-    // 2. Check server registry (data_users.json via Vite /api endpoint)
+    // 2. Cross-device check: Supabase agc_phone_registry (no RLS — works from any device)
     setIsCheckingDevice(true);
+    const supabaseCheck = await checkPhoneInSupabaseRegistry(fullNormalizedNumber);
+    if (supabaseCheck.found) {
+      setIsCheckingDevice(false);
+      setIsExistingAccount(true);
+      setExistingSessionInfo({
+        name: supabaseCheck.username || 'AGC User',
+        avatarUrl: supabaseCheck.avatarUrl,
+      });
+      setStep('device_conflict');
+      return;
+    }
+
+    // 3. Check local server registry (data_users.json via Vite /api — same-LAN fallback)
     try {
       const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
       const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
@@ -365,18 +438,18 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         } catch (_) {}
       }
     } catch (_) {}
-    setIsCheckingDevice(false);
 
+    setIsCheckingDevice(false);
     setStep('confirm_dialog');
   };
 
   // Called when user taps "Yes, Send Code" on the confirmation dialog.
-  // Checks Supabase/server/localStorage for an existing account on another device.
+  // Final gate: checks all registries before actually sending OTP.
   const handleProceedToSendOtp = async () => {
     setIsCheckingDevice(true);
     setErrorMessage(null);
 
-    // Double check existing
+    // 1. localStorage (same device)
     const existing = findExistingAccount(phoneNumber, selectedCountry.code);
     if (existing) {
       setIsCheckingDevice(false);
@@ -386,9 +459,22 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       return;
     }
 
+    // 2. Supabase agc_phone_registry — CROSS-DEVICE primary source of truth
+    const supabaseCheck = await checkPhoneInSupabaseRegistry(fullNormalizedNumber);
+    if (supabaseCheck.found) {
+      setIsCheckingDevice(false);
+      setIsExistingAccount(true);
+      setExistingSessionInfo({
+        name: supabaseCheck.username || 'AGC User',
+        avatarUrl: supabaseCheck.avatarUrl,
+      });
+      setStep('device_conflict');
+      return;
+    }
+
     const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
 
-    // Check local server endpoints (Vite /api or standalone node on port 3002)
+    // 3. Local server registry (data_users.json — same-LAN fallback)
     try {
       const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const endpoints = [
@@ -411,26 +497,6 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         } catch (_) {}
       }
     } catch (_) {}
-
-    // Check Supabase profiles table
-    if (isSupabaseConfigured) {
-      try {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('full_name, avatar_url, phone_number')
-          .or(`phone_number.eq.${fullNormalizedNumber},phone_number.eq.${cleanPhone},phone_number.ilike.%${cleanPhone.slice(-9)}%`)
-          .limit(1)
-          .maybeSingle();
-
-        if (profile && (profile.full_name || profile.phone_number)) {
-          setIsCheckingDevice(false);
-          setIsExistingAccount(true);
-          setExistingSessionInfo({ name: profile.full_name || 'AGC User', avatarUrl: profile.avatar_url });
-          setStep('device_conflict');
-          return;
-        }
-      } catch (_) {}
-    }
 
     setIsCheckingDevice(false);
     setIsExistingAccount(false);
@@ -595,7 +661,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       return;
     }
 
-    // Persist unique username and phone claim
+    // Persist unique username and phone claim — localStorage (same device)
     try {
       const taken = JSON.parse(localStorage.getItem('AGC_taken_usernames') || '[]');
       if (!taken.includes(cleanUser)) {
@@ -614,6 +680,10 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       }
       localStorage.setItem('AGC_registered_phones', JSON.stringify(reg));
     } catch (_) {}
+
+    // 🌍 Write to Supabase agc_phone_registry — cross-device persistent store
+    // This is what prevents re-registration from any other device worldwide
+    registerPhoneInSupabaseRegistry(fullNormalizedNumber, cleanUser, selectedAvatar);
 
     setIsVerifying(false);
     setStep('initializing');
@@ -833,11 +903,20 @@ export const WhatsAppPhoneAuth: React.FC = () => {
               <button
                 type="button"
                 onClick={handlePhoneSubmit}
-                disabled={!phoneNumber.trim()}
+                disabled={!phoneNumber.trim() || isCheckingDevice}
                 className="w-full py-4 bg-gradient-to-r from-purple-600 via-purple-700 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-sm rounded-2xl shadow-lg shadow-purple-700/30 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
               >
-                <span>Continue</span>
-                <ArrowRight className="w-4 h-4" />
+                {isCheckingDevice ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Checking...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Continue</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
 
               <p className="text-[10px] text-purple-200/60 text-center leading-relaxed">

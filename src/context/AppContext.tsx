@@ -4785,6 +4785,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 4. Save to Supabase profiles and broadcast global sync
     if (isSupabaseConfigured) {
+      // 4a. Write to agc_phone_registry — no-RLS public table for cross-device duplicate detection
+      const phoneDigits = cleanPhone;
+      const last9 = phoneDigits.length >= 9 ? phoneDigits.slice(-9) : phoneDigits;
+      supabase
+        .from('agc_phone_registry')
+        .upsert(
+          {
+            phone_digits: last9,
+            full_phone: updatedUser.phoneNumber,
+            username: updatedUser.fullName,
+            avatar_url: updatedUser.avatarUrl || '',
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'phone_digits' }
+        )
+        .then(({ error }: any) => {
+          if (error) console.warn('Phone registry notice:', error.message);
+          else console.log('✅ Cross-device phone registry updated');
+        });
+
       supabase
         .from('profiles')
         .upsert({
