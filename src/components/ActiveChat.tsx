@@ -68,6 +68,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     deleteMessage,
     reactToMessage,
     sendImageMessage,
+    respondToGroupInvitation,
     openCheckout,
     setActiveEscrowModalOrder,
     formatPrice,
@@ -209,6 +210,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   };
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [voiceProgress, setVoiceProgress] = useState<Record<string, number>>({});
+  // Track which voice note transcripts have been revealed by the user
+  const [revealedTranscripts, setRevealedTranscripts] = useState<Record<string, boolean>>({});
   const [showCatalogDrawer, setShowCatalogDrawer] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [translatedMessages, setTranslatedMessages] = useState<Record<string, boolean>>({});
@@ -287,22 +290,18 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     }
   }, [currentMessages, activeChatId]);
 
+  // Cleanup playing audio on unmount or chat switch
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (playingVoiceId) {
-      interval = setInterval(() => {
-        setVoiceProgress((prev) => {
-          const current = prev[playingVoiceId] || 0;
-          if (current >= 100) {
-            setPlayingVoiceId(null);
-            return { ...prev, [playingVoiceId]: 0 };
-          }
-          return { ...prev, [playingVoiceId]: current + 8 };
-        });
-      }, 250);
-    }
-    return () => clearInterval(interval);
-  }, [playingVoiceId]);
+    return () => {
+      Object.values(audioRefs.current).forEach((a) => {
+        try { a.pause(); a.currentTime = 0; } catch (_) {}
+      });
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      setPlayingVoiceId(null);
+    };
+  }, [activeChatId]);
 
   if (!currentChat) {
     return (
@@ -346,34 +345,77 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   // Real audio playback ref map (msgId -> HTMLAudioElement)
   const audioRefs = useRef<Record<string, HTMLAudioElement>>({});
 
-  const toggleVoicePlayback = (msgId: string, audioDataUrl?: string) => {
+  const toggleVoicePlayback = (msgId: string, audioDataUrl?: string, transcriptText?: string) => {
+    // Pause any other playing audio
+    Object.entries(audioRefs.current).forEach(([id, a]) => {
+      if (id !== msgId && !a.paused) {
+        try { a.pause(); a.currentTime = 0; } catch (_) {}
+      }
+    });
+
     const existing = audioRefs.current[msgId];
 
     if (existing && !existing.paused) {
       existing.pause();
       existing.currentTime = 0;
       setPlayingVoiceId(null);
+      setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
       return;
     }
 
-    // Create or reuse audio element
-    if (!existing && audioDataUrl) {
-      const audio = new Audio(audioDataUrl);
-      audioRefs.current[msgId] = audio;
-      audio.onended = () => {
+    if (existing) {
+      existing.play().then(() => {
+        setPlayingVoiceId(msgId);
+      }).catch((err) => {
+        console.warn('Playback resume notice:', err);
+        setPlayingVoiceId(null);
+      });
+      return;
+    }
+
+    if (audioDataUrl) {
+      try {
+        const audio = new Audio(audioDataUrl);
+        audioRefs.current[msgId] = audio;
+        audio.onended = () => {
+          setPlayingVoiceId(null);
+          setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
+        };
+        audio.ontimeupdate = () => {
+          if (audio.duration && audio.duration > 0) {
+            const pct = (audio.currentTime / audio.duration) * 100;
+            setVoiceProgress((prev) => ({ ...prev, [msgId]: pct }));
+          }
+        };
+        audio.onerror = () => {
+          console.warn('Voice note audio format failed to decode');
+          setPlayingVoiceId(null);
+        };
+        audio.play().then(() => {
+          setPlayingVoiceId(msgId);
+        }).catch((err) => {
+          console.warn('Audio play notice:', err);
+          setPlayingVoiceId(null);
+        });
+      } catch (e) {
+        console.warn('Audio construction error:', e);
+      }
+    } else if (transcriptText && typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(transcriptText);
+      utter.onstart = () => {
+        setPlayingVoiceId(msgId);
+        setVoiceProgress((prev) => ({ ...prev, [msgId]: 50 }));
+      };
+      utter.onend = () => {
         setPlayingVoiceId(null);
         setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
       };
-      audio.ontimeupdate = () => {
-        const pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
-        setVoiceProgress((prev) => ({ ...prev, [msgId]: pct }));
+      utter.onerror = () => {
+        setPlayingVoiceId(null);
       };
-      audio.play().catch(() => {});
-    } else if (existing) {
-      existing.play().catch(() => {});
+      window.speechSynthesis.speak(utter);
     }
-
-    setPlayingVoiceId(msgId);
   };
 
   const toggleTranslation = (msgId: string) => {
@@ -675,6 +717,41 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Group Invitation Pending Banner */}
+      {currentChat.invitationStatus === 'pending' && (
+        <div className="p-3.5 bg-gradient-to-r from-purple-900/50 via-indigo-950/60 to-purple-900/50 border-b border-purple-500/40 text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-md z-10 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-full bg-purple-500/20 text-purple-300 flex items-center justify-center shrink-0 border border-purple-500/30">
+              <Users className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="font-bold text-slate-900 dark:text-white">
+                Group Invitation: {currentChat.name}
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-purple-300/80">
+                You were invited to this group. Accept to start participating.
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => respondToGroupInvitation(currentChat.id, true)}
+              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer"
+            >
+              Accept & Join
+            </button>
+            <button
+              type="button"
+              onClick={() => respondToGroupInvitation(currentChat.id, false)}
+              className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+            >
+              Decline
+            </button>
           </div>
         </div>
       )}
@@ -1025,40 +1102,76 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 )}
 
                 {/* Voice Note Message */}
-                {msg.type === 'voice' && msg.voiceNote && (
-                  <div className="space-y-2 min-w-[220px]">
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => toggleVoicePlayback(msg.id, msg.voiceNote?.audioDataUrl)}
-                        className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shrink-0 transition-colors shadow-xs"
-                        aria-label="Play voice note"
-                      >
-                        {playingVoiceId === msg.id ? (
-                          <Pause className="w-4 h-4 fill-current" />
-                        ) : (
-                          <Play className="w-4 h-4 fill-current ml-0.5" />
-                        )}
-                      </button>
+                {msg.type === 'voice' && msg.voiceNote && (() => {
+                  const vn = msg.voiceNote;
+                  const isExpired = Boolean(vn.expiresAt && Date.now() > new Date(vn.expiresAt).getTime());
+                  const isRevealed = revealedTranscripts[msg.id];
+                  const hasTranscript = vn.transcript && vn.transcript.trim().length > 0;
+                  // Expiry label: show "Xh left" or "Expired"
+                  let expiryLabel = '';
+                  if (vn.expiresAt) {
+                    const msLeft = new Date(vn.expiresAt).getTime() - Date.now();
+                    if (isExpired) expiryLabel = 'Expired';
+                    else {
+                      const hLeft = Math.ceil(msLeft / 3600000);
+                      expiryLabel = hLeft <= 1 ? '<1h left' : `${hLeft}h left`;
+                    }
+                  }
+                  return (
+                    <div className="space-y-2 min-w-[220px]">
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => !isExpired && toggleVoicePlayback(msg.id, vn.audioDataUrl)}
+                          className={`w-10 h-10 rounded-full text-white flex items-center justify-center shrink-0 transition-colors shadow-xs ${isExpired ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                          aria-label="Play voice note"
+                          disabled={isExpired}
+                        >
+                          {playingVoiceId === msg.id ? (
+                            <Pause className="w-4 h-4 fill-current" />
+                          ) : (
+                            <Play className="w-4 h-4 fill-current ml-0.5" />
+                          )}
+                        </button>
 
-                      <div className="flex-1">
-                        <div className="w-full bg-slate-300 dark:bg-slate-700 h-1 rounded-full overflow-hidden">
-                          <div
-                            style={{ width: `${voiceProgress[msg.id] || 0}%` }}
-                            className="bg-indigo-600 dark:bg-indigo-400 h-full transition-all duration-200"
-                          />
-                        </div>
-                        <div className="flex justify-between items-center text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
-                          <span>0:{msg.voiceNote.durationSeconds < 10 ? `0${msg.voiceNote.durationSeconds}` : msg.voiceNote.durationSeconds}</span>
+                        <div className="flex-1">
+                          <div className="w-full bg-slate-300 dark:bg-slate-700 h-1 rounded-full overflow-hidden">
+                            <div
+                              style={{ width: `${voiceProgress[msg.id] || 0}%` }}
+                              className="bg-indigo-600 dark:bg-indigo-400 h-full transition-all duration-200"
+                            />
+                          </div>
+                          <div className="flex justify-between items-center text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
+                            <span>0:{vn.durationSeconds < 10 ? `0${vn.durationSeconds}` : vn.durationSeconds}</span>
+                            {expiryLabel && (
+                              <span className={`text-[9px] font-semibold ${isExpired ? 'text-rose-400' : 'text-slate-400'}`}>
+                                🕐 {expiryLabel}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="pt-1 border-t border-black/5 dark:border-white/5 text-xs text-slate-600 dark:text-slate-300 italic">
-                      &ldquo;{translatedMessages[msg.id] && msg.voiceNote.translations ? (msg.voiceNote.translations[language] || msg.voiceNote.translations.en || msg.voiceNote.transcript) : msg.voiceNote.transcript}&rdquo;
+                      {/* Transcript — hidden by default, revealed on tap */}
+                      {!isExpired && (
+                        <div className="pt-1 border-t border-black/5 dark:border-white/5">
+                          {isRevealed && hasTranscript ? (
+                            <div className="text-xs text-slate-600 dark:text-slate-300 italic leading-relaxed">
+                              &ldquo;{translatedMessages[msg.id] && vn.translations ? (vn.translations[language] || vn.translations.en || vn.transcript) : vn.transcript}&rdquo;
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setRevealedTranscripts(prev => ({ ...prev, [msg.id]: true }))}
+                              className="text-[10px] font-semibold text-indigo-500 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center gap-1 transition-colors"
+                            >
+                              💬 Transcribe
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                )}
-
+                  );
+                })()}
                 {/* Product Card Message */}
                 {msg.type === 'product_card' && msg.product && (
                   <div className="space-y-2 min-w-[240px]">

@@ -7,32 +7,44 @@ interface VoiceRecorderModalProps {
   onClose: () => void;
 }
 
+// Web Speech API type declarations (not in all TS lib versions)
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+}
+interface SpeechRecognitionInstance extends EventTarget {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  start(): void;
+  stop(): void;
+  onresult: ((e: SpeechRecognitionEvent) => void) | null;
+  onerror: ((e: Event) => void) | null;
+  onend: (() => void) | null;
+}
+declare const webkitSpeechRecognition: new () => SpeechRecognitionInstance;
+declare const SpeechRecognition: new () => SpeechRecognitionInstance;
+
 export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, onClose }) => {
   const { activeChatId, sendVoiceNote, language } = useApp();
   const [isRecording, setIsRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
-  const [transcriptPreview, setTranscriptPreview] = useState('');
+  const [liveTranscript, setLiveTranscript] = useState('');
   const [permissionError, setPermissionError] = useState<string | null>(null);
 
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<number | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
 
-  const sampleTranscripts: Record<string, string[]> = {
-    pcm: [
-      "How far! Abeg I wan confirm if the material go fit reach my place before 4pm today?",
-      "Good afternoon! Please lock the escrow for the two yards, my dispatch rider go come pick am.",
-      "Oga Kofi, make you help me pack the charger together with the phone make nothing shake.",
-    ],
-    sw: [
-      "Habari yako! Tafadhali nahitaji kuthibitisha kama mzigo utafika kabla ya saa kumi leo jioni.",
-      "Nimependa rangi ya kijani. Naomba unihifadhie nitaweka pesa kwenye Escrow sasa hivi.",
-    ],
-    en: [
-      "Hello! I am confirming whether this can be dispatched to my office address today via Escrow.",
-      "Please hold the item for me, I have deposited the payment in the AGC Escrow Vault.",
-    ],
+  // Map AGC language codes to BCP-47 for Web Speech API
+  const langMap: Record<string, string> = {
+    en: 'en-NG',
+    pcm: 'en-NG',   // Nigerian Pidgin — closest available
+    yo: 'yo-NG',
+    ha: 'ha-NG',
+    sw: 'sw-KE',
+    fr: 'fr-FR',
   };
 
   // RULE 2 & RULE 3: Explicitly stop all audio tracks and cleanup on unmount / cancel
@@ -40,6 +52,11 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
+    }
+
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (_) {}
+      recognitionRef.current = null;
     }
 
     if (mediaStreamRef.current) {
@@ -55,9 +72,7 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
     }
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch (e) {
+      try { mediaRecorderRef.current.stop(); } catch (e) {
         console.warn('Error stopping media recorder:', e);
       }
     }
@@ -77,6 +92,7 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
     if (!isOpen) {
       stopAllMediaTracks();
       setSeconds(0);
+      setLiveTranscript('');
     }
   }, [isOpen]);
 
@@ -85,6 +101,7 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
     try {
       setPermissionError(null);
       stopAllMediaTracks();
+      setLiveTranscript('');
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Microphone recording not supported on this browser.');
@@ -100,10 +117,7 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
 
       mediaStreamRef.current = stream;
 
-      const chosenList = sampleTranscripts[language] || sampleTranscripts.pcm;
-      const randomPrompt = chosenList[Math.floor(Math.random() * chosenList.length)];
-      setTranscriptPreview(randomPrompt);
-
+      // Start MediaRecorder to capture audio blob
       try {
         const recorder = new MediaRecorder(stream);
         mediaRecorderRef.current = recorder;
@@ -112,8 +126,28 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
           if (e.data.size > 0) audioChunksRef.current.push(e.data);
         };
         recorder.start(250); // collect chunks every 250ms
-      } catch {
-        // MediaRecorder fallback
+      } catch (_) {
+        // MediaRecorder fallback — some browsers (Firefox mobile) may not support all formats
+      }
+
+      // Start Web Speech API for free live transcription (Chrome/Android — no API key needed)
+      const SpeechRecognitionCtor = (typeof SpeechRecognition !== 'undefined' ? SpeechRecognition : typeof webkitSpeechRecognition !== 'undefined' ? webkitSpeechRecognition : null);
+      if (SpeechRecognitionCtor) {
+        const rec = new SpeechRecognitionCtor();
+        rec.lang = langMap[language] || 'en-NG';
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.onresult = (e: SpeechRecognitionEvent) => {
+          let full = '';
+          for (let i = 0; i < e.results.length; i++) {
+            full += e.results[i][0].transcript;
+          }
+          setLiveTranscript(full);
+        };
+        rec.onerror = () => {};  // silently ignore (mic already captured)
+        rec.onend = () => {};
+        try { rec.start(); } catch (_) {}
+        recognitionRef.current = rec;
       }
 
       setIsRecording(true);
@@ -122,9 +156,10 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
       timerIntervalRef.current = window.setInterval(() => {
         setSeconds((prev) => prev + 1);
       }, 1000);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Microphone access denied or busy.';
       console.warn('Microphone permission request error:', err);
-      setPermissionError(err.message || 'Microphone access denied or busy.');
+      setPermissionError(msg);
       stopAllMediaTracks();
     }
   };
@@ -136,13 +171,16 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
   const handleSend = () => {
     if (!activeChatId) return;
     const dur = Math.max(2, seconds);
-    // Build ephemeral blob URL from recorded chunks (never saved to DB)
+
+    // Build ephemeral blob URL for sender's in-tab playback
     let audioDataUrl: string | undefined;
     if (audioChunksRef.current.length > 0) {
       const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
       audioDataUrl = URL.createObjectURL(blob);
     }
-    sendVoiceNote(activeChatId, dur, transcriptPreview || 'Voice note', audioDataUrl);
+
+    // transcript is whatever the Web Speech API captured (empty string if unsupported)
+    sendVoiceNote(activeChatId, dur, liveTranscript, audioDataUrl);
     audioChunksRef.current = [];
     stopAllMediaTracks();
     onClose();
@@ -154,6 +192,8 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
   };
 
   if (!isOpen) return null;
+
+  const hasTranscript = liveTranscript.trim().length > 0;
 
   return (
     <div
@@ -173,6 +213,7 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
             <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 font-display">
               Voice Note
             </h3>
+            <span className="text-[9px] font-semibold text-slate-400 dark:text-slate-500">· expires 24h</span>
           </div>
           <button
             type="button"
@@ -217,10 +258,22 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
           )}
         </div>
 
-        {/* Live speech-to-text transcript preview */}
-        {transcriptPreview && (
-          <div className="p-3 bg-purple-50/40 dark:bg-purple-950/20 rounded-xl text-xs text-slate-700 dark:text-purple-200/90 italic leading-relaxed border border-purple-200/40 dark:border-purple-900/30">
-            &ldquo;{transcriptPreview}&rdquo;
+        {/* Live transcript preview (Web Speech API — shown as it comes in while recording) */}
+        {isRecording && (
+          <div className="min-h-[36px] p-2.5 bg-purple-50/40 dark:bg-purple-950/20 rounded-xl text-xs text-slate-600 dark:text-purple-200/80 italic leading-relaxed border border-purple-200/40 dark:border-purple-900/30">
+            {hasTranscript ? (
+              <span>&ldquo;{liveTranscript}&rdquo;</span>
+            ) : (
+              <span className="text-slate-400 dark:text-slate-500 not-italic">🎤 Transcribing…</span>
+            )}
+          </div>
+        )}
+
+        {/* After stopping: show note that transcript is hidden in bubble until tapped */}
+        {!isRecording && seconds > 0 && (
+          <div className="p-2.5 bg-slate-50 dark:bg-slate-900/40 rounded-xl border border-slate-200/60 dark:border-slate-700/40 text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+            <span>💬</span>
+            <span>Transcript hidden in bubble — recipient taps <strong>Transcribe</strong> to reveal.</span>
           </div>
         )}
 
@@ -249,7 +302,7 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
           <button
             type="button"
             onClick={handleSend}
-            disabled={seconds === 0 && !transcriptPreview}
+            disabled={seconds === 0}
             className="flex-1 py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-colors"
           >
             <Send className="w-4 h-4" />

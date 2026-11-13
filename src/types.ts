@@ -209,7 +209,9 @@ export interface VoiceNoteMeta {
   waveform: number[];
   transcript: string;
   translations: Record<LanguageCode, string>;
-  audioDataUrl?: string; // ephemeral blob URL -- never persisted to DB
+  audioDataUrl?: string;    // ephemeral blob: URL for sender's tab; base64 for cross-device
+  expiresAt: string;        // ISO -- voice notes auto-purge 24h after creation
+  transcriptRevealed?: boolean; // hidden by default; revealed on user tap
 }
 
 export interface ChatMessage {
@@ -255,6 +257,7 @@ export interface ChatMessage {
   };
   reactions?: Record<string, string[]>;
   deleted?: boolean;
+  isEncrypted?: boolean;
 }
 
 export interface ChatThread {
@@ -292,6 +295,19 @@ export interface ChatThread {
   members?: string[];
   memberPhones?: string[];
   inviteCode?: string;
+  invitationStatus?: 'pending' | 'accepted' | 'declined';
+  invitedBy?: string;
+}
+
+export interface ContactRequest {
+  id: string;
+  senderPhone: string;
+  senderName: string;
+  senderAvatar?: string;
+  recipientPhone: string;
+  message?: string;
+  createdAt: string;
+  status: 'pending' | 'accepted' | 'declined';
 }
 
 export interface CallLogItem {

