@@ -107,7 +107,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     CURRENCY_RATES,
   } = useApp();
 
-  const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan'>('services');
+  const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan' | 'chat_bg'>('services');
   const [isLegalModalOpen, setIsLegalModalOpen] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
@@ -208,42 +208,54 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* Segmented Navigation Switcher: Profile vs Stores */}
-        <div className="grid grid-cols-3 p-1 bg-slate-100 dark:bg-neutral-950 rounded-xl text-xs font-semibold">
+        {/* Segmented Navigation Switcher: Profile vs Stores vs Artisan vs Chat BG */}
+        <div className="grid grid-cols-4 p-1 bg-slate-100 dark:bg-neutral-950 rounded-xl text-xs font-semibold gap-1">
           <button
             onClick={() => setActiveSubTab('services')}
-            className={`py-2 rounded-lg flex items-center justify-center gap-2 transition-all ${
+            className={`py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
               activeSubTab === 'services'
-                ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs'
+                ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs font-bold'
                 : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            <User className="w-4 h-4" />
-            <span>Profile & Wallet</span>
+            <User className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Profile</span>
           </button>
 
           <button
             onClick={() => setActiveSubTab('stores')}
-            className={`py-2 rounded-lg flex items-center justify-center gap-2 transition-all ${
+            className={`py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
               activeSubTab === 'stores'
-                ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs'
+                ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs font-bold'
                 : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            <Store className="w-4 h-4" />
-            <span>Stores & Market</span>
+            <Store className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Stores</span>
           </button>
 
           <button
             onClick={() => setActiveSubTab('artisan')}
-            className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+            className={`py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
               activeSubTab === 'artisan'
-                ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs'
+                ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs font-bold'
                 : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            <Wrench className="w-3.5 h-3.5" />
-            <span>Artisan Market</span>
+            <Wrench className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Artisans</span>
+          </button>
+
+          <button
+            onClick={() => setActiveSubTab('chat_bg')}
+            className={`py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+              activeSubTab === 'chat_bg'
+                ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs font-bold'
+                : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Chat BG</span>
           </button>
         </div>
       </div>
@@ -372,6 +384,127 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           <div className="p-4 text-center text-xs text-slate-400">
             AGC Artisan Hub · Connecting African Skill ⚒
+          </div>
+        </div>
+      ) : activeSubTab === 'chat_bg' ? (
+        <div className="space-y-4 px-4 py-4 animate-in fade-in">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-purple-600/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                <ImageIcon className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900 dark:text-white tracking-tight">
+                  Chat Background & Wallpaper
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-neutral-400">
+                  Pick African cultural textures or upload custom wallpaper
+                </p>
+              </div>
+            </div>
+
+            {chatWallpaper && (
+              <button
+                type="button"
+                onClick={() => setChatWallpaper(null)}
+                className="px-2.5 py-1.5 rounded-xl text-rose-500 hover:bg-rose-500/10 text-xs font-semibold flex items-center gap-1 transition-colors border border-rose-500/20"
+                title="Reset to default background"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset</span>
+              </button>
+            )}
+          </div>
+
+          {/* Active Wallpaper Preview Card */}
+          <div className="flex items-center gap-3.5 p-3 rounded-2xl bg-white dark:bg-[#120924] border border-slate-200/80 dark:border-purple-900/40 shadow-xs">
+            <div className="w-16 h-16 rounded-xl border border-slate-200 dark:border-purple-900/50 overflow-hidden shrink-0 bg-slate-200 dark:bg-neutral-800 shadow-inner">
+              {chatWallpaper ? (
+                <img
+                  src={chatWallpaper}
+                  alt="Active Wallpaper"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center text-[10px] text-slate-400 font-mono text-center p-1 leading-tight bg-[#120924]">
+                  <span>Charcoal</span>
+                  <span className="text-[9px] opacity-60">Mesh</span>
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                {chatWallpaper ? 'Custom Wallpaper Active' : 'Default Charcoal Mesh'}
+              </div>
+              <p className="text-xs text-slate-500 dark:text-purple-300/60 mt-0.5">
+                {chatWallpaper
+                  ? 'Applied to active chats with full opacity compression'
+                  : 'Clean contrast pattern for low battery & data saving'}
+              </p>
+            </div>
+          </div>
+
+          {/* Upload Button */}
+          <div className="bg-white dark:bg-[#120924] p-4 rounded-2xl border border-slate-200/80 dark:border-purple-900/40 space-y-2">
+            <label className="flex items-center justify-center gap-2 py-3 px-4 bg-purple-600 hover:bg-purple-700 active:scale-98 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-md shadow-purple-600/20">
+              <Upload className="w-4 h-4" />
+              <span>Upload Custom Wallpaper from Device</span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+            </label>
+            {uploadError && (
+              <p className="text-xs text-rose-500 font-medium">
+                {uploadError}
+              </p>
+            )}
+            <p className="text-[11px] text-slate-400 text-center">
+              Supports JPG, PNG, WEBP. Stored securely on your device.
+            </p>
+          </div>
+
+          {/* Preset Background Swatches */}
+          <div className="bg-white dark:bg-[#120924] p-4 rounded-2xl border border-slate-200/80 dark:border-purple-900/40 space-y-3">
+            <div className="text-xs uppercase font-mono font-bold text-slate-400">
+              African Cultural Presets
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
+              {PRESET_WALLPAPERS.map((preset) => {
+                const isSelected = chatWallpaper === preset.url;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => setChatWallpaper(preset.url)}
+                    className={`relative rounded-xl overflow-hidden h-28 border-2 transition-all group text-left ${
+                      isSelected
+                        ? 'border-purple-600 ring-2 ring-purple-600/40 scale-[1.02] shadow-md'
+                        : 'border-slate-200 dark:border-purple-900/30 hover:border-purple-400'
+                    }`}
+                  >
+                    <img
+                      src={preset.url}
+                      alt={preset.title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent flex flex-col justify-end p-2.5">
+                      <span className="text-xs font-bold text-white leading-tight">
+                        {preset.title}
+                      </span>
+                    </div>
+                    {isSelected && (
+                      <div className="absolute top-2 right-2 w-6 h-6 rounded-full bg-purple-600 text-white flex items-center justify-center shadow-md">
+                        <Check className="w-3.5 h-3.5" />
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       ) : (
@@ -543,228 +676,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* 2. Custom Chat Background Wallpaper & Device Upload (Preserved in Fyp) */}
-          <div className="px-4">
-            <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 shadow-xs space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
-                    <ImageIcon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                      Chat Background Wallpaper
-                    </h4>
-                    <p className="text-[11px] text-slate-500 dark:text-neutral-400">
-                      Upload from phone or pick cultural textures
-                    </p>
-                  </div>
-                </div>
-
-                {chatWallpaper && (
-                  <button
-                    type="button"
-                    onClick={() => setChatWallpaper(null)}
-                    className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-500/10 text-xs font-semibold flex items-center gap-1 transition-colors"
-                    title="Reset to default background"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span className="text-[11px]">Reset</span>
-                  </button>
-                )}
-              </div>
-
-              {/* Upload Button */}
-              <div>
-                <label className="flex items-center justify-center gap-2 py-2.5 px-4 bg-purple-600 hover:bg-purple-700 active:scale-98 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-xs">
-                  <Upload className="w-4 h-4" />
-                  <span>Upload Image from Device</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                </label>
-                {uploadError && (
-                  <p className="text-xs text-rose-500 mt-1.5 font-medium">
-                    {uploadError}
-                  </p>
-                )}
-              </div>
-
-              {/* Preset Background Swatches */}
-              <div>
-                <div className="text-[10px] uppercase font-mono font-bold text-slate-400 mb-2">
-                  African Cultural Wallpaper Presets:
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {PRESET_WALLPAPERS.map((preset) => {
-                    const isSelected = chatWallpaper === preset.url;
-                    return (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        onClick={() => setChatWallpaper(preset.url)}
-                        className={`relative rounded-xl overflow-hidden h-20 border-2 transition-all group text-left ${
-                          isSelected
-                            ? 'border-purple-600 ring-2 ring-purple-600/30 scale-[1.02]'
-                            : 'border-slate-200 dark:border-neutral-800 hover:border-slate-400'
-                        }`}
-                      >
-                        <img
-                          src={preset.url}
-                          alt={preset.title}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent flex flex-col justify-end p-1.5">
-                          <span className="text-[10px] font-bold text-white leading-tight truncate">
-                            {preset.title}
-                          </span>
-                        </div>
-                        {isSelected && (
-                          <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-purple-600 text-white flex items-center justify-center shadow-xs">
-                            <Check className="w-3 h-3" />
-                          </div>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Wallpaper Active Preview */}
-              <div className="flex items-center gap-3 p-2.5 rounded-xl bg-slate-50 dark:bg-neutral-950 border border-slate-100 dark:border-neutral-800">
-                <div className="w-12 h-12 rounded-lg border border-slate-200 dark:border-neutral-800 overflow-hidden shrink-0 bg-slate-200 dark:bg-neutral-800">
-                  {chatWallpaper ? (
-                    <img
-                      src={chatWallpaper}
-                      alt="Active Wallpaper"
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-400 font-mono text-center p-1 leading-tight">
-                      Standard Theme
-                    </div>
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                    {chatWallpaper ? 'Custom Wallpaper Active' : 'Default Charcoal Mesh'}
-                  </div>
-                  <p className="text-[10px] text-slate-500 dark:text-neutral-400 truncate">
-                    {chatWallpaper
-                      ? 'Applied to active chats with full opacity compression'
-                      : 'Clean contrast pattern for low battery & data saving'}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
           {/* Quick Hub App Preferences (Language, Currency, Low Data, Theme) */}
           <div className="divide-y divide-slate-100 dark:divide-neutral-800/80 bg-white dark:bg-[#18152e] border-y border-slate-100 dark:border-neutral-800">
-            {/* Invite & Earn ₦500 Referral */}
-            <button
-              onClick={() => setIsReferralModalOpen(true)}
-              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 text-left transition-colors bg-emerald-50/50 dark:bg-emerald-950/20"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
-                  <Share2 className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
-                    <span>Invite Friends & Earn ₦500</span>
-                    <span className="text-[10px] bg-emerald-200 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 font-bold px-1.5 py-0.2 rounded-full">
-                      Anti-Ghost
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    Earn {CURRENCY_SYMBOLS[currency]}500/active friend. Unlocked: {formatPrice(referralProgram.availableBonus, 'NGN')}
-                  </div>
-                </div>
-              </div>
-              <ChevronRight className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            </button>
-
-            {/* Artisan Stations & Workshop Hub */}
-            <button
-              onClick={() => setIsServicesModalOpen(true)}
-              className="w-full flex items-center justify-between p-3.5 hover:bg-purple-500/10 dark:hover:bg-purple-900/20 text-left transition-all border border-transparent hover:border-purple-500/20 group rounded-2xl"
-            >
-              <div className="flex items-center gap-3.5">
-                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-md shadow-purple-600/30 group-hover:scale-105 transition-transform shrink-0">
-                  <Wrench className="w-5 h-5 text-purple-200" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <span>Artisan Stations & Services</span>
-                    <span className="text-[10px] bg-purple-500/20 text-purple-600 dark:text-purple-300 font-mono font-bold px-2 py-0.5 rounded-full border border-purple-400/30">
-                      Verified Hub
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-500 dark:text-purple-300/70 mt-0.5">
-                    Station registration (₦5k), listings (₦500), calendar & apprentice staff
-                  </div>
-                </div>
-              </div>
-              <ChevronRight className="w-4 h-4 text-purple-400 group-hover:translate-x-0.5 transition-transform shrink-0" />
-            </button>
-
-            {/* Merchant Store Registration & Tiers (₦3k / ₦7k) */}
-            <button
-              onClick={() => setIsStoreRegModalOpen(true)}
-              className="w-full flex items-center justify-between p-3.5 hover:bg-blue-500/10 dark:hover:bg-blue-900/20 text-left transition-all border border-transparent hover:border-blue-500/20 group rounded-2xl"
-            >
-              <div className="flex items-center gap-3.5">
-                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-md shadow-blue-600/30 group-hover:scale-105 transition-transform shrink-0">
-                  <Store className="w-5 h-5 text-blue-200" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <span>Store Subscription Tiers</span>
-                    {storeSubscription?.isRegistered ? (
-                      <span className="text-[10px] bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold px-2 py-0.5 rounded-full border border-emerald-400/30">
-                        {storeSubscription.tier === 'starter_30' ? 'Starter · 30 Items' : 'Pro · 100 Items'}
-                      </span>
-                    ) : (
-                      <span className="text-[10px] bg-blue-500/20 text-blue-600 dark:text-blue-400 font-mono font-bold px-2 py-0.5 rounded-full border border-blue-400/30">
-                        From ₦2,199/mo
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-slate-500 dark:text-blue-300/70 mt-0.5">
-                    ₦3k/mo for 30 items limit · ₦7k/mo for 100 items limit
-                  </div>
-                </div>
-              </div>
-              <ChevronRight className="w-4 h-4 text-blue-400 group-hover:translate-x-0.5 transition-transform shrink-0" />
-            </button>
-
-            {/* African Writers Guild (AfriBooks) */}
-            <button
-              onClick={() => setIsWritersModalOpen(true)}
-              className="w-full flex items-center justify-between p-3.5 hover:bg-emerald-500/10 dark:hover:bg-emerald-900/20 text-left transition-all border border-transparent hover:border-emerald-500/20 group rounded-2xl"
-            >
-              <div className="flex items-center gap-3.5">
-                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white flex items-center justify-center shadow-md shadow-emerald-600/30 group-hover:scale-105 transition-transform shrink-0">
-                  <BookOpen className="w-5 h-5 text-emerald-200" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <span>African Writers Guild (AfriBooks)</span>
-                    <span className="text-[10px] bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold px-2 py-0.5 rounded-full border border-emerald-400/30">
-                      🌿 100% No-AI
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-500 dark:text-emerald-300/70 mt-0.5">
-                    Serial chapters, author tips, paid books & 2-friend buddy reading
-                  </div>
-                </div>
-              </div>
-              <ChevronRight className="w-4 h-4 text-emerald-400 group-hover:translate-x-0.5 transition-transform shrink-0" />
-            </button>
 
             {/* Phone Authentication & Change Number */}
             <button
@@ -988,6 +901,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           <div className="p-4 text-center text-xs text-slate-400">
             AGC Super-App · Made for African Markets
+          </div>
+
+          {/* Subtle Invite Friends & Earn — bottom link */}
+          <div className="px-4 pb-2">
+            <button
+              onClick={() => setIsReferralModalOpen(true)}
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-2xl border border-slate-200/80 dark:border-purple-900/30 hover:bg-purple-50 dark:hover:bg-purple-950/30 text-slate-500 dark:text-purple-400/80 hover:text-purple-700 dark:hover:text-purple-300 text-xs font-medium transition-all group"
+            >
+              <Share2 className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+              <span>Invite friends & earn {CURRENCY_SYMBOLS[currency]}500 per active referral</span>
+            </button>
           </div>
         </div>
       )}

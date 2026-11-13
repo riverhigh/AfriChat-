@@ -690,126 +690,151 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
           </div>
 
           {/* CARD GROUP 4: Participants List for Group / Channel */}
-          {isGroupOrChannel && (
-            <div className="bg-[#1c1c1e] rounded-2xl overflow-hidden border border-neutral-800/80 divide-y divide-neutral-800/80">
-              <div className="p-3.5 flex items-center justify-between">
-                <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider">
-                  {chat.membersCount || (isChannel ? 342 : 6)} Participants
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowAddMembersDrawer(true)}
-                  className="text-xs font-bold text-purple-400 hover:text-purple-300 flex items-center gap-1"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add</span>
-                </button>
-              </div>
+          {isGroupOrChannel && (() => {
+            const rawMembers: string[] = Array.isArray((chat as any).members) ? (chat as any).members : [];
+            // Filter out currentUser if present in members array so "You" isn't duplicated
+            const filteredMemberNames = rawMembers.filter((m: string) => {
+              if (!m) return false;
+              const isMe =
+                m === currentUser.fullName ||
+                m === currentUser.phoneNumber ||
+                m.toLowerCase() === 'you' ||
+                (currentUser.username && m === `@${currentUser.username}`);
+              return !isMe;
+            });
 
-              {/* Current user as Admin */}
-              <div className="p-3 flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <img
-                    src={currentUser.avatarUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"}
-                    alt={currentUser.fullName}
-                    className="w-9 h-9 rounded-full object-cover border border-purple-500"
-                  />
-                  <div>
-                    <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <span>You</span>
-                      <span className="text-[10px] font-mono text-purple-400 bg-purple-950/80 px-1.5 py-0.2 rounded-full border border-purple-800">
-                        Admin
-                      </span>
-                    </div>
-                    <div className="text-[10px] text-neutral-400 font-mono">
-                      {currentUser.phoneNumber}
+            const memberList = filteredMemberNames.map((nameOrPhone: string, idx: number) => {
+              const matchedContact = deviceContacts.find(
+                (dc) => dc.name === nameOrPhone || dc.normalizedPhoneNumber === nameOrPhone
+              );
+              return {
+                id: matchedContact?.id || `member_${idx}`,
+                name: matchedContact?.name || nameOrPhone,
+                normalizedPhoneNumber: matchedContact?.normalizedPhoneNumber || nameOrPhone,
+                avatar: matchedContact?.avatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(nameOrPhone)}&backgroundColor=581c87&textColor=ffffff`,
+              };
+            });
+
+            const totalParticipants = 1 + memberList.length;
+
+            return (
+              <div className="bg-[#1c1c1e] rounded-2xl overflow-hidden border border-neutral-800/80 divide-y divide-neutral-800/80">
+                <div className="p-3.5 flex items-center justify-between">
+                  <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider">
+                    {totalParticipants} {totalParticipants === 1 ? 'Participant' : 'Participants'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddMembersDrawer(true)}
+                    className="text-xs font-bold text-purple-400 hover:text-purple-300 flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add</span>
+                  </button>
+                </div>
+
+                {/* Current user as Admin */}
+                <div className="p-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <img
+                      src={currentUser.avatarUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"}
+                      alt={currentUser.fullName}
+                      className="w-9 h-9 rounded-full object-cover border border-purple-500"
+                    />
+                    <div>
+                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <span>You</span>
+                        <span className="text-[10px] font-mono text-purple-400 bg-purple-950/80 px-1.5 py-0.2 rounded-full border border-purple-800">
+                          Admin
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-neutral-400 font-mono">
+                        {currentUser.phoneNumber}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Group / Channel Participants with Admin Permissions & Removal */}
-              {(() => {
-                // Persistent members list from chat thread or contacts
-                const memberList = (chat as any).members && (chat as any).members.length > 0
-                  ? (chat as any).members.map((nameOrPhone: string, idx: number) => {
-                      const matchedContact = deviceContacts.find(
-                        (dc) => dc.name === nameOrPhone || dc.normalizedPhoneNumber === nameOrPhone
-                      );
-                      return {
-                        id: matchedContact?.id || `member_${idx}`,
-                        name: matchedContact?.name || nameOrPhone,
-                        normalizedPhoneNumber: matchedContact?.normalizedPhoneNumber || nameOrPhone,
-                        avatar: matchedContact?.avatar || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
-                      };
-                    })
-                  : deviceContacts.slice(0, 4);
-
-                return memberList.map((c: any) => {
-                const isMemberAdmin = Boolean(
-                  chat.admins?.includes(c.name) ||
-                  chat.admins?.includes(c.normalizedPhoneNumber)
-                );
-                return (
-                  <div key={c.id} className="p-3 flex items-center justify-between gap-2 hover:bg-neutral-800/30 transition-colors">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <img
-                        src={c.avatar || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80"}
-                        alt={c.name}
-                        className="w-9 h-9 rounded-full object-cover border border-neutral-700 shrink-0"
-                      />
-                      <div className="min-w-0">
-                        <div className="text-xs font-semibold text-white truncate flex items-center gap-1.5">
-                          <span>{c.name}</span>
-                          {isMemberAdmin ? (
-                            <span className="text-[9px] font-mono text-purple-400 bg-purple-950/80 px-1.5 py-0.2 rounded-full border border-purple-800 shrink-0">
-                              Admin
-                            </span>
-                          ) : (
-                            <span className="text-[9px] text-neutral-400 bg-neutral-800 px-1.5 py-0.2 rounded-full shrink-0 font-mono">
-                              Member
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-neutral-400 font-mono truncate">{c.normalizedPhoneNumber}</div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          toggleMemberAdmin(chat.id, c.name);
-                          showToast(isMemberAdmin ? `Removed admin permissions from ${c.name}` : `Granted ${c.name} admin permissions`);
-                        }}
-                        className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition-colors ${
-                          isMemberAdmin
-                            ? 'text-amber-400 border-amber-800/60 bg-amber-950/40 hover:bg-amber-900/60'
-                            : 'text-purple-300 border-purple-800/60 bg-purple-950/40 hover:bg-purple-900/60'
-                        }`}
-                        title={isMemberAdmin ? "Dismiss as admin" : "Give admin permissions"}
-                      >
-                        {isMemberAdmin ? "Dismiss" : "Make Admin"}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          removeMemberFromGroup(chat.id, c.name);
-                          showToast(`Removed ${c.name} from ${entityType.toLowerCase()}`);
-                        }}
-                        className="text-[10px] font-bold text-rose-400 hover:text-rose-300 px-2 py-1 rounded-lg border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 transition-colors"
-                        title={`Remove from ${entityType.toLowerCase()}`}
-                      >
-                        Remove
-                      </button>
-                    </div>
+                {/* Group / Channel Participants with Admin Permissions & Removal (No mock fallbacks) */}
+                {memberList.length === 0 ? (
+                  <div className="p-4 text-center">
+                    <p className="text-xs text-neutral-400">No other members in this {entityType.toLowerCase()} yet.</p>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddMembersDrawer(true)}
+                      className="mt-2 text-xs font-bold text-purple-400 hover:text-purple-300 inline-flex items-center gap-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Invite or Add Contacts</span>
+                    </button>
                   </div>
-                );
-              });
-              })()}
-            </div>
-          )}
+                ) : (
+                  memberList.map((c: any) => {
+                    const isMemberAdmin = Boolean(
+                      chat.admins?.includes(c.name) ||
+                      chat.admins?.includes(c.normalizedPhoneNumber)
+                    );
+                    return (
+                      <div key={c.id} className="p-3 flex items-center justify-between gap-2 hover:bg-neutral-800/30 transition-colors">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <img
+                            src={c.avatar}
+                            alt={c.name}
+                            className="w-9 h-9 rounded-full object-cover border border-neutral-700 shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold text-white truncate flex items-center gap-1.5">
+                              <span>{c.name}</span>
+                              {isMemberAdmin ? (
+                                <span className="text-[9px] font-mono text-purple-400 bg-purple-950/80 px-1.5 py-0.2 rounded-full border border-purple-800 shrink-0">
+                                  Admin
+                                </span>
+                              ) : (
+                                <span className="text-[9px] text-neutral-400 bg-neutral-800 px-1.5 py-0.2 rounded-full shrink-0 font-mono">
+                                  Member
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-neutral-400 font-mono truncate">{c.normalizedPhoneNumber}</div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              toggleMemberAdmin(chat.id, c.name);
+                              showToast(isMemberAdmin ? `Removed admin permissions from ${c.name}` : `Granted ${c.name} admin permissions`);
+                            }}
+                            className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition-colors ${
+                              isMemberAdmin
+                                ? 'text-amber-400 border-amber-800/60 bg-amber-950/40 hover:bg-amber-900/60'
+                                : 'text-purple-300 border-purple-800/60 bg-purple-950/40 hover:bg-purple-900/60'
+                            }`}
+                            title={isMemberAdmin ? "Dismiss as admin" : "Give admin permissions"}
+                          >
+                            {isMemberAdmin ? "Dismiss" : "Make Admin"}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              removeMemberFromGroup(chat.id, c.name);
+                              showToast(`Removed ${c.name} from ${entityType.toLowerCase()}`);
+                            }}
+                            className="text-[10px] font-bold text-rose-400 hover:text-rose-300 px-2 py-1 rounded-lg border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 transition-colors"
+                            title={`Remove from ${entityType.toLowerCase()}`}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            );
+          })()}
 
           {/* CARD GROUP 5: Export, Clear & Management Actions */}
           <div className="bg-[#1c1c1e] rounded-2xl overflow-hidden divide-y divide-neutral-800/80 border border-neutral-800/80 text-sm font-medium">
