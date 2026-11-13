@@ -14,6 +14,7 @@ import {
   ArrowRight,
   Headphones,
   Sparkles,
+  PawPrint,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { TownCommunity } from '../types';
@@ -30,6 +31,7 @@ export const TownView: React.FC = () => {
     audioSpaces,
     joinAudioSpace,
     createAudioSpace,
+    setIsPetShopModalOpen,
   } = useApp();
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'channels' | 'groups' | 'spaces'>('all');
@@ -91,6 +93,7 @@ export const TownView: React.FC = () => {
     'Campus & Youth',
     'Lifestyle & Faith',
     'Music & Creative',
+    'Pets & Animals',
   ];
 
   const cleanUsername = currentUser.username
@@ -104,6 +107,23 @@ export const TownView: React.FC = () => {
   const liveSpaces = audioSpaces.filter((s) => s.isLive);
 
   const filteredCommunities = townCommunities.filter((item) => {
+    // 1. Strict filter: purge any test, mock, dummy, or sample entities
+    const lowerName = item.name.toLowerCase();
+    const lowerDesc = (item.description || '').toLowerCase();
+    const lowerId = item.id.toLowerCase();
+    if (
+      lowerName.includes('test') ||
+      lowerName.includes('mock') ||
+      lowerName.includes('dummy') ||
+      lowerName.includes('sample') ||
+      lowerDesc.includes('test group') ||
+      lowerDesc.includes('mock account') ||
+      lowerId.startsWith('test_') ||
+      lowerId.startsWith('__test')
+    ) {
+      return false;
+    }
+
     if (activeFilter === 'channels' && item.type !== 'channel') return false;
     if (activeFilter === 'groups' && item.type !== 'group') return false;
     if (selectedCategory !== 'All' && item.category !== selectedCategory) return false;
@@ -390,6 +410,44 @@ export const TownView: React.FC = () => {
               </span>
               <span className="font-mono text-[11px] font-semibold">{filteredCommunities.length} communities</span>
             </div>
+
+            {/* African Pets Hub Spotlight Banner */}
+            {(selectedCategory === 'All' || selectedCategory === 'Pets & Animals') && (
+              <div
+                onClick={() => setIsPetShopModalOpen(true)}
+                className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/15 via-purple-500/10 to-indigo-500/15 border border-amber-500/30 dark:border-amber-500/20 hover:border-amber-500/60 transition-all cursor-pointer flex items-center justify-between gap-3 group shadow-xs hover:shadow-md"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-11 h-11 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-600 dark:text-amber-400 shrink-0 group-hover:scale-105 transition-transform">
+                    <PawPrint className="w-6 h-6" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <h4 className="font-bold text-xs text-slate-900 dark:text-white group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">
+                        African Pets Forum & Pet Shop
+                      </h4>
+                      <span className="text-[9px] font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 rounded-full font-mono uppercase">
+                        New
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-purple-300/70 truncate mt-0.5">
+                      Buy & sell purebred Boerboels, cats, birds, aquarium & join pet discussions
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsPetShopModalOpen(true);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold shrink-0 transition-transform active:scale-95 shadow-sm inline-flex items-center gap-1"
+                >
+                  <span>Explore</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             {filteredCommunities.length === 0 ? (
               <div className="py-12 px-4 text-center bg-white dark:bg-[#120924] rounded-3xl border border-dashed border-purple-300/60 dark:border-purple-800/40">

@@ -1,4 +1,4 @@
-﻿import {
+import {
   initSocket,
   getSocket,
   joinChatRoom,
@@ -83,6 +83,7 @@ import {
   fetchScamReportByTarget,
   fetchAllScamReports,
   broadcastScamReport,
+  upsertScamReportInDb,
 } from '../services/supabase';
 import {
   FeatureFlags,
@@ -620,6 +621,9 @@ interface AppContextType {
   upgradeTutorUnlimited: (paymentMethod: 'wallet' | 'paystack') => { success: boolean; message: string };
   publishCourse: (courseData: Omit<Course, 'id' | 'tutorId' | 'tutorName' | 'tutorAvatar' | 'tutorIsBlueVerified' | 'enrolledStudentsCount' | 'rating' | 'reviewsCount' | 'createdAt' | 'isEnrolledByMe'>) => { success: boolean; course?: Course; message: string };
   enrollInCourse: (courseId: string, paymentMethod: 'wallet' | 'paystack') => { success: boolean; message: string };
+  // 30. Pet Shop & Forum
+  isPetShopModalOpen: boolean;
+  setIsPetShopModalOpen: (val: boolean) => void;
   // 29. Super Admin Console & Moderation
   isAdminModalOpen: boolean;
   setIsAdminModalOpen: (val: boolean) => void;
@@ -1031,10 +1035,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const saved = localStorage.getItem('AGC_town_communities_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && !parsed.some((c: TownCommunity) => c.id === 'town_cv_tech' || c.id === 'town_afritech_daily')) {
-          return parsed;
-        } else {
-          localStorage.removeItem('AGC_town_communities_v2');
+        if (Array.isArray(parsed)) {
+          // Prune test/mock communities from initial state
+          const clean = parsed.filter((c: TownCommunity) => {
+            const low = `${c.name} ${c.id} ${c.description || ''}`.toLowerCase();
+            return !low.includes('test') && !low.includes('mock') && !low.includes('sample') && !c.id.startsWith('test_') && !c.id.startsWith('__test');
+          });
+          return clean;
         }
       }
     } catch (e) {
@@ -1062,6 +1069,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     // 1. Fetch from Supabase town_communities
     if (isSupabaseConfigured) {
+      // Purge any leftover test entities in Supabase
+      supabase.from('town_communities').delete().ilike('name', '%test%').then(() => {}, () => {});
+      supabase.from('town_communities').delete().ilike('name', '%mock%').then(() => {}, () => {});
+
       supabase
         .from('town_communities')
         .select('*')
@@ -1071,6 +1082,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const map = new Map<string, TownCommunity>();
               prev.forEach((c) => map.set(c.id, c));
               data.forEach((row: any) => {
+                const lowerName = (row.name || '').toLowerCase();
+                const lowerDesc = (row.description || '').toLowerCase();
+                const lowerId = (row.id || '').toLowerCase();
+                if (
+                  lowerName.includes('test') ||
+                  lowerName.includes('mock') ||
+                  lowerName.includes('sample') ||
+                  lowerDesc.includes('test') ||
+                  lowerId.startsWith('test_') ||
+                  lowerId.startsWith('__test')
+                ) {
+                  return; // Skip test community
+                }
                 const tags: string[] = Array.isArray(row.tags) ? row.tags : [];
                 const typeTag = tags.find((t: string) => t.startsWith('type:'));
                 const commType = typeTag ? (typeTag.replace('type:', '') as 'group' | 'channel') : (row.category === 'Broadcast' ? 'channel' : 'group');
@@ -5435,10 +5459,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setScamLookupEntity(updatedEntity);
 
-    // 2. Broadcast to all live users via Supabase Realtime
+    // 2. Persist to Supabase Database and broadcast to all live users
     if (isSupabaseConfigured) {
       try {
-        broadcastScamReport({
+        const payload = {
           targetValue: updatedEntity.targetValue,
           targetType: updatedEntity.targetType,
           riskLevel: updatedEntity.riskLevel,
@@ -5450,7 +5474,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             reason: f.reason,
             flagged_by: f.flaggedBy,
           })),
-        });
+        };
+        // Persist to Supabase scam_reports table
+        upsertScamReportInDb(payload).catch((err) => console.warn('Scam DB upsert error:', err));
+        // Broadcast over Realtime
+        broadcastScamReport(payload);
       } catch (_) {}
     }
   };
@@ -5981,9 +6009,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser((prev) => {
       const updated = { ...prev, ...updates };
       localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated));
+
+      if (isSupabaseConfigured && (updated.id || updated.phoneNumber)) {
+        supabase
+          .from('profiles')
+          .upsert({
+            id: updated.id,
+            full_name: updated.fullName,
+            phone_number: updated.phoneNumber,
+            avatar_url: updated.avatarUrl,
+            bio: updated.about,
+            updated_at: new Date().toISOString(),
+          })
+          .then(({ error }: any) => {
+            if (error) console.warn('Supabase profile sync notice:', error);
+          }, () => {});
+      }
+
       return updated;
     });
   };
+
+  // PWA App Badge: show unread message count on installed PWA icon
+  useEffect(() => {
+    const totalUnread = chats.reduce((acc, c) => acc + (c.unreadCount || 0), 0);
+    if ('setAppBadge' in navigator) {
+      if (totalUnread > 0) {
+        (navigator as any).setAppBadge(totalUnread).catch(() => {/* badge not supported */});
+      } else {
+        (navigator as any).clearAppBadge().catch(() => {/* badge not supported */});
+      }
+    }
+  }, [chats]);
 
   // 9. Contacts Handlers
   const syncDeviceContacts = () => {
@@ -7554,6 +7611,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [isTutorModalOpen, setIsTutorModalOpen] = useState(false);
+  const [isPetShopModalOpen, setIsPetShopModalOpen] = useState(false);
   const [activeLearningCourse, setActiveLearningCourse] = useState<Course | null>(null);
 
   const registerAsTutor = (data: {
@@ -8696,6 +8754,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         upgradeTutorUnlimited,
         publishCourse,
         enrollInCourse,
+        // 30. Pet Shop & Forum
+        isPetShopModalOpen,
+        setIsPetShopModalOpen,
         // 29. Super Admin Console & Moderation
         isAdminModalOpen,
         setIsAdminModalOpen,

@@ -411,9 +411,38 @@ export async function fetchAllScamReports(limit = 200) {
 }
 
 /**
+ * Persists a scam / fraud report into Supabase scam_reports table.
+ * Uses upsert on target_value and target_type so reports increment and sync across all devices.
+ */
+export async function upsertScamReportInDb(entity: {
+  targetValue: string;
+  targetType: 'phone' | 'bank_account';
+  riskLevel: string;
+  reportsCount: number;
+  accountName?: string;
+  bankName?: string;
+  flags: { date: string; reason: string; flagged_by?: string; flaggedBy?: string }[];
+}) {
+  const cleaned = entity.targetValue.replace(/\s+/g, '');
+  const row = {
+    target_value: cleaned,
+    target_type: entity.targetType,
+    risk_level: entity.riskLevel,
+    reports_count: entity.reportsCount,
+    account_name: entity.accountName || null,
+    bank_name: entity.bankName || null,
+    flags: entity.flags,
+    updated_at: new Date().toISOString(),
+  };
+
+  return supabase
+    .from('scam_reports')
+    .upsert(row, { onConflict: 'target_value,target_type' });
+}
+
+/**
  * Broadcast a new scam report to all connected AGC users via Realtime.
- * Since RLS blocks anon inserts, we use Realtime broadcast as the primary
- * live-sync mechanism. Reports are also stored in localStorage as local state.
+ * Also syncs with Supabase database so reports persist permanently.
  */
 export function broadcastScamReport(entity: {
   targetValue: string;

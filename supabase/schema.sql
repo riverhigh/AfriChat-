@@ -1694,3 +1694,15 @@ create policy "allow_all_read_invites" on public.group_invitations for select us
 create policy "allow_all_insert_invites" on public.group_invitations for insert with check (true);
 create policy "allow_all_update_invites" on public.group_invitations for update using (true) with check (true);
 create policy "allow_all_delete_invites" on public.group_invitations for delete using (true);
+
+
+-- Scam Reports Permissions (Persist reports directly to DB)
+alter table public.scam_reports enable row level security;
+drop policy if exists "allow_all_read_scam_reports" on public.scam_reports;
+drop policy if exists "allow_all_insert_scam_reports" on public.scam_reports;
+drop policy if exists "allow_all_update_scam_reports" on public.scam_reports;
+drop policy if exists "allow_all_delete_scam_reports" on public.scam_reports;
+create policy "allow_all_read_scam_reports" on public.scam_reports for select using (true);
+create policy "allow_all_insert_scam_reports" on public.scam_reports for insert with check (true);
+create policy "allow_all_update_scam_reports" on public.scam_reports for update using (true) with check (true);
+create policy "allow_all_delete_scam_reports" on public.scam_reports for delete using (true);

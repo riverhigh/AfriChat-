@@ -46,6 +46,7 @@ import { StoreRegistrationModal } from './components/StoreRegistrationModal';
 import { WritersGuildModal } from './components/WritersGuildModal';
 import { AdminDashboardModal } from './components/AdminDashboardModal';
 import { TutorCoursesModal } from './components/TutorCoursesModal';
+import { PetShopModal } from './components/PetShopModal';
 import { WhatsAppPhoneAuth } from './components/WhatsAppPhoneAuth';
 import { PhoneSignUpBanner } from './components/PhoneSignUpBanner';
 import { ErrandsModal } from './components/ErrandsModal';
@@ -53,7 +54,7 @@ import { CallErrorBoundary } from './components/CallErrorBoundary';
 import { ChatErrorBoundary } from './components/ChatErrorBoundary';
 
 const AppContent: React.FC = () => {
-  const { activeChatId, setActiveChatId, activeTab, isAuthenticated, isKickedOut, endCall } = useApp();
+  const { activeChatId, setActiveChatId, activeTab, isAuthenticated, isKickedOut, endCall, isPetShopModalOpen, setIsPetShopModalOpen } = useApp();
   const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('agc_splash_shown'));
   const handleSplashDone = useCallback(() => {
     sessionStorage.setItem('agc_splash_shown', 'true');
@@ -262,6 +263,12 @@ const AppContent: React.FC = () => {
         {/* Super Admin Console & Moderation Desk */}
         <AdminDashboardModal />
         <TutorCoursesModal />
+
+        {/* African Pets Forum & Pet Shop Marketplace */}
+        <PetShopModal
+          isOpen={isPetShopModalOpen}
+          onClose={() => setIsPetShopModalOpen(false)}
+        />
       </div>
     </div>
   );

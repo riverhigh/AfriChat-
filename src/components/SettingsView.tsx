@@ -32,6 +32,7 @@ import {
   Wrench,
   Crown,
   BookOpen,
+  Camera,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { CurrencyCode, LanguageCode, AppFontSize } from '../types';
@@ -106,11 +107,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     referralProgram,
     CURRENCY_SYMBOLS,
     CURRENCY_RATES,
+    updateUserProfile,
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan' | 'chat_bg'>('services');
   const [isLegalModalOpen, setIsLegalModalOpen] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isAvatarUploading, setIsAvatarUploading] = useState(false);
+  const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -157,6 +161,52 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       default:
         return 'English';
     }
+  };
+
+  /** Compress and update user avatar from device image */
+  const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setAvatarUploadError('Please select a valid image file.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setAvatarUploadError('Image must be under 5MB.');
+      return;
+    }
+    setIsAvatarUploading(true);
+    setAvatarUploadError(null);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const src = ev.target?.result as string;
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 256;
+        const scale = Math.min(MAX / img.width, MAX / img.height, 1);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { setIsAvatarUploading(false); return; }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.82);
+        updateUserProfile({ avatarUrl: compressed });
+        setIsAvatarUploading(false);
+      };
+      img.onerror = () => {
+        setAvatarUploadError('Failed to process image.');
+        setIsAvatarUploading(false);
+      };
+      img.src = src;
+    };
+    reader.onerror = () => {
+      setAvatarUploadError('Failed to read file.');
+      setIsAvatarUploading(false);
+    };
+    reader.readAsDataURL(file);
+    // reset input so same file can be re-selected
+    e.target.value = '';
   };
 
   return (
@@ -521,15 +571,34 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           {/* User Profile Identity Row */}
           <div className="flex items-center justify-between px-4 py-4 border-b border-slate-100 dark:border-neutral-800 bg-white dark:bg-[#18152e]">
             <div className="flex items-center gap-3.5">
-              <div className="relative">
-                <div className="w-16 h-16 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden flex items-center justify-center p-0.5 border-2 border-indigo-600">
-                  <img
-                    src={currentUser.avatarUrl}
-                    alt={currentUser.fullName}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full rounded-full object-cover"
-                  />
-                </div>
+              <div className="relative group cursor-pointer" title="Change profile photo">
+                {/* Hidden file input */}
+                <input
+                  type="file"
+                  id="avatar-upload-input"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleAvatarUpload}
+                  disabled={isAvatarUploading}
+                />
+                <label htmlFor="avatar-upload-input" className="cursor-pointer">
+                  <div className="w-16 h-16 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden flex items-center justify-center p-0.5 border-2 border-indigo-600 relative">
+                    <img
+                      src={currentUser.avatarUrl}
+                      alt={currentUser.fullName}
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full rounded-full object-cover"
+                    />
+                    {/* Camera overlay on hover */}
+                    <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      {isAvatarUploading ? (
+                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Camera className="w-5 h-5 text-white" />
+                      )}
+                    </div>
+                  </div>
+                </label>
                 {currentUser.isPhoneVerified && (
                   <span
                     className="absolute -bottom-1 -right-1 w-5 h-5 bg-emerald-500 text-white rounded-full flex items-center justify-center ring-2 ring-white dark:ring-[#18152e]"
@@ -539,6 +608,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </span>
                 )}
               </div>
+              {avatarUploadError && (
+                <p className="text-xs text-red-500 mt-1">{avatarUploadError}</p>
+              )}
 
               <div>
                 <div className="flex items-center gap-1.5">

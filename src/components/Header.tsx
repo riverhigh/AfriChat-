@@ -35,6 +35,7 @@ import {
   CheckCircle2,
   ShieldCheck,
   Search,
+  PawPrint,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -77,6 +78,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
     setIsTutorModalOpen,
     setIsArtisanModalOpen,
     setIsAdminModalOpen,
+    setIsPetShopModalOpen,
     systemBroadcast,
     setSystemBroadcast,
     joinAudioSpace,
@@ -219,6 +221,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                       { label: 'Tutors', sub: '\u20a65k · Courses', icon: GraduationCap, action: () => setIsTutorModalOpen(true), cat: 'tools' },
                       { label: 'Meme Studio', sub: 'African Stickers', icon: Sparkles, action: () => setIsMemeStudioOpen(true), cat: 'tools' },
                       { label: 'Scam Checker', sub: 'Verify Phone/Bank', icon: ShieldAlert, action: () => setIsScamCheckerOpen(true), cat: 'tools' },
+                      { label: 'Pet Shop', sub: 'Forum & Marketplace', icon: PawPrint, action: () => setIsPetShopModalOpen(true), cat: 'services' },
                       { label: 'Security PIN', sub: 'Wallet Auth', icon: LockKeyhole, action: () => setIsSecurityModalOpen(true), cat: 'tools' },
                     ];
                     const q = menuSearch.toLowerCase();

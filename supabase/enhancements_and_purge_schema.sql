@@ -148,3 +148,101 @@ begin
   alter publication supabase_realtime add table public.group_invitations;
 exception when others then null;
 end $$;
+
+-- 6. Scam Reports Table Permissions (Persist Reports Directly to DB)
+alter table public.scam_reports enable row level security;
+
+drop policy if exists "allow_all_read_scam_reports" on public.scam_reports;
+drop policy if exists "allow_all_insert_scam_reports" on public.scam_reports;
+drop policy if exists "allow_all_update_scam_reports" on public.scam_reports;
+drop policy if exists "allow_all_delete_scam_reports" on public.scam_reports;
+
+create policy "allow_all_read_scam_reports" on public.scam_reports
+  for select using (true);
+
+create policy "allow_all_insert_scam_reports" on public.scam_reports
+  for insert with check (true);
+
+create policy "allow_all_update_scam_reports" on public.scam_reports
+  for update using (true) with check (true);
+
+create policy "allow_all_delete_scam_reports" on public.scam_reports
+  for delete using (true);
+
+do $$
+begin
+  alter publication supabase_realtime add table public.scam_reports;
+exception when others then null;
+end $$;
+
+-- 7. Automated Database Cleanup: Purge Test & Mock Communities from Town
+delete from public.town_communities
+where lower(name) like '%test%'
+   or lower(name) like '%mock%'
+   or lower(name) like '%sample%'
+   or lower(id) like 'test_%'
+   or lower(id) like '__test%';
+
+
+-- 8. African Pets Forum & Pet Shop Marketplace Schema
+create table if not exists public.pet_listings (
+  id text primary key,
+  seller_phone text not null,
+  seller_name text,
+  category text not null,
+  title text not null,
+  price numeric(12,2) default 0,
+  currency text default 'NGN',
+  location text,
+  breed text,
+  age text,
+  description text,
+  photo text,
+  is_available boolean default true,
+  created_at timestamptz default now()
+);
+
+alter table public.pet_listings enable row level security;
+drop policy if exists "allow_all_read_pet_listings" on public.pet_listings;
+drop policy if exists "allow_all_insert_pet_listings" on public.pet_listings;
+drop policy if exists "allow_all_update_pet_listings" on public.pet_listings;
+drop policy if exists "allow_all_delete_pet_listings" on public.pet_listings;
+
+create policy "allow_all_read_pet_listings" on public.pet_listings for select using (true);
+create policy "allow_all_insert_pet_listings" on public.pet_listings for insert with check (true);
+create policy "allow_all_update_pet_listings" on public.pet_listings for update using (true) with check (true);
+create policy "allow_all_delete_pet_listings" on public.pet_listings for delete using (true);
+
+do 
+begin
+  alter publication supabase_realtime add table public.pet_listings;
+exception when others then null;
+end ;
+
+create table if not exists public.pet_forum_posts (
+  id text primary key,
+  author_phone text not null,
+  author_name text,
+  author_avatar text,
+  category text not null,
+  text text not null,
+  image_base64 text,
+  like_count integer default 0,
+  comment_count integer default 0,
+  created_at timestamptz default now()
+);
+
+alter table public.pet_forum_posts enable row level security;
+drop policy if exists "allow_all_read_pet_forum_posts" on public.pet_forum_posts;
+drop policy if exists "allow_all_insert_pet_forum_posts" on public.pet_forum_posts;
+drop policy if exists "allow_all_update_pet_forum_posts" on public.pet_forum_posts;
+
+create policy "allow_all_read_pet_forum_posts" on public.pet_forum_posts for select using (true);
+create policy "allow_all_insert_pet_forum_posts" on public.pet_forum_posts for insert with check (true);
+create policy "allow_all_update_pet_forum_posts" on public.pet_forum_posts for update using (true) with check (true);
+
+do 
+begin
+  alter publication supabase_realtime add table public.pet_forum_posts;
+exception when others then null;
+end ;
