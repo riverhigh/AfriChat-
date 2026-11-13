@@ -21,6 +21,8 @@ import {
   Megaphone,
   Check,
   Plus,
+  Clock,
+  XCircle,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { AudioSpaceSpeaker } from '../types';
@@ -29,6 +31,9 @@ export const AudioSpaceModal: React.FC = () => {
   const {
     activeAudioSpace,
     leaveAudioSpace,
+    endAudioSpace,
+    spaceEndedSummary,
+    setSpaceEndedSummary,
     toggleAudioSpaceMute,
     toggleSpaceLowBandwidth,
     currentUser,
@@ -100,6 +105,51 @@ export const AudioSpaceModal: React.FC = () => {
   );
   const [isEditingPin, setIsEditingPin] = useState(false);
   const [pinInput, setPinInput] = useState(pinnedNote);
+
+  if (spaceEndedSummary) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+        <div className="w-full max-w-sm rounded-3xl bg-gradient-to-b from-[#1f0b3b] via-[#120624] to-[#0b0317] border border-purple-500/40 p-6 text-center space-y-4 shadow-2xl text-white">
+          <div className="w-14 h-14 rounded-full bg-purple-600/20 text-purple-400 mx-auto flex items-center justify-center border border-purple-500/30">
+            <Radio className="w-7 h-7" />
+          </div>
+          <div>
+            <span className="text-[10px] font-mono uppercase tracking-wider text-purple-400 bg-purple-950/60 border border-purple-500/30 px-2.5 py-0.5 rounded-full">
+              Space Concluded
+            </span>
+            <h3 className="text-lg font-black font-display text-white mt-2">
+              {spaceEndedSummary.title}
+            </h3>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5 py-2">
+            <div className="p-3 bg-purple-950/50 rounded-2xl border border-purple-500/20 text-center">
+              <Clock className="w-4 h-4 text-amber-400 mx-auto mb-1" />
+              <div className="text-[10px] text-purple-300/70 font-mono">Total Duration</div>
+              <div className="text-base font-black font-mono text-white mt-0.5">
+                {spaceEndedSummary.durationFormatted}
+              </div>
+            </div>
+            <div className="p-3 bg-purple-950/50 rounded-2xl border border-purple-500/20 text-center">
+              <Users className="w-4 h-4 text-emerald-400 mx-auto mb-1" />
+              <div className="text-[10px] text-purple-300/70 font-mono">Peak Listeners</div>
+              <div className="text-base font-black font-mono text-white mt-0.5">
+                {spaceEndedSummary.peakListeners}
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setSpaceEndedSummary(null)}
+            className="w-full py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl shadow-md transition-all active:scale-95"
+          >
+            Return to Town
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!activeAudioSpace) return null;
 
@@ -587,6 +637,18 @@ export const AudioSpaceModal: React.FC = () => {
             <Hand className="w-4 h-4" />
             <span>{hasRequestedMic ? 'Hand Raised' : 'Request Mic'}</span>
           </button>
+
+          {/* End Space Button for Host */}
+          {isHost && (
+            <button
+              type="button"
+              onClick={() => endAudioSpace(activeAudioSpace.id)}
+              className="py-3 px-4 bg-rose-600/80 hover:bg-rose-600 text-white border border-rose-500 rounded-2xl text-xs font-bold transition-all shadow-md active:scale-95 flex items-center gap-1.5"
+            >
+              <XCircle className="w-4 h-4" />
+              <span>End Space</span>
+            </button>
+          )}
 
           {/* Leave Button */}
           <button

@@ -7,6 +7,7 @@ import {
   QrCode,
   ShieldCheck,
   ChevronRight,
+  ArrowLeft,
   Moon,
   Sun,
   Wallet,
@@ -390,9 +391,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <div className="space-y-4 px-4 py-4 animate-in fade-in">
           {/* Header */}
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-2xl bg-purple-600/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
-                <ImageIcon className="w-5 h-5" />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('services')}
+                className="p-2 -ml-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-white"
+                title="Back to Settings"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+              <div className="w-9 h-9 rounded-2xl bg-purple-600/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                <ImageIcon className="w-4 h-4" />
               </div>
               <div>
                 <h3 className="text-base font-black text-slate-900 dark:text-white tracking-tight">
@@ -901,6 +910,35 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           <div className="p-4 text-center text-xs text-slate-400">
             AGC Super-App · Made for African Markets
+          </div>
+
+          {/* Chat Background & Wallpaper Option */}
+          <div className="px-4 pb-2">
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('chat_bg')}
+              className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-white dark:bg-[#120924] border border-slate-200/80 dark:border-purple-900/40 hover:border-purple-500/50 transition-all text-left shadow-xs group cursor-pointer"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-purple-600/10 text-purple-600 dark:text-purple-400 flex items-center justify-center border border-purple-500/20 group-hover:scale-105 transition-transform">
+                  <ImageIcon className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <span>Chat Background & Wallpaper</span>
+                    {chatWallpaper && (
+                      <span className="text-[9px] font-mono bg-purple-500/20 text-purple-600 dark:text-purple-300 px-1.5 py-0.2 rounded-full font-bold">
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-purple-300/70 mt-0.5">
+                    African cultural patterns or custom photo wallpaper
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-purple-400 group-hover:translate-x-0.5 transition-all" />
+            </button>
           </div>
 
           {/* Subtle Invite Friends & Earn — bottom link */}

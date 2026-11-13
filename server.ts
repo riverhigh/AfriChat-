@@ -23,7 +23,117 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
+
+// ── CUSTOM APPLICATION FIREWALL (WAF) & THREAT INSPECTION ──────────────────
+const SQLI_REGEX = /(union\s+select|select\s+.*\s+from|insert\s+into|drop\s+table|update\s+.*\s+set|delete\s+from|sleep\(\d+\)|benchmark\(|waitfor\s+delay|--|\/\*|\*\/|;\s*drop|'\s*or\s*['\d]=['\d])/i;
+const XSS_REGEX = /(<script.*?>|javascript:|onload\s*=|onerror\s*=|onmouseover\s*=|eval\(|<iframe|<svg.*?onload)/i;
+const PATH_TRAVERSAL_REGEX = /(\.\.[\/\\]|%2e%2e%2f|%2e%2e\/|\.\.%2f|\/etc\/passwd|win\.ini)/i;
+
+function inspectPayloadForThreats(target: any): string | null {
+  if (!target) return null;
+  const str = typeof target === 'string' ? target : JSON.stringify(target);
+  if (SQLI_REGEX.test(str)) return 'SQL Injection attempt detected';
+  if (XSS_REGEX.test(str)) return 'XSS payload detected';
+  if (PATH_TRAVERSAL_REGEX.test(str)) return 'Path traversal attempt detected';
+  return null;
+}
+
+// WAF Middleware applied to all incoming HTTP requests
+app.use((req: Request, res: Response, next) => {
+  const urlThreat = inspectPayloadForThreats(req.originalUrl || req.url);
+  if (urlThreat) {
+    console.warn(`[WAF BLOCKED] ${req.ip} -> ${req.method} ${req.url} (${urlThreat})`);
+    return res.status(403).json({
+      error: 'Access Denied: Malicious payload pattern intercepted by AfriChat WAF engine.',
+      reason: urlThreat,
+      code: 'AGC_WAF_BLOCKED',
+    });
+  }
+
+  const queryThreat = inspectPayloadForThreats(req.query);
+  if (queryThreat) {
+    console.warn(`[WAF BLOCKED] Query Threat: ${req.ip} -> ${queryThreat}`);
+    return res.status(403).json({
+      error: 'Access Denied: Dangerous query parameters detected.',
+      code: 'AGC_WAF_QUERY_VIOLATION',
+    });
+  }
+
+  if (req.body && Object.keys(req.body).length > 0) {
+    const bodyThreat = inspectPayloadForThreats(req.body);
+    if (bodyThreat) {
+      console.warn(`[WAF BLOCKED] Body Threat: ${req.ip} -> ${bodyThreat}`);
+      return res.status(403).json({
+        error: 'Access Denied: Dangerous request body detected.',
+        code: 'AGC_WAF_BODY_VIOLATION',
+      });
+    }
+  }
+
+  next();
+});
+
+// ── AUTH ROUTE RATE LIMITER (BRUTE FORCE PROTECTION) ───────────────────────
+interface RateLimitRecord {
+  attempts: number;
+  resetAt: number;
+}
+const authRateLimits = new Map<string, RateLimitRecord>();
+const AUTH_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const AUTH_MAX_ATTEMPTS = 10; // max 10 auth attempts per IP per 15 minutes
+
+const authRateLimiter = (req: Request, res: Response, next: () => void) => {
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || req.ip || '127.0.0.1';
+  const now = Date.now();
+  let record = authRateLimits.get(ip);
+
+  if (!record || now > record.resetAt) {
+    record = { attempts: 1, resetAt: now + AUTH_WINDOW_MS };
+    authRateLimits.set(ip, record);
+    return next();
+  }
+
+  record.attempts += 1;
+  if (record.attempts > AUTH_MAX_ATTEMPTS) {
+    const retryAfterSeconds = Math.ceil((record.resetAt - now) / 1000);
+    console.warn(`[RATE LIMIT EXCEEDED] Auth IP: ${ip} (Attempts: ${record.attempts})`);
+    res.setHeader('Retry-After', retryAfterSeconds);
+    return res.status(429).json({
+      error: 'Too many authentication attempts from this IP address. Please try again later.',
+      retryAfterSeconds,
+      code: 'AGC_AUTH_RATE_LIMIT',
+    });
+  }
+
+  next();
+};
+
+// ── ANTI-BOT & RECON SCRAPING MITIGATION ────────────────────────────────────
+const BOT_USER_AGENTS = [
+  'sqlmap', 'nikto', 'nmap', 'masscan', 'gobuster', 'dirbuster', 'wpscan',
+  'python-requests', 'aiohttp', 'curl/', 'wget/', 'postmanruntime',
+];
+
+const botMitigation = (req: Request, res: Response, next: () => void) => {
+  const ua = (req.headers['user-agent'] || '').toLowerCase();
+  const isMaliciousBot = BOT_USER_AGENTS.some((bot) => ua.includes(bot));
+
+  if (isMaliciousBot) {
+    console.warn(`[BOT BLOCKED] High-value scrape attempt: ${req.ip} (UA: ${ua})`);
+    return res.status(403).json({
+      error: 'Direct automated scraping prohibited on this endpoint.',
+      code: 'AGC_BOT_RECON_BLOCKED',
+    });
+  }
+  next();
+};
+
+// Apply rate limiter and bot protection to user registration and auth lookup routes
+app.use('/api/users/register', authRateLimiter, botMitigation);
+app.use('/api/users/check-phone', authRateLimiter);
+app.use('/api/users/check-username', authRateLimiter);
+app.use('/api/users', botMitigation);
 
 // Basic health check route
 app.get('/api/health', (_req: Request, res: Response) => {

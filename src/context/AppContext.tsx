@@ -1065,7 +1065,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supabase
         .from('town_communities')
         .select('*')
-        .then(({ data }) => {
+        .then(({ data }: any) => {
           if (data && Array.isArray(data) && data.length > 0) {
             setTownCommunities((prev) => {
               const map = new Map<string, TownCommunity>();
@@ -1138,8 +1138,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               return merged;
             });
           }
-        })
-        .catch(() => {});
+        }, () => {});
     } catch (_) {}
 
     // 3. Socket.io community_created listener
@@ -2105,7 +2104,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
-    fetchLiveAudioSpaces().then(({ data }) => {
+    fetchLiveAudioSpaces().then(({ data }: any) => {
       if (data && Array.isArray(data) && data.length > 0) {
         setAudioSpaces((prev) => {
           const map = new Map<string, AudioSpace>();
@@ -2513,6 +2512,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (_) {}
   }, [currentUser.phoneNumber]);
 
+  // Sync incoming pending friend requests from Supabase contact_requests table
+  useEffect(() => {
+    if (!isSupabaseConfigured || !currentUser.phoneNumber) return;
+    const cleanPhone = currentUser.phoneNumber.replace(/\D/g, '');
+    const altPhone = normalizePhoneDigits(cleanPhone);
+    const phones = Array.from(new Set([currentUser.phoneNumber, cleanPhone, altPhone].filter(Boolean)));
+
+    supabase
+      .from('contact_requests')
+      .select('*')
+      .in('to_phone', phones)
+      .eq('status', 'pending')
+      .then(({ data }) => {
+        if (data && data.length > 0) {
+          setFriendRequests((prev) => {
+            const existingIds = new Set(prev.map((r) => r.id));
+            const newReqs = data
+              .filter((d: any) => !existingIds.has(d.id))
+              .map((d: any) => ({
+                id: d.id,
+                senderPhone: d.from_phone,
+                senderName: d.from_name,
+                senderAvatar: d.from_avatar,
+                recipientPhone: d.to_phone,
+                message: d.greeting,
+                createdAt: d.created_at ? new Date(d.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently',
+                status: 'pending' as const,
+              }));
+            return newReqs.length > 0 ? [...newReqs, ...prev] : prev;
+          });
+        }
+      }, () => {});
+  }, [currentUser.phoneNumber, isSupabaseConfigured]);
+
   // Persist friend requests scoped by current user phone
   useEffect(() => {
     if (currentUser.phoneNumber) {
@@ -2552,7 +2585,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .from('device_contacts')
         .select('*')
         .eq('owner_id', currentUser.id)
-        .then(({ data }) => {
+        .then(({ data }: any) => {
           if (data && Array.isArray(data) && data.length > 0) {
             setDeviceContacts((prev) => {
               const map = new Map<string, DeviceContact>();
@@ -2660,8 +2693,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               return prev;
             });
           }
-        })
-        .catch(() => {});
+        }, () => {});
     } catch (_) {}
   }, [isAuthenticated, currentUser.id, currentUser.phoneNumber]);
 
@@ -2808,7 +2840,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .gte('expires_at', new Date().toISOString())
         .order('created_at', { ascending: false })
         .limit(200)
-        .then(({ data }) => {
+        .then(({ data }: any) => {
           if (!data || !Array.isArray(data)) return;
           const incoming = data
             .filter((row: any) => {
@@ -2871,8 +2903,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               });
             }
           }
-        })
-        .catch(() => {});
+        }, () => {});
     } catch (_) {}
 
     // 3. Multi-Tab / Same Machine BroadcastChannel Sync
@@ -5108,6 +5139,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (isSupabaseConfigured) {
+      supabase
+        .from('contact_requests')
+        .insert({
+          id: req.id,
+          from_phone: req.senderPhone,
+          to_phone: req.recipientPhone,
+          from_name: req.senderName,
+          from_avatar: req.senderAvatar,
+          greeting: req.message,
+          status: 'pending',
+        })
+        .then(() => {}, () => {});
+
       const cleanTarget = targetPhone.replace(/\D/g, '');
       const targets = [cleanTarget, normalizePhoneDigits(cleanTarget)].filter(Boolean);
       targets.forEach((t) => {
@@ -5132,6 +5176,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     addNewDeviceContact(req.senderName, req.senderPhone, 'Connected via Contact Request', true, req.senderAvatar);
     setFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
+
+    if (isSupabaseConfigured) {
+      supabase
+        .from('contact_requests')
+        .update({ status: 'accepted', updated_at: new Date().toISOString() })
+        .eq('id', requestId)
+        .then(() => {}, () => {});
+    }
 
     const socket = getSocket();
     if (socket) {
@@ -5177,6 +5229,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const declineFriendRequest = (requestId: string) => {
     setFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
+    if (isSupabaseConfigured) {
+      supabase
+        .from('contact_requests')
+        .update({ status: 'declined', updated_at: new Date().toISOString() })
+        .eq('id', requestId)
+        .then(() => {}, () => {});
+    }
   };
 
   const respondToGroupInvitation = (chatId: string, accept: boolean) => {
@@ -5235,7 +5294,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .subscribe();
 
     // Also hydrate scam database from Supabase on mount
-    fetchAllScamReports().then(({ data }) => {
+    fetchAllScamReports().then(({ data }: any) => {
       if (!data || !Array.isArray(data) || data.length === 0) return;
       setScamDatabase((prev) => {
         const merged: Record<string, ScamEntity> = { ...prev };
@@ -5262,7 +5321,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         try { localStorage.setItem('AGC_scam_database_v2', JSON.stringify(merged)); } catch (_) {}
         return merged;
       });
-    }).catch(() => {});
+    }, () => {});
 
     return () => { scamCh.unsubscribe(); };
   }, [isSupabaseConfigured]);

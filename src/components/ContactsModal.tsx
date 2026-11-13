@@ -36,6 +36,9 @@ export const ContactsModal: React.FC = () => {
     createGroup,
     createChannel,
     isUserOnline,
+    friendRequests,
+    acceptFriendRequest,
+    declineFriendRequest,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -870,6 +873,66 @@ export const ContactsModal: React.FC = () => {
 
         {/* Contacts List */}
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-purple-950/40">
+          {/* Incoming Friend Requests (WeChat Style) */}
+          {friendRequests && friendRequests.length > 0 && (
+            <div className="p-3 bg-purple-500/10 dark:bg-purple-950/40 border-b border-purple-500/20 space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold text-purple-700 dark:text-purple-300">
+                <span className="flex items-center gap-1.5">
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>Friend Requests ({friendRequests.length})</span>
+                </span>
+                <span className="text-[10px] bg-purple-600 text-white px-2 py-0.5 rounded-full font-mono">
+                  Pending
+                </span>
+              </div>
+              <div className="space-y-2">
+                {friendRequests.map((req) => (
+                  <div
+                    key={req.id}
+                    className="p-2.5 bg-white dark:bg-[#1c0e35] rounded-xl border border-purple-300/40 dark:border-purple-800/40 flex items-center justify-between gap-2 shadow-xs"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img
+                        src={req.senderAvatar || ICON_AVATAR}
+                        alt={req.senderName}
+                        className="w-9 h-9 rounded-full object-cover border border-purple-500/30 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="font-bold text-xs text-slate-900 dark:text-white truncate">
+                          {req.senderName}
+                        </div>
+                        <div className="text-[10px] text-purple-600 dark:text-purple-300/70 font-mono truncate">
+                          {req.senderPhone}
+                        </div>
+                        {req.message && (
+                          <div className="text-[11px] text-slate-500 dark:text-purple-300/60 italic truncate mt-0.5">
+                            &ldquo;{req.message}&rdquo;
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => acceptFriendRequest(req.id)}
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs transition-colors"
+                      >
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => declineFriendRequest(req.id)}
+                        className="px-2 py-1 bg-slate-200 dark:bg-purple-900/30 text-slate-600 dark:text-purple-300 hover:bg-slate-300 rounded-lg text-xs"
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Quick Message Yourself row */}
           {(!searchQuery || 'message yourself you notes'.includes(searchQuery.toLowerCase())) && (
             <div

@@ -1620,3 +1620,77 @@ create policy "Allow update statuses" on public.user_statuses for update using (
 create policy "Public read errand runners" on public.errand_runners for select using (true);
 create policy "Public read errand items" on public.errand_items for select using (true);
 create policy "Public read feature flags" on public.feature_flags for select using (true);
+
+
+-- ============================================================
+-- SECTION 35: 24H PURGE, FRIEND REQUESTS & GROUP INVITATIONS
+-- ============================================================
+
+-- Statuses delete policy (required for client-side and server-side 24h purge)
+drop policy if exists "Allow delete expired statuses" on public.user_statuses;
+drop policy if exists "allow_all_delete_statuses" on public.user_statuses;
+create policy "allow_all_delete_statuses" on public.user_statuses
+  for delete using (true);
+
+-- Automated stored procedure for 24h status cleanup
+create or replace function public.purge_expired_user_statuses()
+returns int
+language plpgsql
+security definer
+as $$
+declare
+  deleted_count int;
+begin
+  delete from public.user_statuses
+  where expires_at < now();
+  get diagnostics deleted_count = row_count;
+  return deleted_count;
+end;
+$$;
+
+-- WeChat-Style Contact & Friend Requests
+create table if not exists public.contact_requests (
+  id              text primary key,
+  from_phone      text not null,
+  to_phone        text not null,
+  from_name       text not null,
+  from_avatar     text,
+  greeting        text default 'Hi! I would like to connect on AfriChat.',
+  status          text default 'pending' check (status in ('pending', 'accepted', 'declined')),
+  created_at      timestamptz default now(),
+  updated_at      timestamptz default now()
+);
+
+alter table public.contact_requests enable row level security;
+drop policy if exists "allow_all_read_requests" on public.contact_requests;
+drop policy if exists "allow_all_insert_requests" on public.contact_requests;
+drop policy if exists "allow_all_update_requests" on public.contact_requests;
+drop policy if exists "allow_all_delete_requests" on public.contact_requests;
+create policy "allow_all_read_requests" on public.contact_requests for select using (true);
+create policy "allow_all_insert_requests" on public.contact_requests for insert with check (true);
+create policy "allow_all_update_requests" on public.contact_requests for update using (true) with check (true);
+create policy "allow_all_delete_requests" on public.contact_requests for delete using (true);
+
+-- Group & Channel Pending Invitations
+create table if not exists public.group_invitations (
+  id              text primary key,
+  group_id        text not null,
+  group_name      text not null,
+  group_avatar    text,
+  invited_phone   text not null,
+  invited_by_phone text not null,
+  invited_by_name text,
+  status          text default 'pending' check (status in ('pending', 'accepted', 'declined')),
+  created_at      timestamptz default now(),
+  updated_at      timestamptz default now()
+);
+
+alter table public.group_invitations enable row level security;
+drop policy if exists "allow_all_read_invites" on public.group_invitations;
+drop policy if exists "allow_all_insert_invites" on public.group_invitations;
+drop policy if exists "allow_all_update_invites" on public.group_invitations;
+drop policy if exists "allow_all_delete_invites" on public.group_invitations;
+create policy "allow_all_read_invites" on public.group_invitations for select using (true);
+create policy "allow_all_insert_invites" on public.group_invitations for insert with check (true);
+create policy "allow_all_update_invites" on public.group_invitations for update using (true) with check (true);
+create policy "allow_all_delete_invites" on public.group_invitations for delete using (true);

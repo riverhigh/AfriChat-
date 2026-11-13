@@ -62,6 +62,13 @@ const AppContent: React.FC = () => {
   const [isVoiceRecorderOpen, setIsVoiceRecorderOpen] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
+  const [isTablet, setIsTablet] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768);
+
+  React.useEffect(() => {
+    const handleResize = () => setIsTablet(window.innerWidth >= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Render SplashScreen overlay before anything else (shows once per session)
   if (showSplash) {
@@ -116,34 +123,73 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="fixed inset-0 w-full h-full bg-slate-900/10 dark:bg-black flex justify-center overflow-hidden text-slate-900 dark:text-white font-sans transition-colors select-none">
-      <div className="w-full max-w-md h-full bg-white dark:bg-black shadow-2xl flex flex-col relative overflow-hidden border-x border-slate-200/50 dark:border-neutral-800">
+      <div className="w-full max-w-md md:max-w-5xl lg:max-w-6xl xl:max-w-7xl h-full md:h-[95vh] md:my-auto md:rounded-3xl bg-white dark:bg-black shadow-2xl flex flex-col relative overflow-hidden border-x md:border border-slate-200/50 dark:border-neutral-800">
         {/* Floating Street Radio bar when active in background */}
         <AudioSpaceBar />
 
-        {activeChatId ? (
-          <ChatErrorBoundary onReset={() => setActiveChatId(null)}>
-            <ActiveChat onOpenVoiceRecorder={() => setIsVoiceRecorderOpen(true)} />
-          </ChatErrorBoundary>
-        ) : (
-          <div className="flex flex-col flex-1 h-full overflow-hidden">
-            <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
+        {/* Master-Detail Split on Tablet & Wide Displays for Chats */}
+        {isTablet && activeTab === 'chats' ? (
+          <div className="flex flex-row w-full h-full overflow-hidden">
+            {/* Master: Left Chat List pane */}
+            <div className="w-80 lg:w-96 shrink-0 h-full flex flex-col border-r border-slate-200/80 dark:border-neutral-800 bg-white dark:bg-black overflow-hidden relative">
+              <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
+              <div className="flex-1 overflow-y-auto overflow-x-hidden">
+                <ChatList />
+              </div>
+              <BottomNav />
+            </div>
 
-            <main className="flex-1 overflow-y-auto overflow-x-hidden">
-              {activeTab === 'status' && <StatusView />}
-              {activeTab === 'calls' && <CallsView />}
-              {activeTab === 'town' && <TownView />}
-              {activeTab === 'chats' && <ChatList />}
-              {activeTab === 'settings' && (
-                <SettingsView
-                  onOpenLanguageModal={() => setIsLanguageModalOpen(true)}
-                  onOpenDisplayModal={() => setIsDisplayModalOpen(true)}
-                />
+            {/* Detail: Right Active Chat pane */}
+            <div className="flex-1 h-full flex flex-col bg-slate-50 dark:bg-neutral-950 overflow-hidden relative">
+              {activeChatId ? (
+                <ChatErrorBoundary onReset={() => setActiveChatId(null)}>
+                  <ActiveChat onOpenVoiceRecorder={() => setIsVoiceRecorderOpen(true)} />
+                </ChatErrorBoundary>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center select-none">
+                  <div className="w-20 h-20 rounded-3xl bg-purple-600/10 dark:bg-purple-500/15 border border-purple-500/30 flex items-center justify-center mb-5 shadow-lg shadow-purple-500/10">
+                    <img src="/icon-192.png" alt="AfriChat" className="w-12 h-12 rounded-2xl object-cover shadow-sm" />
+                  </div>
+                  <h3 className="text-xl font-black font-display text-slate-900 dark:text-white mb-2">
+                    AfriChat Web &amp; Tablet
+                  </h3>
+                  <p className="text-sm text-slate-500 dark:text-neutral-400 max-w-sm mb-6 leading-relaxed">
+                    Select a conversation from the list to start messaging, sending voice notes, or making calls.
+                  </p>
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
+                    <span>🔒 End-to-End Encrypted (AES-GCM 256)</span>
+                  </div>
+                </div>
               )}
-              {activeTab === 'market' && <MarketplaceView />}
-            </main>
-
-            <BottomNav />
+            </div>
           </div>
+        ) : (
+          /* Single Column Mobile / Smartwatch View or Non-Chat Tabs */
+          activeChatId ? (
+            <ChatErrorBoundary onReset={() => setActiveChatId(null)}>
+              <ActiveChat onOpenVoiceRecorder={() => setIsVoiceRecorderOpen(true)} />
+            </ChatErrorBoundary>
+          ) : (
+            <div className="flex flex-col flex-1 h-full overflow-hidden">
+              <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
+
+              <main className="flex-1 overflow-y-auto overflow-x-hidden">
+                {activeTab === 'status' && <StatusView />}
+                {activeTab === 'calls' && <CallsView />}
+                {activeTab === 'town' && <TownView />}
+                {activeTab === 'chats' && <ChatList />}
+                {activeTab === 'settings' && (
+                  <SettingsView
+                    onOpenLanguageModal={() => setIsLanguageModalOpen(true)}
+                    onOpenDisplayModal={() => setIsDisplayModalOpen(true)}
+                  />
+                )}
+                {activeTab === 'market' && <MarketplaceView />}
+              </main>
+
+              <BottomNav />
+            </div>
+          )
         )}
 
         {/* Global Modals & Interactive Overlays */}

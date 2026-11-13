@@ -169,7 +169,11 @@ export const ChatList: React.FC = () => {
                 className="relative shrink-0 group cursor-pointer"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setSelectedProfileChat(chat);
+                  if (contactStatus) {
+                    setActiveViewingStatus(contactStatus);
+                  } else {
+                    setSelectedProfileChat(chat);
+                  }
                 }}
                 title={hasRecentStatus ? `${chat.name} posted a new status - tap to view` : 'View contact info'}
               >

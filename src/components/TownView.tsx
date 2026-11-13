@@ -141,32 +141,17 @@ export const TownView: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Masked Username Privacy Pill */}
-            <button
-              type="button"
-              onClick={toggleHidePhoneNumberInTown}
-              className={`px-2.5 py-1.5 rounded-xl text-[11px] font-medium transition-all flex items-center gap-1.5 border ${
-                hidePhoneNumberInTown
-                  ? 'bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border-purple-300 dark:border-purple-800/80 shadow-2xs'
-                  : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10'
-              }`}
-              title="Toggle Anonymous Phone Masking in Town"
+            {/* Always-Masked Phone Privacy Badge */}
+            <div
+              className="px-2.5 py-1.5 rounded-xl text-[11px] font-medium flex items-center gap-1.5 border bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border-purple-300 dark:border-purple-800/80 shadow-2xs select-none"
+              title="Phone numbers are strictly masked and protected across Town groups, spaces and channels"
             >
-              {hidePhoneNumberInTown ? (
-                <>
-                  <ShieldCheck className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
-                  <span className="font-mono font-bold max-w-[85px] truncate">{cleanUsername}</span>
-                  <span className="text-[9px] font-bold bg-purple-600/15 px-1 py-0.2 rounded text-purple-700 dark:text-purple-300">
-                    Masked
-                  </span>
-                </>
-              ) : (
-                <>
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Public</span>
-                </>
-              )}
-            </button>
+              <ShieldCheck className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+              <span className="font-mono font-bold max-w-[85px] truncate">{cleanUsername}</span>
+              <span className="text-[9px] font-bold bg-purple-600/15 px-1 py-0.2 rounded text-purple-700 dark:text-purple-300">
+                Private
+              </span>
+            </div>
 
             {/* Join Code Button */}
             <button

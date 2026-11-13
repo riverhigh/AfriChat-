@@ -342,7 +342,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
 
         <div className="flex items-center gap-1.5">
           {/* Paystack Wallet Balance Pill with Toggle to Turn Off Figure */}
-          <div className="flex items-center rounded-full bg-white/10 hover:bg-white/15 text-indigo-200 text-xs font-mono font-bold transition-all border border-white/10 shadow-xs">
+          <div className="smartwatch-hide flex items-center rounded-full bg-white/10 hover:bg-white/15 text-indigo-200 text-xs font-mono font-bold transition-all border border-white/10 shadow-xs">
             <button
               type="button"
               onClick={() => setIsWalletModalOpen(true)}

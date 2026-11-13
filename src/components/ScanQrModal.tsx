@@ -35,6 +35,7 @@ export const ScanQrModal: React.FC = () => {
     addNewDeviceContact,
     startChatWithContact,
     deviceContacts,
+    sendFriendRequest,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'scan' | 'my_qr'>('my_qr');
@@ -45,6 +46,9 @@ export const ScanQrModal: React.FC = () => {
     phone: string;
     avatar?: string;
   } | null>(null);
+  const [greetingNote, setGreetingNote] = useState('');
+  const [isSendingRequest, setIsSendingRequest] = useState(false);
+  const [requestSent, setRequestSent] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -362,19 +366,21 @@ export const ScanQrModal: React.FC = () => {
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  const handleStartChatWithScanned = () => {
+  const handleSendRequestToScanned = async () => {
     if (!scanResult) return;
-    const existing = deviceContacts.find(
-      (c) => c.normalizedPhoneNumber === scanResult.phone || c.rawPhoneNumber === scanResult.phone
+    setIsSendingRequest(true);
+    await sendFriendRequest(
+      scanResult.phone,
+      scanResult.name,
+      greetingNote || `Hi, I am ${currentUser.fullName || 'AGC User'}. Let's connect on AfriChat!`
     );
-    if (existing) {
+    setIsSendingRequest(false);
+    setRequestSent(true);
+    setTimeout(() => {
       setIsScanQrModalOpen(false);
-      startChatWithContact(existing);
-    } else {
-      const contact = addNewDeviceContact(scanResult.name, scanResult.phone, '', true, scanResult.avatar);
-      setIsScanQrModalOpen(false);
-      startChatWithContact(contact);
-    }
+      setScanResult(null);
+      setRequestSent(false);
+    }, 2200);
   };
 
   if (!isScanQrModalOpen) return null;
@@ -449,24 +455,62 @@ export const ScanQrModal: React.FC = () => {
           </button>
         </div>
 
-        {/* Scan Result Banner */}
+        {/* WeChat-style Scan Result Card: Add Friend Request */}
         {scanResult && (
-          <div className="mx-4 mt-3 p-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs animate-in zoom-in-95 space-y-2">
-            <div className="flex items-center gap-2.5">
-              <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-              <div>
-                <span className="font-bold text-white block">{scanResult.name}</span>
-                <span className="text-[11px] font-mono text-emerald-300">{scanResult.phone}</span>
+          <div className="mx-4 mt-3 p-4 rounded-2xl bg-gradient-to-b from-purple-950/60 to-[#1c0d38] border border-purple-500/40 text-xs animate-in zoom-in-95 space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-full overflow-hidden bg-purple-900/40 border border-purple-500/40 shrink-0">
+                <img
+                  src={scanResult.avatar || '/favicon.svg'}
+                  alt={scanResult.name}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-white text-sm truncate">{scanResult.name}</span>
+                  <span className="text-[9px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded-full border border-purple-500/30 font-mono">
+                    AfriChat Peer
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono text-purple-300/70 block mt-0.5">{scanResult.phone}</span>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={handleStartChatWithScanned}
-              className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              <span>Start Chat Now</span>
-            </button>
+
+            {requestSent ? (
+              <div className="p-3 bg-emerald-500/20 border border-emerald-500/40 rounded-xl text-center text-emerald-300 font-bold flex items-center justify-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <span>Friend request sent! Awaiting confirmation.</span>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                <input
+                  type="text"
+                  value={greetingNote}
+                  onChange={(e) => setGreetingNote(e.target.value)}
+                  placeholder={`Hi, I'm ${currentUser.fullName || 'AGC User'}. Let's connect!`}
+                  className="w-full px-3 py-2 bg-purple-950/80 border border-purple-500/30 rounded-xl text-xs text-white placeholder-purple-400/50 focus:outline-none focus:border-purple-400"
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={isSendingRequest}
+                    onClick={handleSendRequestToScanned}
+                    className="flex-1 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-md active:scale-95 disabled:opacity-50"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>{isSendingRequest ? 'Sending...' : 'Send Friend Request'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScanResult(null)}
+                    className="px-3 py-2.5 bg-purple-950/40 hover:bg-purple-900/40 text-purple-300 rounded-xl text-xs font-semibold"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
