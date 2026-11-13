@@ -1,45 +1,5 @@
 [
   {
-    "id": "usr_davido",
-    "fullName": "Davido Adeleke",
-    "phoneNumber": "+2348030001122",
-    "avatarUrl": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-    "about": "Timeless 001 · Using AGC",
-    "role": "creator"
-  },
-  {
-    "id": "usr_burna",
-    "fullName": "Burna Boy",
-    "phoneNumber": "+2348021114477",
-    "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
-    "about": "African Giant · Using AGC",
-    "role": "creator"
-  },
-  {
-    "id": "usr_babatunde",
-    "fullName": "Babatunde Adeleke",
-    "phoneNumber": "+2348031234567",
-    "avatarUrl": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-    "about": "Available · Using AGC",
-    "role": "user"
-  },
-  {
-    "id": "usr_amaka",
-    "fullName": "Amaka Eze",
-    "phoneNumber": "+2348028889911",
-    "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
-    "about": "Available · Using AGC",
-    "role": "user"
-  },
-  {
-    "id": "usr_kwame",
-    "fullName": "Kwame Mensah",
-    "phoneNumber": "+233245551234",
-    "avatarUrl": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
-    "about": "Accra dispatch driver · Using AGC",
-    "role": "user"
-  },
-  {
     "id": "usr_1794512523246",
     "phoneNumber": "+2348114247388",
     "fullName": "gafaa",

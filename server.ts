@@ -36,6 +36,27 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
+// Helper to normalize and produce matching phone variants (handles 080... vs 23480... vs last 9 digits)
+function getPhoneVariants(rawPhone?: string): string[] {
+  if (!rawPhone) return [];
+  const clean = rawPhone.replace(/\D/g, '');
+  if (!clean) return [];
+  const variants = new Set<string>();
+  variants.add(clean);
+  if (clean.startsWith('0') && clean.length === 11) {
+    variants.add('234' + clean.slice(1));
+  } else if (clean.startsWith('234') && clean.length === 13) {
+    variants.add('0' + clean.slice(3));
+  }
+  if (clean.length >= 9) {
+    variants.add(clean.slice(-9));
+  }
+  if (clean.length >= 10) {
+    variants.add(clean.slice(-10));
+  }
+  return Array.from(variants);
+}
+
 // ── Persistent User Registry ────────────────────────────────────────────────
 interface RegisteredUser {
   id: string;
@@ -348,9 +369,22 @@ io.on('connection', (socket: Socket) => {
     socket.leave(`chat:${chatId}`);
   });
 
+  // 1c. Live Group Creation Relay
+  socket.on('create_group', (payload: { chat: any; memberPhones: string[] }) => {
+    const { chat, memberPhones } = payload;
+    if (chat && Array.isArray(memberPhones)) {
+      memberPhones.forEach((phone: string) => {
+        const variants = getPhoneVariants(phone);
+        variants.forEach((v) => {
+          socket.to(`phone:${v}`).emit('group_created', { chat });
+        });
+      });
+    }
+  });
+
   // 2. Live Chat Message Broadcast
-  socket.on('send_message', (payload: { chatId: string; message: any; targetPhone?: string }) => {
-    const { chatId, message, targetPhone } = payload;
+  socket.on('send_message', (payload: { chatId: string; message: any; targetPhone?: string; memberPhones?: string[]; chat?: any }) => {
+    const { chatId, message, targetPhone, memberPhones, chat } = payload;
 
     // Derive target phone if not explicitly provided
     let finalTarget = targetPhone ? targetPhone.replace(/\D/g, '') : '';
@@ -361,16 +395,32 @@ io.on('connection', (socket: Socket) => {
     }
 
     // Broadcast to everyone else in this chat room
-    socket.to(`chat:${chatId}`).emit('new_message', { chatId, message, targetPhone: finalTarget });
+    socket.to(`chat:${chatId}`).emit('new_message', { chatId, message, targetPhone: finalTarget, chat, isGroup: Boolean(chatId.startsWith('group_')) });
 
     // Also broadcast to target user's phone channel so incoming messages update their chat list
     if (finalTarget) {
-      socket.to(`phone:${finalTarget}`).emit('new_message', { chatId, message, targetPhone: finalTarget });
+      const targetVariants = getPhoneVariants(finalTarget);
+      targetVariants.forEach((v) => {
+        socket.to(`phone:${v}`).emit('new_message', { chatId, message, targetPhone: finalTarget, chat });
+      });
     }
 
-    // If it's a town community or group, broadcast to everyone
+    // If it is a group with member phones, broadcast to all members' personal phone channels
+    if (Array.isArray(memberPhones) && memberPhones.length > 0) {
+      const senderPhone = (socket as any)._agcPhone || (message?.senderPhone || '').replace(/\D/g, '');
+      memberPhones.forEach((phone: string) => {
+        const variants = getPhoneVariants(phone);
+        variants.forEach((v) => {
+          if (v !== senderPhone) {
+            socket.to(`phone:${v}`).emit('new_message', { chatId, message, isGroup: true, chat });
+          }
+        });
+      });
+    }
+
+    // If it's a town community, broadcast to everyone
     if (chatId.startsWith('town_comm_')) {
-      socket.broadcast.emit('new_message', { chatId, message });
+      socket.broadcast.emit('new_message', { chatId, message, chat });
     }
   });
 
@@ -446,28 +496,15 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('register_phone', (payload: string | { phone: string; sessionToken?: string }) => {
     const rawPhone = typeof payload === 'string' ? payload : payload.phone;
-    const sessionToken = typeof payload === 'object' ? payload.sessionToken : undefined;
-    const clean = rawPhone.replace(/\D/g, '');
+    const clean = (rawPhone || '').replace(/\D/g, '');
     if (!clean) return;
 
-    // 🔒 Single-session enforcement via Socket.io
-    const existingSocketId = phoneToSocketId.get(clean);
-    if (existingSocketId && existingSocketId !== socket.id) {
-      const existingSocket = io.sockets.sockets.get(existingSocketId);
-      if (existingSocket) {
-        existingSocket.emit('force_logout', {
-          reason: 'new_device_login',
-          message: 'Your account was opened on another device.',
-        });
-        existingSocket.disconnect(true);
-      }
-    }
-
-    phoneToSocketId.set(clean, socket.id);
-    socket.join(`phone:${clean}`);
-    // Store phone on socket for cleanup on disconnect
+    const variants = getPhoneVariants(clean);
+    variants.forEach((v) => {
+      socket.join(`phone:${v}`);
+    });
     (socket as any)._agcPhone = clean;
-    console.log(`📱 [Phone Registered]: ${clean} → socket ${socket.id}`);
+    console.log(`📱 [Phone Registered]: ${clean} (joined ${variants.length} variant rooms) → socket ${socket.id}`);
   });
 
   // 6. WebRTC Call Room Signaling Relay

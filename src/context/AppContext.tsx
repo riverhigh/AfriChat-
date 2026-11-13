@@ -4,6 +4,7 @@ import {
   joinChatRoom,
   leaveChatRoom,
   emitLiveMessage,
+  emitCreateGroup,
   emitPhoneCallSignal,
   joinLiveSpace,
   leaveLiveSpace,
@@ -13,11 +14,32 @@ import {
   emitLikeStatus,
 } from '../services/socket';
 
+export const normalizePhoneDigits = (raw?: string): string => {
+  if (!raw) return '';
+  let d = raw.replace(/\D/g, '');
+  if (d.startsWith('0') && d.length === 11) {
+    d = '234' + d.slice(1);
+  }
+  return d;
+};
+
+export const phonesMatch = (p1?: string, p2?: string): boolean => {
+  if (!p1 || !p2) return false;
+  const c1 = p1.replace(/\D/g, '');
+  const c2 = p2.replace(/\D/g, '');
+  if (c1 === c2) return true;
+  const n1 = normalizePhoneDigits(p1);
+  const n2 = normalizePhoneDigits(p2);
+  if (n1 && n2 && n1 === n2) return true;
+  if (c1.length >= 9 && c2.length >= 9 && c1.slice(-9) === c2.slice(-9)) return true;
+  return false;
+};
+
 export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
-  const cleanA = (phoneA || '').replace(/\D/g, '');
-  const cleanB = (phoneB || '').replace(/\D/g, '');
-  if (cleanA && cleanB) {
-    const sorted = [cleanA, cleanB].sort();
+  const normA = normalizePhoneDigits(phoneA);
+  const normB = normalizePhoneDigits(phoneB);
+  if (normA && normB) {
+    const sorted = [normA, normB].sort();
     return `dm_${sorted[0]}_${sorted[1]}`;
   }
   return '';
@@ -28,14 +50,14 @@ export const getSavedUserCleanPhone = (): string => {
     const s = localStorage.getItem('AGC_user_profile_v2');
     if (s) {
       const p = JSON.parse(s);
-      if (p?.phoneNumber) return p.phoneNumber.replace(/\D/g, '');
+      if (p?.phoneNumber) return normalizePhoneDigits(p.phoneNumber);
     }
   } catch (_) {}
   return '';
 };
 
 export const getUserStorageKey = (prefix: string, cleanPhone?: string): string => {
-  const clean = cleanPhone || getSavedUserCleanPhone();
+  const clean = cleanPhone ? normalizePhoneDigits(cleanPhone) : getSavedUserCleanPhone();
   return clean ? `${prefix}_${clean}` : prefix;
 };
 
@@ -209,7 +231,7 @@ interface AppContextType {
   clearChat: (chatId: string) => void;
   updateChat: (chatId: string, updates: Partial<ChatThread>) => void;
   addMembersToGroup: (chatId: string, memberNames: string[]) => void;
-  createGroup: (name: string, memberNamesOrPhones: string[], avatar?: string, description?: string) => string;
+  createGroup: (name: string, memberNamesOrPhones: string[], avatar?: string, description?: string, memberPhones?: string[]) => string;
   createChannel: (name: string, description?: string, avatar?: string) => string;
   toggleMemberAdmin: (chatId: string, memberName: string) => void;
   removeMemberFromGroup: (chatId: string, memberName: string) => void;
@@ -366,6 +388,7 @@ interface AppContextType {
   syncDeviceContacts: () => void;
   startChatWithContact: (contact: DeviceContact) => void;
   addNewDeviceContact: (name: string, phone: string, about?: string, isRegistered?: boolean, avatar?: string) => DeviceContact;
+  importDeviceContacts: (contacts: { name: string; phone: string }[]) => Promise<number>;
   // Live Supabase Presence & Typing Indicators
   onlineUserKeys: Set<string>;
   isUserOnline: (phoneOrIdentifier?: string) => boolean;
@@ -2172,6 +2195,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
   }, [messages, currentUser?.phoneNumber]);
+
+  // Re-read user's chats and messages whenever switching users / phone number
+  useEffect(() => {
+    if (!currentUser?.phoneNumber) return;
+    const chatKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+    const msgKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+    try {
+      const savedChats = localStorage.getItem(chatKey);
+      if (savedChats) {
+        const parsed = JSON.parse(savedChats);
+        if (Array.isArray(parsed) && !parsed.some((c: ChatThread) => c.id === 'chat_balogun_ajo' || c.id === 'chat_mama_chidinma')) {
+          setChats(parsed);
+        } else {
+          setChats([]);
+        }
+      } else {
+        setChats([]);
+      }
+    } catch (_) {
+      setChats([]);
+    }
+
+    try {
+      const savedMsgs = localStorage.getItem(msgKey);
+      setMessages(savedMsgs ? JSON.parse(savedMsgs) : {});
+    } catch (_) {
+      setMessages({});
+    }
+  }, [currentUser?.phoneNumber]);
   useEffect(() => {
     try {
       const savedWallet = localStorage.getItem('AGC_user_wallet_v2');
@@ -2386,10 +2438,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   }, [currentUser.id, currentUser.phoneNumber]);
 
-  // 9. Contact Synchronization & Discovery State
+  // 9. Contact Synchronization & Discovery State (Strictly partitioned per logged-in user)
   const [deviceContacts, setDeviceContacts] = useState<DeviceContact[]>(() => {
     try {
-      const saved = localStorage.getItem('AGC_device_contacts');
+      const userKey = getUserStorageKey('AGC_device_contacts');
+      const saved = localStorage.getItem(userKey);
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse device contacts:', e);
@@ -2398,11 +2451,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [isContactsModalOpen, setIsContactsModalOpen] = useState(false);
 
-  // Sync added friend list across devices from Supabase & Gateway server
+  // Re-read user's contacts when phone changes
+  useEffect(() => {
+    const userKey = getUserStorageKey('AGC_device_contacts', currentUser.phoneNumber);
+    try {
+      const saved = localStorage.getItem(userKey);
+      setDeviceContacts(saved ? JSON.parse(saved) : []);
+    } catch (_) {}
+  }, [currentUser.phoneNumber]);
+
+  // Persist device contacts scoped by current user's phone
+  useEffect(() => {
+    if (currentUser.phoneNumber) {
+      try {
+        const userKey = getUserStorageKey('AGC_device_contacts', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(deviceContacts));
+      } catch (_) {}
+    }
+  }, [deviceContacts, currentUser.phoneNumber]);
+
+  // Sync saved contacts across devices from Supabase & Gateway server
   useEffect(() => {
     if (!isAuthenticated || !currentUser?.phoneNumber) return;
 
-    // 1. Fetch from Supabase device_contacts
+    // 1. Fetch from Supabase device_contacts for THIS user
     if (isSupabaseConfigured && currentUser.id) {
       supabase
         .from('device_contacts')
@@ -2425,47 +2497,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 });
               });
               const merged = Array.from(map.values());
-              try { localStorage.setItem('AGC_device_contacts', JSON.stringify(merged)); } catch (_) {}
+              try {
+                const userKey = getUserStorageKey('AGC_device_contacts', currentUser.phoneNumber);
+                localStorage.setItem(userKey, JSON.stringify(merged));
+              } catch (_) {}
               return merged;
             });
           }
         });
 
-      // 1b. Fetch all registered users from agc_phone_registry so any user created on any device appears
+      // 1b. Enrich ONLY existing contacts with registered status from agc_phone_registry (never inject strangers)
       supabase
         .from('agc_phone_registry')
         .select('phone_digits, full_phone, username, avatar_url')
         .then(({ data }) => {
           if (data && Array.isArray(data) && data.length > 0) {
             setDeviceContacts((prev) => {
-              const map = new Map<string, DeviceContact>();
-              prev.forEach((c) => map.set(c.normalizedPhoneNumber, c));
-              const myClean = (currentUser.phoneNumber || '').replace(/\D/g, '');
-              data.forEach((row: any) => {
-                const rowClean = (row.full_phone || row.phone_digits || '').replace(/\D/g, '');
-                if (rowClean && rowClean !== myClean) {
-                  const norm = row.full_phone || `+${rowClean}`;
-                  const existing = map.get(norm);
-                  map.set(norm, {
-                    id: existing?.id || `cnt_${row.phone_digits || rowClean}`,
-                    name: row.username || existing?.name || 'AGC Contact',
-                    rawPhoneNumber: row.full_phone || norm,
-                    normalizedPhoneNumber: norm,
-                    about: 'Available · Using AGC',
-                    avatar: row.avatar_url || existing?.avatar || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+              let changed = false;
+              const updated = prev.map((c) => {
+                const matched = data.find((row: any) => phonesMatch(row.full_phone || row.phone_digits, c.normalizedPhoneNumber || c.rawPhoneNumber));
+                if (matched && (!c.isRegisteredOnAGC || !c.registeredUser)) {
+                  changed = true;
+                  return {
+                    ...c,
                     isRegisteredOnAGC: true,
-                  });
+                    avatar: matched.avatar_url || c.avatar,
+                    registeredUser: {
+                      id: `usr_${matched.phone_digits}`,
+                      phoneNumber: matched.full_phone || c.normalizedPhoneNumber,
+                      fullName: matched.username || c.name,
+                      avatarUrl: matched.avatar_url || c.avatar,
+                      about: 'Available · Using AGC',
+                      createdAt: new Date().toISOString(),
+                      lastSeen: 'recently',
+                    },
+                  };
                 }
+                return c;
               });
-              const merged = Array.from(map.values());
-              try { localStorage.setItem('AGC_device_contacts', JSON.stringify(merged)); } catch (_) {}
-              return merged;
+              if (changed) {
+                try {
+                  const userKey = getUserStorageKey('AGC_device_contacts', currentUser.phoneNumber);
+                  localStorage.setItem(userKey, JSON.stringify(updated));
+                } catch (_) {}
+                return updated;
+              }
+              return prev;
             });
           }
         });
     }
 
-    // 2. Fetch from local server registry if available
+    // 2. Fetch from local server registry to enrich contacts (never inject strangers)
     try {
       const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       fetch(`http://${socketHost}:3002/api/users`)
@@ -2473,28 +2556,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .then((json) => {
           if (json?.users && Array.isArray(json.users)) {
             setDeviceContacts((prev) => {
-              const map = new Map<string, DeviceContact>();
-              prev.forEach((c) => map.set(c.normalizedPhoneNumber, c));
-              const myClean = (currentUser.phoneNumber || '').replace(/\D/g, '');
-              json.users.forEach((u: any) => {
-                if (u.cleanPhone && u.cleanPhone !== myClean) {
-                  const norm = u.phoneNumber?.startsWith('+') ? u.phoneNumber : `+${u.cleanPhone}`;
-                  if (!map.has(norm)) {
-                    map.set(norm, {
-                      id: `cnt_${u.id}`,
-                      name: u.fullName || 'AGC Contact',
-                      rawPhoneNumber: u.phoneNumber,
-                      normalizedPhoneNumber: norm,
-                      about: u.about || 'Available · Using AGC',
-                      avatar: u.avatarUrl,
-                      isRegisteredOnAGC: true,
-                    });
-                  }
+              let changed = false;
+              const updated = prev.map((c) => {
+                const matched = json.users.find((u: any) => phonesMatch(u.phoneNumber || u.cleanPhone, c.normalizedPhoneNumber || c.rawPhoneNumber));
+                if (matched && (!c.isRegisteredOnAGC || !c.registeredUser)) {
+                  changed = true;
+                  return {
+                    ...c,
+                    isRegisteredOnAGC: true,
+                    avatar: matched.avatarUrl || c.avatar,
+                    registeredUser: {
+                      id: matched.id || `usr_${matched.cleanPhone}`,
+                      phoneNumber: matched.phoneNumber || c.normalizedPhoneNumber,
+                      fullName: matched.fullName || c.name,
+                      avatarUrl: matched.avatarUrl || c.avatar,
+                      about: matched.about || 'Available · Using AGC',
+                      createdAt: new Date().toISOString(),
+                      lastSeen: 'online',
+                    },
+                  };
                 }
+                return c;
               });
-              const merged = Array.from(map.values());
-              try { localStorage.setItem('AGC_device_contacts', JSON.stringify(merged)); } catch (_) {}
-              return merged;
+              if (changed) {
+                try {
+                  const userKey = getUserStorageKey('AGC_device_contacts', currentUser.phoneNumber);
+                  localStorage.setItem(userKey, JSON.stringify(updated));
+                } catch (_) {}
+                return updated;
+              }
+              return prev;
             });
           }
         })
@@ -3317,6 +3408,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newStatus: UserStatus = {
       id: `status_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
+      userPhone: currentUser.phoneNumber,
       userName: currentUser.fullName,
       userAvatar: currentUser.avatarUrl,
       isMe: true,
@@ -3349,6 +3441,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newStatus: UserStatus = {
       id: `status_thought_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
+      userPhone: currentUser.phoneNumber,
       userName: currentUser.fullName,
       userAvatar: currentUser.avatarUrl,
       isMe: true,
@@ -3387,6 +3480,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newStatus: UserStatus = {
       id: `status_media_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
+      userPhone: currentUser.phoneNumber,
       userName: currentUser.fullName,
       userAvatar: currentUser.avatarUrl,
       isMe: true,
@@ -3419,6 +3513,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newStatus: UserStatus = {
       id: `status_vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
+      userPhone: currentUser.phoneNumber,
       userName: currentUser.fullName,
       userAvatar: currentUser.avatarUrl,
       isMe: true,
@@ -3838,10 +3933,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const createGroup = (name: string, memberNamesOrPhones: string[], avatar?: string, description?: string): string => {
+  const createGroup = (name: string, memberNamesOrPhones: string[], avatar?: string, description?: string, memberPhones?: string[]): string => {
     const newChatId = 'group_' + Date.now();
     const shortInvite = 'G' + Math.random().toString(36).substring(2, 7).toUpperCase();
     const myName = currentUser.fullName || 'You';
+    const myPhone = currentUser.phoneNumber || '';
+    const allMemberPhones = Array.from(new Set([
+      myPhone,
+      ...(memberPhones || []),
+      ...memberNamesOrPhones.filter((m) => /^\+?[0-9\s-]+$/.test(m)),
+    ])).filter(Boolean);
+
     const newThread: ChatThread = {
       id: newChatId,
       name,
@@ -3856,7 +3958,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isGroup: true,
       membersCount: memberNamesOrPhones.length + 1,
       admins: [myName],
-      members: memberNamesOrPhones,
+      members: [myName, ...memberNamesOrPhones],
+      memberPhones: allMemberPhones,
       inviteCode: shortInvite,
       description,
     };
@@ -3874,7 +3977,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setChats((prev) => {
       const updated = [newThread, ...prev];
       try {
-        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
+        const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(updated));
       } catch (_) {}
       return updated;
     });
@@ -3882,20 +3986,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setMessages((prev) => {
       const updated = { ...prev, [newChatId]: [sysMsg] };
       try {
-        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
+        const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(updated));
       } catch (_) {}
       return updated;
     });
 
     // Broadcast new group to Socket.io and Supabase so other members see it on their dash
     try {
-      const bc = new BroadcastChannel('AGC_chats_sync');
-      bc.postMessage({ chatId: newChatId, chat: newThread, message: sysMsg, senderId: currentUser.id });
-      bc.close();
+      emitCreateGroup(newThread, allMemberPhones);
+      emitLiveMessage(newChatId, sysMsg, undefined, allMemberPhones, newThread);
     } catch (_) {}
 
     try {
-      emitLiveMessage(newChatId, sysMsg, undefined);
+      const bc = new BroadcastChannel('AGC_chats_sync');
+      bc.postMessage({ chatId: newChatId, chat: newThread, message: sysMsg, senderId: currentUser.id, memberPhones: allMemberPhones });
+      bc.close();
     } catch (_) {}
 
     if (isSupabaseConfigured) {
@@ -3908,6 +4014,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         members_count: memberNamesOrPhones.length + 1,
         members: memberNamesOrPhones,
       }).catch((e) => console.warn('Supabase group persist notice:', e));
+
+      // Broadcast to all members' personal Supabase inboxes
+      allMemberPhones.forEach((p) => {
+        const cleanP = p.replace(/\D/g, '');
+        if (cleanP) {
+          try {
+            const inboxCh = supabase.channel(`inbox_${cleanP}`, { config: { broadcast: { self: false } } });
+            inboxCh.subscribe((st) => {
+              if (st === 'SUBSCRIBED') {
+                inboxCh.send({ type: 'broadcast', event: 'group_created', payload: { chat: newThread, message: sysMsg } });
+              }
+            });
+          } catch (_) {}
+        }
+      });
 
       try {
         const sbChannel = supabase.channel('town_community_feed', { config: { broadcast: { self: false } } });
@@ -4095,7 +4216,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!targetCleanPhone && chatId.startsWith('dm_')) {
       const parts = chatId.replace('dm_', '').split('_');
-      targetCleanPhone = parts.find((p) => p !== myCleanPhone) || parts[0];
+      targetCleanPhone = parts.find((p) => !phonesMatch(p, myCleanPhone)) || parts[0];
     }
 
     if (!targetCleanPhone && currentChat?.id) {
@@ -4105,12 +4226,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
+    const memberPhones = currentChat?.memberPhones || [];
     const isDeviceOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
 
     // 1. BroadcastChannel (instant same-computer tab/window sync)
     try {
       const bc = new BroadcastChannel('AGC_chats_sync');
-      bc.postMessage({ chatId, message: msg, senderId: currentUser.id, targetPhone: targetCleanPhone });
+      bc.postMessage({ chatId, message: msg, senderId: currentUser.id, targetPhone: targetCleanPhone, memberPhones, isGroup: Boolean(currentChat?.isGroup), chat: currentChat });
       bc.close();
     } catch (e) {
       console.warn('BroadcastChannel error:', e);
@@ -4128,14 +4250,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const list = prev[chatId] || [];
         const updated = list.map((m) => (m.id === msg.id ? { ...m, status: 'delivered' as const } : m));
         try {
-          localStorage.setItem('AGC_messages_v2', JSON.stringify({ ...prev, [chatId]: updated }));
+          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify({ ...prev, [chatId]: updated }));
         } catch (_) {}
         return { ...prev, [chatId]: updated };
       });
     }
 
     // 2. Socket.io Live WebSocket Relay
-    emitLiveMessage(chatId, msg, targetCleanPhone);
+    emitLiveMessage(chatId, msg, targetCleanPhone, memberPhones, currentChat);
 
     // 3. Supabase Realtime (Cross-device & background inbox channel)
     if (isSupabaseConfigured) {
@@ -4148,22 +4271,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             sbChannel.send({
               type: 'broadcast',
               event: 'new_message',
-              payload: { chatId, message: msg, senderId: currentUser.id },
+              payload: { chatId, message: msg, senderId: currentUser.id, chat: currentChat },
             });
           }
         });
 
-        // Directly broadcast to recipient's personal inbox channel
+        // Directly broadcast to recipient's personal inbox channels (both clean and normalized)
         if (targetCleanPhone) {
-          const inboxChannel = supabase.channel(`inbox_${targetCleanPhone}`, {
-            config: { broadcast: { self: false } },
+          const targets = new Set([targetCleanPhone, normalizePhoneDigits(targetCleanPhone)].filter(Boolean));
+          targets.forEach((t) => {
+            const inboxChannel = supabase.channel(`inbox_${t}`, { config: { broadcast: { self: false } } });
+            inboxChannel.subscribe((status) => {
+              if (status === 'SUBSCRIBED') {
+                inboxChannel.send({
+                  type: 'broadcast',
+                  event: 'new_message',
+                  payload: { chatId, message: msg, senderId: currentUser.id, targetPhone: targetCleanPhone, chat: currentChat },
+                });
+              }
+            });
           });
-          inboxChannel.subscribe((status) => {
-            if (status === 'SUBSCRIBED') {
-              inboxChannel.send({
-                type: 'broadcast',
-                event: 'new_message',
-                payload: { chatId, message: msg, senderId: currentUser.id },
+        }
+
+        // If it's a group, broadcast to each member's personal inbox channel
+        if (memberPhones && memberPhones.length > 0) {
+          memberPhones.forEach((p) => {
+            const cp = p.replace(/\D/g, '');
+            if (cp && !phonesMatch(cp, myCleanPhone)) {
+              const inboxChannel = supabase.channel(`inbox_${cp}`, { config: { broadcast: { self: false } } });
+              inboxChannel.subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                  inboxChannel.send({
+                    type: 'broadcast',
+                    event: 'new_message',
+                    payload: { chatId, message: msg, senderId: currentUser.id, isGroup: true, chat: currentChat },
+                  });
+                }
               });
             }
           });
@@ -5557,7 +5700,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setDeviceContacts((prev) => {
       const updated = [newContact, ...prev.filter(c => c.normalizedPhoneNumber !== normalized)];
-      try { localStorage.setItem('AGC_device_contacts', JSON.stringify(updated)); } catch (_) {}
+      try {
+        const userKey = getUserStorageKey('AGC_device_contacts', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(updated));
+      } catch (_) {}
       return updated;
     });
 
@@ -5579,23 +5725,109 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newContact;
   };
 
+  const importDeviceContacts = async (rawContacts: { name: string; phone: string }[]): Promise<number> => {
+    if (!rawContacts || rawContacts.length === 0) return 0;
+
+    const normalizedList: DeviceContact[] = rawContacts.map((c, i) => {
+      const raw = c.phone.trim();
+      const cleaned = raw.replace(/[\s-]/g, '');
+      const normalized = cleaned.startsWith('0') ? `+234${cleaned.slice(1)}` : cleaned.startsWith('+') ? cleaned : `+234${cleaned}`;
+      return {
+        id: `cnt_imp_${Date.now()}_${i}`,
+        name: c.name.trim() || `Contact ${normalized.slice(-4)}`,
+        rawPhoneNumber: raw,
+        normalizedPhoneNumber: normalized,
+        about: 'Device Contact',
+        avatar: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+        isRegisteredOnAGC: false,
+      };
+    });
+
+    let registeredCount = 0;
+    let registeredUsers: any[] = [];
+    try {
+      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const res = await fetch(`http://${socketHost}:3002/api/users`);
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json?.users)) registeredUsers = json.users;
+      }
+    } catch (_) {}
+
+    if (isSupabaseConfigured) {
+      try {
+        const { data } = await supabase.from('agc_phone_registry').select('*');
+        if (Array.isArray(data)) registeredUsers = [...registeredUsers, ...data];
+      } catch (_) {}
+    }
+
+    const updatedContacts = normalizedList.map((c) => {
+      const match = registeredUsers.find((u) => phonesMatch(u.full_phone || u.phoneNumber || u.cleanPhone || u.phone_digits, c.normalizedPhoneNumber || c.rawPhoneNumber));
+      if (match) {
+        registeredCount++;
+        return {
+          ...c,
+          isRegisteredOnAGC: true,
+          avatar: match.avatar_url || match.avatarUrl || c.avatar,
+          about: match.about || 'Available · Using AGC',
+          registeredUser: {
+            id: match.id || `usr_${match.phone_digits}`,
+            phoneNumber: match.full_phone || c.normalizedPhoneNumber,
+            fullName: match.username || match.fullName || c.name,
+            avatarUrl: match.avatar_url || match.avatarUrl || c.avatar,
+            about: match.about || 'Available · Using AGC',
+            createdAt: new Date().toISOString(),
+            lastSeen: 'recently',
+          },
+        };
+      }
+      return c;
+    });
+
+    setDeviceContacts((prev) => {
+      const map = new Map<string, DeviceContact>();
+      prev.forEach((c) => map.set(c.normalizedPhoneNumber, c));
+      updatedContacts.forEach((c) => map.set(c.normalizedPhoneNumber, c));
+      const merged = Array.from(map.values());
+      try {
+        const userKey = getUserStorageKey('AGC_device_contacts', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(merged));
+      } catch (_) {}
+      return merged;
+    });
+
+    // Also persist imported contacts to Supabase device_contacts
+    if (isSupabaseConfigured && currentUser.id) {
+      try {
+        const rows = updatedContacts.map((c) => ({
+          owner_id: currentUser.id,
+          name: c.name,
+          phone: c.normalizedPhoneNumber,
+          avatar_url: c.avatar,
+          is_on_afri_chat: c.isRegisteredOnAGC,
+        }));
+        supabase.from('device_contacts').upsert(rows, { onConflict: 'owner_id,phone' }).then(() => {});
+      } catch (_) {}
+    }
+
+    return registeredCount;
+  };
+
   const startChatWithContact = (contact: DeviceContact) => {
-    const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
-    const otherPhone = (contact.normalizedPhoneNumber || contact.rawPhoneNumber || '').replace(/\D/g, '');
-    const isSelf = contact.id === 'self' || (myPhone && otherPhone && myPhone === otherPhone);
+    const myPhone = currentUser.phoneNumber || '';
+    const otherPhone = contact.normalizedPhoneNumber || contact.rawPhoneNumber || '';
+    const isSelf = contact.id === 'self' || phonesMatch(myPhone, otherPhone);
     const deterministicId = isSelf
-      ? `dm_self_${myPhone}`
+      ? `dm_self_${normalizePhoneDigits(myPhone)}`
       : myPhone && otherPhone
-      ? `dm_${[myPhone, otherPhone].sort().join('_')}`
+      ? getDirectChatId(myPhone, otherPhone)
       : '';
 
     let existingChat = chats.find(
       (c) =>
         (deterministicId && c.id === deterministicId) ||
-        (isSelf && (c.id === `dm_self_${myPhone}` || c.name.includes('(Message yourself)'))) ||
-        (!isSelf && otherPhone && c.phone && c.phone.replace(/\D/g, '') === otherPhone) ||
-        (!isSelf && c.phone === contact.normalizedPhoneNumber) ||
-        (!isSelf && c.phone === contact.rawPhoneNumber) ||
+        (isSelf && (c.id === `dm_self_${normalizePhoneDigits(myPhone)}` || c.name.includes('(Message yourself)'))) ||
+        (!isSelf && otherPhone && c.phone && phonesMatch(c.phone, otherPhone)) ||
         (!isSelf && c.name.toLowerCase() === contact.name.toLowerCase())
     );
 
@@ -5617,11 +5849,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isOnline: true,
         phone: contact.normalizedPhoneNumber || contact.rawPhoneNumber,
       };
-      setChats((prev) => [newThread, ...prev]);
+      setChats((prev) => {
+        const updated = [newThread, ...prev];
+        try {
+          const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
+      });
       existingChat = newThread;
     } else if (existingChat.id !== targetChatId) {
       const updated = { ...existingChat, id: targetChatId };
-      setChats((prev) => prev.map((c) => (c.id === existingChat!.id ? updated : c)));
+      setChats((prev) => {
+        const updatedList = prev.map((c) => (c.id === existingChat!.id ? updated : c));
+        try {
+          const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify(updatedList));
+        } catch (_) {}
+        return updatedList;
+      });
       existingChat = updated;
     }
 
@@ -7202,21 +7448,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Real-Time Multi-Transport Live Chat Connection (Socket.io + BroadcastChannel + Supabase)
   const handleIncomingMessage = useCallback(
-    ({ chatId, message, senderId, targetPhone }: { chatId: string; message: ChatMessage; senderId?: string; targetPhone?: string }) => {
+    ({ chatId, message, senderId, targetPhone, isGroup, chat }: { chatId: string; message: ChatMessage; senderId?: string; targetPhone?: string; isGroup?: boolean; chat?: any }) => {
       if (!message || !chatId) return;
 
       const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
       const senderCleanPhone = (message.senderPhone || '').replace(/\D/g, '');
-      const isFromMe = (senderId && senderId === currentUser.id) || (senderCleanPhone && senderCleanPhone === myCleanPhone && message.sender === 'user');
+      const isFromMe = (senderId && senderId === currentUser.id) || (senderCleanPhone && phonesMatch(senderCleanPhone, myCleanPhone) && message.sender === 'user');
 
       const isDm = chatId.startsWith('dm_');
-      const isSelfChat = chatId.includes('self') || (myCleanPhone && senderCleanPhone === myCleanPhone && (!targetPhone || targetPhone.replace(/\D/g, '') === myCleanPhone));
+      const isGroupChat = Boolean(isGroup || chatId.startsWith('group_') || chat?.isGroup);
+      const isSelfChat = chatId.includes('self') || (myCleanPhone && phonesMatch(senderCleanPhone, myCleanPhone) && (!targetPhone || phonesMatch(targetPhone, myCleanPhone)));
 
       // 1. Strict DM Protection: Only actual participants can receive or view direct messages!
       if (isDm && !isSelfChat) {
         const parts = chatId.replace('dm_', '').split('_');
         if (parts.length >= 2 && myCleanPhone) {
-          const isParticipant = parts[0] === myCleanPhone || parts[1] === myCleanPhone;
+          const isParticipant = phonesMatch(parts[0], myCleanPhone) || phonesMatch(parts[1], myCleanPhone);
           if (!isParticipant) {
             // Strictly private between other users; drop immediately!
             return;
@@ -7224,26 +7471,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      // If a target phone was explicitly addressed, drop if it does not match my phone and isn't from me
-      if (targetPhone) {
-        const cleanTarget = targetPhone.replace(/\D/g, '');
-        if (cleanTarget && myCleanPhone && cleanTarget !== myCleanPhone && !isFromMe) {
+      // If a target phone was explicitly addressed, verify recipient matches my phone
+      if (targetPhone && !isFromMe && !isGroupChat) {
+        if (!phonesMatch(targetPhone, myCleanPhone)) {
           return;
         }
       }
 
-      // 2. Resolve chat ID:
-      // NEVER transform a community, group, space, channel or store chat into a DM!
+      // 2. Resolve chat ID symmetrically
       let resolvedChatId = chatId;
       let otherCleanPhone = '';
       if (isDm) {
         if (isSelfChat) {
-          resolvedChatId = `dm_self_${myCleanPhone}`;
+          resolvedChatId = `dm_self_${normalizePhoneDigits(myCleanPhone)}`;
         } else {
           const parts = chatId.replace('dm_', '').split('_');
-          otherCleanPhone = parts.find((p) => p !== myCleanPhone) || senderCleanPhone;
+          otherCleanPhone = (phonesMatch(parts[0], myCleanPhone) ? parts[1] : parts[0]) || senderCleanPhone;
           if (myCleanPhone && otherCleanPhone) {
-            resolvedChatId = `dm_${[myCleanPhone, otherCleanPhone].sort().join('_')}`;
+            resolvedChatId = getDirectChatId(myCleanPhone, otherCleanPhone);
           }
         }
       }
@@ -7259,10 +7504,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sender: isSelfChat ? 'user' : (isFromMe ? 'user' : 'other'),
           status: 'delivered',
         };
-        return {
+        const updated = {
           ...prev,
           [resolvedChatId]: [...list, receivedMsg],
         };
+        try {
+          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
       });
 
       // 4. Update or insert thread
@@ -7271,7 +7521,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (c) =>
             c.id === resolvedChatId ||
             c.id === chatId ||
-            (otherCleanPhone && c.phone && c.phone.replace(/\D/g, '') === otherCleanPhone)
+            (!isGroupChat && otherCleanPhone && c.phone && phonesMatch(c.phone, otherCleanPhone))
         );
 
         const msgText =
@@ -7287,7 +7537,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (index >= 0) {
           const updated = [...prev];
           const matched = { ...updated[index] };
-          // If activeChatId was the old id, keep it in sync with resolvedChatId
           if (matched.id !== resolvedChatId && activeChatId === matched.id) {
             setActiveChatId(resolvedChatId);
           }
@@ -7299,26 +7548,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ? 0
               : (matched.unreadCount || 0) + 1;
           updated.splice(index, 1);
-          return [matched, ...updated];
+          const finalUpdated = [matched, ...updated];
+          try {
+            const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+            localStorage.setItem(userKey, JSON.stringify(finalUpdated));
+          } catch (_) {}
+          return finalUpdated;
         } else {
           const newThread: ChatThread = {
             id: resolvedChatId,
-            name: isSelfChat
+            name: isGroupChat
+              ? (chat?.name || 'Group Chat')
+              : isSelfChat
               ? `${currentUser.fullName || 'You'} (Message yourself)`
               : (message.senderName || 'AGC Contact'),
             avatar:
-              (isSelfChat ? currentUser.avatarUrl : message.senderAvatar) ||
+              (isGroupChat
+                ? chat?.avatar
+                : isSelfChat
+                ? currentUser.avatarUrl
+                : message.senderAvatar) ||
               "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
             verifiedStore: false,
-            location: isSelfChat ? 'Notes to Self' : (resolvedChatId.startsWith('town_comm_') ? 'Town Community' : 'Direct Chat'),
+            location: isGroupChat
+              ? 'Community Group'
+              : isSelfChat
+              ? 'Notes to Self'
+              : (resolvedChatId.startsWith('town_comm_') ? 'Town Community' : 'Direct Chat'),
             unreadCount: activeChatId === resolvedChatId || activeChatId === chatId ? 0 : 1,
             lastMessage: msgText,
             lastMessageTime: message.timestamp,
             catalog: [],
             isOnline: true,
+            isGroup: isGroupChat,
+            membersCount: chat?.membersCount || 2,
+            members: chat?.members || [],
+            memberPhones: chat?.memberPhones || [],
             phone: isSelfChat ? currentUser.phoneNumber : (message.senderPhone || ''),
           };
-          return [newThread, ...prev];
+          const finalUpdated = [newThread, ...prev];
+          try {
+            const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+            localStorage.setItem(userKey, JSON.stringify(finalUpdated));
+          } catch (_) {}
+          return finalUpdated;
         }
       });
 
@@ -7335,6 +7608,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    const normPhone = normalizePhoneDigits(myCleanPhone);
     const socket = initSocket({
       id: currentUser.id,
       name: currentUser.fullName,
@@ -7342,8 +7616,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       phone: currentUser.phoneNumber,
     });
 
-    // 1. Socket.io listener
+    if (socket && myCleanPhone) {
+      socket.emit('register_phone', myCleanPhone);
+      if (normPhone !== myCleanPhone) {
+        socket.emit('register_phone', normPhone);
+      }
+      socket.emit('user_online', {
+        userId: currentUser.id,
+        userName: currentUser.fullName,
+        avatar: currentUser.avatarUrl,
+        phoneNumber: currentUser.phoneNumber,
+      });
+    }
+
+    // 1. Socket.io listeners
     socket.on('new_message', handleIncomingMessage);
+
+    const handleGroupCreated = (payload: any) => {
+      if (!payload?.chat) return;
+      const chat: ChatThread = payload.chat;
+      setChats((prev) => {
+        if (prev.some((c) => c.id === chat.id)) return prev;
+        const updated = [chat, ...prev];
+        try {
+          const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
+      });
+      showLocalNotification(
+        `👥 Added to "${chat.name}"`,
+        `You were added to group ${chat.name}`,
+        chat.avatar || '/icon-192.png'
+      );
+    };
+
+    socket.on('group_created', handleGroupCreated);
 
     // 2. BroadcastChannel listener (instant multi-tab / window sync)
     let bc: BroadcastChannel | null = null;
@@ -7351,23 +7659,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       bc = new BroadcastChannel('AGC_chats_sync');
       bc.onmessage = (e) => {
         if (e.data && e.data.chatId && e.data.message) {
-          const { chatId, senderId, targetPhone } = e.data;
+          const { chatId, senderId, targetPhone, memberPhones, isGroup } = e.data;
           const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
-          // Don't process self's broadcast unless self-chat
           if (senderId === currentUser.id && !chatId.includes('self')) {
             return;
           }
-          // If DM, verify myPhone is a participant
           if (chatId.startsWith('dm_') && !chatId.includes('self')) {
             const parts = chatId.replace('dm_', '').split('_');
-            if (parts.length >= 2 && myPhone && !parts.includes(myPhone)) {
+            if (parts.length >= 2 && myPhone && !phonesMatch(parts[0], myPhone) && !phonesMatch(parts[1], myPhone)) {
               return;
             }
           }
-          // If targetPhone is specified, only accept if addressed to myPhone
-          if (targetPhone) {
-            const cleanTarget = targetPhone.replace(/\D/g, '');
-            if (cleanTarget && myPhone && cleanTarget !== myPhone) {
+          if (targetPhone && !isGroup) {
+            if (myPhone && !phonesMatch(targetPhone, myPhone)) {
               return;
             }
           }
@@ -7380,6 +7684,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 3. Persistent Supabase Realtime Inbox Listener (guarantees cross-device delivery)
     let sbInboxChannel: any = null;
+    let sbInboxNorm: any = null;
     if (isSupabaseConfigured && myCleanPhone) {
       sbInboxChannel = supabase.channel(`inbox_${myCleanPhone}`, {
         config: { broadcast: { self: false } },
@@ -7390,7 +7695,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             handleIncomingMessage(payload);
           }
         })
+        .on('broadcast', { event: 'group_created' }, ({ payload }: any) => {
+          if (payload && payload.chat) {
+            handleGroupCreated(payload);
+          }
+        })
         .subscribe();
+
+      if (normPhone !== myCleanPhone) {
+        sbInboxNorm = supabase.channel(`inbox_${normPhone}`, {
+          config: { broadcast: { self: false } },
+        });
+        sbInboxNorm
+          .on('broadcast', { event: 'new_message' }, ({ payload }: any) => {
+            if (payload && payload.message) {
+              handleIncomingMessage(payload);
+            }
+          })
+          .on('broadcast', { event: 'group_created' }, ({ payload }: any) => {
+            if (payload && payload.chat) {
+              handleGroupCreated(payload);
+            }
+          })
+          .subscribe();
+      }
     }
 
     // 4. Persistent Supabase Realtime Town Feed Listener
@@ -7410,8 +7738,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       socket.off('new_message', handleIncomingMessage);
+      socket.off('group_created', handleGroupCreated);
       if (bc) bc.close();
       if (sbInboxChannel) sbInboxChannel.unsubscribe();
+      if (sbInboxNorm) sbInboxNorm.unsubscribe();
       if (sbTownFeed) sbTownFeed.unsubscribe();
     };
   }, [currentUser, activeChatId, handleIncomingMessage]);
@@ -7854,6 +8184,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         syncDeviceContacts,
         startChatWithContact,
         addNewDeviceContact,
+        importDeviceContacts,
         // Live Supabase Presence & Typing Indicators
         onlineUserKeys,
         isUserOnline,

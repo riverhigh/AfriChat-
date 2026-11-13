@@ -14,6 +14,8 @@ import {
   Radio,
   Plus,
   Check,
+  Smartphone,
+  BookUser,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
@@ -28,6 +30,7 @@ export const ContactsModal: React.FC = () => {
     deviceContacts,
     startChatWithContact,
     addNewDeviceContact,
+    importDeviceContacts,
     startCall,
     currentUser,
     createGroup,
@@ -38,17 +41,26 @@ export const ContactsModal: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'registered' | 'invite'>('registered');
   const [showAddContactForm, setShowAddContactForm] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [groupDesc, setGroupDesc] = useState('');
-  const [selectedGroupMembers, setSelectedGroupMembers] = useState<string[]>([]);
+  const [selectedGroupMembers, setSelectedGroupMembers] = useState<{ name: string; phone: string }[]>([]);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
   const [channelName, setChannelName] = useState('');
   const [channelDesc, setChannelDesc] = useState('');
 
   const handleCreateGroup = () => {
     if (!groupName.trim()) return;
-    createGroup(groupName.trim(), selectedGroupMembers, undefined, groupDesc.trim());
+    createGroup(
+      groupName.trim(),
+      selectedGroupMembers.map((m) => m.name),
+      undefined,
+      groupDesc.trim(),
+      selectedGroupMembers.map((m) => m.phone)
+    );
     setIsContactsModalOpen(false);
     setShowCreateGroup(false);
     setGroupName('');
@@ -387,44 +399,165 @@ export const ContactsModal: React.FC = () => {
           </div>
         )}
 
-        {/* Top Quick Actions: New Group & New Channel */}
-        <div className="grid grid-cols-2 gap-2 px-4 pt-3 shrink-0">
+        {/* Top Quick Actions: Access Phone Contacts, New Group & New Channel */}
+        <div className="px-4 pt-3 space-y-2 shrink-0">
           <button
             type="button"
-            onClick={() => {
-              setShowCreateGroup(true);
+            disabled={isImporting}
+            onClick={async () => {
+              if (typeof navigator !== 'undefined' && 'contacts' in navigator && 'ContactsManager' in window) {
+                try {
+                  const props = ['name', 'tel'];
+                  const opts = { multiple: true };
+                  const contacts = await (navigator as any).contacts.select(props, opts);
+                  if (contacts && contacts.length > 0) {
+                    const parsed = contacts
+                      .map((c: any) => ({
+                        name: Array.isArray(c.name) ? c.name[0] : c.name || 'Phone Contact',
+                        phone: Array.isArray(c.tel) ? c.tel[0] : c.tel || '',
+                      }))
+                      .filter((c: any) => c.phone);
+                    if (parsed.length > 0) {
+                      setIsImporting(true);
+                      const foundCount = await importDeviceContacts(parsed);
+                      setIsImporting(false);
+                      setInviteSentToast(`Synced ${parsed.length} contacts! (${foundCount} found on AGC ✨)`);
+                      setTimeout(() => setInviteSentToast(null), 3500);
+                      return;
+                    }
+                  }
+                } catch (err: any) {
+                  if (err?.name !== 'AbortError') {
+                    console.warn('Contact picker fallback:', err);
+                  }
+                }
+              }
+              setShowImportModal(true);
+              setShowCreateGroup(false);
               setShowCreateChannel(false);
               setShowAddContactForm(false);
             }}
-            className="flex items-center gap-2.5 p-2.5 rounded-2xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-900/60 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors text-left"
+            className="w-full flex items-center justify-between p-2.5 rounded-2xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 text-white shadow-md active:scale-[0.98] transition-transform text-left"
           >
-            <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <Users className="w-4 h-4" />
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+                <Smartphone className="w-4 h-4 text-white" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-bold leading-tight">Access Phone Contacts</div>
+                <div className="text-[10px] text-purple-200">Find who uses AGC & message directly</div>
+              </div>
             </div>
-            <div className="min-w-0">
-              <div className="text-xs font-bold text-slate-900 dark:text-white truncate">New Group</div>
-              <div className="text-[10px] text-purple-600 dark:text-purple-400">Invite up to 256</div>
-            </div>
+            <span className="text-[10px] font-bold bg-white/20 px-2 py-0.5 rounded-full shrink-0">
+              {isImporting ? 'Syncing...' : 'Sync Contacts ✨'}
+            </span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              setShowCreateChannel(true);
-              setShowCreateGroup(false);
-              setShowAddContactForm(false);
-            }}
-            className="flex items-center gap-2.5 p-2.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors text-left"
-          >
-            <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <Radio className="w-4 h-4" />
-            </div>
-            <div className="min-w-0">
-              <div className="text-xs font-bold text-slate-900 dark:text-white truncate">New Channel</div>
-              <div className="text-[10px] text-indigo-600 dark:text-indigo-400">Broadcast news</div>
-            </div>
-          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setShowCreateGroup(true);
+                setShowCreateChannel(false);
+                setShowAddContactForm(false);
+                setShowImportModal(false);
+              }}
+              className="flex items-center gap-2.5 p-2.5 rounded-2xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-900/60 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors text-left"
+            >
+              <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Users className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-slate-900 dark:text-white truncate">New Group</div>
+                <div className="text-[10px] text-purple-600 dark:text-purple-400">Live chat group</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowCreateChannel(true);
+                setShowCreateGroup(false);
+                setShowAddContactForm(false);
+                setShowImportModal(false);
+              }}
+              className="flex items-center gap-2.5 p-2.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors text-left"
+            >
+              <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Radio className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-slate-900 dark:text-white truncate">New Channel</div>
+                <div className="text-[10px] text-indigo-600 dark:text-indigo-400">Broadcast news</div>
+              </div>
+            </button>
+          </div>
         </div>
+
+        {/* Batch Contacts Import Drawer */}
+        {showImportModal && (
+          <div className="p-4 border-b border-purple-200 dark:border-purple-900/60 bg-purple-50/70 dark:bg-purple-950/30 space-y-3 shrink-0 animate-in slide-in-from-top-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-bold text-purple-800 dark:text-purple-200">
+                <BookUser className="w-4 h-4" />
+                <span>Import Phone Contacts</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowImportModal(false)}
+                className="text-xs text-slate-400 hover:text-slate-600"
+              >
+                Cancel
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-600 dark:text-purple-300/70">
+              Paste or type your contacts (Name, Phone number per line). AGC will check which of them are active users:
+            </p>
+            <textarea
+              rows={3}
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              placeholder="e.g.&#10;Mama Chidinma, 08031234567&#10;Uncle Yomi, 08028889911"
+              className="w-full p-2.5 bg-white dark:bg-[#1c1033] rounded-xl text-xs text-slate-900 dark:text-white border border-purple-300 dark:border-purple-800 focus:outline-none focus:ring-1 focus:ring-purple-500 font-mono"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={!importText.trim() || isImporting}
+                onClick={async () => {
+                  const lines = importText.split('\n').filter((l) => l.trim().length > 0);
+                  const parsed: { name: string; phone: string }[] = [];
+                  for (const line of lines) {
+                    const commaParts = line.split(',');
+                    if (commaParts.length >= 2) {
+                      parsed.push({ name: commaParts[0].trim(), phone: commaParts[1].trim() });
+                    } else {
+                      const match = line.match(/\+?[0-9\s-]{7,}/);
+                      if (match) {
+                        const phone = match[0].trim();
+                        const name = line.replace(match[0], '').trim() || `Contact ${phone.slice(-4)}`;
+                        parsed.push({ name, phone });
+                      }
+                    }
+                  }
+                  if (parsed.length > 0) {
+                    setIsImporting(true);
+                    const foundCount = await importDeviceContacts(parsed);
+                    setIsImporting(false);
+                    setInviteSentToast(`Synced ${parsed.length} contacts! (${foundCount} found on AGC ✨)`);
+                    setTimeout(() => setInviteSentToast(null), 3500);
+                  }
+                  setImportText('');
+                  setShowImportModal(false);
+                }}
+                className="flex-1 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5"
+              >
+                {isImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Smartphone className="w-3.5 h-3.5" />}
+                <span>Import & Check AGC Users</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Search & Tabs */}
         <div className="p-4 space-y-2.5 border-b border-slate-100 dark:border-purple-900/30 shrink-0">
@@ -518,17 +651,27 @@ export const ContactsModal: React.FC = () => {
                 Select Members ({selectedGroupMembers.length} selected)
               </div>
               <div className="flex gap-1.5 overflow-x-auto pb-1 max-h-24 flex-wrap">
-                {registeredList.slice(0, 10).map((c) => {
-                  const isSelected = selectedGroupMembers.includes(c.name);
+                {registeredList.slice(0, 15).map((c) => {
+                  const memberPhone = c.normalizedPhoneNumber || c.rawPhoneNumber;
+                  const isSelected = selectedGroupMembers.some(
+                    (m) => m.name === c.name || (memberPhone && m.phone === memberPhone)
+                  );
                   return (
                     <button
                       key={c.id}
                       type="button"
                       onClick={() => {
                         if (isSelected) {
-                          setSelectedGroupMembers(selectedGroupMembers.filter((n) => n !== c.name));
+                          setSelectedGroupMembers(
+                            selectedGroupMembers.filter(
+                              (m) => m.name !== c.name && m.phone !== memberPhone
+                            )
+                          );
                         } else {
-                          setSelectedGroupMembers([...selectedGroupMembers, c.name]);
+                          setSelectedGroupMembers([
+                            ...selectedGroupMembers,
+                            { name: c.name, phone: memberPhone },
+                          ]);
                         }
                       }}
                       className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1 border transition-colors ${

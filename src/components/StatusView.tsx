@@ -23,7 +23,7 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, phonesMatch } from '../context/AppContext';
 import { UserStatus } from '../types';
 import { compressImageFile } from '../utils/imageUtils';
 
@@ -98,6 +98,8 @@ export const StatusView: React.FC = () => {
     creators,
     creatorPosts,
     setIsCreatorModalOpen,
+    deviceContacts,
+    setIsContactsModalOpen,
     t,
   } = useApp();
 
@@ -112,7 +114,17 @@ export const StatusView: React.FC = () => {
   const [selectedTheme, setSelectedTheme] = useState(THOUGHT_THEMES[0]);
 
   const myStatuses = useMemo(() => statuses.filter((s) => s.isMe), [statuses]);
-  const otherStatuses = useMemo(() => statuses.filter((s) => !s.isMe), [statuses]);
+  // Strict Privacy: Only show statuses from saved device contacts
+  const otherStatuses = useMemo(() => {
+    return statuses.filter((s) => {
+      if (s.isMe) return false;
+      if (!s.userPhone) return false;
+      return deviceContacts.some((c) => {
+        const cp = c.normalizedPhoneNumber || c.rawPhoneNumber;
+        return phonesMatch(s.userPhone, cp);
+      });
+    });
+  }, [statuses, deviceContacts]);
 
   // Live countdown â€” re-compute every 60 s
   const [nowMs, setNowMs] = useState(Date.now());
@@ -511,8 +523,15 @@ export const StatusView: React.FC = () => {
             ))}
           </div>
         ) : (
-          <div className="px-4 py-4 text-xs text-slate-400">
-            No unviewed status updates
+          <div className="px-4 py-6 text-center text-xs text-slate-400 dark:text-neutral-500">
+            <p>No recent status updates from your contacts.</p>
+            <button
+              type="button"
+              onClick={() => setIsContactsModalOpen(true)}
+              className="mt-2 text-xs font-semibold text-purple-600 dark:text-purple-400 hover:underline inline-block"
+            >
+              Sync Phone Contacts to see friends' stories
+            </button>
           </div>
         )}
       </div>

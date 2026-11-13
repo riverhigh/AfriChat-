@@ -78,9 +78,14 @@ export const leaveChatRoom = (chatId: string) => {
 };
 
 // 2. Chat Message Signaling
-export const emitLiveMessage = (chatId: string, message: ChatMessage, targetPhone?: string) => {
+export const emitLiveMessage = (chatId: string, message: ChatMessage, targetPhone?: string, memberPhones?: string[], chat?: any) => {
   const s = getSocket();
-  s?.emit('send_message', { chatId, message, targetPhone });
+  s?.emit('send_message', { chatId, message, targetPhone, memberPhones, chat });
+};
+
+export const emitCreateGroup = (chat: any, memberPhones: string[]) => {
+  const s = getSocket();
+  s?.emit('create_group', { chat, memberPhones });
 };
 
 // 3. Audio Spaces / Street Radio

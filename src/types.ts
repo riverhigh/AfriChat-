@@ -290,6 +290,7 @@ export interface ChatThread {
   description?: string;
   creatorId?: string;
   members?: string[];
+  memberPhones?: string[];
   inviteCode?: string;
 }
 
