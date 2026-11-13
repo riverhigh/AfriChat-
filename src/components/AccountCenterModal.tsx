@@ -398,6 +398,41 @@ export const AccountCenterModal: React.FC<AccountCenterModalProps> = ({ isOpen, 
                   </p>
                 )}
               </div>
+
+              {/* 4. Current Logged On Device Section */}
+              <div className="p-4 rounded-2xl bg-white dark:bg-[#1a0f35] border border-purple-500/30 shadow-xs space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Laptop className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase font-mono">
+                      Current Device Logged On
+                    </h4>
+                  </div>
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-500">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                    <span>Active Now</span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-purple-600/15 flex items-center justify-center text-purple-400 shrink-0">
+                    {deviceInfo.deviceType === 'mobile' ? (
+                      <Smartphone className="w-5 h-5" />
+                    ) : deviceInfo.deviceType === 'tablet' ? (
+                      <Monitor className="w-5 h-5" />
+                    ) : (
+                      <Laptop className="w-5 h-5" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                      {deviceInfo.os} · {deviceInfo.browser}
+                    </div>
+                    <div className="text-[10px] text-slate-400 font-mono">
+                      AfriChat PWA Session · Lagos, Nigeria (Estimated IP)
+                    </div>
+                  </div>
+                </div>
+              </div>
             </>
           ) : (
             <>

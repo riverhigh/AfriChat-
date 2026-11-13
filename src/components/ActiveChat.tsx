@@ -60,6 +60,7 @@ interface ActiveChatProps {
 export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) => {
   const {
     clearChat,
+    deleteChat,
     activeChatId,
     setActiveChatId,
     chats,
@@ -663,6 +664,31 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           >
             <Trash2 className="w-5 h-5" />
           </button>
+
+          {(currentChat.isGroup || currentChat.isChannel) &&
+            (currentChat.creatorId === currentUser.id ||
+              currentChat.admins?.includes(currentUser.fullName) ||
+              currentChat.admins?.includes('You') ||
+              currentChat.id.startsWith('town_comm_')) && (
+              <button
+                type="button"
+                onClick={() => {
+                  const typeLabel = currentChat.isChannel ? 'channel' : 'group';
+                  if (
+                    window.confirm(
+                      `Permanently delete ${typeLabel} "${currentChat.name}" for everyone?\n\nThis will remove the ${typeLabel} and all its messages.`
+                    )
+                  ) {
+                    deleteChat(currentChat.id);
+                  }
+                }}
+                className="p-2 hover:bg-rose-500/25 text-rose-300 hover:text-rose-100 rounded-full transition-colors"
+                title={`Delete ${currentChat.isChannel ? 'Channel' : 'Group'} (Creator)`}
+                aria-label="Delete Group or Channel"
+              >
+                <Trash2 className="w-5 h-5 text-rose-400" />
+              </button>
+            )}
         </div>
       </div>
 

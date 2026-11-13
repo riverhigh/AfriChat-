@@ -261,8 +261,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* Segmented Navigation Switcher: Profile vs Stores vs Artisan vs Chat BG */}
-        <div className="grid grid-cols-4 p-1 bg-slate-100 dark:bg-neutral-950 rounded-xl text-xs font-semibold gap-1">
+        {/* Segmented Navigation Switcher: Profile vs Stores vs Artisan */}
+        <div className="grid grid-cols-3 p-1 bg-slate-100 dark:bg-neutral-950 rounded-xl text-xs font-semibold gap-1">
           <button
             onClick={() => setActiveSubTab('services')}
             className={`py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
@@ -297,18 +297,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           >
             <Wrench className="w-3.5 h-3.5 shrink-0" />
             <span className="truncate">Artisans</span>
-          </button>
-
-          <button
-            onClick={() => setActiveSubTab('chat_bg')}
-            className={`py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
-              activeSubTab === 'chat_bg'
-                ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs font-bold'
-                : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <ImageIcon className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">Chat BG</span>
           </button>
         </div>
       </div>
@@ -1025,11 +1013,44 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <span>Invite friends & earn {CURRENCY_SYMBOLS[currency]}500 per active referral</span>
             </button>
           </div>
+
+          {/* Account Center Banner Tile */}
+          <div className="px-4 pb-3">
+            <button
+              type="button"
+              onClick={() => setIsAccountCenterOpen(true)}
+              className="w-full p-4 rounded-2xl bg-gradient-to-r from-purple-900/30 via-indigo-900/20 to-purple-950/30 border border-purple-500/30 hover:border-purple-500 text-left transition-all shadow-xs hover:shadow-md flex items-center justify-between group cursor-pointer"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="w-11 h-11 rounded-2xl bg-purple-600/20 border border-purple-500/30 flex items-center justify-center text-purple-400 group-hover:scale-105 transition-transform shrink-0">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-purple-400 transition-colors">
+                      Account Center
+                    </h4>
+                    <span className="text-[9px] font-mono font-bold bg-purple-500/20 text-purple-600 dark:text-purple-300 px-2 py-0.5 rounded-full uppercase">
+                      Meta / Apple Style
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-purple-300/70 mt-0.5 line-clamp-1">
+                    Security, email setup, passwords, biometric passkeys & logged-in devices
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-purple-400 group-hover:translate-x-0.5 transition-all shrink-0" />
+            </button>
+          </div>
         </div>
       )}
       <LegalComplianceModal
         isOpen={isLegalModalOpen}
         onClose={() => setIsLegalModalOpen(false)}
+      />
+      <AccountCenterModal
+        isOpen={isAccountCenterOpen}
+        onClose={() => setIsAccountCenterOpen(false)}
       />
     </div>
   );

@@ -52,6 +52,7 @@ export const ChatList: React.FC = () => {
 
   // Shelved view state (WhatsApp-style Archive)
   const [showShelvedOnly, setShowShelvedOnly] = useState(false);
+  const [selectedLabelFilter, setSelectedLabelFilter] = useState<string | null>(null);
 
   // Add to List / Label modal state
   const [labelingChat, setLabelingChat] = useState<ChatThread | null>(null);
@@ -67,6 +68,7 @@ export const ChatList: React.FC = () => {
   ];
 
   const shelvedCount = chats.filter((c) => c.isShelved).length;
+  const userLabels = Array.from(new Set(chats.map((c) => c.label).filter(Boolean))) as string[];
 
   const filteredChats = chats.filter((chat) => {
     // Shelved filter: WhatsApp behavior
@@ -74,6 +76,10 @@ export const ChatList: React.FC = () => {
       if (!chat.isShelved) return false;
     } else {
       if (chat.isShelved) return false;
+    }
+
+    if (selectedLabelFilter) {
+      if (chat.label !== selectedLabelFilter) return false;
     }
 
     const matchesSearch =
@@ -240,6 +246,26 @@ export const ChatList: React.FC = () => {
             <Store className="w-3 h-3" />
             <span>Stores</span>
           </button>
+
+          {/* Dynamic User Custom Lists / Labels Chips */}
+          {userLabels.map((lbl) => (
+            <button
+              key={lbl}
+              type="button"
+              onClick={() => {
+                setSelectedLabelFilter(selectedLabelFilter === lbl ? null : lbl);
+                setShowShelvedOnly(false);
+              }}
+              className={`px-3 py-1.5 text-xs rounded-full font-semibold transition-colors shrink-0 flex items-center gap-1.5 ${
+                selectedLabelFilter === lbl
+                  ? 'bg-indigo-600 text-white shadow-xs font-bold'
+                  : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 border border-indigo-200 dark:border-indigo-900/40'
+              }`}
+            >
+              <Tag className="w-2.5 h-2.5" />
+              <span>{lbl}</span>
+            </button>
+          ))}
         </div>
       </div>
 

@@ -15,6 +15,7 @@ import {
   Headphones,
   Sparkles,
   PawPrint,
+  Trash2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { TownCommunity } from '../types';
@@ -32,6 +33,7 @@ export const TownView: React.FC = () => {
     joinAudioSpace,
     createAudioSpace,
     setIsPetShopModalOpen,
+    deleteTownCommunity,
   } = useApp();
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'channels' | 'groups' | 'spaces'>('all');
@@ -561,6 +563,22 @@ export const TownView: React.FC = () => {
                         <span>Chat</span>
                         <ArrowRight className="w-3 h-3" />
                       </button>
+
+                      {(item.adminName === currentUser.fullName || item.adminName === 'You' || item.creatorId === currentUser.id) && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(`Permanently delete "${item.name}"? This will remove this ${item.type} for all members.`)) {
+                              deleteTownCommunity(item.id);
+                            }
+                          }}
+                          className="p-1.5 rounded-xl text-rose-500 hover:bg-rose-500/10 border border-rose-500/30 hover:border-rose-500 transition-colors"
+                          title={`Delete ${item.type} (Creator)`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
