@@ -180,8 +180,8 @@ delete from public.town_communities
 where lower(name) like '%test%'
    or lower(name) like '%mock%'
    or lower(name) like '%sample%'
-   or lower(id) like 'test_%'
-   or lower(id) like '__test%';
+   or lower(id::text) like 'test_%'
+   or lower(id::text) like '__test%';
 
 
 -- 8. African Pets Forum & Pet Shop Marketplace Schema
