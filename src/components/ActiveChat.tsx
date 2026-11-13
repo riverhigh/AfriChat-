@@ -101,6 +101,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     setActiveViewingStatus,
     currentUser,
     isUserOnline,
+    getLastSeen,
     typingUsers,
     sendTypingIndicator,
   } = useApp();
@@ -527,7 +528,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   )}
 
                   {(() => {
-                    const isPeerOnline = currentChat.isOnline || isUserOnline(currentChat.phoneNumber || currentChat.name);
+                    const isPeerOnline = !currentChat.isGroup && !currentChat.isChannel && isUserOnline(currentChat.phoneNumber || currentChat.phone || currentChat.id || currentChat.name);
                     return isPeerOnline && !currentChat.isScamFlagged && !hasRecentStatus ? (
                       <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-400 border-2 border-purple-950 dark:border-black rounded-full shadow-sm shadow-emerald-400 animate-pulse" />
                     ) : null;
@@ -570,7 +571,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     {(() => {
                       const currentTyping = typingUsers[currentChat.id] || [];
                       const isTypingNow = currentTyping.length > 0;
-                      const isPeerOnline = currentChat.isOnline || isUserOnline(currentChat.phoneNumber || currentChat.name);
+                      const isPeerOnline = !currentChat.isGroup && !currentChat.isChannel && isUserOnline(currentChat.phoneNumber || currentChat.phone || currentChat.id || currentChat.name);
 
                       if (currentChat.isScamFlagged) {
                         return <span className="text-rose-400 font-bold">⚠️ Flagged Scammer ({currentChat.scamReportsCount} reports)</span>;
@@ -598,7 +599,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                           </span>
                         );
                       }
-                      return 'last seen recently';
+                      if (currentChat.isGroup || currentChat.isChannel) {
+                        return null;
+                      }
+                      const lastSeenStr = getLastSeen(currentChat.phoneNumber || currentChat.phone || currentChat.id || currentChat.name);
+                      return <span className="text-indigo-200/70 font-normal">{lastSeenStr}</span>;
                     })()}
                   </div>
                 </div>

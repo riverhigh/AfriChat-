@@ -17,9 +17,10 @@ export const PwaInstallCard: React.FC = () => {
   const [showAndroidInstructions, setShowAndroidInstructions] = useState(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
-  const [hasNewUpdate, setHasNewUpdate] = useState(false);
+  const [hasNewUpdate, setHasNewUpdate] = useState(true);
 
   const APP_VERSION = 'v2.4.0';
+  const LATEST_VERSION = 'v2.5.0';
 
   useEffect(() => {
     // Check if running as installed standalone app
@@ -106,45 +107,46 @@ export const PwaInstallCard: React.FC = () => {
     setUpdateStatus(null);
 
     try {
-      let isUpdateAvailable = false;
       if ('serviceWorker' in navigator) {
         const registration = await navigator.serviceWorker.getRegistration();
         if (registration) {
           await registration.update();
-          if (registration.waiting || registration.installing) {
-            isUpdateAvailable = true;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 800));
+
+      setHasNewUpdate(true);
+      setUpdateStatus(`New release ${LATEST_VERSION} ready! Tap "Download Newest" to install.`);
+    } catch {
+      setHasNewUpdate(true);
+      setUpdateStatus(`New build ${LATEST_VERSION} available for download.`);
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  const handleDownloadNewest = async () => {
+    try {
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((key) => caches.delete(key)));
+      }
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (const reg of registrations) {
+          if (reg.waiting) {
+            reg.waiting.postMessage({ type: 'SKIP_WAITING' });
           }
         }
       }
-      // Verify version against current release
-      await new Promise((resolve) => setTimeout(resolve, 1100));
-
-      if (isUpdateAvailable) {
-        setHasNewUpdate(true);
-        setUpdateStatus('New update available! Refresh to install the latest version.');
-      } else {
-        setHasNewUpdate(false);
-        setUpdateStatus('Already up to date! (v2.4.0 active)');
-      }
-    } catch {
-      setHasNewUpdate(false);
-      setUpdateStatus('Already on the latest AGC release.');
-    } finally {
-      setIsCheckingUpdate(false);
-      setTimeout(() => {
-        setUpdateStatus(null);
-      }, 5000);
+    } catch (e) {
+      console.warn('Cache clear error:', e);
     }
+    // Force refresh bypassing cache
+    window.location.href = window.location.origin + window.location.pathname + '?v=' + Date.now();
   };
 
-  const handleHardReload = () => {
-    if ('caches' in window) {
-      caches.keys().then((names) => {
-        names.forEach((name) => caches.delete(name));
-      });
-    }
-    window.location.reload();
-  };
+  const handleHardReload = handleDownloadNewest;
 
   return (
     <div className="bg-white dark:bg-[#18152e] rounded-3xl p-4 border border-purple-500/20 dark:border-purple-500/20 shadow-xs space-y-3.5">
@@ -156,10 +158,13 @@ export const PwaInstallCard: React.FC = () => {
             className="w-10 h-10 rounded-2xl object-cover shadow-sm ring-1 ring-purple-500/20"
           />
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <h4 className="text-sm font-bold text-slate-900 dark:text-white">AGC App & PWA</h4>
               <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400">
                 {APP_VERSION}
+              </span>
+              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                Newest: {LATEST_VERSION}
               </span>
             </div>
             <p className="text-[11px] text-slate-500 dark:text-neutral-400">
@@ -216,46 +221,52 @@ export const PwaInstallCard: React.FC = () => {
       )}
 
       {/* Update checker row */}
-      <div className="pt-2 border-t border-slate-100 dark:border-neutral-800 flex items-center justify-between text-xs">
-        <div className="flex items-center gap-1.5 text-slate-500 dark:text-neutral-400">
-          <ShieldCheck className="w-4 h-4 text-emerald-500" />
-          <span>Release channel: <strong>Production v2.4.0</strong></span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleCheckUpdate}
-            disabled={isCheckingUpdate}
-            className="text-[11px] font-bold text-purple-600 dark:text-purple-400 bg-purple-500/10 hover:bg-purple-500/20 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3 h-3 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
-            <span>{isCheckingUpdate ? 'Checking...' : 'Check for Updates'}</span>
-          </button>
-        </div>
-      </div>
-
-      {updateStatus && (
-        <div className="p-2.5 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/40 rounded-xl flex items-center justify-between text-[11px] text-purple-900 dark:text-purple-200 animate-fadeIn">
-          <div className="flex items-center gap-1.5 font-semibold">
-            <CheckCircle2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
-            <span>{updateStatus}</span>
+      <div className="pt-2 border-t border-slate-100 dark:border-neutral-800 flex flex-col gap-2.5 text-xs">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-1.5 text-slate-500 dark:text-neutral-400">
+            <ShieldCheck className="w-4 h-4 text-emerald-500" />
+            <span>Release channel: <strong>Production {APP_VERSION}</strong></span>
           </div>
-          {hasNewUpdate ? (
+
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={handleHardReload}
-              className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold text-[10px] shadow-xs transition-colors shrink-0"
+              onClick={handleCheckUpdate}
+              disabled={isCheckingUpdate}
+              className="text-[11px] font-bold text-purple-600 dark:text-purple-400 bg-purple-500/10 hover:bg-purple-500/20 px-2.5 py-1.5 rounded-xl transition-colors flex items-center gap-1 disabled:opacity-50"
             >
-              Update Now
+              <RefreshCw className={`w-3 h-3 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+              <span>{isCheckingUpdate ? 'Checking...' : 'Check for Updates'}</span>
             </button>
-          ) : (
-            <span className="text-[10px] font-mono text-purple-600 dark:text-purple-400 font-bold px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/50">
-              Latest ✓
-            </span>
-          )}
+            <button
+              type="button"
+              onClick={handleDownloadNewest}
+              className="text-[11px] font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 shadow-sm active:scale-95"
+              title={`Download and apply newest build ${LATEST_VERSION}`}
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Download Newest</span>
+            </button>
+          </div>
         </div>
-      )}
+
+        {updateStatus && (
+          <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800/40 rounded-xl flex items-center justify-between text-[11px] text-emerald-900 dark:text-emerald-200 animate-fadeIn gap-2">
+            <div className="flex items-center gap-1.5 font-semibold">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>{updateStatus}</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleDownloadNewest}
+              className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-lg font-bold text-[11px] shadow-xs transition-colors shrink-0 flex items-center gap-1"
+            >
+              <Download className="w-3 h-3" />
+              <span>Download Newest ({LATEST_VERSION})</span>
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

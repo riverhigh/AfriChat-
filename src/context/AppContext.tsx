@@ -405,6 +405,7 @@ interface AppContextType {
   // Live Supabase Presence & Typing Indicators
   onlineUserKeys: Set<string>;
   isUserOnline: (phoneOrIdentifier?: string) => boolean;
+  getLastSeen: (phoneOrIdentifier?: string) => string;
   typingUsers: Record<string, string[]>;
   sendTypingIndicator: (chatId: string, isTyping: boolean) => void;
   // 10. User Uploaded Memes & GIFs + In-Chat Drawer
@@ -2764,6 +2765,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ─── Realtime Presence & Live Typing Indicators (Supabase Channel) ────────
   const [onlineUserKeys, setOnlineUserKeys] = useState<Set<string>>(new Set());
   const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({});
+  const [lastSeenMap, setLastSeenMap] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('AGC_last_seen_map_v2');
+      return saved ? JSON.parse(saved) : {};
+    } catch (_) {
+      return {};
+    }
+  });
+
+  const recordLastSeen = useCallback((key?: string, timeIso: string = new Date().toISOString()) => {
+    if (!key) return;
+    const clean = key.replace(/\D/g, '');
+    const last9 = clean.length >= 9 ? clean.slice(-9) : clean;
+    setLastSeenMap((prev) => {
+      const next = {
+        ...prev,
+        [key]: timeIso,
+        ...(clean ? { [clean]: timeIso } : {}),
+        ...(last9 ? { [last9]: timeIso } : {}),
+      };
+      try { localStorage.setItem('AGC_last_seen_map_v2', JSON.stringify(next)); } catch (_) {}
+      return next;
+    });
+  }, []);
 
   const isUserOnline = useCallback(
     (identifier?: string): boolean => {
@@ -2780,6 +2805,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return false;
     },
     [onlineUserKeys]
+  );
+
+  const getLastSeen = useCallback(
+    (identifier?: string): string => {
+      if (!identifier) return 'last seen recently';
+      if (isUserOnline(identifier)) return 'online';
+
+      const clean = identifier.replace(/\D/g, '');
+      const last9 = clean.length >= 9 ? clean.slice(-9) : clean;
+      const timeIso =
+        lastSeenMap[identifier] ||
+        (clean ? lastSeenMap[clean] : undefined) ||
+        (last9 ? lastSeenMap[last9] : undefined);
+
+      if (!timeIso || timeIso === 'online') {
+        const contact = deviceContacts.find(
+          (c) =>
+            phonesMatch(c.normalizedPhoneNumber, identifier) ||
+            phonesMatch(c.rawPhoneNumber, identifier) ||
+            (c.registeredUser?.phoneNumber && phonesMatch(c.registeredUser.phoneNumber, identifier))
+        );
+        if (contact?.registeredUser?.lastSeen && contact.registeredUser.lastSeen !== 'online') {
+          return contact.registeredUser.lastSeen;
+        }
+        return 'last seen recently';
+      }
+
+      try {
+        const d = new Date(timeIso);
+        if (isNaN(d.getTime())) return 'last seen recently';
+        const now = new Date();
+        const diffMs = now.getTime() - d.getTime();
+        const diffSecs = Math.floor(diffMs / 1000);
+        const diffMins = Math.floor(diffSecs / 60);
+
+        if (diffSecs < 60) return 'last seen just now';
+        if (diffMins < 60) return `last seen ${diffMins}m ago`;
+
+        const formatTime = (date: Date) => {
+          let h = date.getHours();
+          const m = date.getMinutes().toString().padStart(2, '0');
+          const ampm = h >= 12 ? 'PM' : 'AM';
+          h = h % 12 || 12;
+          return `${h}:${m} ${ampm}`;
+        };
+
+        const isToday = d.toDateString() === now.toDateString();
+        if (isToday) return `last seen today at ${formatTime(d)}`;
+
+        const yesterday = new Date(now);
+        yesterday.setDate(now.getDate() - 1);
+        const isYesterday = d.toDateString() === yesterday.toDateString();
+        if (isYesterday) return `last seen yesterday at ${formatTime(d)}`;
+
+        return `last seen ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+      } catch (_) {
+        return 'last seen recently';
+      }
+    },
+    [isUserOnline, lastSeenMap, deviceContacts]
   );
 
   const sendTypingIndicator = useCallback(
@@ -2847,6 +2932,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           next.delete(key);
           return next;
         });
+        recordLastSeen(key);
+      })
+      .on('broadcast', { event: 'user_offline' }, ({ payload }) => {
+        if (!payload?.phone) return;
+        const clean = payload.phone.replace(/\D/g, '');
+        const last9 = clean.length >= 9 ? clean.slice(-9) : clean;
+        setOnlineUserKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(payload.phone);
+          if (clean) next.delete(clean);
+          if (last9) next.delete(last9);
+          return next;
+        });
+        recordLastSeen(payload.phone, payload.timestamp || new Date().toISOString());
+      })
+      .on('broadcast', { event: 'user_online' }, ({ payload }) => {
+        if (!payload?.phone) return;
+        const clean = payload.phone.replace(/\D/g, '');
+        const last9 = clean.length >= 9 ? clean.slice(-9) : clean;
+        setOnlineUserKeys((prev) => {
+          const next = new Set(prev);
+          next.add(payload.phone);
+          if (clean) next.add(clean);
+          if (last9) next.add(last9);
+          return next;
+        });
       })
       .on('broadcast', { event: 'typing_indicator' }, ({ payload }) => {
         if (!payload || payload.senderPhone === currentUser.phoneNumber) return;
@@ -2874,10 +2985,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             name: currentUser.fullName,
             onlineAt: new Date().toISOString(),
           });
+          presenceChannel.send({
+            type: 'broadcast',
+            event: 'user_online',
+            payload: { phone: currentUser.phoneNumber },
+          });
         }
       });
 
+    // Detect browser close, tab switch, background sleep
+    const handleVisibilityOrUnload = () => {
+      const nowIso = new Date().toISOString();
+      if (document.visibilityState === 'hidden') {
+        presenceChannel.untrack();
+        presenceChannel.send({
+          type: 'broadcast',
+          event: 'user_offline',
+          payload: { phone: currentUser.phoneNumber, timestamp: nowIso },
+        });
+        if (isSupabaseConfigured) {
+          supabase.from('profiles').update({ last_seen: nowIso }).eq('phone_number', currentUser.phoneNumber).then(() => {}, () => {});
+        }
+      } else if (document.visibilityState === 'visible') {
+        presenceChannel.track({
+          userId: currentUser.id,
+          phone: currentUser.phoneNumber,
+          cleanPhone: myCleanPhone,
+          last9: myLast9,
+          name: currentUser.fullName,
+          onlineAt: nowIso,
+        });
+        presenceChannel.send({
+          type: 'broadcast',
+          event: 'user_online',
+          payload: { phone: currentUser.phoneNumber },
+        });
+        if (isSupabaseConfigured) {
+          supabase.from('profiles').update({ last_seen: 'online' }).eq('phone_number', currentUser.phoneNumber).then(() => {}, () => {});
+        }
+      }
+    };
+
+    window.addEventListener('visibilitychange', handleVisibilityOrUnload);
+    window.addEventListener('beforeunload', handleVisibilityOrUnload);
+    window.addEventListener('pagehide', handleVisibilityOrUnload);
+
     return () => {
+      window.removeEventListener('visibilitychange', handleVisibilityOrUnload);
+      window.removeEventListener('beforeunload', handleVisibilityOrUnload);
+      window.removeEventListener('pagehide', handleVisibilityOrUnload);
       presenceChannel.unsubscribe();
     };
   }, [isAuthenticated, currentUser?.phoneNumber, currentUser?.id, currentUser?.fullName]);
@@ -8662,6 +8818,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // Live Supabase Presence & Typing Indicators
         onlineUserKeys,
         isUserOnline,
+        getLastSeen,
         typingUsers,
         sendTypingIndicator,
         // 10. User Uploaded Memes & GIFs + In-Chat Drawer

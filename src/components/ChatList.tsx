@@ -454,7 +454,7 @@ export const ChatList: React.FC = () => {
                     </span>
                   )}
 
-                  {(chat.isOnline || isUserOnline(chat.phoneNumber || chat.name)) && !chat.isScamFlagged && !hasRecentStatus && (
+                  {!chat.isGroup && !chat.isChannel && isUserOnline(chat.phoneNumber || chat.phone || chat.id || chat.name) && !chat.isScamFlagged && !hasRecentStatus && (
                     <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white dark:border-black rounded-full" />
                   )}
                   {chat.isScamFlagged && (

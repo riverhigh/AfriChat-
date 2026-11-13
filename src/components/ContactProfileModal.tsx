@@ -67,6 +67,8 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
     flagEntityAsScam,
     CURRENCY_SYMBOLS,
     currency,
+    isUserOnline,
+    getLastSeen,
   } = useApp();
 
   // Local UI State
@@ -338,7 +340,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
               referrerPolicy="no-referrer"
               className="w-28 h-28 rounded-full object-cover border-2 border-white/20 shadow-2xl ring-4 ring-neutral-900"
             />
-            {chat.isOnline && !isGroupOrChannel && (
+            {!isGroupOrChannel && isUserOnline(chat.phoneNumber || chat.phone || chat.id || chat.name) && (
               <span className="absolute bottom-1 right-1 w-5 h-5 bg-emerald-500 border-3 border-black rounded-full" />
             )}
             {isGroup && (
@@ -395,17 +397,29 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
               </span>
             </div>
           ) : (
-            <p className="text-xs text-neutral-400 font-mono mt-0.5 tracking-wide flex items-center gap-1.5">
-              <span>{contactPhone}</span>
-              <button
-                type="button"
-                onClick={handleCopyPhone}
-                className="text-neutral-400 hover:text-white"
-                title="Copy phone"
-              >
-                {copiedPhone ? <Check className="w-3.5 h-3.5 text-purple-400" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-            </p>
+            <div className="flex flex-col items-center mt-0.5">
+              <p className="text-xs text-neutral-400 font-mono tracking-wide flex items-center gap-1.5">
+                <span>{contactPhone}</span>
+                <button
+                  type="button"
+                  onClick={handleCopyPhone}
+                  className="text-neutral-400 hover:text-white"
+                  title="Copy phone"
+                >
+                  {copiedPhone ? <Check className="w-3.5 h-3.5 text-purple-400" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </p>
+              <p className="text-[11px] font-medium mt-0.5">
+                {isUserOnline(chat.phoneNumber || chat.phone || chat.id || chat.name) ? (
+                  <span className="text-emerald-400 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>online now</span>
+                  </span>
+                ) : (
+                  <span className="text-neutral-400">{getLastSeen(chat.phoneNumber || chat.phone || chat.id || chat.name)}</span>
+                )}
+              </p>
+            </div>
           )}
 
           {/* Action Row */}
