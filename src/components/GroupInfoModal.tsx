@@ -86,7 +86,7 @@ function buildMemberList(chat: ChatThread, currentUser: any, deviceContacts: any
 }
 
 export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose, chat }) => {
-  const { currentUser, deviceContacts, updateChat, removeMemberFromGroup } = useApp();
+  const { currentUser, deviceContacts, updateChat, removeMemberFromGroup, deleteChat } = useApp();
   const [copied, setCopied] = useState(false);
   const [announceMode, setAnnounceMode] = useState(false);
   const [members, setMembers] = useState<GroupMember[]>(() =>

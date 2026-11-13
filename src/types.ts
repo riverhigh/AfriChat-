@@ -297,6 +297,8 @@ export interface ChatThread {
   inviteCode?: string;
   invitationStatus?: 'pending' | 'accepted' | 'declined';
   invitedBy?: string;
+  isShelved?: boolean;
+  label?: string;
 }
 
 export interface ContactRequest {
@@ -585,6 +587,7 @@ export interface TownCommunity {
   isJoined: boolean;
   recentActivity: string;
   adminName: string;
+  creatorId?: string;
 }
 
 // 19. Healthcare & Telehealth System

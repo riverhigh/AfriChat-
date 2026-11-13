@@ -38,6 +38,7 @@ import { useApp } from '../context/AppContext';
 import { CurrencyCode, LanguageCode, AppFontSize } from '../types';
 import { MarketplaceView } from './MarketplaceView';
 import { LegalComplianceModal } from './LegalComplianceModal';
+import { AccountCenterModal } from './AccountCenterModal';
 import { PwaInstallCard } from './PwaInstallCard';
 
 interface SettingsViewProps {
@@ -112,6 +113,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan' | 'chat_bg'>('services');
   const [isLegalModalOpen, setIsLegalModalOpen] = useState(false);
+  const [isAccountCenterOpen, setIsAccountCenterOpen] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isAvatarUploading, setIsAvatarUploading] = useState(false);
   const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);

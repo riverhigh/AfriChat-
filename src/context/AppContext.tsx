@@ -231,6 +231,9 @@ interface AppContextType {
   setActiveChatId: (id: string | null) => void;
   chats: ChatThread[];
   clearChat: (chatId: string) => void;
+  deleteChat: (chatId: string) => void;
+  toggleShelfChat: (chatId: string) => void;
+  setChatLabel: (chatId: string, label?: string) => void;
   updateChat: (chatId: string, updates: Partial<ChatThread>) => void;
   addMembersToGroup: (chatId: string, memberNames: string[]) => void;
   createGroup: (name: string, memberNamesOrPhones: string[], avatar?: string, description?: string, memberPhones?: string[]) => string;
@@ -481,6 +484,7 @@ interface AppContextType {
   toggleHidePhoneNumberInTown: () => void;
   toggleJoinTownCommunity: (id: string) => void;
   addTownCommunity: (name: string, type: 'group' | 'channel', category: TownCommunity['category'], description: string) => void;
+  deleteTownCommunity: (id: string) => void;
   // Feature Flags System
   featureFlags: FeatureFlags;
   isFeatureEnabled: (key: keyof FeatureFlags) => boolean;
@@ -1337,6 +1341,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }).then(({ error }) => {
         if (error) console.warn('Town community Supabase insert notice:', error.message);
       });
+    }
+  };
+
+  const deleteTownCommunity = (communityId: string) => {
+    setTownCommunities((prev) => {
+      const updated = prev.filter((c) => c.id !== communityId);
+      try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+      return updated;
+    });
+
+    const communityChatId = `town_comm_${communityId}`;
+    setChats((prev) => {
+      const updated = prev.filter((c) => c.id !== communityChatId);
+      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
+      return updated;
+    });
+
+    setMessages((prev) => {
+      const updated = { ...prev };
+      delete updated[communityChatId];
+      try { localStorage.setItem('AGC_messages_v2', JSON.stringify(updated)); } catch (_) {}
+      return updated;
+    });
+
+    setActiveChatId((curr) => (curr === communityChatId ? null : curr));
+
+    if (isSupabaseConfigured) {
+      supabase.from('town_communities').delete().eq('id', communityId).then(() => {}, () => {});
+      try {
+        const commCh = supabase.channel('live_town_communities', { config: { broadcast: { self: false } } });
+        commCh.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            commCh.send({ type: 'broadcast', event: 'community_deleted', payload: { id: communityId } });
+          }
+        });
+      } catch (_) {}
     }
   };
 
@@ -4582,6 +4622,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
       } catch (_) {}
+      return updated;
+    });
+  };
+
+  const deleteChat = (chatId: string) => {
+    if (chatId.startsWith('town_comm_')) {
+      const rawId = chatId.replace('town_comm_', '');
+      deleteTownCommunity(rawId);
+      return;
+    }
+    setChats((prev) => {
+      const updated = prev.filter((c) => c.id !== chatId);
+      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
+      return updated;
+    });
+    setMessages((prev) => {
+      const updated = { ...prev };
+      delete updated[chatId];
+      try { localStorage.setItem('AGC_messages_v2', JSON.stringify(updated)); } catch (_) {}
+      return updated;
+    });
+    setActiveChatId((curr) => (curr === chatId ? null : curr));
+  };
+
+  const toggleShelfChat = (chatId: string) => {
+    setChats((prev) => {
+      const updated = prev.map((c) => (c.id === chatId ? { ...c, isShelved: !c.isShelved } : c));
+      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
+      return updated;
+    });
+  };
+
+  const setChatLabel = (chatId: string, label?: string) => {
+    setChats((prev) => {
+      const updated = prev.map((c) => (c.id === chatId ? { ...c, label: label ? label.trim() : undefined } : c));
+      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
       return updated;
     });
   };
@@ -8427,6 +8503,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isFeatureEnabled,
         toggleFeatureFlag,
         clearChat,
+        deleteChat,
+        toggleShelfChat,
+        setChatLabel,
         updateChat,
         addMembersToGroup,
         removeMemberFromGroup,
@@ -8656,6 +8735,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleHidePhoneNumberInTown,
         toggleJoinTownCommunity,
         addTownCommunity,
+        deleteTownCommunity,
         // 19. Healthcare
         doctors,
         queueTokens,
