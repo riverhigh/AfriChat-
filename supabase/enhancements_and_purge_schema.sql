@@ -213,11 +213,11 @@ create policy "allow_all_insert_pet_listings" on public.pet_listings for insert 
 create policy "allow_all_update_pet_listings" on public.pet_listings for update using (true) with check (true);
 create policy "allow_all_delete_pet_listings" on public.pet_listings for delete using (true);
 
-do 
+do $$
 begin
   alter publication supabase_realtime add table public.pet_listings;
 exception when others then null;
-end ;
+end $$;
 
 create table if not exists public.pet_forum_posts (
   id text primary key,
@@ -241,8 +241,8 @@ create policy "allow_all_read_pet_forum_posts" on public.pet_forum_posts for sel
 create policy "allow_all_insert_pet_forum_posts" on public.pet_forum_posts for insert with check (true);
 create policy "allow_all_update_pet_forum_posts" on public.pet_forum_posts for update using (true) with check (true);
 
-do 
+do $$
 begin
   alter publication supabase_realtime add table public.pet_forum_posts;
 exception when others then null;
-end ;
+end $$;
