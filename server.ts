@@ -351,8 +351,6 @@ io.on('connection', (socket: Socket) => {
   // 2. Live Chat Message Broadcast
   socket.on('send_message', (payload: { chatId: string; message: any; targetPhone?: string }) => {
     const { chatId, message, targetPhone } = payload;
-    // Broadcast to everyone else in this chat room
-    socket.to(`chat:${chatId}`).emit('new_message', { chatId, message });
 
     // Derive target phone if not explicitly provided
     let finalTarget = targetPhone ? targetPhone.replace(/\D/g, '') : '';
@@ -362,9 +360,12 @@ io.on('connection', (socket: Socket) => {
       finalTarget = parts.find((p: string) => p !== senderPhone) || '';
     }
 
+    // Broadcast to everyone else in this chat room
+    socket.to(`chat:${chatId}`).emit('new_message', { chatId, message, targetPhone: finalTarget });
+
     // Also broadcast to target user's phone channel so incoming messages update their chat list
     if (finalTarget) {
-      socket.to(`phone:${finalTarget}`).emit('new_message', { chatId, message });
+      socket.to(`phone:${finalTarget}`).emit('new_message', { chatId, message, targetPhone: finalTarget });
     }
 
     // If it's a town community or group, broadcast to everyone

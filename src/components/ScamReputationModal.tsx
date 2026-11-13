@@ -164,18 +164,18 @@ export const ScamReputationModal: React.FC = () => {
               {scamLookupEntity ? (
                 <div
                   className={`rounded-2xl border p-4 space-y-3 ${
-                    scamLookupEntity.riskLevel === 'high'
+                    scamLookupEntity.riskLevel === 'critical_scam'
                       ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800'
-                      : scamLookupEntity.riskLevel === 'medium'
+                      : scamLookupEntity.riskLevel === 'suspicious'
                       ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800'
                       : 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800'
                   }`}
                 >
                   {/* Risk header */}
                   <div className="flex items-center gap-2">
-                    {scamLookupEntity.riskLevel === 'high' ? (
+                    {scamLookupEntity.riskLevel === 'critical_scam' ? (
                       <ShieldAlert className="w-5 h-5 text-rose-500 shrink-0" />
-                    ) : scamLookupEntity.riskLevel === 'medium' ? (
+                    ) : scamLookupEntity.riskLevel === 'suspicious' ? (
                       <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
                     ) : (
                       <ShieldCheck className="w-5 h-5 text-emerald-500 shrink-0" />
@@ -187,14 +187,14 @@ export const ScamReputationModal: React.FC = () => {
                         </span>
                         <span
                           className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                            scamLookupEntity.riskLevel === 'high'
+                            scamLookupEntity.riskLevel === 'critical_scam'
                               ? 'bg-rose-500 text-white'
-                              : scamLookupEntity.riskLevel === 'medium'
+                              : scamLookupEntity.riskLevel === 'suspicious'
                               ? 'bg-amber-500 text-white'
                               : 'bg-emerald-500 text-white'
                           }`}
                         >
-                          {scamLookupEntity.riskLevel.toUpperCase()} RISK
+                          {scamLookupEntity.riskLevel.toUpperCase().replace('_', ' ')}
                         </span>
                       </div>
                       <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
@@ -238,16 +238,16 @@ export const ScamReputationModal: React.FC = () => {
                   {/* Summary verdict */}
                   <div
                     className={`rounded-xl px-3 py-2 text-xs font-medium ${
-                      scamLookupEntity.riskLevel === 'high'
+                      scamLookupEntity.riskLevel === 'critical_scam'
                         ? 'bg-rose-100 dark:bg-rose-900/40 text-rose-800 dark:text-rose-300'
-                        : scamLookupEntity.riskLevel === 'medium'
+                        : scamLookupEntity.riskLevel === 'suspicious'
                         ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300'
                         : 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
                     }`}
                   >
-                    {scamLookupEntity.riskLevel === 'high' ? (
+                    {scamLookupEntity.riskLevel === 'critical_scam' ? (
                       <p>⚠️ High risk — multiple AGC community reports. Avoid transacting with this entity.</p>
-                    ) : scamLookupEntity.riskLevel === 'medium' ? (
+                    ) : scamLookupEntity.riskLevel === 'suspicious' ? (
                       <p>🟡 Moderate risk — some reports flagged. Proceed with caution and verify identity.</p>
                     ) : (
                       <p>✅ No fraudulent activity reported on this entity across Nigerian or African networks.</p>

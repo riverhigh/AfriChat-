@@ -43,6 +43,7 @@ import {
   Bell,
   Volume2,
   Search,
+  MessageSquare,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
@@ -265,13 +266,20 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
-  const currentChat = chats.find((c) => c.id === activeChatId);
+  const currentChat =
+    chats.find((c) => c.id === activeChatId) ||
+    (activeChatId?.startsWith('dm_')
+      ? chats.find((c) => c.phone && activeChatId.includes(c.phone.replace(/\D/g, '')))
+      : undefined);
   const isGroupAdmin = currentUser && currentChat?.isGroup &&
     (currentChat as any).adminIds?.includes(currentUser.id);
   const isChannelAdmin = currentUser && currentChat?.isChannel &&
     (currentChat as any).adminIds?.includes(currentUser.id);
   const isChannelMember = currentChat?.isChannel && !isChannelAdmin;
-  const currentMessages = activeChatId ? messages[activeChatId] || [] : [];
+  const currentMessages =
+    (activeChatId && messages[activeChatId]) ||
+    (currentChat?.id && messages[currentChat.id]) ||
+    [];
 
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -296,7 +304,28 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     return () => clearInterval(interval);
   }, [playingVoiceId]);
 
-  if (!currentChat) return null;
+  if (!currentChat) {
+    return (
+      <div className="flex flex-col h-full w-full max-w-md mx-auto bg-white dark:bg-black items-center justify-center p-6 text-center select-none">
+        <div className="w-14 h-14 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center text-purple-600 dark:text-purple-400 mb-4 shadow-sm">
+          <MessageSquare className="w-7 h-7" />
+        </div>
+        <h3 className="text-base font-bold text-slate-800 dark:text-slate-100 mb-1">
+          Conversation not available
+        </h3>
+        <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xs mb-6">
+          This conversation could not be loaded or was cleared.
+        </p>
+        <button
+          type="button"
+          onClick={() => setActiveChatId(null)}
+          className="px-6 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold shadow-md shadow-purple-600/30 active:scale-95 transition-all cursor-pointer"
+        >
+          Return to Chats
+        </button>
+      </div>
+    );
+  }
 
   const handleSend = () => {
     if (!inputText.trim() || !activeChatId) return;

@@ -50,9 +50,10 @@ import { WhatsAppPhoneAuth } from './components/WhatsAppPhoneAuth';
 import { PhoneSignUpBanner } from './components/PhoneSignUpBanner';
 import { ErrandsModal } from './components/ErrandsModal';
 import { CallErrorBoundary } from './components/CallErrorBoundary';
+import { ChatErrorBoundary } from './components/ChatErrorBoundary';
 
 const AppContent: React.FC = () => {
-  const { activeChatId, activeTab, isAuthenticated, isKickedOut, endCall } = useApp();
+  const { activeChatId, setActiveChatId, activeTab, isAuthenticated, isKickedOut, endCall } = useApp();
   const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('agc_splash_shown'));
   const handleSplashDone = useCallback(() => {
     sessionStorage.setItem('agc_splash_shown', 'true');
@@ -120,7 +121,9 @@ const AppContent: React.FC = () => {
         <AudioSpaceBar />
 
         {activeChatId ? (
-          <ActiveChat onOpenVoiceRecorder={() => setIsVoiceRecorderOpen(true)} />
+          <ChatErrorBoundary onReset={() => setActiveChatId(null)}>
+            <ActiveChat onOpenVoiceRecorder={() => setIsVoiceRecorderOpen(true)} />
+          </ChatErrorBoundary>
         ) : (
           <div className="flex flex-col flex-1 h-full overflow-hidden">
             <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />

@@ -22,6 +22,23 @@ export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
   }
   return '';
 };
+
+export const getSavedUserCleanPhone = (): string => {
+  try {
+    const s = localStorage.getItem('AGC_user_profile_v2');
+    if (s) {
+      const p = JSON.parse(s);
+      if (p?.phoneNumber) return p.phoneNumber.replace(/\D/g, '');
+    }
+  } catch (_) {}
+  return '';
+};
+
+export const getUserStorageKey = (prefix: string, cleanPhone?: string): string => {
+  const clean = cleanPhone || getSavedUserCleanPhone();
+  return clean ? `${prefix}_${clean}` : prefix;
+};
+
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
 import { downsampleDataUrl } from '../utils/imageUtils';
@@ -1903,13 +1920,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [activeChatId]);
   const [chats, setChats] = useState<ChatThread[]>(() => {
     try {
-      const saved = localStorage.getItem('AGC_chats_v2');
+      const userKey = getUserStorageKey('AGC_chats_v2');
+      const saved = localStorage.getItem(userKey);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && !parsed.some((c: ChatThread) => c.id === 'chat_balogun_ajo' || c.id === 'chat_mama_chidinma')) {
           return parsed;
         } else {
-          localStorage.removeItem('AGC_chats_v2');
+          localStorage.removeItem(userKey);
         }
       }
     } catch (e) {
@@ -1919,7 +1937,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>(() => {
     try {
-      const saved = localStorage.getItem('AGC_messages_v2');
+      const userKey = getUserStorageKey('AGC_messages_v2');
+      const saved = localStorage.getItem(userKey);
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn(e);
@@ -2134,6 +2153,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isPhoneVerified: false,
     };
   });
+
+  // Automatically persist chats & messages strictly partitioned per user
+  useEffect(() => {
+    const clean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
+    if (clean) {
+      try {
+        localStorage.setItem(`AGC_chats_v2_${clean}`, JSON.stringify(chats));
+      } catch (_) {}
+    }
+  }, [chats, currentUser?.phoneNumber]);
+
+  useEffect(() => {
+    const clean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
+    if (clean) {
+      try {
+        localStorage.setItem(`AGC_messages_v2_${clean}`, JSON.stringify(messages));
+      } catch (_) {}
+    }
+  }, [messages, currentUser?.phoneNumber]);
   useEffect(() => {
     try {
       const savedWallet = localStorage.getItem('AGC_user_wallet_v2');
@@ -4186,19 +4224,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     setChats((prev) => {
-      const updated = prev.map((c) =>
-        c.id === chatId
-          ? {
-              ...c,
-              lastMessage: caption ? `📷 ${caption}` : '📷 Photo',
-              lastMessageTime: newMsg.timestamp,
-            }
-          : c
+      const exists = prev.some((c) => c.id === chatId);
+      if (exists) {
+        return prev.map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                lastMessage: caption ? `📷 ${caption}` : '📷 Photo',
+                lastMessageTime: newMsg.timestamp,
+              }
+            : c
+        );
+      }
+      const contactMatch = deviceContacts.find(
+        (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
       );
-      try {
-        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
-      } catch (_) {}
-      return updated;
+      const newThread: ChatThread = {
+        id: chatId,
+        name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
+        avatar:
+          contactMatch?.avatar ||
+          "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+        verifiedStore: false,
+        location: 'Direct Chat',
+        unreadCount: 0,
+        lastMessage: caption ? `📷 ${caption}` : '📷 Photo',
+        lastMessageTime: newMsg.timestamp,
+        catalog: [],
+        isOnline: true,
+        phone: contactMatch?.rawPhoneNumber || '',
+      };
+      return [newThread, ...prev];
     });
 
     // Broadcast live across all transports (Socket.io, BroadcastChannel, Supabase Realtime)
@@ -4265,18 +4321,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     setChats((prev) => {
-      const updated = prev.map((c) =>
-        c.id === chatId
-          ? {
-              ...c,
-              lastMessage: text,
-              lastMessageTime: newMsg.timestamp,
-            }
-          : c
-      );
-      try {
-        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
-      } catch (e) {}
+      const exists = prev.some((c) => c.id === chatId);
+      let updated: ChatThread[];
+      if (exists) {
+        updated = prev.map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                lastMessage: text,
+                lastMessageTime: newMsg.timestamp,
+              }
+            : c
+        );
+      } else {
+        const contactMatch = deviceContacts.find(
+          (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
+        );
+        const newThread: ChatThread = {
+          id: chatId,
+          name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
+          avatar:
+            contactMatch?.avatar ||
+            "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+          verifiedStore: false,
+          location: 'Direct Chat',
+          unreadCount: 0,
+          lastMessage: text,
+          lastMessageTime: newMsg.timestamp,
+          catalog: [],
+          isOnline: true,
+          phone: contactMatch?.rawPhoneNumber || '',
+        };
+        updated = [newThread, ...prev];
+      }
       return updated;
     });
 
@@ -4314,17 +4391,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
 
-    setChats((prev) =>
-      prev.map((c) =>
-        c.id === chatId
-          ? {
-              ...c,
-              lastMessage: `🎤 Voice message (${durationSeconds}s)`,
-              lastMessageTime: newMsg.timestamp,
-            }
-          : c
-      )
-    );
+    setChats((prev) => {
+      const exists = prev.some((c) => c.id === chatId);
+      if (exists) {
+        return prev.map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                lastMessage: `🎤 Voice message (${durationSeconds}s)`,
+                lastMessageTime: newMsg.timestamp,
+              }
+            : c
+        );
+      }
+      const contactMatch = deviceContacts.find(
+        (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
+      );
+      const newThread: ChatThread = {
+        id: chatId,
+        name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
+        avatar:
+          contactMatch?.avatar ||
+          "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+        verifiedStore: false,
+        location: 'Direct Chat',
+        unreadCount: 0,
+        lastMessage: `🎤 Voice message (${durationSeconds}s)`,
+        lastMessageTime: newMsg.timestamp,
+        catalog: [],
+        isOnline: true,
+        phone: contactMatch?.rawPhoneNumber || '',
+      };
+      return [newThread, ...prev];
+    });
 
     // Broadcast live
     broadcastLiveMessage(chatId, newMsg);
@@ -4504,6 +4603,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const openChatWithProduct = (chatId: string, product: Product) => {
     setActiveTab('chats');
+    setChats((prev) => {
+      if (prev.some((c) => c.id === chatId)) return prev;
+      const newThread: ChatThread = {
+        id: chatId,
+        name: product.sellerName,
+        avatar: product.imageUrl,
+        verifiedStore: true,
+        location: product.category,
+        unreadCount: 0,
+        lastMessage: `Product: ${product.title}`,
+        lastMessageTime: 'Just now',
+        catalog: [product],
+        isOnline: true,
+        storeCategory: product.category,
+      };
+      return [newThread, ...prev];
+    });
     setActiveChatId(chatId);
     sendProductCard(chatId, product);
   };
@@ -4526,17 +4642,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
 
-    setChats((prev) =>
-      prev.map((c) =>
-        c.id === chatId
-          ? {
-              ...c,
-              lastMessage: `🎭 Meme: ${meme.title}`,
-              lastMessageTime: newMsg.timestamp,
-            }
-          : c
-      )
-    );
+    setChats((prev) => {
+      const exists = prev.some((c) => c.id === chatId);
+      if (exists) {
+        return prev.map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                lastMessage: `🎭 Meme: ${meme.title}`,
+                lastMessageTime: newMsg.timestamp,
+              }
+            : c
+        );
+      }
+      const newThread: ChatThread = {
+        id: chatId,
+        name: chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat',
+        avatar:
+          "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+        verifiedStore: false,
+        location: 'Direct Chat',
+        unreadCount: 0,
+        lastMessage: `🎭 Meme: ${meme.title}`,
+        lastMessageTime: newMsg.timestamp,
+        catalog: [],
+        isOnline: true,
+      };
+      return [newThread, ...prev];
+    });
 
     broadcastLiveMessage(chatId, newMsg);
   };
@@ -5185,6 +5318,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setCurrentUser(updatedUser);
     setIsAuthenticated(true);
+    setActiveChatId(null);
+
+    // Strictly partition and load chats/messages for this phone number:
+    try {
+      const savedUserChats = localStorage.getItem(`AGC_chats_v2_${cleanPhone}`);
+      if (savedUserChats) {
+        const parsed = JSON.parse(savedUserChats);
+        setChats(Array.isArray(parsed) ? parsed : []);
+      } else {
+        setChats([]);
+      }
+    } catch (_) {
+      setChats([]);
+    }
+
+    try {
+      const savedUserMsgs = localStorage.getItem(`AGC_messages_v2_${cleanPhone}`);
+      if (savedUserMsgs) {
+        setMessages(JSON.parse(savedUserMsgs));
+      } else {
+        setMessages({});
+      }
+    } catch (_) {
+      setMessages({});
+    }
 
     // 1. LocalStorage Persistence (Never wiped)
     localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
@@ -5354,6 +5512,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const logoutUser = () => {
     setIsAuthenticated(false);
     localStorage.setItem('AGC_is_authenticated', 'false');
+    setActiveChatId(null);
+    setChats([]);
+    setMessages({});
     setIsAuthModalOpen(true);
   };
 
@@ -7041,41 +7202,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Real-Time Multi-Transport Live Chat Connection (Socket.io + BroadcastChannel + Supabase)
   const handleIncomingMessage = useCallback(
-    ({ chatId, message, senderId }: { chatId: string; message: ChatMessage; senderId?: string }) => {
+    ({ chatId, message, senderId, targetPhone }: { chatId: string; message: ChatMessage; senderId?: string; targetPhone?: string }) => {
+      if (!message || !chatId) return;
+
       const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
-      const senderCleanPhone = message.senderPhone?.replace(/\D/g, '') || '';
-      const otherCleanPhone = senderCleanPhone === myCleanPhone ? '' : senderCleanPhone;
+      const senderCleanPhone = (message.senderPhone || '').replace(/\D/g, '');
+      const isFromMe = (senderId && senderId === currentUser.id) || (senderCleanPhone && senderCleanPhone === myCleanPhone && message.sender === 'user');
 
-      const isSelfChat = chatId.includes('self') || (myCleanPhone && senderCleanPhone === myCleanPhone && (!otherCleanPhone || chatId.endsWith(myCleanPhone)));
-      const canonicalDmId = isSelfChat
-        ? `dm_self_${myCleanPhone}`
-        : myCleanPhone && otherCleanPhone
-        ? `dm_${[myCleanPhone, otherCleanPhone].sort().join('_')}`
-        : '';
-      const resolvedChatId = canonicalDmId || chatId;
+      const isDm = chatId.startsWith('dm_');
+      const isSelfChat = chatId.includes('self') || (myCleanPhone && senderCleanPhone === myCleanPhone && (!targetPhone || targetPhone.replace(/\D/g, '') === myCleanPhone));
 
-      // Filter duplicates strictly by message ID
+      // 1. Strict DM Protection: Only actual participants can receive or view direct messages!
+      if (isDm && !isSelfChat) {
+        const parts = chatId.replace('dm_', '').split('_');
+        if (parts.length >= 2 && myCleanPhone) {
+          const isParticipant = parts[0] === myCleanPhone || parts[1] === myCleanPhone;
+          if (!isParticipant) {
+            // Strictly private between other users; drop immediately!
+            return;
+          }
+        }
+      }
+
+      // If a target phone was explicitly addressed, drop if it does not match my phone and isn't from me
+      if (targetPhone) {
+        const cleanTarget = targetPhone.replace(/\D/g, '');
+        if (cleanTarget && myCleanPhone && cleanTarget !== myCleanPhone && !isFromMe) {
+          return;
+        }
+      }
+
+      // 2. Resolve chat ID:
+      // NEVER transform a community, group, space, channel or store chat into a DM!
+      let resolvedChatId = chatId;
+      let otherCleanPhone = '';
+      if (isDm) {
+        if (isSelfChat) {
+          resolvedChatId = `dm_self_${myCleanPhone}`;
+        } else {
+          const parts = chatId.replace('dm_', '').split('_');
+          otherCleanPhone = parts.find((p) => p !== myCleanPhone) || senderCleanPhone;
+          if (myCleanPhone && otherCleanPhone) {
+            resolvedChatId = `dm_${[myCleanPhone, otherCleanPhone].sort().join('_')}`;
+          }
+        }
+      }
+
+      // 3. Filter duplicates strictly by message ID
       setMessages((prev) => {
         const list = prev[resolvedChatId] || prev[chatId] || [];
         if (list.some((m) => m.id === message.id)) return prev;
 
-        const isFromMe = (senderId && senderId === currentUser.id) || (senderCleanPhone && senderCleanPhone === myCleanPhone && message.sender === 'user');
         const receivedMsg: ChatMessage = {
           ...message,
           chatId: resolvedChatId,
           sender: isSelfChat ? 'user' : (isFromMe ? 'user' : 'other'),
           status: 'delivered',
         };
-        const updated = {
+        return {
           ...prev,
           [resolvedChatId]: [...list, receivedMsg],
         };
-        try {
-          localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
-        } catch (_) {}
-        return updated;
       });
 
+      // 4. Update or insert thread
       setChats((prev) => {
         const index = prev.findIndex(
           (c) =>
@@ -7096,20 +7286,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (index >= 0) {
           const updated = [...prev];
-          const matched = { ...updated[index], id: resolvedChatId };
+          const matched = { ...updated[index] };
+          // If activeChatId was the old id, keep it in sync with resolvedChatId
+          if (matched.id !== resolvedChatId && activeChatId === matched.id) {
+            setActiveChatId(resolvedChatId);
+          }
+          matched.id = resolvedChatId;
           matched.lastMessage = msgText;
           matched.lastMessageTime = message.timestamp;
-          matched.unreadCount = activeChatId === resolvedChatId || activeChatId === chatId ? 0 : (matched.unreadCount || 0) + 1;
+          matched.unreadCount =
+            activeChatId === resolvedChatId || activeChatId === matched.id || activeChatId === chatId
+              ? 0
+              : (matched.unreadCount || 0) + 1;
           updated.splice(index, 1);
-          const finalChats = [matched, ...updated];
-          try {
-            localStorage.setItem('AGC_chats_v2', JSON.stringify(finalChats));
-          } catch (_) {}
-          return finalChats;
+          return [matched, ...updated];
         } else {
           const newThread: ChatThread = {
             id: resolvedChatId,
-            name: isSelfChat ? `${currentUser.fullName || 'You'} (Message yourself)` : (message.senderName || 'AGC Contact'),
+            name: isSelfChat
+              ? `${currentUser.fullName || 'You'} (Message yourself)`
+              : (message.senderName || 'AGC Contact'),
             avatar:
               (isSelfChat ? currentUser.avatarUrl : message.senderAvatar) ||
               "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
@@ -7122,15 +7318,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             isOnline: true,
             phone: isSelfChat ? currentUser.phoneNumber : (message.senderPhone || ''),
           };
-          const finalChats = [newThread, ...prev];
-          try {
-            localStorage.setItem('AGC_chats_v2', JSON.stringify(finalChats));
-          } catch (_) {}
-          return finalChats;
+          return [newThread, ...prev];
         }
       });
 
-      if (activeChatId !== resolvedChatId && activeChatId !== chatId) {
+      if (activeChatId !== resolvedChatId && activeChatId !== chatId && !isFromMe) {
         showLocalNotification(
           `💬 ${message.senderName || 'AGC User'}`,
           message.text || (message.type === 'image' ? '📷 Sent a photo' : 'Sent you an attachment'),
@@ -7159,6 +7351,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       bc = new BroadcastChannel('AGC_chats_sync');
       bc.onmessage = (e) => {
         if (e.data && e.data.chatId && e.data.message) {
+          const { chatId, senderId, targetPhone } = e.data;
+          const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+          // Don't process self's broadcast unless self-chat
+          if (senderId === currentUser.id && !chatId.includes('self')) {
+            return;
+          }
+          // If DM, verify myPhone is a participant
+          if (chatId.startsWith('dm_') && !chatId.includes('self')) {
+            const parts = chatId.replace('dm_', '').split('_');
+            if (parts.length >= 2 && myPhone && !parts.includes(myPhone)) {
+              return;
+            }
+          }
+          // If targetPhone is specified, only accept if addressed to myPhone
+          if (targetPhone) {
+            const cleanTarget = targetPhone.replace(/\D/g, '');
+            if (cleanTarget && myPhone && cleanTarget !== myPhone) {
+              return;
+            }
+          }
           handleIncomingMessage(e.data);
         }
       };
