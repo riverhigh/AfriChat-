@@ -44,6 +44,8 @@ import {
   Volume2,
   Search,
   MessageSquare,
+  UserCheck,
+  UserX,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
@@ -104,6 +106,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     getLastSeen,
     typingUsers,
     sendTypingIndicator,
+    friendRequests,
+    acceptFriendRequest,
+    declineFriendRequest,
   } = useApp();
 
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
@@ -786,6 +791,56 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           </div>
         </div>
       )}
+
+      {/* 1-on-1 Contact Request Pending Banner */}
+      {(() => {
+        if (currentChat.isGroup || currentChat.isChannel) return null;
+        const pendingContactReq = friendRequests.find(
+          (r) =>
+            r.status === 'pending' &&
+            ((currentChat.phoneNumber && r.senderPhone && r.senderPhone.replace(/\D/g, '') === currentChat.phoneNumber.replace(/\D/g, '')) ||
+             (currentChat.phone && r.senderPhone && r.senderPhone.replace(/\D/g, '') === currentChat.phone.replace(/\D/g, '')) ||
+             (r.senderName && r.senderName.toLowerCase() === currentChat.name.toLowerCase()))
+        );
+        if (!pendingContactReq) return null;
+
+        return (
+          <div className="p-3.5 bg-gradient-to-r from-purple-950/90 via-[#18152e] to-purple-950/90 border-b border-purple-500/40 text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-md z-10 shrink-0">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-300 flex items-center justify-center shrink-0 border border-emerald-500/30">
+                <UserCheck className="w-4 h-4 text-emerald-400" />
+              </div>
+              <div>
+                <div className="font-bold text-white flex items-center gap-1.5">
+                  <span>{pendingContactReq.senderName} added you</span>
+                  <span className="text-[10px] font-mono text-purple-300 bg-purple-500/20 px-1.5 py-0.2 rounded-full">New Request</span>
+                </div>
+                <div className="text-[11px] text-purple-200/80">
+                  "{pendingContactReq.message || `Wants to connect with you on AfriChat.`}"
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => acceptFriendRequest(pendingContactReq.id)}
+                className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer flex items-center gap-1"
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+                <span>Accept</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => declineFriendRequest(pendingContactReq.id)}
+                className="px-3.5 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1"
+              >
+                <UserX className="w-3.5 h-3.5" />
+                <span>Decline</span>
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Message Feed */}
       <div

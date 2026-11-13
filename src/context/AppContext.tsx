@@ -395,6 +395,8 @@ interface AppContextType {
   addNewDeviceContact: (name: string, phone: string, about?: string, isRegistered?: boolean, avatar?: string) => DeviceContact;
   importDeviceContacts: (contacts: { name: string; phone: string }[]) => Promise<number>;
   friendRequests: import('../types').ContactRequest[];
+  activeContactRequestPopup: import('../types').ContactRequest | null;
+  setActiveContactRequestPopup: (req: import('../types').ContactRequest | null) => void;
   sendFriendRequest: (targetPhone: string, targetName?: string, message?: string) => Promise<boolean>;
   acceptFriendRequest: (requestId: string) => void;
   declineFriendRequest: (requestId: string) => void;
@@ -2561,6 +2563,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return [];
   });
 
+  const [activeContactRequestPopup, setActiveContactRequestPopup] = useState<import('../types').ContactRequest | null>(null);
+
+  const handleIncomingFriendRequest = useCallback((req: import('../types').ContactRequest) => {
+    if (!req || !req.id) return;
+    setFriendRequests((prev) => {
+      if (prev.some((r) => r.id === req.id)) return prev;
+      return [req, ...prev];
+    });
+    setActiveContactRequestPopup(req);
+    showLocalNotification(
+      `👋 New Contact Request from ${req.senderName}`,
+      req.message || `${req.senderName} (${req.senderPhone}) added you!`,
+      req.senderAvatar || '/icon-192.png'
+    );
+  }, []);
+
   const [spaceEndedSummary, setSpaceEndedSummary] = useState<{
     spaceId: string;
     title: string;
@@ -2591,6 +2609,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .eq('status', 'pending')
       .then(({ data }) => {
         if (data && data.length > 0) {
+          const dismissedPopups: string[] = JSON.parse(sessionStorage.getItem('AGC_dismissed_request_popups') || '[]');
+          const unhandled = data.find((d: any) => !dismissedPopups.includes(d.id));
+          if (unhandled) {
+            setActiveContactRequestPopup((current) => {
+              if (current) return current;
+              return {
+                id: unhandled.id,
+                senderPhone: unhandled.from_phone,
+                senderName: unhandled.from_name,
+                senderAvatar: unhandled.from_avatar,
+                recipientPhone: unhandled.to_phone,
+                message: unhandled.greeting,
+                createdAt: unhandled.created_at ? new Date(unhandled.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently',
+                status: 'pending' as const,
+              };
+            });
+          }
+
           setFriendRequests((prev) => {
             const existingIds = new Set(prev.map((r) => r.id));
             const newReqs = data
@@ -5431,7 +5467,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!req) return;
 
     addNewDeviceContact(req.senderName, req.senderPhone, 'Connected via Contact Request', true, req.senderAvatar);
-    setFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
+    setFriendRequests((prev) => {
+      const remaining = prev.filter((r) => r.id !== requestId);
+      setActiveContactRequestPopup((curr) => (curr?.id === requestId ? (remaining.length > 0 ? remaining[0] : null) : curr));
+      return remaining;
+    });
 
     if (isSupabaseConfigured) {
       supabase
@@ -5484,7 +5524,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const declineFriendRequest = (requestId: string) => {
-    setFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
+    setFriendRequests((prev) => {
+      const remaining = prev.filter((r) => r.id !== requestId);
+      setActiveContactRequestPopup((curr) => (curr?.id === requestId ? (remaining.length > 0 ? remaining[0] : null) : curr));
+      return remaining;
+    });
     if (isSupabaseConfigured) {
       supabase
         .from('contact_requests')
@@ -6325,6 +6369,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (error) console.warn('Supabase device_contacts notice:', error.message);
         });
       } catch (_) {}
+    }
+
+    // Automatically send contact request to the added peer so they get the Accept / Decline pop-up!
+    if (normalized && currentUser.phoneNumber && !phonesMatch(normalized, currentUser.phoneNumber)) {
+      sendFriendRequest(normalized, name, `Hi, I am ${currentUser.fullName || 'AGC User'}. I added you on AfriChat!`);
     }
 
     return newContact;
@@ -8270,13 +8319,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
     };
 
+    const handleFriendRequestSocket = ({ request }: any) => {
+      if (request) handleIncomingFriendRequest(request);
+    };
+
     socket.on('group_created', handleGroupCreated);
+    socket.on('friend_request', handleFriendRequestSocket);
 
     // 2. BroadcastChannel listener (instant multi-tab / window sync)
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel('AGC_chats_sync');
       bc.onmessage = (e) => {
+        if (e.data && e.data.type === 'friend_request' && e.data.request) {
+          const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+          const target = (e.data.targetPhone || e.data.request.recipientPhone || '').replace(/\D/g, '');
+          if (!target || phonesMatch(target, myPhone)) {
+            handleIncomingFriendRequest(e.data.request);
+          }
+          return;
+        }
         if (e.data && e.data.chatId && e.data.message) {
           const { chatId, senderId, targetPhone, memberPhones, isGroup } = e.data;
           const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
@@ -8319,6 +8381,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             handleGroupCreated(payload);
           }
         })
+        .on('broadcast', { event: 'friend_request' }, ({ payload }: any) => {
+          if (payload && payload.request) {
+            handleIncomingFriendRequest(payload.request);
+          }
+        })
         .subscribe();
 
       if (normPhone !== myCleanPhone) {
@@ -8334,6 +8401,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .on('broadcast', { event: 'group_created' }, ({ payload }: any) => {
             if (payload && payload.chat) {
               handleGroupCreated(payload);
+            }
+          })
+          .on('broadcast', { event: 'friend_request' }, ({ payload }: any) => {
+            if (payload && payload.request) {
+              handleIncomingFriendRequest(payload.request);
             }
           })
           .subscribe();
@@ -8358,6 +8430,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       socket.off('new_message', handleIncomingMessage);
       socket.off('group_created', handleGroupCreated);
+      socket.off('friend_request', handleFriendRequestSocket);
       if (bc) bc.close();
       if (sbInboxChannel) sbInboxChannel.unsubscribe();
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
@@ -8808,6 +8881,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addNewDeviceContact,
         importDeviceContacts,
         friendRequests,
+        activeContactRequestPopup,
+        setActiveContactRequestPopup,
         sendFriendRequest,
         acceptFriendRequest,
         declineFriendRequest,

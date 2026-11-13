@@ -12,6 +12,7 @@ import { MarketplaceView } from './components/MarketplaceView';
 import { CallsView } from './components/CallsView';
 import { ActiveCallModal } from './components/ActiveCallModal';
 import { IncomingCallModal } from './components/IncomingCallModal';
+import { IncomingContactRequestModal } from './components/IncomingContactRequestModal';
 import { SettingsView } from './components/SettingsView';
 import { TownView } from './components/TownView';
 import { CheckoutDrawer } from './components/CheckoutDrawer';
@@ -197,6 +198,7 @@ const AppContent: React.FC = () => {
         <StatusViewerModal />
         <CallErrorBoundary onReset={endCall}>{"\n"}<ActiveCallModal />{"\n"}</CallErrorBoundary>
         <IncomingCallModal />
+        <IncomingContactRequestModal />
         <CheckoutDrawer />
         <EscrowModal />
         <VoiceRecorderModal

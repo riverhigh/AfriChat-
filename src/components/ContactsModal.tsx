@@ -39,6 +39,7 @@ export const ContactsModal: React.FC = () => {
     friendRequests,
     acceptFriendRequest,
     declineFriendRequest,
+    setActiveContactRequestPopup,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -889,7 +890,9 @@ export const ContactsModal: React.FC = () => {
                 {friendRequests.map((req) => (
                   <div
                     key={req.id}
-                    className="p-2.5 bg-white dark:bg-[#1c0e35] rounded-xl border border-purple-300/40 dark:border-purple-800/40 flex items-center justify-between gap-2 shadow-xs"
+                    onClick={() => setActiveContactRequestPopup(req)}
+                    className="p-2.5 bg-white dark:bg-[#1c0e35] hover:bg-purple-500/5 dark:hover:bg-[#251347] rounded-xl border border-purple-300/40 dark:border-purple-800/40 flex items-center justify-between gap-2 shadow-xs cursor-pointer transition-colors"
+                    title="Click to view full request pop-up"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <img
@@ -911,18 +914,18 @@ export const ContactsModal: React.FC = () => {
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                       <button
                         type="button"
                         onClick={() => acceptFriendRequest(req.id)}
-                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs transition-colors"
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
                       >
                         Accept
                       </button>
                       <button
                         type="button"
                         onClick={() => declineFriendRequest(req.id)}
-                        className="px-2 py-1 bg-slate-200 dark:bg-purple-900/30 text-slate-600 dark:text-purple-300 hover:bg-slate-300 rounded-lg text-xs"
+                        className="px-2 py-1 bg-slate-200 dark:bg-purple-900/30 text-slate-600 dark:text-purple-300 hover:bg-slate-300 rounded-lg text-xs cursor-pointer"
                       >
                         Decline
                       </button>
