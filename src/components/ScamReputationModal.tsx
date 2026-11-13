@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   X,
   ShieldAlert,
@@ -11,9 +11,10 @@ import {
   Phone,
   Clock,
   UserCheck,
+  Loader2,
+  Radio,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { ScamEntity } from '../types';
 
 export const ScamReputationModal: React.FC = () => {
   const {
@@ -22,33 +23,37 @@ export const ScamReputationModal: React.FC = () => {
     checkEntityReputation,
     flagEntityAsScam,
     scamLookupEntity,
+    isCheckingReputation,
   } = useApp();
 
-  const [searchQuery, setSearchQuery] = useState('+234 809 999 0011');
+  const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'check' | 'report'>('check');
   const [reportValue, setReportValue] = useState('');
   const [reportType, setReportType] = useState<'phone' | 'bank_account'>('phone');
   const [reportReason, setReportReason] = useState('Sent fake bank debit SMS alert and disappeared');
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isScamCheckerModalOpen) return null;
 
-  const handleSearch = (e: React.FormEvent) => {
+  const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
-    checkEntityReputation(searchQuery.trim());
+    await checkEntityReputation(searchQuery.trim());
   };
 
-  const handleReportSubmit = (e: React.FormEvent) => {
+  const handleReportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reportValue.trim()) return;
-    flagEntityAsScam(reportValue.trim(), reportType, reportReason);
-    setFeedback(`Report submitted! ${reportValue} flagged in AGC crowdsourced scam vault.`);
+    setIsSubmitting(true);
+    await flagEntityAsScam(reportValue.trim(), reportType, reportReason);
+    setFeedback(`✅ Report broadcast live! ${reportValue} flagged in AGC crowdsourced vault.`);
+    setIsSubmitting(false);
     setTimeout(() => {
       setFeedback(null);
       setActiveTab('check');
       setSearchQuery(reportValue);
-    }, 1500);
+    }, 2000);
   };
 
   return (
@@ -70,11 +75,16 @@ export const ScamReputationModal: React.FC = () => {
               <ShieldAlert className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100 font-display">
-                Scam & Reputation Checker
+              <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100 font-display flex items-center gap-1.5">
+                Scam &amp; Reputation Checker
+                {/* Live indicator */}
+                <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
+                  <Radio className="w-2.5 h-2.5 animate-pulse" />
+                  Live
+                </span>
               </h3>
               <p className="text-[10px] text-slate-400">
-                Crowdsourced fraud database for African phone numbers & accounts
+                Crowdsourced fraud database for African phone numbers &amp; accounts
               </p>
             </div>
           </div>
@@ -116,9 +126,9 @@ export const ScamReputationModal: React.FC = () => {
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {feedback && (
-            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 text-emerald-800 dark:text-emerald-300 rounded-xl text-xs flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>{feedback}</span>
+            <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-400/40 text-emerald-800 dark:text-emerald-300 rounded-xl text-xs flex items-center gap-2 shadow-sm">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+              <span className="font-medium">{feedback}</span>
             </div>
           )}
 
@@ -127,149 +137,132 @@ export const ScamReputationModal: React.FC = () => {
               {/* Search Form */}
               <form onSubmit={handleSearch} className="flex gap-2">
                 <div className="relative flex-1">
-                  <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400 pointer-events-none" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
                   <input
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Enter phone or account (e.g. +234...)"
+                    placeholder="Search phone number or bank account…"
                     className="w-full pl-9 pr-3 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
                 <button
                   type="submit"
-                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs shrink-0"
+                  disabled={isCheckingReputation}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 transition-colors"
                 >
-                  Verify
+                  {isCheckingReputation ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Search className="w-3.5 h-3.5" />
+                  )}
+                  {isCheckingReputation ? 'Checking…' : 'Verify'}
                 </button>
               </form>
 
-              {/* Quick sample chips */}
-              <div className="flex items-center gap-1.5 text-[11px] overflow-x-auto no-scrollbar">
-                <span className="text-slate-400 shrink-0">Try Demo:</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery('+234 809 999 0011');
-                    checkEntityReputation('+234 809 999 0011');
-                  }}
-                  className="px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 font-mono text-[10px] border border-rose-200 dark:border-rose-800"
-                >
-                  Flagged Phone
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery('0129883471');
-                    checkEntityReputation('0129883471');
-                  }}
-                  className="px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 font-mono text-[10px] border border-rose-200 dark:border-rose-800"
-                >
-                  Flagged Bank Acct
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery('+234 803 123 4567');
-                    checkEntityReputation('+234 803 123 4567');
-                  }}
-                  className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 font-mono text-[10px] border border-emerald-200 dark:border-emerald-800"
-                >
-                  Verified Clean
-                </button>
-              </div>
-
-              {/* Result Card */}
+              {/* Result */}
               {scamLookupEntity ? (
                 <div
-                  className={`p-4 rounded-2xl border ${
-                    scamLookupEntity.riskLevel === 'critical_scam'
-                      ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-200'
-                      : 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800/80 text-emerald-900 dark:text-emerald-200'
+                  className={`rounded-2xl border p-4 space-y-3 ${
+                    scamLookupEntity.riskLevel === 'high'
+                      ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800'
+                      : scamLookupEntity.riskLevel === 'medium'
+                      ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800'
+                      : 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800'
                   }`}
                 >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2">
-                      {scamLookupEntity.riskLevel === 'critical_scam' ? (
-                        <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center font-bold">
-                          <AlertTriangle className="w-5 h-5" />
-                        </div>
-                      ) : (
-                        <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold">
-                          <ShieldCheck className="w-5 h-5" />
-                        </div>
-                      )}
-                      <div>
-                        <div className="font-bold text-sm">
-                          {scamLookupEntity.riskLevel === 'critical_scam'
-                            ? 'HIGH FRAUD RISK DETECTED!'
-                            : 'VERIFIED CLEAN ENTITY'}
-                        </div>
-                        <div className="text-xs font-mono opacity-80 mt-0.5">
+                  {/* Risk header */}
+                  <div className="flex items-center gap-2">
+                    {scamLookupEntity.riskLevel === 'high' ? (
+                      <ShieldAlert className="w-5 h-5 text-rose-500 shrink-0" />
+                    ) : scamLookupEntity.riskLevel === 'medium' ? (
+                      <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+                    ) : (
+                      <ShieldCheck className="w-5 h-5 text-emerald-500 shrink-0" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-bold text-slate-900 dark:text-slate-100 font-mono truncate">
                           {scamLookupEntity.targetValue}
-                        </div>
+                        </span>
+                        <span
+                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                            scamLookupEntity.riskLevel === 'high'
+                              ? 'bg-rose-500 text-white'
+                              : scamLookupEntity.riskLevel === 'medium'
+                              ? 'bg-amber-500 text-white'
+                              : 'bg-emerald-500 text-white'
+                          }`}
+                        >
+                          {scamLookupEntity.riskLevel.toUpperCase()} RISK
+                        </span>
                       </div>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        {scamLookupEntity.reportsCount} report{scamLookupEntity.reportsCount !== 1 ? 's' : ''} in AGC vault
+                      </p>
                     </div>
-
-                    <span
-                      className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${
-                        scamLookupEntity.riskLevel === 'critical_scam'
-                          ? 'bg-rose-600 text-white'
-                          : 'bg-emerald-600 text-white'
-                      }`}
-                    >
-                      {scamLookupEntity.reportsCount} Reports
-                    </span>
                   </div>
 
-                  {scamLookupEntity.accountName && (
-                    <div className="mt-3 p-2 bg-black/5 dark:bg-white/5 rounded-xl text-xs space-y-0.5">
-                      <div className="font-semibold">Associated Account Name:</div>
-                      <div className="font-mono text-slate-800 dark:text-slate-100">
-                        {scamLookupEntity.accountName} · {scamLookupEntity.bankName}
-                      </div>
+                  {/* Account info */}
+                  {(scamLookupEntity.accountName || scamLookupEntity.bankName) && (
+                    <div className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 bg-white/60 dark:bg-black/20 rounded-xl px-3 py-2">
+                      <UserCheck className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      <span>
+                        {scamLookupEntity.accountName}
+                        {scamLookupEntity.bankName && ` · ${scamLookupEntity.bankName}`}
+                      </span>
                     </div>
                   )}
 
-                  {/* Flag Logs */}
-                  {scamLookupEntity.recentFlags.length > 0 && (
-                    <div className="mt-3 space-y-1.5">
-                      <div className="text-[11px] font-bold uppercase tracking-wider opacity-75">
-                        Crowdsourced Evidence Logs:
-                      </div>
-                      <div className="space-y-1">
-                        {scamLookupEntity.recentFlags.map((flag, idx) => (
-                          <div
-                            key={idx}
-                            className="p-2 rounded-lg bg-white/60 dark:bg-black/40 text-[11px] leading-relaxed border border-black/5 dark:border-white/5"
-                          >
-                            <p className="font-medium">"{flag.reason}"</p>
-                            <div className="flex items-center justify-between text-[10px] opacity-70 mt-1">
-                              <span>Flagged by {flag.flaggedBy}</span>
-                              <span>{flag.date}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Recommendation */}
-                  <div className="mt-3 pt-3 border-t border-black/10 dark:border-white/10 text-xs font-medium">
-                    {scamLookupEntity.riskLevel === 'critical_scam' ? (
-                      <p className="text-rose-700 dark:text-rose-300">
-                        🚨 DO NOT transfer funds directly. Always use AGC Escrow Vault to hold money until goods are delivered!
+                  {/* Recent flags */}
+                  {scamLookupEntity.recentFlags && scamLookupEntity.recentFlags.length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                        Recent Reports
                       </p>
+                      {scamLookupEntity.recentFlags.slice(0, 3).map((flag, i) => (
+                        <div
+                          key={i}
+                          className="flex items-start gap-2 text-[11px] text-slate-700 dark:text-slate-300 bg-white/50 dark:bg-black/20 rounded-lg px-2.5 py-1.5"
+                        >
+                          <Clock className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
+                          <span className="flex-1">{flag.reason}</span>
+                          <span className="text-[9px] text-slate-400 shrink-0 whitespace-nowrap">
+                            {flag.date}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Summary verdict */}
+                  <div
+                    className={`rounded-xl px-3 py-2 text-xs font-medium ${
+                      scamLookupEntity.riskLevel === 'high'
+                        ? 'bg-rose-100 dark:bg-rose-900/40 text-rose-800 dark:text-rose-300'
+                        : scamLookupEntity.riskLevel === 'medium'
+                        ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300'
+                        : 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
+                    }`}
+                  >
+                    {scamLookupEntity.riskLevel === 'high' ? (
+                      <p>⚠️ High risk — multiple AGC community reports. Avoid transacting with this entity.</p>
+                    ) : scamLookupEntity.riskLevel === 'medium' ? (
+                      <p>🟡 Moderate risk — some reports flagged. Proceed with caution and verify identity.</p>
                     ) : (
-                      <p className="text-emerald-700 dark:text-emerald-300">
-                        ✓ No fraudulent activity reported on this entity across Nigerian or African networks.
-                      </p>
+                      <p>✅ No fraudulent activity reported on this entity across Nigerian or African networks.</p>
                     )}
                   </div>
                 </div>
               ) : (
-                <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
-                  Search any phone number or bank account above to see its crowdsourced reputation.
+                <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 space-y-1">
+                  <ShieldAlert className="w-8 h-8 text-slate-300 dark:text-slate-700 mx-auto mb-2" />
+                  <p className="font-medium text-slate-500 dark:text-slate-400">
+                    Search any Nigerian or African phone number or bank account
+                  </p>
+                  <p className="text-slate-400 dark:text-slate-500">
+                    to check AGC's live crowdsourced fraud vault.
+                  </p>
                 </div>
               )}
             </div>
@@ -344,10 +337,15 @@ export const ScamReputationModal: React.FC = () => {
 
               <button
                 type="submit"
-                className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition-colors"
+                disabled={isSubmitting}
+                className="w-full py-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition-colors"
               >
-                <Flag className="w-4 h-4" />
-                <span>Submit Fraud Flag to AGC Vault</span>
+                {isSubmitting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Flag className="w-4 h-4" />
+                )}
+                <span>{isSubmitting ? 'Broadcasting…' : 'Submit Fraud Flag to AGC Vault'}</span>
               </button>
             </form>
           )}

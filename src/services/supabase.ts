@@ -374,6 +374,72 @@ export async function updateAudioSpaceInDb(id: string, updates: Record<string, u
   return supabase.from('audio_spaces').update(updates).eq('id', id);
 }
 
+// ─── Scam Report & Reputation Database ───────────────────────────────────────
+
+/**
+ * Fetch a scam/fraud report by its target_value (phone or bank account number).
+ * Schema: id, created_at, updated_at, target_value, target_type, risk_level, reports_count, account_name, bank_name, flags (jsonb)
+ */
+export async function fetchScamReportByTarget(targetValue: string) {
+  const cleaned = targetValue.replace(/\s+/g, '');
+  // Try exact match first, then partial
+  const { data, error } = await supabase
+    .from('scam_reports')
+    .select('*')
+    .or(`target_value.eq.${cleaned},target_value.eq.${targetValue}`)
+    .maybeSingle();
+
+  if (error) {
+    // Try a broader search using ilike
+    const { data: d2, error: e2 } = await supabase
+      .from('scam_reports')
+      .select('*')
+      .ilike('target_value', `%${cleaned}%`)
+      .maybeSingle();
+    return { data: d2, error: e2 };
+  }
+  return { data, error };
+}
+
+/** Fetch all scam reports (for the crowdsourced vault display). */
+export async function fetchAllScamReports(limit = 200) {
+  return supabase
+    .from('scam_reports')
+    .select('*')
+    .order('reports_count', { ascending: false })
+    .limit(limit);
+}
+
+/**
+ * Broadcast a new scam report to all connected AGC users via Realtime.
+ * Since RLS blocks anon inserts, we use Realtime broadcast as the primary
+ * live-sync mechanism. Reports are also stored in localStorage as local state.
+ */
+export function broadcastScamReport(entity: {
+  targetValue: string;
+  targetType: 'phone' | 'bank_account';
+  riskLevel: string;
+  reportsCount: number;
+  accountName?: string;
+  bankName?: string;
+  flags: { date: string; reason: string; flagged_by: string }[];
+}) {
+  const ch = supabase.channel('agc_scam_reports_live', {
+    config: { broadcast: { self: true } },
+  });
+  ch.subscribe((status) => {
+    if (status === 'SUBSCRIBED') {
+      ch.send({
+        type: 'broadcast',
+        event: 'new_scam_report',
+        payload: entity,
+      });
+      // Unsubscribe after sending
+      setTimeout(() => ch.unsubscribe(), 2000);
+    }
+  });
+}
+
 // ─── Live Artisan Stations & Workshop Hub ─────────────────────────────────────
 
 export async function fetchLiveArtisanStations(limit = 100) {

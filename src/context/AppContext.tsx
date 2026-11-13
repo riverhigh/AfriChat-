@@ -40,6 +40,9 @@ import {
   fetchLiveStoreSubscriptions,
   createStoreSubscriptionInDb,
   fetchServiceProviders,
+  fetchScamReportByTarget,
+  fetchAllScamReports,
+  broadcastScamReport,
 } from '../services/supabase';
 import {
   FeatureFlags,
@@ -285,8 +288,9 @@ interface AppContextType {
   setIsScamCheckerOpen: (val: boolean) => void;
   scamLookupEntity: ScamEntity | null;
   setScamLookupEntity: (entity: ScamEntity | null) => void;
-  checkEntityReputation: (query: string) => ScamEntity | null;
-  flagEntityAsScam: (targetValue: string, targetType: 'phone' | 'bank_account', reason: string) => void;
+  isCheckingReputation: boolean;
+  checkEntityReputation: (query: string) => Promise<ScamEntity | null>;
+  flagEntityAsScam: (targetValue: string, targetType: 'phone' | 'bank_account', reason: string) => Promise<void>;
   // 4. Screenshot & Screen Recording Blocker
   isScreenshotBlockerActive: boolean;
   toggleScreenshotBlocker: () => void;
@@ -2075,9 +2079,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
 
   // 3. Scam Alert & Reputation Checker State
-  const [scamDatabase, setScamDatabase] = useState<Record<string, ScamEntity>>(MOCK_SCAM_DATABASE);
+  const [scamDatabase, setScamDatabase] = useState<Record<string, ScamEntity>>(() => {
+    // Load from localStorage first (persists user-submitted reports between sessions)
+    try {
+      const saved = localStorage.getItem('AGC_scam_database_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Merge with MOCK_SCAM_DATABASE so built-in entries are always present
+        return { ...MOCK_SCAM_DATABASE, ...parsed };
+      }
+    } catch (_) {}
+    return { ...MOCK_SCAM_DATABASE };
+  });
   const [isScamCheckerModalOpen, setIsScamCheckerModalOpen] = useState(false);
   const [scamLookupEntity, setScamLookupEntity] = useState<ScamEntity | null>(null);
+  const [isCheckingReputation, setIsCheckingReputation] = useState(false);
 
   // 4. Screenshot & Screen Recording Blocker State
   const [isScreenshotBlockerActive, setIsScreenshotBlockerActive] = useState<boolean>(true);
@@ -4646,56 +4662,205 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // 3. Scam Alert & Reputation Checker Handlers
-  const checkEntityReputation = (query: string): ScamEntity | null => {
+
+  // ── Live Supabase Realtime listener for cross-device scam report sync ─────
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    const scamCh = supabase.channel('agc_scam_reports_live', {
+      config: { broadcast: { self: false } },
+    });
+    scamCh
+      .on('broadcast', { event: 'new_scam_report' }, ({ payload }: any) => {
+        if (!payload?.targetValue) return;
+        const key = payload.targetValue.replace(/\s+/g, '');
+        const incoming: ScamEntity = {
+          targetValue: payload.targetValue,
+          targetType: payload.targetType || 'phone',
+          riskLevel: payload.riskLevel || 'critical_scam',
+          reportsCount: payload.reportsCount || 1,
+          accountName: payload.accountName,
+          bankName: payload.bankName,
+          recentFlags: Array.isArray(payload.flags)
+            ? payload.flags.map((f: any) => ({
+                date: f.date || 'Just now',
+                reason: f.reason || '',
+                flaggedBy: f.flagged_by || f.flaggedBy || 'Anonymous',
+              }))
+            : [],
+        };
+        setScamDatabase((prev) => {
+          const updated = { ...prev, [key]: incoming };
+          try { localStorage.setItem('AGC_scam_database_v2', JSON.stringify(updated)); } catch (_) {}
+          return updated;
+        });
+        // If user is currently looking at this entity, refresh the result
+        setScamLookupEntity((prev) => {
+          if (prev && prev.targetValue.replace(/\s+/g, '') === key) return incoming;
+          return prev;
+        });
+      })
+      .subscribe();
+
+    // Also hydrate scam database from Supabase on mount
+    fetchAllScamReports().then(({ data }) => {
+      if (!data || !Array.isArray(data) || data.length === 0) return;
+      setScamDatabase((prev) => {
+        const merged: Record<string, ScamEntity> = { ...prev };
+        data.forEach((row: any) => {
+          const key = (row.target_value || '').replace(/\s+/g, '');
+          if (!key) return;
+          const flags: { date: string; reason: string; flaggedBy: string }[] = Array.isArray(row.flags)
+            ? row.flags.map((f: any) => ({
+                date: f.date || new Date(row.created_at).toLocaleDateString(),
+                reason: f.reason || '',
+                flaggedBy: f.flagged_by || f.flaggedBy || 'Verified AGC User',
+              }))
+            : [];
+          merged[key] = {
+            targetValue: row.target_value,
+            targetType: row.target_type || 'phone',
+            riskLevel: row.risk_level || 'verified_clean',
+            reportsCount: row.reports_count || row.count || 0,
+            accountName: row.account_name,
+            bankName: row.bank_name,
+            recentFlags: flags,
+          };
+        });
+        try { localStorage.setItem('AGC_scam_database_v2', JSON.stringify(merged)); } catch (_) {}
+        return merged;
+      });
+    }).catch(() => {});
+
+    return () => { scamCh.unsubscribe(); };
+  }, [isSupabaseConfigured]);
+
+  /**
+   * Async reputation check: queries Supabase first (live database),
+   * falls back to local scamDatabase (mock + user-submitted via broadcast).
+   */
+  const checkEntityReputation = async (query: string): Promise<ScamEntity | null> => {
+    setIsCheckingReputation(true);
+    setScamLookupEntity(null);
+
     const cleaned = query.replace(/\s+/g, '');
+
+    // 1. Try live Supabase lookup
+    if (isSupabaseConfigured) {
+      try {
+        const { data } = await fetchScamReportByTarget(query);
+        if (data) {
+          const flags: { date: string; reason: string; flaggedBy: string }[] = Array.isArray(data.flags)
+            ? data.flags.map((f: any) => ({
+                date: f.date || new Date(data.created_at).toLocaleDateString(),
+                reason: f.reason || '',
+                flaggedBy: f.flagged_by || f.flaggedBy || 'Verified AGC User',
+              }))
+            : [];
+          const entity: ScamEntity = {
+            targetValue: data.target_value,
+            targetType: data.target_type || 'phone',
+            riskLevel: data.risk_level || 'verified_clean',
+            reportsCount: data.reports_count || data.count || 0,
+            accountName: data.account_name,
+            bankName: data.bank_name,
+            recentFlags: flags,
+          };
+          // Cache in local db
+          setScamDatabase((prev) => {
+            const updated = { ...prev, [cleaned]: entity };
+            try { localStorage.setItem('AGC_scam_database_v2', JSON.stringify(updated)); } catch (_) {}
+            return updated;
+          });
+          setScamLookupEntity(entity);
+          setIsCheckingReputation(false);
+          return entity;
+        }
+      } catch (_) {}
+    }
+
+    // 2. Fall back to local scamDatabase (mock + broadcast-received entries)
     const found = Object.values(scamDatabase).find(
       (e) => e.targetValue.replace(/\s+/g, '') === cleaned
     );
     if (found) {
       setScamLookupEntity(found);
+      setIsCheckingReputation(false);
       return found;
     }
-    // Return clean result
+
+    // 3. Not found anywhere — return clean entity
     const cleanEntity: ScamEntity = {
       targetValue: query,
-      targetType: query.startsWith('+') || query.length === 11 ? 'phone' : 'bank_account',
+      targetType: cleaned.startsWith('+') || /^\d{11}$/.test(cleaned) ? 'phone' : 'bank_account',
       riskLevel: 'verified_clean',
       reportsCount: 0,
       recentFlags: [],
     };
     setScamLookupEntity(cleanEntity);
+    setIsCheckingReputation(false);
     return cleanEntity;
   };
 
-  const flagEntityAsScam = (targetValue: string, targetType: 'phone' | 'bank_account', reason: string) => {
+  /**
+   * Submit a scam/fraud report: persists locally, broadcasts to all live
+   * AGC users via Supabase Realtime, and updates local state.
+   */
+  const flagEntityAsScam = async (
+    targetValue: string,
+    targetType: 'phone' | 'bank_account',
+    reason: string
+  ): Promise<void> => {
     const key = targetValue.replace(/\s+/g, '');
     const existing = scamDatabase[key];
-    const newFlag = {
-      date: 'Just now',
-      reason,
-      flaggedBy: 'Chioma Adebayo (Verified User)',
-    };
+    const reporterName = currentUser.fullName && currentUser.fullName !== 'AGC User'
+      ? `${currentUser.fullName.split(' ')[0]} (Verified)`
+      : 'Anonymous AGC User';
+    const now = new Date();
+    const dateLabel = now.toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' });
+
+    const newFlag = { date: dateLabel, reason, flaggedBy: reporterName };
 
     const updatedEntity: ScamEntity = existing
       ? {
           ...existing,
           reportsCount: existing.reportsCount + 1,
-          riskLevel: 'critical_scam',
-          recentFlags: [newFlag, ...existing.recentFlags],
+          riskLevel: 'critical_scam' as const,
+          recentFlags: [newFlag, ...existing.recentFlags].slice(0, 20),
         }
       : {
           targetValue,
           targetType,
-          riskLevel: 'critical_scam',
+          riskLevel: 'critical_scam' as const,
           reportsCount: 1,
           recentFlags: [newFlag],
         };
 
-    setScamDatabase((prev) => ({
-      ...prev,
-      [key]: updatedEntity,
-    }));
+    // 1. Update local state immediately
+    setScamDatabase((prev) => {
+      const updated = { ...prev, [key]: updatedEntity };
+      try { localStorage.setItem('AGC_scam_database_v2', JSON.stringify(updated)); } catch (_) {}
+      return updated;
+    });
     setScamLookupEntity(updatedEntity);
+
+    // 2. Broadcast to all live users via Supabase Realtime
+    if (isSupabaseConfigured) {
+      try {
+        broadcastScamReport({
+          targetValue: updatedEntity.targetValue,
+          targetType: updatedEntity.targetType,
+          riskLevel: updatedEntity.riskLevel,
+          reportsCount: updatedEntity.reportsCount,
+          accountName: updatedEntity.accountName,
+          bankName: updatedEntity.bankName,
+          flags: updatedEntity.recentFlags.map((f) => ({
+            date: f.date,
+            reason: f.reason,
+            flagged_by: f.flaggedBy,
+          })),
+        });
+      } catch (_) {}
+    }
   };
 
   // 4. Screenshot & Recording Blocker Handlers
@@ -7433,6 +7598,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsScamCheckerOpen: setIsScamCheckerModalOpen,
         scamLookupEntity,
         setScamLookupEntity,
+        isCheckingReputation,
         checkEntityReputation,
         flagEntityAsScam,
         // 4. Screenshot & Recording Blocker
