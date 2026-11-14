@@ -149,6 +149,11 @@ import {
   TutorProfile,
   AdminUserRecord,
   AdminSystemBroadcast,
+  AdminSystemConfig,
+  AdminCmsData,
+  CmsAnnouncement,
+  CmsMarqueeBanner,
+  CmsFaqItem,
 } from '../types';
 import {
   LOCALIZED_STRINGS,
@@ -640,7 +645,13 @@ interface AppContextType {
   adminResolveEscrow: (orderId: string, action: 'release_to_seller' | 'refund_to_buyer', note: string) => { success: boolean; message: string };
   systemBroadcast: AdminSystemBroadcast | null;
   setSystemBroadcast: (broadcast: AdminSystemBroadcast | null) => void;
-  createAdminBroadcast: (title: string, message: string, level: 'info' | 'warning' | 'alert') => void;
+  createAdminBroadcast: (title: string, message: string, level: 'info' | 'warning' | 'alert' | 'urgent') => void;
+  systemConfig: AdminSystemConfig;
+  updateSystemConfig: (updates: Partial<AdminSystemConfig>) => Promise<void>;
+  updateAdminFeatureFlag: (key: keyof FeatureFlags, val?: boolean) => Promise<void>;
+  cmsData: AdminCmsData;
+  updateCmsData: (updates: Partial<AdminCmsData>) => Promise<void>;
+  setUserStatus: (userIdOrPhone: string, status: 'active' | 'suspended' | 'banned' | 'flagged') => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -725,29 +736,141 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const chatBroadcastChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   // Track which per-chat inbox channels are already subscribed (phone -> channel)
   const inboxChannelRefsRef = useRef<Map<string, ReturnType<typeof supabase.channel>>>(new Map());
-  // ── Feature Flags System (Wallet as Master Hub) ──────────────────────────
+  // ── Admin System Config, CMS & Feature Flags System ─────────────────────────
+  const DEFAULT_SYSTEM_CONFIG: AdminSystemConfig = {
+    maintenanceMode: false,
+    maintenanceMessage: 'AfriChat is undergoing scheduled system upgrades. We will be back shortly.',
+    allowNewRegistrations: true,
+    requirePhoneOtp: false,
+    defaultCurrency: 'NGN',
+    dispatchCommissionPercent: 5,
+    escrowCommissionPercent: 1.5,
+    artisanCommissionPercent: 2,
+    creatorCommissionPercent: 5,
+    minTransferAmountNgn: 100,
+    maxDailyTransferNgn: 5000000,
+    delayedSendHoldDurationMins: 15,
+    lowBandwidthDefault: false,
+    supportContactPhone: '+234800000000',
+  };
+
+  const DEFAULT_CMS_DATA: AdminCmsData = {
+    announcements: [
+      {
+        id: 'ann_welcome',
+        title: 'Welcome to AfriChat Super-App',
+        content: 'Experience secure African remittances, peer-to-peer escrow, and on-demand local dispatch.',
+        level: 'info',
+        audience: 'all',
+        actionUrl: '',
+        active: true,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+    marqueeBanner: {
+      enabled: true,
+      text: '⚡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.',
+      speed: 'normal',
+      backgroundColor: '#7c3aed',
+      textColor: '#ffffff',
+    },
+    faqArticles: [
+      {
+        id: 'faq_escrow',
+        question: 'How does Balogun Escrow Protection work?',
+        answer: 'When you purchase goods or book an artisan, your payment is held securely in an encrypted vault until you confirm satisfactory delivery.',
+        category: 'escrow',
+        published: true,
+      },
+      {
+        id: 'faq_dispatch',
+        question: 'How do PickkR and Gokada dispatch deliveries work?',
+        answer: 'Our dispatch system matches nearby verified riders. A 5% platform fee guarantees insurance and GPS parcel tracking.',
+        category: 'dispatch',
+        published: true,
+      },
+      {
+        id: 'faq_safety',
+        question: 'How do I avoid scammers on P2P payments?',
+        answer: 'Use the Scam Shield tool in the 3-dot menu before sending funds. Never release escrow funds until you inspect items physically.',
+        category: 'security',
+        published: true,
+      },
+    ],
+    communityGuidelines: '1. Treat all community members with respect.\n2. No fraudulent listings, phishing links, or unauthorized transactions.\n3. Verified badges are subject to continuous compliance with AfriChat terms.',
+    termsOfService: 'AfriChat provides communication, marketplace escrow mediation, and logistical dispatch coordination across African regions.',
+    sponsorSpotlight: {
+      enabled: true,
+      brandName: 'Kente Pay Africa',
+      tagline: 'Zero-Fee African Merchant Remittances',
+      bannerUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      linkUrl: '',
+    },
+  };
+
+  const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
+    wallet: true,
+    p2pTransfers: true,
+    escrow: true,
+    delayedSend: true,
+    securityPin: true,
+    dispatch: true,
+    artisan: true,
+    healthcare: true,
+    legal: true,
+    jobs: true,
+    petShop: true,
+    errands: true,
+    creator: true,
+    audioSpaces: true,
+    writers: true,
+    storeTiers: true,
+    tutor: true,
+    referral: true,
+    memeStudio: true,
+    scamChecker: true,
+    town: true,
+    market: true,
+    status: true,
+    calls: true,
+    voiceNotes: true,
+    ajo: true,
+    payroll: true,
+  };
+
+  const [systemConfig, setSystemConfig] = useState<AdminSystemConfig>(() => {
+    try {
+      const s = localStorage.getItem('AGC_system_config_v1');
+      if (s) return { ...DEFAULT_SYSTEM_CONFIG, ...JSON.parse(s) };
+    } catch (_) {}
+    return DEFAULT_SYSTEM_CONFIG;
+  });
+
+  const [cmsData, setCmsData] = useState<AdminCmsData>(() => {
+    try {
+      const s = localStorage.getItem('AGC_cms_data_v1');
+      if (s) return { ...DEFAULT_CMS_DATA, ...JSON.parse(s) };
+    } catch (_) {}
+    return DEFAULT_CMS_DATA;
+  });
+
   const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(() => {
     try {
       const saved = localStorage.getItem('AGC_feature_flags_v1');
-      if (saved) return JSON.parse(saved);
+      if (saved) return { ...DEFAULT_FEATURE_FLAGS, ...JSON.parse(saved) };
     } catch (_) {}
-    return {
-      wallet: true, market: true, artisan: true, errands: true, ajo: true,
-      payroll: true, writers: true, creator: true, escrow: true, tutor: true,
-      dispatch: true, calls: true, status: true, town: true, audioSpaces: true,
-      healthcare: true, legal: true, jobs: true,
-    };
+    return DEFAULT_FEATURE_FLAGS;
   });
 
   const isFeatureEnabled = (key: keyof FeatureFlags): boolean => {
     if (key === 'wallet') return featureFlags.wallet;
     const WALLET_DEPENDENTS: (keyof FeatureFlags)[] = [
-      'market', 'artisan', 'errands', 'ajo', 'payroll', 'writers', 'creator', 'escrow', 'tutor'
+      'market', 'artisan', 'errands', 'ajo', 'payroll', 'writers', 'creator', 'escrow', 'tutor', 'p2pTransfers', 'storeTiers'
     ];
     if (WALLET_DEPENDENTS.includes(key)) {
-      return featureFlags.wallet && Boolean(featureFlags[key]);
+      return Boolean(featureFlags.wallet && featureFlags[key] !== false);
     }
-    return Boolean(featureFlags[key]);
+    return Boolean(featureFlags[key] !== false);
   };
 
   const toggleFeatureFlag = (key: keyof FeatureFlags) => {
@@ -756,6 +879,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(next)); } catch (_) {}
       return next;
     });
+  };
+
+  const updateSystemConfig = async (updates: Partial<AdminSystemConfig>) => {
+    setSystemConfig((prev) => {
+      const next = { ...prev, ...updates };
+      try { localStorage.setItem('AGC_system_config_v1', JSON.stringify(next)); } catch (_) {}
+      return next;
+    });
+    try {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      await fetch(`http://${host}:3002/api/admin/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+    } catch (e) {
+      console.warn('Notice syncing admin config to server:', e);
+    }
+  };
+
+  const updateAdminFeatureFlag = async (key: keyof FeatureFlags, val?: boolean) => {
+    const nextVal = val !== undefined ? val : !featureFlags[key];
+    const updates = { [key]: nextVal };
+    setFeatureFlags((prev) => {
+      const next = { ...prev, ...updates };
+      try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(next)); } catch (_) {}
+      return next;
+    });
+    try {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      await fetch(`http://${host}:3002/api/admin/features`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+    } catch (e) {
+      console.warn('Notice syncing admin features to server:', e);
+    }
+  };
+
+  const updateCmsData = async (updates: Partial<AdminCmsData>) => {
+    setCmsData((prev) => {
+      const next = { ...prev, ...updates };
+      try { localStorage.setItem('AGC_cms_data_v1', JSON.stringify(next)); } catch (_) {}
+      return next;
+    });
+    try {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      await fetch(`http://${host}:3002/api/admin/cms`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+    } catch (e) {
+      console.warn('Notice syncing admin cms to server:', e);
+    }
   };
 
   // ── Errands System ────────────────────────────────────────────────────────
@@ -8320,10 +8499,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     };
 
+    const handleAdminConfigUpdated = (cfg: AdminSystemConfig) => {
+      setSystemConfig(cfg);
+      try { localStorage.setItem('AGC_system_config_v1', JSON.stringify(cfg)); } catch (_) {}
+    };
+    const handleAdminFeaturesUpdated = (flags: FeatureFlags) => {
+      setFeatureFlags(flags);
+      try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(flags)); } catch (_) {}
+    };
+    const handleAdminCmsUpdated = (cms: AdminCmsData) => {
+      setCmsData(cms);
+      try { localStorage.setItem('AGC_cms_data_v1', JSON.stringify(cms)); } catch (_) {}
+    };
+    const handleSystemBroadcast = (bc: AdminSystemBroadcast) => {
+      setSystemBroadcast(bc);
+      try { localStorage.setItem('AGC_system_broadcast', JSON.stringify(bc)); } catch (_) {}
+    };
+
     socket.on('group_created', handleGroupCreated);
     socket.on('friend_request', handleFriendRequestSocket);
     socket.on('dispatch_order_created', handleDispatchOrderCreated);
     socket.on('dispatch_status_updated', handleDispatchStatusUpdated);
+    socket.on('admin_config_updated', handleAdminConfigUpdated);
+    socket.on('admin_features_updated', handleAdminFeaturesUpdated);
+    socket.on('admin_cms_updated', handleAdminCmsUpdated);
+    socket.on('system_broadcast', handleSystemBroadcast);
 
     // 2. BroadcastChannel listener (instant multi-tab / window sync)
     let bc: BroadcastChannel | null = null;
@@ -8432,6 +8632,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('friend_request', handleFriendRequestSocket);
       socket.off('dispatch_order_created', handleDispatchOrderCreated);
       socket.off('dispatch_status_updated', handleDispatchStatusUpdated);
+      socket.off('admin_config_updated', handleAdminConfigUpdated);
+      socket.off('admin_features_updated', handleAdminFeaturesUpdated);
+      socket.off('admin_cms_updated', handleAdminCmsUpdated);
+      socket.off('system_broadcast', handleSystemBroadcast);
       if (bc) bc.close();
       if (sbInboxChannel) sbInboxChannel.unsubscribe();
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
@@ -8439,7 +8643,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser, activeChatId, handleIncomingMessage]);
 
-  // Initial fetch for live dispatch orders from backend API
+  // Initial fetch for live dispatch orders & admin system configuration from backend API
   useEffect(() => {
     try {
       const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
@@ -8449,6 +8653,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (data?.success && Array.isArray(data.orders) && data.orders.length > 0) {
             setDispatchOrders(data.orders);
             localStorage.setItem('AGC_dispatch_orders', JSON.stringify(data.orders));
+          }
+        })
+        .catch(() => {});
+
+      fetch(`http://${socketHost}:3002/api/admin/config`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.success) {
+            if (data.config) {
+              setSystemConfig((prev) => ({ ...prev, ...data.config }));
+              try { localStorage.setItem('AGC_system_config_v1', JSON.stringify(data.config)); } catch (_) {}
+            }
+            if (data.featureFlags) {
+              setFeatureFlags((prev) => ({ ...prev, ...data.featureFlags }));
+              try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(data.featureFlags)); } catch (_) {}
+            }
+            if (data.cms) {
+              setCmsData((prev) => ({ ...prev, ...data.cms }));
+              try { localStorage.setItem('AGC_cms_data_v1', JSON.stringify(data.cms)); } catch (_) {}
+            }
           }
         })
         .catch(() => {});
@@ -8653,6 +8877,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : u
       )
     );
+    try {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const clean = userId.replace(/\D/g, '');
+      if (clean) {
+        fetch(`http://${host}:3002/api/admin/users/${clean}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'suspended' }),
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  };
+
+  const setUserStatus = (userIdOrPhone: string, status: 'active' | 'suspended' | 'banned' | 'flagged') => {
+    setAdminUsers((prev) =>
+      prev.map((u) =>
+        u.id === userIdOrPhone || u.phoneNumber === userIdOrPhone
+          ? { ...u, status }
+          : u
+      )
+    );
+    try {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const clean = userIdOrPhone.replace(/\D/g, '');
+      if (clean) {
+        fetch(`http://${host}:3002/api/admin/users/${clean}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status }),
+        }).catch(() => {});
+      }
+    } catch (_) {}
   };
 
   const adminResolveEscrow = (orderId: string, action: 'release_to_seller' | 'refund_to_buyer', note: string) => {
@@ -8700,7 +8956,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  const createAdminBroadcast = (title: string, message: string, level: 'info' | 'warning' | 'alert' = 'info') => {
+  const createAdminBroadcast = (title: string, message: string, level: 'info' | 'warning' | 'alert' | 'urgent' = 'info') => {
     const newBroadcast: AdminSystemBroadcast = {
       id: `bc_${Date.now()}`,
       title,
@@ -8710,6 +8966,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       active: true,
     };
     setSystemBroadcast(newBroadcast);
+
+    try {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      fetch(`http://${host}:3002/api/admin/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, message, level }),
+      }).catch(() => {});
+    } catch (_) {}
 
     // Push directly to users' Updates tab as an official status story
     const adminStatus: UserStatus = {
@@ -9096,6 +9361,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         systemBroadcast,
         setSystemBroadcast,
         createAdminBroadcast,
+        systemConfig,
+        updateSystemConfig,
+        updateAdminFeatureFlag,
+        cmsData,
+        updateCmsData,
+        setUserStatus,
       }}
     >
       {children}

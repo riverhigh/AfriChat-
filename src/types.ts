@@ -1056,41 +1056,119 @@ export interface AdminUserRecord {
   role: 'user' | 'creator' | 'merchant' | 'admin';
   verificationBadge?: 'blue' | 'gold' | 'creator_plus' | null;
   isPhoneVerified: boolean;
-  status: 'active' | 'suspended' | 'flagged';
+  status: 'active' | 'suspended' | 'flagged' | 'banned';
   joinedDate: string;
   walletBalanceNgn: number;
   ordersCount: number;
+  lastSeen?: string; // ISO date string or 'online'
+  isOnline?: boolean;
+  deviceInfo?: string;
 }
 
 export interface AdminSystemBroadcast {
   id: string;
   title: string;
   message: string;
-  level: 'info' | 'warning' | 'alert';
+  level: 'info' | 'warning' | 'alert' | 'urgent';
   createdAt: string;
   active: boolean;
 }
 
-// 29. Admin Feature Switches & Dependency Hub
+// 29. Admin System Config, Feature Flags & CMS
+export interface AdminSystemConfig {
+  maintenanceMode: boolean;
+  maintenanceMessage: string;
+  allowNewRegistrations: boolean;
+  requirePhoneOtp: boolean;
+  defaultCurrency: CurrencyCode;
+  dispatchCommissionPercent: number; // e.g. 5%
+  escrowCommissionPercent: number; // e.g. 1.5%
+  artisanCommissionPercent: number; // e.g. 2%
+  creatorCommissionPercent: number; // e.g. 5%
+  minTransferAmountNgn: number;
+  maxDailyTransferNgn: number;
+  delayedSendHoldDurationMins: number;
+  lowBandwidthDefault: boolean;
+  supportContactPhone: string;
+}
+
 export interface FeatureFlags {
+  // Master Financials
   wallet: boolean;          // Master dependency hub: if off, disables all money-related features
-  market: boolean;          // requires wallet
-  artisan: boolean;         // requires wallet
-  errands: boolean;         // requires wallet
-  ajo: boolean;             // requires wallet
-  payroll: boolean;         // requires wallet
-  writers: boolean;         // requires wallet
-  creator: boolean;         // requires wallet
+  p2pTransfers?: boolean;
   escrow: boolean;          // requires wallet
-  tutor: boolean;           // requires wallet
+  delayedSend?: boolean;
+  securityPin?: boolean;
+
+  // Services & 3-Dot Menu Hub
   dispatch: boolean;        // independent
-  calls: boolean;           // independent
-  status: boolean;          // independent
-  town: boolean;            // independent
-  audioSpaces: boolean;     // independent
+  artisan: boolean;         // requires wallet
   healthcare: boolean;      // independent
   legal: boolean;           // independent
   jobs: boolean;            // independent
+  petShop?: boolean;
+  errands: boolean;         // requires wallet
+
+  // Creator & Tools
+  creator: boolean;         // requires wallet
+  audioSpaces: boolean;     // independent
+  writers: boolean;         // requires wallet
+  storeTiers?: boolean;
+  tutor: boolean;           // requires wallet
+  referral?: boolean;
+  memeStudio?: boolean;
+  scamChecker?: boolean;
+
+  // Global Navigation & Communication
+  town: boolean;            // independent
+  market: boolean;          // requires wallet
+  status: boolean;          // independent
+  calls: boolean;           // independent
+  voiceNotes?: boolean;
+  ajo: boolean;             // requires wallet
+  payroll: boolean;         // requires wallet
+}
+
+export interface CmsAnnouncement {
+  id: string;
+  title: string;
+  content: string;
+  level: 'info' | 'warning' | 'alert' | 'urgent';
+  audience: 'all' | 'merchants' | 'creators' | 'drivers';
+  actionUrl?: string;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface CmsMarqueeBanner {
+  enabled: boolean;
+  text: string;
+  speed: 'slow' | 'normal' | 'fast';
+  backgroundColor: string;
+  textColor: string;
+}
+
+export interface CmsFaqItem {
+  id: string;
+  question: string;
+  answer: string;
+  category: 'wallet' | 'escrow' | 'dispatch' | 'security' | 'general';
+  published: boolean;
+}
+
+export interface AdminCmsData {
+  announcements: CmsAnnouncement[];
+  marqueeBanner: CmsMarqueeBanner;
+  faqArticles: CmsFaqItem[];
+  communityGuidelines: string;
+  termsOfService: string;
+  sponsorSpotlight: {
+    enabled: boolean;
+    brandName: string;
+    tagline: string;
+    bannerUrl?: string;
+    linkUrl?: string;
+  };
 }
 
 // 30. Errand Delivery & Shopping Service Types

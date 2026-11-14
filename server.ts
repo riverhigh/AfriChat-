@@ -177,6 +177,12 @@ interface RegisteredUser {
   about?: string;
   registeredAt: string;
   role?: string;
+  status?: 'active' | 'suspended' | 'flagged' | 'banned';
+  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | null;
+  walletBalanceNgn?: number;
+  lastSeen?: string;
+  isOnline?: boolean;
+  deviceInfo?: string;
 }
 
 const usersByPhone = new Map<string, RegisteredUser>();
@@ -188,6 +194,148 @@ const USERS_FILE = path.join(__dirname, 'data_users.json');
 const COMMUNITIES_FILE = path.join(__dirname, 'data_communities.json');
 const STATUSES_FILE = path.join(__dirname, 'data_statuses.json');
 const DISPATCH_FILE = path.join(__dirname, 'data_dispatch_orders.json');
+const CONFIG_FILE = path.join(__dirname, 'data_admin_config.json');
+const CMS_FILE = path.join(__dirname, 'data_admin_cms.json');
+
+const DEFAULT_SYSTEM_CONFIG = {
+  maintenanceMode: false,
+  maintenanceMessage: 'AfriChat is undergoing scheduled system upgrades. We will be back shortly.',
+  allowNewRegistrations: true,
+  requirePhoneOtp: false,
+  defaultCurrency: 'NGN',
+  dispatchCommissionPercent: 5,
+  escrowCommissionPercent: 1.5,
+  artisanCommissionPercent: 2,
+  creatorCommissionPercent: 5,
+  minTransferAmountNgn: 100,
+  maxDailyTransferNgn: 5000000,
+  delayedSendHoldDurationMins: 15,
+  lowBandwidthDefault: false,
+  supportContactPhone: '+234800000000',
+};
+
+const DEFAULT_FEATURE_FLAGS = {
+  wallet: true,
+  p2pTransfers: true,
+  escrow: true,
+  delayedSend: true,
+  securityPin: true,
+  dispatch: true,
+  artisan: true,
+  healthcare: true,
+  legal: true,
+  jobs: true,
+  petShop: true,
+  errands: true,
+  creator: true,
+  audioSpaces: true,
+  writers: true,
+  storeTiers: true,
+  tutor: true,
+  referral: true,
+  memeStudio: true,
+  scamChecker: true,
+  town: true,
+  market: true,
+  status: true,
+  calls: true,
+  voiceNotes: true,
+  ajo: true,
+  payroll: true,
+};
+
+const DEFAULT_CMS_DATA = {
+  announcements: [
+    {
+      id: 'ann_welcome',
+      title: 'Welcome to AfriChat Super-App',
+      content: 'Experience secure African remittances, peer-to-peer escrow, and on-demand local dispatch.',
+      level: 'info' as const,
+      audience: 'all' as const,
+      actionUrl: '',
+      active: true,
+      createdAt: new Date().toISOString(),
+    },
+  ],
+  marqueeBanner: {
+    enabled: true,
+    text: '⚡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.',
+    speed: 'normal' as const,
+    backgroundColor: '#7c3aed',
+    textColor: '#ffffff',
+  },
+  faqArticles: [
+    {
+      id: 'faq_escrow',
+      question: 'How does Balogun Escrow Protection work?',
+      answer: 'When you purchase goods or book an artisan, your payment is held securely in an encrypted vault until you confirm satisfactory delivery.',
+      category: 'escrow' as const,
+      published: true,
+    },
+    {
+      id: 'faq_dispatch',
+      question: 'How do PickkR and Gokada dispatch deliveries work?',
+      answer: 'Our dispatch system matches nearby verified riders. A 5% platform fee guarantees insurance and GPS parcel tracking.',
+      category: 'dispatch' as const,
+      published: true,
+    },
+    {
+      id: 'faq_safety',
+      question: 'How do I avoid scammers on P2P payments?',
+      answer: 'Use the Scam Shield tool in the 3-dot menu before sending funds. Never release escrow funds until you inspect items physically.',
+      category: 'security' as const,
+      published: true,
+    },
+  ],
+  communityGuidelines: '1. Treat all community members with respect.\n2. No fraudulent listings, phishing links, or unauthorized transactions.\n3. Verified badges are subject to continuous compliance with AfriChat terms.',
+  termsOfService: 'AfriChat provides communication, marketplace escrow mediation, and logistical dispatch coordination across African regions.',
+  sponsorSpotlight: {
+    enabled: true,
+    brandName: 'Kente Pay Africa',
+    tagline: 'Zero-Fee African Merchant Remittances',
+    bannerUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+    linkUrl: '',
+  },
+};
+
+let systemConfig = { ...DEFAULT_SYSTEM_CONFIG };
+let featureFlags = { ...DEFAULT_FEATURE_FLAGS };
+let cmsData = { ...DEFAULT_CMS_DATA };
+
+try {
+  if (fs.existsSync(CONFIG_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    if (raw.config) systemConfig = { ...DEFAULT_SYSTEM_CONFIG, ...raw.config };
+    if (raw.featureFlags) featureFlags = { ...DEFAULT_FEATURE_FLAGS, ...raw.featureFlags };
+  }
+} catch (e) {
+  console.warn('Notice loading admin config:', e);
+}
+
+try {
+  if (fs.existsSync(CMS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(CMS_FILE, 'utf8'));
+    if (raw) cmsData = { ...DEFAULT_CMS_DATA, ...raw };
+  }
+} catch (e) {
+  console.warn('Notice loading admin cms:', e);
+}
+
+function saveAdminConfigFile() {
+  try {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify({ config: systemConfig, featureFlags }, null, 2));
+  } catch (e) {
+    console.warn('Notice saving admin config:', e);
+  }
+}
+
+function saveAdminCmsFile() {
+  try {
+    fs.writeFileSync(CMS_FILE, JSON.stringify(cmsData, null, 2));
+  } catch (e) {
+    console.warn('Notice saving admin cms:', e);
+  }
+}
 const communitiesMap = new Map<string, any>();
 const statusesMap = new Map<string, any>();
 const dispatchOrdersMap = new Map<string, any>();
@@ -595,18 +743,76 @@ app.get('/api/admin/metrics', (_req: Request, res: Response) => {
       orders: allOrders,
     },
     systemStatus: 'healthy',
+    config: systemConfig,
+    featureFlags,
+    cms: cmsData,
   });
+});
+
+// Admin System Config: GET & POST
+app.get('/api/admin/config', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    config: systemConfig,
+    featureFlags,
+    cms: cmsData,
+  });
+});
+
+app.post('/api/admin/config', (req: Request, res: Response) => {
+  const updates = req.body;
+  systemConfig = { ...systemConfig, ...updates };
+  saveAdminConfigFile();
+  io.emit('admin_config_updated', systemConfig);
+  res.json({ success: true, config: systemConfig });
+});
+
+// Admin Feature Toggles: POST
+app.post('/api/admin/features', (req: Request, res: Response) => {
+  const updates = req.body;
+  featureFlags = { ...featureFlags, ...updates };
+  saveAdminConfigFile();
+  io.emit('admin_features_updated', featureFlags);
+  res.json({ success: true, featureFlags });
+});
+
+// Admin CMS Content: POST
+app.post('/api/admin/cms', (req: Request, res: Response) => {
+  const updates = req.body;
+  cmsData = { ...cmsData, ...updates };
+  saveAdminCmsFile();
+  io.emit('admin_cms_updated', cmsData);
+  res.json({ success: true, cms: cmsData });
 });
 
 app.patch('/api/admin/users/:phone/badge', (req: Request, res: Response) => {
   const { phone } = req.params;
-  const { verificationBadge, role, status } = req.body;
+  const { verificationBadge, role, status, walletBalanceNgn } = req.body;
   const clean = phone.replace(/\D/g, '');
   const user = usersByPhone.get(clean);
   if (user) {
-    if (verificationBadge !== undefined) (user as any).verificationBadge = verificationBadge;
-    if (role !== undefined) (user as any).role = role;
-    if (status !== undefined) (user as any).status = status;
+    if (verificationBadge !== undefined) user.verificationBadge = verificationBadge;
+    if (role !== undefined) user.role = role;
+    if (status !== undefined) user.status = status;
+    if (walletBalanceNgn !== undefined) user.walletBalanceNgn = walletBalanceNgn;
+    usersByPhone.set(clean, user);
+    saveUsersFile();
+    io.emit('user_updated', user);
+    return res.json({ success: true, user });
+  }
+  res.status(404).json({ error: 'User not found' });
+});
+
+app.patch('/api/admin/users/:phone/status', (req: Request, res: Response) => {
+  const { phone } = req.params;
+  const { status, verificationBadge, role, walletBalanceNgn } = req.body;
+  const clean = phone.replace(/\D/g, '');
+  const user = usersByPhone.get(clean);
+  if (user) {
+    if (status !== undefined) user.status = status;
+    if (verificationBadge !== undefined) user.verificationBadge = verificationBadge;
+    if (role !== undefined) user.role = role;
+    if (walletBalanceNgn !== undefined) user.walletBalanceNgn = walletBalanceNgn;
     usersByPhone.set(clean, user);
     saveUsersFile();
     io.emit('user_updated', user);
@@ -652,19 +858,40 @@ io.on('connection', (socket: Socket) => {
   console.log(`⚡ [Socket Connected]: ${socket.id}`);
 
   // User presence registration
-  socket.on('user_online', (userData: { userId: string; userName: string; avatar?: string; phoneNumber?: string }) => {
-    onlineUsers.set(socket.id, userData);
+  socket.on('user_online', (userData: { userId: string; userName: string; avatar?: string; phoneNumber?: string; role?: string; deviceInfo?: string }) => {
+    onlineUsers.set(socket.id, {
+      userId: userData.userId,
+      userName: userData.userName,
+      avatar: userData.avatar,
+    });
     if (userData?.phoneNumber) {
       const clean = userData.phoneNumber.replace(/\D/g, '');
+      (socket as any)._userCleanPhone = clean;
       socket.join(`phone:${clean}`);
-      if (!usersByPhone.has(clean)) {
+      const existing = usersByPhone.get(clean);
+      if (existing) {
+        existing.isOnline = true;
+        existing.lastSeen = 'online';
+        if (userData.userName) existing.fullName = userData.userName;
+        if (userData.avatar) existing.avatarUrl = userData.avatar;
+        if (userData.role) existing.role = userData.role;
+        if (userData.deviceInfo) existing.deviceInfo = userData.deviceInfo;
+        usersByPhone.set(clean, existing);
+        saveUsersFile();
+      } else {
         usersByPhone.set(clean, {
-          id: userData.userId,
-          fullName: userData.userName,
+          id: userData.userId || `usr_${Date.now()}`,
+          fullName: userData.userName || 'AGC User',
           phoneNumber: userData.phoneNumber,
           cleanPhone: clean,
           avatarUrl: userData.avatar,
           registeredAt: new Date().toISOString(),
+          role: userData.role || 'user',
+          status: 'active',
+          walletBalanceNgn: 50000,
+          isOnline: true,
+          lastSeen: 'online',
+          deviceInfo: userData.deviceInfo,
         });
         saveUsersFile();
       }
@@ -882,6 +1109,19 @@ io.on('connection', (socket: Socket) => {
   socket.on('disconnect', () => {
     onlineUsers.delete(socket.id);
     io.emit('presence_update', Array.from(onlineUsers.values()));
+
+    const clean = (socket as any)._userCleanPhone || (socket as any)._agcPhone;
+    if (clean && usersByPhone.has(clean)) {
+      const u = usersByPhone.get(clean);
+      if (u) {
+        u.isOnline = false;
+        u.lastSeen = new Date().toISOString();
+        usersByPhone.set(clean, u);
+        saveUsersFile();
+        io.emit('user_updated', u);
+      }
+    }
+
     // Clean up phone→socket mapping if this socket was the active one
     const agcPhone = (socket as any)._agcPhone;
     if (agcPhone && phoneToSocketId.get(agcPhone) === socket.id) {

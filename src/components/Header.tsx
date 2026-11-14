@@ -83,6 +83,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
     setSystemBroadcast,
     joinAudioSpace,
     audioSpaces,
+    isFeatureEnabled,
   } = useApp();
 
   const [showMenu, setShowMenu] = useState(false);
@@ -202,30 +203,28 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
 
                   {/* 4-col icon launcher */}
                   {(() => {
-                    const allTools: { label: string; sub: string; icon: React.ElementType; action: () => void; cat: 'finance' | 'services' | 'tools' }[] = [
-                      { label: 'Wallet', sub: 'Paystack & Escrow', icon: Wallet, action: () => setIsWalletModalOpen(true), cat: 'finance' },
-                      
-                      
-                      { label: 'Delayed Send', sub: 'Anti-Fraud Send', icon: Clock, action: () => setIsTransferModalOpen(true), cat: 'finance' },
-                      { label: 'Artisan Hub', sub: '\u20a65k · Book Skill', icon: Wrench, action: () => setIsServicesModalOpen(true), cat: 'services' },
-                      { label: 'AfriHealth', sub: 'Queues & Telehealth', icon: HeartPulse, action: () => setIsHealthModalOpen(true), cat: 'services' },
-                      { label: 'AfriLaw', sub: 'Contracts & Law', icon: Scale, action: () => setIsLegalModalOpen(true), cat: 'services' },
-                      { label: 'Dispatch', sub: 'PickkR / Gokada', icon: Truck, action: () => setIsDispatchModalOpen(true), cat: 'services' },
-                      { label: 'Job Board', sub: 'Hire & Earn Gigs', icon: Briefcase, action: () => setIsJobBoardModalOpen(true), cat: 'services' },
-                      { label: 'Creator Hub', sub: 'VIP Calls & Drops', icon: Sparkles, action: () => setIsCreatorModalOpen(true), cat: 'tools' },
-                      
-                      { label: 'Store Tiers', sub: '\u20a63k / \u20a67k Monthly', icon: Store, action: () => setIsStoreRegModalOpen(true), cat: 'tools' },
-                      { label: 'Writers Guild', sub: 'Chapters & Buddy', icon: BookOpen, action: () => setIsWritersModalOpen(true), cat: 'tools' },
-                      { label: 'Spaces', sub: 'Live Audio Spaces', icon: Radio, action: () => { const live = audioSpaces.find((s) => s.isLive) || audioSpaces[0]; if (live) joinAudioSpace(live); }, cat: 'tools' },
-                      { label: 'Invite & Earn', sub: '\u20a6500/Friend', icon: Share2, action: () => setIsReferralModalOpen(true), cat: 'tools' },
-                      { label: 'Tutors', sub: '\u20a65k · Courses', icon: GraduationCap, action: () => setIsTutorModalOpen(true), cat: 'tools' },
-                      { label: 'Meme Studio', sub: 'African Stickers', icon: Sparkles, action: () => setIsMemeStudioOpen(true), cat: 'tools' },
-                      { label: 'Scam Checker', sub: 'Verify Phone/Bank', icon: ShieldAlert, action: () => setIsScamCheckerOpen(true), cat: 'tools' },
-                      { label: 'Pet Shop', sub: 'Forum & Marketplace', icon: PawPrint, action: () => setIsPetShopModalOpen(true), cat: 'services' },
-                      { label: 'Security PIN', sub: 'Wallet Auth', icon: LockKeyhole, action: () => setIsSecurityModalOpen(true), cat: 'tools' },
+                    const allTools: { label: string; sub: string; icon: React.ElementType; action: () => void; cat: 'finance' | 'services' | 'tools'; featureKey?: string }[] = [
+                      { label: 'Wallet', sub: 'Paystack & Escrow', icon: Wallet, action: () => setIsWalletModalOpen(true), cat: 'finance', featureKey: 'wallet' },
+                      { label: 'Delayed Send', sub: 'Anti-Fraud Send', icon: Clock, action: () => setIsTransferModalOpen(true), cat: 'finance', featureKey: 'delayedSend' },
+                      { label: 'Artisan Hub', sub: '₦5k · Book Skill', icon: Wrench, action: () => setIsServicesModalOpen(true), cat: 'services', featureKey: 'artisan' },
+                      { label: 'AfriHealth', sub: 'Queues & Telehealth', icon: HeartPulse, action: () => setIsHealthModalOpen(true), cat: 'services', featureKey: 'healthcare' },
+                      { label: 'AfriLaw', sub: 'Contracts & Law', icon: Scale, action: () => setIsLegalModalOpen(true), cat: 'services', featureKey: 'legal' },
+                      { label: 'Dispatch', sub: 'PickkR / Gokada', icon: Truck, action: () => setIsDispatchModalOpen(true), cat: 'services', featureKey: 'dispatch' },
+                      { label: 'Job Board', sub: 'Hire & Earn Gigs', icon: Briefcase, action: () => setIsJobBoardModalOpen(true), cat: 'services', featureKey: 'jobs' },
+                      { label: 'Creator Hub', sub: 'VIP Calls & Drops', icon: Sparkles, action: () => setIsCreatorModalOpen(true), cat: 'tools', featureKey: 'creator' },
+                      { label: 'Store Tiers', sub: '₦3k / ₦7k Monthly', icon: Store, action: () => setIsStoreRegModalOpen(true), cat: 'tools', featureKey: 'storeTiers' },
+                      { label: 'Writers Guild', sub: 'Chapters & Buddy', icon: BookOpen, action: () => setIsWritersModalOpen(true), cat: 'tools', featureKey: 'writers' },
+                      { label: 'Spaces', sub: 'Live Audio Spaces', icon: Radio, action: () => { const live = audioSpaces.find((s) => s.isLive) || audioSpaces[0]; if (live) joinAudioSpace(live); }, cat: 'tools', featureKey: 'audioSpaces' },
+                      { label: 'Invite & Earn', sub: '₦500/Friend', icon: Share2, action: () => setIsReferralModalOpen(true), cat: 'tools', featureKey: 'referral' },
+                      { label: 'Tutors', sub: '₦5k · Courses', icon: GraduationCap, action: () => setIsTutorModalOpen(true), cat: 'tools', featureKey: 'tutor' },
+                      { label: 'Meme Studio', sub: 'African Stickers', icon: Sparkles, action: () => setIsMemeStudioOpen(true), cat: 'tools', featureKey: 'memeStudio' },
+                      { label: 'Scam Checker', sub: 'Verify Phone/Bank', icon: ShieldAlert, action: () => setIsScamCheckerOpen(true), cat: 'tools', featureKey: 'scamChecker' },
+                      { label: 'Pet Shop', sub: 'Forum & Marketplace', icon: PawPrint, action: () => setIsPetShopModalOpen(true), cat: 'services', featureKey: 'petShop' },
+                      { label: 'Security PIN', sub: 'Wallet Auth', icon: LockKeyhole, action: () => setIsSecurityModalOpen(true), cat: 'tools', featureKey: 'securityPin' },
                     ];
                     const q = menuSearch.toLowerCase();
                     const filtered = allTools.filter((t) => {
+                      if (t.featureKey && !isFeatureEnabled(t.featureKey as any)) return false;
                       if (q) return t.label.toLowerCase().includes(q) || t.sub.toLowerCase().includes(q);
                       return t.cat === menuFilter;
                     });

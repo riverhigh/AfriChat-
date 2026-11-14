@@ -30,9 +30,28 @@ import {
   CheckCircle2,
   Clock,
   Sparkles,
+  ToggleLeft,
+  Sliders,
+  FileText,
+  Megaphone,
+  Globe,
+  Percent,
+  AlertCircle,
+  Eye,
+  EyeOff,
+  ToggleRight,
+  Settings,
+  Newspaper,
+  HelpCircle,
+  MessageSquare,
+  Image,
+  Star,
+  PlusCircle,
+  Trash2,
+  Edit3,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { DispatchDeliveryOrder } from '../types';
+import { DispatchDeliveryOrder, FeatureFlags, CmsAnnouncement, CmsFaqItem } from '../types';
 
 interface LiveAdminMetrics {
   uptimeSeconds: number;
@@ -70,9 +89,16 @@ export const AdminDashboardModal: React.FC = () => {
     audioSpaces,
     serviceProviders,
     dispatchOrders,
+    systemConfig,
+    updateSystemConfig,
+    updateAdminFeatureFlag,
+    featureFlags,
+    cmsData,
+    updateCmsData,
+    setUserStatus,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'dispatch' | 'escrow' | 'broadcast' | 'telemetry'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'dispatch' | 'escrow' | 'broadcast' | 'config' | 'features' | 'cms' | 'telemetry'>('overview');
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
@@ -87,13 +113,37 @@ export const AdminDashboardModal: React.FC = () => {
   // Broadcast compose form state
   const [bcTitle, setBcTitle] = useState('');
   const [bcMessage, setBcMessage] = useState('');
-  const [bcLevel, setBcLevel] = useState<'info' | 'warning' | 'alert'>('info');
+  const [bcLevel, setBcLevel] = useState<'info' | 'warning' | 'alert' | 'urgent'>('info');
 
   // Supabase ping test state
   const [pingStatus, setPingStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [pingLatency, setPingLatency] = useState<number | null>(null);
   const [pingMessage, setPingMessage] = useState<string>('');
   const [copiedText, setCopiedText] = useState<string | null>(null);
+
+  // Config form local state (mirrors systemConfig)
+  const [cfgMaintenanceMode, setCfgMaintenanceMode] = useState(false);
+  const [cfgMaintenanceMsg, setCfgMaintenanceMsg] = useState('');
+  const [cfgAllowReg, setCfgAllowReg] = useState(true);
+  const [cfgRequireOtp, setCfgRequireOtp] = useState(true);
+  const [cfgDispatchComm, setCfgDispatchComm] = useState(5);
+  const [cfgEscrowComm, setCfgEscrowComm] = useState(2.5);
+  const [cfgArtisanComm, setCfgArtisanComm] = useState(10);
+  const [cfgCreatorComm, setCfgCreatorComm] = useState(15);
+  const [cfgMinTransfer, setCfgMinTransfer] = useState(100);
+  const [cfgMaxDailyTransfer, setCfgMaxDailyTransfer] = useState(500000);
+  const [cfgDelayMins, setCfgDelayMins] = useState(10);
+  const [cfgSupportPhone, setCfgSupportPhone] = useState('');
+  const [configSaved, setConfigSaved] = useState(false);
+
+  // CMS form state
+  const [cmsNewAnnTitle, setCmsNewAnnTitle] = useState('');
+  const [cmsNewAnnMsg, setCmsNewAnnMsg] = useState('');
+  const [cmsFaqQuestion, setCmsFaqQuestion] = useState('');
+  const [cmsFaqAnswer, setCmsFaqAnswer] = useState('');
+  const [cmsSaving, setCmsSaving] = useState(false);
+  const [cmsGuidelines, setCmsGuidelines] = useState('');
+  const [cmsSaved, setCmsSaved] = useState(false);
 
   const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
 
@@ -123,6 +173,22 @@ export const AdminDashboardModal: React.FC = () => {
     return () => clearInterval(interval);
   }, [isAdminModalOpen, autoRefresh]);
 
+  useEffect(() => {
+    if (!isAdminModalOpen || !systemConfig) return;
+    setCfgMaintenanceMode(systemConfig.maintenanceMode ?? false);
+    setCfgMaintenanceMsg(systemConfig.maintenanceMessage ?? '');
+    setCfgAllowReg(systemConfig.allowNewRegistrations ?? true);
+    setCfgRequireOtp(systemConfig.requirePhoneOtp ?? true);
+    setCfgDispatchComm(systemConfig.dispatchCommissionPercent ?? 5);
+    setCfgEscrowComm(systemConfig.escrowCommissionPercent ?? 2.5);
+    setCfgArtisanComm(systemConfig.artisanCommissionPercent ?? 10);
+    setCfgCreatorComm(systemConfig.creatorCommissionPercent ?? 15);
+    setCfgMinTransfer(systemConfig.minTransferAmountNgn ?? 100);
+    setCfgMaxDailyTransfer(systemConfig.maxDailyTransferNgn ?? 500000);
+    setCfgDelayMins(systemConfig.delayedSendHoldDurationMins ?? 10);
+    setCfgSupportPhone(systemConfig.supportContactPhone ?? '');
+  }, [isAdminModalOpen, systemConfig]);
+
   if (!isAdminModalOpen) return null;
 
   // Combine adminUsers and backend registered users
@@ -144,6 +210,8 @@ export const AdminDashboardModal: React.FC = () => {
             joinedDate: ru.createdAt ? new Date(ru.createdAt).toLocaleDateString() : 'Recent',
             walletBalanceNgn: ru.walletBalanceNgn || 50000,
             ordersCount: ru.ordersCount || 0,
+            isOnline: ru.isOnline || false,
+            lastSeen: ru.lastSeen || null,
           });
         }
       });
@@ -242,6 +310,55 @@ export const AdminDashboardModal: React.FC = () => {
     setTimeout(() => setCopiedText(null), 2000);
   };
 
+  useEffect(() => {
+    if (!isAdminModalOpen || !systemConfig) return;
+    setCfgMaintenanceMode(systemConfig.maintenanceMode ?? false);
+    setCfgMaintenanceMsg(systemConfig.maintenanceMessage ?? '');
+    setCfgAllowReg(systemConfig.allowNewRegistrations ?? true);
+    setCfgRequireOtp(systemConfig.requirePhoneOtp ?? true);
+    setCfgDispatchComm(systemConfig.dispatchCommissionPercent ?? 5);
+    setCfgEscrowComm(systemConfig.escrowCommissionPercent ?? 2.5);
+    setCfgArtisanComm(systemConfig.artisanCommissionPercent ?? 10);
+    setCfgCreatorComm(systemConfig.creatorCommissionPercent ?? 15);
+    setCfgMinTransfer(systemConfig.minTransferAmountNgn ?? 100);
+    setCfgMaxDailyTransfer(systemConfig.maxDailyTransferNgn ?? 500000);
+    setCfgDelayMins(systemConfig.delayedSendHoldDurationMins ?? 10);
+    setCfgSupportPhone(systemConfig.supportContactPhone ?? '');
+    if (cmsData?.communityGuidelines) {
+      setCmsGuidelines(cmsData.communityGuidelines);
+    }
+  }, [isAdminModalOpen, systemConfig, cmsData]);
+
+  const handleSaveConfig = async () => {
+    await updateSystemConfig({
+      maintenanceMode: cfgMaintenanceMode,
+      maintenanceMessage: cfgMaintenanceMsg,
+      allowNewRegistrations: cfgAllowReg,
+      requirePhoneOtp: cfgRequireOtp,
+      dispatchCommissionPercent: cfgDispatchComm,
+      escrowCommissionPercent: cfgEscrowComm,
+      artisanCommissionPercent: cfgArtisanComm,
+      creatorCommissionPercent: cfgCreatorComm,
+      minTransferAmountNgn: cfgMinTransfer,
+      maxDailyTransferNgn: cfgMaxDailyTransfer,
+      delayedSendHoldDurationMins: cfgDelayMins,
+      supportContactPhone: cfgSupportPhone,
+    });
+    setConfigSaved(true);
+    setTimeout(() => setConfigSaved(false), 3000);
+  };
+
+  const formatLastSeen = (iso?: string): string => {
+    if (!iso) return 'Unknown';
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  };
+
   const formatUptime = (sec: number) => {
     const hrs = Math.floor(sec / 3600);
     const mins = Math.floor((sec % 3600) / 60);
@@ -322,12 +439,15 @@ export const AdminDashboardModal: React.FC = () => {
         {/* Tab Navigation Segmented Bar */}
         <div className="flex items-center gap-1.5 px-4 py-2 border-b border-purple-500/15 bg-slate-900/60 overflow-x-auto text-xs font-semibold scrollbar-none shrink-0">
           {[
-            { id: 'overview', label: 'Executive Overview', icon: Activity, count: null },
+            { id: 'overview', label: 'Overview', icon: Activity, count: null },
             { id: 'users', label: 'Users & Badges', icon: Users, count: mergedUsers.length },
-            { id: 'dispatch', label: 'Dispatch & 5% Fee', icon: Truck, count: activeOrders.length },
+            { id: 'dispatch', label: 'Dispatch (5%)', icon: Truck, count: activeOrders.length },
             { id: 'escrow', label: 'Escrow Vault', icon: Lock, count: escrowOrders.filter((o) => o.status === 'escrow_secured').length },
-            { id: 'broadcast', label: 'Live Broadcast', icon: Bell, count: systemBroadcast?.active ? 'Active' : null },
-            { id: 'telemetry', label: 'Server & Cloud Node', icon: Server, count: null },
+            { id: 'features', label: 'Feature Toggles', icon: ToggleRight, count: Object.keys(featureFlags).length },
+            { id: 'config', label: 'System Config', icon: Sliders, count: null },
+            { id: 'cms', label: 'CMS & Content', icon: FileText, count: null },
+            { id: 'broadcast', label: 'Broadcast', icon: Bell, count: systemBroadcast?.active ? 'Active' : null },
+            { id: 'telemetry', label: 'Telemetry', icon: Server, count: null },
           ].map((t) => {
             const Icon = t.icon;
             const isActive = activeTab === t.id;
@@ -673,6 +793,12 @@ export const AdminDashboardModal: React.FC = () => {
                               {formatPrice(user.walletBalanceNgn, 'NGN')}
                             </span>
                           </div>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className={`w-1.5 h-1.5 rounded-full ${(user as any).isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+                            <span className={`text-[10px] font-mono ${(user as any).isOnline ? 'text-emerald-400 font-bold' : 'text-slate-500'}`}>
+                              {(user as any).isOnline ? 'Online now' : `Last seen: ${formatLastSeen((user as any).lastSeen)}`}
+                            </span>
+                          </div>
                         </div>
                       </div>
 
@@ -735,6 +861,18 @@ export const AdminDashboardModal: React.FC = () => {
                             <Ban className="w-3.5 h-3.5" />
                           )}
                         </button>
+
+                        {/* Status Select */}
+                        <select
+                          value={(user as any).status || 'active'}
+                          onChange={(e) => setUserStatus(user.id || user.phoneNumber, e.target.value as any)}
+                          className="text-[10px] font-mono rounded-xl bg-slate-800 border border-slate-700 text-slate-200 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-purple-500 cursor-pointer"
+                        >
+                          <option value="active">Active</option>
+                          <option value="suspended">Suspended</option>
+                          <option value="banned">Banned</option>
+                          <option value="flagged">Flagged</option>
+                        </select>
                       </div>
                     </div>
                   ))
@@ -1038,14 +1176,16 @@ export const AdminDashboardModal: React.FC = () => {
                   <div className="flex items-center justify-between pt-1">
                     <div className="flex items-center gap-2">
                       <span className="text-[11px] font-semibold text-slate-400">Severity:</span>
-                      {(['info', 'warning', 'alert'] as const).map((level) => (
+                      {(['info', 'warning', 'alert', 'urgent'] as const).map((level) => (
                         <button
                           key={level}
                           type="button"
                           onClick={() => setBcLevel(level)}
                           className={`px-2.5 py-1 rounded-lg capitalize text-[10px] font-bold ${
                             bcLevel === level
-                              ? level === 'alert'
+                              ? level === 'urgent'
+                                ? 'bg-red-700 text-white animate-pulse'
+                                : level === 'alert'
                                 ? 'bg-rose-500 text-white'
                                 : level === 'warning'
                                 ? 'bg-amber-500 text-slate-950'
@@ -1096,6 +1236,641 @@ export const AdminDashboardModal: React.FC = () => {
                   </button>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ═════════════════════════════════════════════════════════════════ */}
+          {/* 7. FEATURE TOGGLES                                               */}
+          {/* ═════════════════════════════════════════════════════════════════ */}
+          {activeTab === 'features' && (
+            <div className="space-y-5 animate-in fade-in duration-150">
+              <div className="flex items-center gap-2">
+                <ToggleRight className="w-5 h-5 text-purple-400" />
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-white">System Feature Toggles</h3>
+                  <p className="text-[11px] text-slate-400">Enable or disable any subsystem across all connected clients in real time.</p>
+                </div>
+              </div>
+
+              {([
+                {
+                  group: '💳 Core Finance & Vaults',
+                  desc: 'Wallet is the master switch. Disabling it automatically pauses all wallet-dependent transfers and vaults.',
+                  flags: [
+                    { key: 'wallet', label: 'Wallet (Master Switch)', desc: 'Paystack topup, balances & all monetary operations' },
+                    { key: 'p2pTransfers', label: 'P2P Transfers', desc: 'Direct phone-to-phone or account money transfers' },
+                    { key: 'escrow', label: 'Escrow Vault', desc: 'Buyer-protected marketplace payments & release mechanisms' },
+                    { key: 'ajo', label: 'Ajo / Thrift Circle', desc: 'Rotating communal savings and pot distributions' },
+                    { key: 'payroll', label: 'Payroll & Bulk Disbursements', desc: 'Business scheduled salary payments' },
+                    { key: 'delayedSend', label: 'Delayed Send (Anti-Fraud)', desc: 'Reversible hold window on transfers' },
+                    { key: 'securityPin', label: 'Security PIN', desc: 'Mandatory PIN authentication for transactions' },
+                  ],
+                },
+                {
+                  group: '🔧 Services & Dispatch (3-dot Menu)',
+                  desc: 'Public on-demand services available in the application menu.',
+                  flags: [
+                    { key: 'dispatch', label: 'Courier Dispatch (PickkR / Gokada)', desc: 'Doorstep pickup, tracking & delivery bookings' },
+                    { key: 'artisan', label: 'Artisan Hub', desc: 'Carpenters, plumbers, electricians & craft bookings' },
+                    { key: 'healthcare', label: 'AfriHealth Telehealth', desc: 'Digital clinic queues, consults & prescriptions' },
+                    { key: 'legal', label: 'AfriLaw Legal Services', desc: 'Verified African attorneys & contract drafting' },
+                    { key: 'jobs', label: 'Job Board & Gig Marketplace', desc: 'Freelance work, gigs & full-time hiring' },
+                    { key: 'petShop', label: 'Pet Shop & Veterinary Forum', desc: 'Breeder listings, pet adoption & health questions' },
+                    { key: 'errands', label: 'Errands & Runner Network', desc: 'Market runs and grocery pick-up errands' },
+                  ],
+                },
+                {
+                  group: '🎨 Creator Economy & Tools',
+                  desc: 'Creator tools, learning spaces, and community monetization.',
+                  flags: [
+                    { key: 'creator', label: 'Creator Hub', desc: 'VIP video calls, tips & exclusive content drops' },
+                    { key: 'audioSpaces', label: 'Audio Spaces', desc: 'Live drop-in audio stages with speaker queues' },
+                    { key: 'writers', label: 'Writers Guild', desc: 'Serialized book chapters, co-writing & feedback' },
+                    { key: 'storeTiers', label: 'Merchant Store Tiers', desc: '₦3k / ₦7k monthly verified merchant stores' },
+                    { key: 'tutor', label: 'Tutors & Skill Academy', desc: '1-on-1 tutoring sessions and video courses' },
+                    { key: 'referral', label: 'Invite & Earn (Referral)', desc: '₦500 bonus per verified friend invited' },
+                    { key: 'memeStudio', label: 'Meme & Sticker Studio', desc: 'African culture sticker creator' },
+                    { key: 'scamChecker', label: 'Scam Checker & Fraud Watch', desc: 'Phone number & bank account verification tool' },
+                  ],
+                },
+                {
+                  group: '🗺️ Navigation & Communication',
+                  desc: 'Core communication primitives and community feeds.',
+                  flags: [
+                    { key: 'town', label: 'Town Square Feed', desc: 'Public broadcast feed and trending topics' },
+                    { key: 'market', label: 'Marketplace Directory', desc: 'Product catalogues and physical vendor listings' },
+                    { key: 'status', label: '24h Stories / Status Updates', desc: 'Disappearing photo/video updates' },
+                    { key: 'calls', label: 'Voice & Video Calls', desc: 'Real-time WebRTC audio/video call system' },
+                    { key: 'voiceNotes', label: 'Voice Notes', desc: 'Audio recording in direct and group messaging' },
+                  ],
+                },
+              ] as { group: string; desc: string; flags: { key: keyof FeatureFlags; label: string; desc: string }[] }[]).map(({ group, desc, flags }) => (
+                <div key={group} className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+                  <div>
+                    <h4 className="text-xs font-bold text-white">{group}</h4>
+                    <p className="text-[11px] text-slate-400">{desc}</p>
+                  </div>
+                  <div className="space-y-2">
+                    {flags.map(({ key, label, desc: flagDesc }) => {
+                      const flagKey = key as keyof FeatureFlags;
+                      const enabled = featureFlags[flagKey] !== false;
+                      const isWalletDependent = ['p2pTransfers', 'escrow', 'ajo', 'payroll', 'delayedSend', 'securityPin'].includes(key as string);
+                      const isLockedByWallet = !featureFlags.wallet && isWalletDependent;
+
+                      return (
+                        <div
+                          key={key as string}
+                          className={`flex items-center justify-between gap-3 p-3 rounded-xl border transition-all ${
+                            isLockedByWallet
+                              ? 'bg-slate-950/40 border-slate-800/40 opacity-50'
+                              : 'bg-slate-950 border-slate-800/80 hover:border-purple-500/40'
+                          }`}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-white">{label}</span>
+                              {isLockedByWallet && (
+                                <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-rose-900/40 text-rose-400 border border-rose-800/40 font-bold">
+                                  LOCKED (WALLET OFF)
+                                </span>
+                              )}
+                              {key === 'wallet' && !enabled && (
+                                <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-amber-900/40 text-amber-400 border border-amber-800/40 font-bold">
+                                  ALL FINANCE DISABLED
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-400 truncate mt-0.5">{flagDesc}</p>
+                          </div>
+
+                          <button
+                            type="button"
+                            disabled={isLockedByWallet}
+                            onClick={() => updateAdminFeatureFlag(flagKey)}
+                            className={`shrink-0 w-12 h-6 rounded-full relative transition-colors ${
+                              enabled && !isLockedByWallet ? 'bg-purple-600' : 'bg-slate-700'
+                            }`}
+                            title={enabled ? 'Click to toggle OFF' : 'Click to toggle ON'}
+                          >
+                            <span
+                              className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                                enabled && !isLockedByWallet ? 'translate-x-6' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ═════════════════════════════════════════════════════════════════ */}
+          {/* 8. SYSTEM CONFIG                                                 */}
+          {/* ═════════════════════════════════════════════════════════════════ */}
+          {activeTab === 'config' && (
+            <div className="space-y-5 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sliders className="w-5 h-5 text-indigo-400" />
+                  <div>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-white">System Configuration</h3>
+                    <p className="text-[11px] text-slate-400">Platform-wide parameters persisted to disk and broadcast to all users.</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveConfig}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-md ${
+                    configSaved ? 'bg-emerald-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                  }`}
+                >
+                  {configSaved ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                      <span>Config Saved & Synced!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Save & Apply Platform Settings</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Maintenance & Registrations */}
+              <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Platform Availability & Auth</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-bold text-white">Maintenance Mode</div>
+                      <div className="text-[10px] text-slate-400">Lock app for non-admins</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCfgMaintenanceMode(!cfgMaintenanceMode)}
+                      className={`w-11 h-6 rounded-full relative transition-colors ${cfgMaintenanceMode ? 'bg-rose-600' : 'bg-slate-700'}`}
+                    >
+                      <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${cfgMaintenanceMode ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                    </button>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-bold text-white">Allow Registrations</div>
+                      <div className="text-[10px] text-slate-400">Accept new accounts</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCfgAllowReg(!cfgAllowReg)}
+                      className={`w-11 h-6 rounded-full relative transition-colors ${cfgAllowReg ? 'bg-emerald-600' : 'bg-slate-700'}`}
+                    >
+                      <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${cfgAllowReg ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                    </button>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-bold text-white">Require Phone OTP</div>
+                      <div className="text-[10px] text-slate-400">Mandatory SMS code</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCfgRequireOtp(!cfgRequireOtp)}
+                      className={`w-11 h-6 rounded-full relative transition-colors ${cfgRequireOtp ? 'bg-purple-600' : 'bg-slate-700'}`}
+                    >
+                      <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${cfgRequireOtp ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                    </button>
+                  </div>
+                </div>
+
+                {cfgMaintenanceMode && (
+                  <div className="mt-2">
+                    <label className="text-[11px] font-bold text-rose-300 block mb-1">Maintenance Banner Message for Users</label>
+                    <textarea
+                      rows={2}
+                      value={cfgMaintenanceMsg}
+                      onChange={(e) => setCfgMaintenanceMsg(e.target.value)}
+                      placeholder="e.g. AfriChat is undergoing scheduled system upgrades. Service will resume shortly."
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-rose-900/60 bg-rose-950/20 text-white focus:outline-none focus:ring-1 focus:ring-rose-500"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Commission Percentages */}
+              <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Commission Percentages (%)</h4>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                    <label className="text-[11px] font-bold text-emerald-400 block">Dispatch Fee (%)</label>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={50}
+                        step={0.5}
+                        value={cfgDispatchComm}
+                        onChange={(e) => setCfgDispatchComm(parseFloat(e.target.value) || 0)}
+                        className="w-full px-2 py-1 text-sm font-mono font-bold text-white rounded-lg bg-slate-900 border border-slate-700"
+                      />
+                      <span className="text-slate-400 text-xs font-bold">%</span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                    <label className="text-[11px] font-bold text-amber-400 block">Escrow Fee (%)</label>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={50}
+                        step={0.5}
+                        value={cfgEscrowComm}
+                        onChange={(e) => setCfgEscrowComm(parseFloat(e.target.value) || 0)}
+                        className="w-full px-2 py-1 text-sm font-mono font-bold text-white rounded-lg bg-slate-900 border border-slate-700"
+                      />
+                      <span className="text-slate-400 text-xs font-bold">%</span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                    <label className="text-[11px] font-bold text-sky-400 block">Artisan Fee (%)</label>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={50}
+                        step={0.5}
+                        value={cfgArtisanComm}
+                        onChange={(e) => setCfgArtisanComm(parseFloat(e.target.value) || 0)}
+                        className="w-full px-2 py-1 text-sm font-mono font-bold text-white rounded-lg bg-slate-900 border border-slate-700"
+                      />
+                      <span className="text-slate-400 text-xs font-bold">%</span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                    <label className="text-[11px] font-bold text-purple-400 block">Creator Fee (%)</label>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={50}
+                        step={0.5}
+                        value={cfgCreatorComm}
+                        onChange={(e) => setCfgCreatorComm(parseFloat(e.target.value) || 0)}
+                        className="w-full px-2 py-1 text-sm font-mono font-bold text-white rounded-lg bg-slate-900 border border-slate-700"
+                      />
+                      <span className="text-slate-400 text-xs font-bold">%</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Limits and Timeouts */}
+              <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Financial & Fraud Limits</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                    <label className="text-[11px] font-bold text-slate-300 block">Min Transfer (₦)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={cfgMinTransfer}
+                      onChange={(e) => setCfgMinTransfer(parseInt(e.target.value) || 0)}
+                      className="w-full px-2 py-1 text-xs font-mono text-white rounded-lg bg-slate-900 border border-slate-700"
+                    />
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                    <label className="text-[11px] font-bold text-slate-300 block">Max Daily Transfer (₦)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={cfgMaxDailyTransfer}
+                      onChange={(e) => setCfgMaxDailyTransfer(parseInt(e.target.value) || 0)}
+                      className="w-full px-2 py-1 text-xs font-mono text-white rounded-lg bg-slate-900 border border-slate-700"
+                    />
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                    <label className="text-[11px] font-bold text-slate-300 block">Delayed Send Hold (Mins)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      value={cfgDelayMins}
+                      onChange={(e) => setCfgDelayMins(parseInt(e.target.value) || 10)}
+                      className="w-full px-2 py-1 text-xs font-mono text-white rounded-lg bg-slate-900 border border-slate-700"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <label className="text-[11px] font-bold text-slate-300 block mb-1">Official Support Phone / WhatsApp</label>
+                  <input
+                    type="text"
+                    value={cfgSupportPhone}
+                    onChange={(e) => setCfgSupportPhone(e.target.value)}
+                    placeholder="+2348012345678"
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-800 bg-slate-950 text-white font-mono focus:outline-none focus:ring-1 focus:ring-purple-500"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ═════════════════════════════════════════════════════════════════ */}
+          {/* 9. CMS & CONTENT                                                 */}
+          {/* ═════════════════════════════════════════════════════════════════ */}
+          {activeTab === 'cms' && (
+            <div className="space-y-5 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-cyan-400" />
+                  <div>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-white">CMS & Platform Content</h3>
+                    <p className="text-[11px] text-slate-400">Manage marquee tickers, official announcements, help center FAQ, and community guidelines.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Marquee Ticker */}
+              <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Megaphone className="w-4 h-4 text-cyan-400" />
+                    <h4 className="text-xs font-bold text-white">Global Marquee Banner Ticker</h4>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateCmsData({
+                        marqueeBanner: {
+                          ...(cmsData?.marqueeBanner || { text: '', enabled: false, speedSeconds: 20 }),
+                          enabled: !cmsData?.marqueeBanner?.enabled,
+                        },
+                      })
+                    }
+                    className={`w-11 h-6 rounded-full relative transition-colors ${
+                      cmsData?.marqueeBanner?.enabled ? 'bg-cyan-600' : 'bg-slate-700'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                        cmsData?.marqueeBanner?.enabled ? 'translate-x-5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    value={cmsData?.marqueeBanner?.text || ''}
+                    onChange={(e) =>
+                      updateCmsData({
+                        marqueeBanner: {
+                          ...(cmsData?.marqueeBanner || { enabled: true, speedSeconds: 20 }),
+                          text: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="Enter ticker message scrolling at top of app..."
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-800 bg-slate-950 text-white focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                  />
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>Preview status: <strong className={cmsData?.marqueeBanner?.enabled ? 'text-cyan-400' : 'text-slate-500'}>{cmsData?.marqueeBanner?.enabled ? 'Active on all screens' : 'Disabled'}</strong></span>
+                    <span>Speed: 20s loop</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Official Announcements */}
+              <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Bell className="w-4 h-4 text-amber-400" />
+                    <h4 className="text-xs font-bold text-white">Official Announcements</h4>
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-400">{(cmsData?.announcements || []).length} items</span>
+                </div>
+
+                {/* Create New Announcement */}
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                  <input
+                    type="text"
+                    value={cmsNewAnnTitle}
+                    onChange={(e) => setCmsNewAnnTitle(e.target.value)}
+                    placeholder="Announcement Title (e.g. Welcome to AfriChat 2.0)"
+                    className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-800 bg-slate-900 text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                  <textarea
+                    rows={2}
+                    value={cmsNewAnnMsg}
+                    onChange={(e) => setCmsNewAnnMsg(e.target.value)}
+                    placeholder="Announcement body content..."
+                    className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-800 bg-slate-900 text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      disabled={!cmsNewAnnTitle.trim() || !cmsNewAnnMsg.trim()}
+                      onClick={() => {
+                        const newAnn: CmsAnnouncement = {
+                          id: `ann_${Date.now()}`,
+                          title: cmsNewAnnTitle.trim(),
+                          content: cmsNewAnnMsg.trim(),
+                          level: 'info',
+                          audience: 'all',
+                          active: true,
+                          createdAt: new Date().toISOString(),
+                        };
+                        updateCmsData({ announcements: [newAnn, ...(cmsData?.announcements || [])] });
+                        setCmsNewAnnTitle('');
+                        setCmsNewAnnMsg('');
+                      }}
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 flex items-center gap-1 transition-colors"
+                    >
+                      <PlusCircle className="w-3.5 h-3.5" />
+                      <span>Post Announcement</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Announcement List */}
+                <div className="space-y-2">
+                  {(cmsData?.announcements || []).map((ann, idx) => (
+                    <div
+                      key={ann.id || idx}
+                      className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-start justify-between gap-3 text-xs"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h5 className="font-bold text-white truncate">{ann.title}</h5>
+                          <span
+                            className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold ${
+                              ann.active ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'
+                            }`}
+                          >
+                            {ann.active ? 'LIVE' : 'HIDDEN'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-300 mt-0.5 line-clamp-2">{ann.content || (ann as any).message}</p>
+                        <span className="text-[9px] text-slate-500 font-mono block mt-1">{ann.createdAt ? new Date(ann.createdAt).toLocaleString() : 'Just now'}</span>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = [...(cmsData?.announcements || [])];
+                            updated[idx] = { ...updated[idx], active: !updated[idx].active };
+                            updateCmsData({ announcements: updated });
+                          }}
+                          className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-colors ${
+                            ann.active
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                              : 'bg-slate-800 text-slate-400 border-slate-700'
+                          }`}
+                        >
+                          {ann.active ? 'Active' : 'Hidden'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = (cmsData?.announcements || []).filter((_, i) => i !== idx);
+                            updateCmsData({ announcements: updated });
+                          }}
+                          className="p-1 rounded-lg text-rose-400 hover:bg-rose-950/40 transition-colors"
+                          title="Delete announcement"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {(!cmsData?.announcements || cmsData.announcements.length === 0) && (
+                    <div className="text-center py-4 text-xs text-slate-500">No announcements posted yet.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* FAQ Management */}
+              <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <HelpCircle className="w-4 h-4 text-purple-400" />
+                    <h4 className="text-xs font-bold text-white">Help Center FAQ Articles</h4>
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-400">{(cmsData?.faqArticles || []).length} articles</span>
+                </div>
+
+                {/* Add FAQ */}
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                  <input
+                    type="text"
+                    value={cmsFaqQuestion}
+                    onChange={(e) => setCmsFaqQuestion(e.target.value)}
+                    placeholder="Question (e.g. How does Escrow protection work?)"
+                    className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-800 bg-slate-900 text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
+                  />
+                  <textarea
+                    rows={2}
+                    value={cmsFaqAnswer}
+                    onChange={(e) => setCmsFaqAnswer(e.target.value)}
+                    placeholder="Detailed explanation..."
+                    className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-800 bg-slate-900 text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      disabled={!cmsFaqQuestion.trim() || !cmsFaqAnswer.trim()}
+                      onClick={() => {
+                        const newFaq: CmsFaqItem = {
+                          id: `faq_${Date.now()}`,
+                          question: cmsFaqQuestion.trim(),
+                          answer: cmsFaqAnswer.trim(),
+                          category: 'general',
+                          published: true,
+                        };
+                        updateCmsData({ faqArticles: [...(cmsData?.faqArticles || []), newFaq] });
+                        setCmsFaqQuestion('');
+                        setCmsFaqAnswer('');
+                      }}
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white flex items-center gap-1 transition-colors"
+                    >
+                      <PlusCircle className="w-3.5 h-3.5" />
+                      <span>Add Article</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* FAQ List */}
+                <div className="space-y-2">
+                  {(cmsData?.faqArticles || []).map((item: CmsFaqItem, idx: number) => (
+                    <div
+                      key={item.id || idx}
+                      className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-start justify-between gap-3 text-xs"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <h5 className="font-bold text-purple-300">Q: {item.question}</h5>
+                        <p className="text-[11px] text-slate-300 mt-1">A: {item.answer}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated = (cmsData?.faqArticles || []).filter((_, i) => i !== idx);
+                          updateCmsData({ faqArticles: updated });
+                        }}
+                        className="p-1 rounded-lg text-rose-400 hover:bg-rose-950/40 transition-colors shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  {(!cmsData?.faqArticles || cmsData.faqArticles.length === 0) && (
+                    <div className="text-center py-4 text-xs text-slate-500">No FAQ articles published.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Community Guidelines */}
+              <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4 text-indigo-400" />
+                  <h4 className="text-xs font-bold text-white">Community Rules & Guidelines</h4>
+                </div>
+                <textarea
+                  rows={4}
+                  value={cmsGuidelines}
+                  onChange={(e) => setCmsGuidelines(e.target.value)}
+                  placeholder="Enter community conduct rules, escrow safety advice, and marketplace terms..."
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-800 bg-slate-950 text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <div className="flex justify-between items-center">
+                  <span className="text-[11px] text-slate-500">Displayed in settings and new user onboarding</span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await updateCmsData({ communityGuidelines: cmsGuidelines });
+                      setCmsSaved(true);
+                      setTimeout(() => setCmsSaved(false), 2500);
+                    }}
+                    className={`px-4 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                      cmsSaved ? 'bg-emerald-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                    }`}
+                  >
+                    {cmsSaved ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Send className="w-3.5 h-3.5" />}
+                    <span>{cmsSaved ? 'Guidelines Saved!' : 'Save Community Rules'}</span>
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
