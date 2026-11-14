@@ -863,9 +863,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const isFeatureEnabled = (key: keyof FeatureFlags): boolean => {
-    if (key === 'wallet') return featureFlags.wallet;
+    if (key === 'wallet') return Boolean(featureFlags.wallet);
     const WALLET_DEPENDENTS: (keyof FeatureFlags)[] = [
-      'market', 'artisan', 'errands', 'ajo', 'payroll', 'writers', 'creator', 'escrow', 'tutor', 'p2pTransfers', 'storeTiers'
+      'market', 'artisan', 'errands', 'ajo', 'payroll', 'writers', 'creator', 'escrow', 'tutor', 'p2pTransfers', 'storeTiers', 'delayedSend', 'securityPin'
     ];
     if (WALLET_DEPENDENTS.includes(key)) {
       return Boolean(featureFlags.wallet && featureFlags[key] !== false);

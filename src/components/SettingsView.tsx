@@ -109,6 +109,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     CURRENCY_SYMBOLS,
     CURRENCY_RATES,
     updateUserProfile,
+    isFeatureEnabled,
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan' | 'chat_bg'>('services');
@@ -261,11 +262,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* Segmented Navigation Switcher: Profile vs Stores vs Artisan */}
-        <div className="grid grid-cols-3 p-1 bg-slate-100 dark:bg-neutral-950 rounded-xl text-xs font-semibold gap-1">
+        {/* Segmented Navigation Switcher: Profile vs Stores vs Artisan - Disappear when toggled off */}
+        <div className="flex p-1 bg-slate-100 dark:bg-neutral-950 rounded-xl text-xs font-semibold gap-1">
           <button
             onClick={() => setActiveSubTab('services')}
-            className={`py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+            className={`flex-1 py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
               activeSubTab === 'services'
                 ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs font-bold'
                 : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
@@ -275,29 +276,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <span className="truncate">Profile</span>
           </button>
 
-          <button
-            onClick={() => setActiveSubTab('stores')}
-            className={`py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
-              activeSubTab === 'stores'
-                ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs font-bold'
-                : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Store className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">Stores</span>
-          </button>
+          {(isFeatureEnabled('storeTiers') || isFeatureEnabled('market')) && (
+            <button
+              onClick={() => setActiveSubTab('stores')}
+              className={`flex-1 py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+                activeSubTab === 'stores'
+                  ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs font-bold'
+                  : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Store className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Stores</span>
+            </button>
+          )}
 
-          <button
-            onClick={() => setActiveSubTab('artisan')}
-            className={`py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
-              activeSubTab === 'artisan'
-                ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs font-bold'
-                : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Wrench className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">Artisans</span>
-          </button>
+          {isFeatureEnabled('artisan') && (
+            <button
+              onClick={() => setActiveSubTab('artisan')}
+              className={`flex-1 py-2 px-1 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+                activeSubTab === 'artisan'
+                  ? 'bg-white dark:bg-neutral-900 text-purple-600 dark:text-purple-400 shadow-xs font-bold'
+                  : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Wrench className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Artisans</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -672,80 +677,86 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
           )}
 
-          {/* AGC Wallet Card with Privacy Masking */}
-          <div className="px-4">
-            <div className="p-4 rounded-2xl bg-gradient-to-tr from-[#1e1b4b] via-[#312e81] to-[#4338ca] text-white space-y-3 shadow-md relative overflow-hidden">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Wallet className="w-4 h-4 text-amber-400" />
-                  <span className="text-xs font-semibold">AGC Vault & Wallet</span>
+          {/* AGC Wallet Card with Privacy Masking - Disappears when wallet toggle is OFF */}
+          {isFeatureEnabled('wallet') && (
+            <div className="px-4">
+              <div className="p-4 rounded-2xl bg-gradient-to-tr from-[#1e1b4b] via-[#312e81] to-[#4338ca] text-white space-y-3 shadow-md relative overflow-hidden">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Wallet className="w-4 h-4 text-amber-400" />
+                    <span className="text-xs font-semibold">AGC Vault & Wallet</span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={toggleHideBalance}
+                      className="p-1 hover:bg-white/10 rounded-lg text-white/80 hover:text-white transition-colors"
+                      title={hideBalanceOnNav ? 'Reveal balance' : 'Hide balance for privacy'}
+                    >
+                      {hideBalanceOnNav ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                    <span className="text-[10px] font-mono bg-white/15 px-2 py-0.5 rounded-full">
+                      Paystack Escrow
+                    </span>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-baseline justify-between">
+                  <div>
+                    <div className="text-[11px] text-indigo-200">Available Balance:</div>
+                    <div className="text-2xl font-black font-mono tracking-tight">
+                      {hideBalanceOnNav ? '₦ ••••••••' : formatPrice(wallet.availableBalance, 'NGN')}
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <div className="text-[10px] text-indigo-200">Escrow Locked:</div>
+                    <div className="text-xs font-bold font-mono text-amber-300">
+                      {hideBalanceOnNav ? '₦ ••••••' : formatPrice(wallet.escrowLockedBalance, 'NGN')}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/15">
                   <button
-                    onClick={toggleHideBalance}
-                    className="p-1 hover:bg-white/10 rounded-lg text-white/80 hover:text-white transition-colors"
-                    title={hideBalanceOnNav ? 'Reveal balance' : 'Hide balance for privacy'}
+                    onClick={() => setIsWalletModalOpen(true)}
+                    className="py-2 bg-white text-purple-950 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-transform"
                   >
-                    {hideBalanceOnNav ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Top-up (Paystack)</span>
                   </button>
-                  <span className="text-[10px] font-mono bg-white/15 px-2 py-0.5 rounded-full">
-                    Paystack Escrow
-                  </span>
+
+                  <button
+                    onClick={() => setIsWalletModalOpen(true)}
+                    className="py-2 bg-white/15 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <ArrowUpRight className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Manage Vault</span>
+                  </button>
+
+                  {isFeatureEnabled('delayedSend') && (
+                    <button
+                      onClick={() => setIsTransferModalOpen(true)}
+                      className="py-2 bg-white/20 hover:bg-white/25 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <Clock className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Send (1-2 Days Delay)</span>
+                    </button>
+                  )}
+
+                  {isFeatureEnabled('payroll') && (
+                    <button
+                      onClick={() => setIsPayrollModalOpen(true)}
+                      className="py-2 bg-white/20 hover:bg-white/25 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <Repeat className="w-3.5 h-3.5 text-purple-200" />
+                      <span>Payroll Auto-Debit</span>
+                    </button>
+                  )}
                 </div>
-              </div>
-
-              <div className="flex items-baseline justify-between">
-                <div>
-                  <div className="text-[11px] text-indigo-200">Available Balance:</div>
-                  <div className="text-2xl font-black font-mono tracking-tight">
-                    {hideBalanceOnNav ? '₦ ••••••••' : formatPrice(wallet.availableBalance, 'NGN')}
-                  </div>
-                </div>
-
-                <div className="text-right">
-                  <div className="text-[10px] text-indigo-200">Escrow Locked:</div>
-                  <div className="text-xs font-bold font-mono text-amber-300">
-                    {hideBalanceOnNav ? '₦ ••••••' : formatPrice(wallet.escrowLockedBalance, 'NGN')}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/15">
-                <button
-                  onClick={() => setIsWalletModalOpen(true)}
-                  className="py-2 bg-white text-purple-950 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-transform"
-                >
-                  <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Top-up (Paystack)</span>
-                </button>
-
-                <button
-                  onClick={() => setIsWalletModalOpen(true)}
-                  className="py-2 bg-white/15 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <ArrowUpRight className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Manage Vault</span>
-                </button>
-
-                <button
-                  onClick={() => setIsTransferModalOpen(true)}
-                  className="py-2 bg-white/20 hover:bg-white/25 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <Clock className="w-3.5 h-3.5 text-amber-300" />
-                  <span>Send (1-2 Days Delay)</span>
-                </button>
-
-                <button
-                  onClick={() => setIsPayrollModalOpen(true)}
-                  className="py-2 bg-white/20 hover:bg-white/25 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <Repeat className="w-3.5 h-3.5 text-purple-200" />
-                  <span>Payroll Auto-Debit</span>
-                </button>
               </div>
             </div>
-          </div>
+          )}
 
           {/* Quick Hub App Preferences (Language, Currency, Low Data, Theme) */}
           <div className="divide-y divide-slate-100 dark:divide-neutral-800/80 bg-white dark:bg-[#18152e] border-y border-slate-100 dark:border-neutral-800">

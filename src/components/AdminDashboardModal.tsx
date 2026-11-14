@@ -1255,7 +1255,7 @@ export const AdminDashboardModal: React.FC = () => {
               {([
                 {
                   group: '💳 Core Finance & Vaults',
-                  desc: 'Wallet is the master switch. Disabling it automatically pauses all wallet-dependent transfers and vaults.',
+                  desc: 'Wallet is the master switch. Disabling it automatically hides and removes all wallet UI, transfers, vaults, and financial tools across the entire system.',
                   flags: [
                     { key: 'wallet', label: 'Wallet (Master Switch)', desc: 'Paystack topup, balances & all monetary operations' },
                     { key: 'p2pTransfers', label: 'P2P Transfers', desc: 'Direct phone-to-phone or account money transfers' },

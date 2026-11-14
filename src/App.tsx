@@ -55,7 +55,7 @@ import { CallErrorBoundary } from './components/CallErrorBoundary';
 import { ChatErrorBoundary } from './components/ChatErrorBoundary';
 
 const AppContent: React.FC = () => {
-  const { activeChatId, setActiveChatId, activeTab, isAuthenticated, isKickedOut, endCall, isPetShopModalOpen, setIsPetShopModalOpen } = useApp();
+  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled } = useApp();
   const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('agc_splash_shown'));
   const handleSplashDone = useCallback(() => {
     sessionStorage.setItem('agc_splash_shown', 'true');
@@ -71,6 +71,19 @@ const AppContent: React.FC = () => {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Auto-redirect if active tab's feature is toggled OFF by admin
+  React.useEffect(() => {
+    if (activeTab === 'status' && !isFeatureEnabled('status')) {
+      setActiveTab('chats');
+    } else if (activeTab === 'calls' && !isFeatureEnabled('calls')) {
+      setActiveTab('chats');
+    } else if (activeTab === 'town' && !isFeatureEnabled('town')) {
+      setActiveTab('chats');
+    } else if (activeTab === 'market' && !isFeatureEnabled('market')) {
+      setActiveTab('chats');
+    }
+  }, [activeTab, isFeatureEnabled, setActiveTab]);
 
   // Render SplashScreen overlay before anything else (shows once per session)
   if (showSplash) {
@@ -176,9 +189,9 @@ const AppContent: React.FC = () => {
               <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
 
               <main className="flex-1 overflow-y-auto overflow-x-hidden">
-                {activeTab === 'status' && <StatusView />}
-                {activeTab === 'calls' && <CallsView />}
-                {activeTab === 'town' && <TownView />}
+                {activeTab === 'status' && isFeatureEnabled('status') && <StatusView />}
+                {activeTab === 'calls' && isFeatureEnabled('calls') && <CallsView />}
+                {activeTab === 'town' && isFeatureEnabled('town') && <TownView />}
                 {activeTab === 'chats' && <ChatList />}
                 {activeTab === 'settings' && (
                   <SettingsView
@@ -186,7 +199,7 @@ const AppContent: React.FC = () => {
                     onOpenDisplayModal={() => setIsDisplayModalOpen(true)}
                   />
                 )}
-                {activeTab === 'market' && <MarketplaceView />}
+                {activeTab === 'market' && isFeatureEnabled('market') && <MarketplaceView />}
               </main>
 
               <BottomNav />
@@ -200,47 +213,49 @@ const AppContent: React.FC = () => {
         <IncomingCallModal />
         <IncomingContactRequestModal />
         <CheckoutDrawer />
-        <EscrowModal />
-        <VoiceRecorderModal
-          isOpen={isVoiceRecorderOpen}
-          onClose={() => setIsVoiceRecorderOpen(false)}
-        />
+        {isFeatureEnabled('escrow') && <EscrowModal />}
+        {isFeatureEnabled('voiceNotes') && (
+          <VoiceRecorderModal
+            isOpen={isVoiceRecorderOpen}
+            onClose={() => setIsVoiceRecorderOpen(false)}
+          />
+        )}
         <LanguageSelectorModal
           isOpen={isLanguageModalOpen}
           onClose={() => setIsLanguageModalOpen(false)}
         />
-        <WalletModal />
+        {isFeatureEnabled('wallet') && <WalletModal />}
 
-        {/* African Super-App Features */}
-        <MemeStickerStudioModal />
-        <AudioSpaceModal />
-        <ScamReputationModal />
-        <InvoiceGeneratorModal />
-        <InvoiceViewerModal />
-        <FinancialPollModal />
-        <AjoLedgerModal />
+        {/* African Super-App Features - Disappear completely when toggled off */}
+        {isFeatureEnabled('memeStudio') && <MemeStickerStudioModal />}
+        {isFeatureEnabled('audioSpaces') && <AudioSpaceModal />}
+        {isFeatureEnabled('scamChecker') && <ScamReputationModal />}
+        {isFeatureEnabled('wallet') && <InvoiceGeneratorModal />}
+        {isFeatureEnabled('wallet') && <InvoiceViewerModal />}
+        {isFeatureEnabled('wallet') && <FinancialPollModal />}
+        {isFeatureEnabled('ajo') && <AjoLedgerModal />}
 
         {/* AGC Carrier Phone Auth, Contacts Discovery & Super-App Extensions */}
         <AuthModal />
         <ContactsModal />
-        <DispatchModal />
-        <ErrandsModal />
-        <JobBoardModal />
-        <SecurityModal />
+        {isFeatureEnabled('dispatch') && <DispatchModal />}
+        {isFeatureEnabled('errands') && <ErrandsModal />}
+        {isFeatureEnabled('jobs') && <JobBoardModal />}
+        {isFeatureEnabled('securityPin') && <SecurityModal />}
 
         {/* Services Booking, 1-2 Days Delayed Transfers & Payroll Auto-Debit */}
-        <ServicesBookingModal />
-        <DelayedTransferModal />
-        <PayrollModal />
+        {isFeatureEnabled('artisan') && <ServicesBookingModal />}
+        {isFeatureEnabled('delayedSend') && <DelayedTransferModal />}
+        {isFeatureEnabled('payroll') && <PayrollModal />}
 
         {/* Scan QR & Unique UID Modal */}
         <ScanQrModal />
 
         {/* AfriHealth: Hospital Queuing, Telehealth & EHR Vault */}
-        <HealthcareModal />
+        {isFeatureEnabled('healthcare') && <HealthcareModal />}
 
         {/* AfriLaw: Smart Contracts, Legal SOS & CAC Tracker */}
-        <LegalModal />
+        {isFeatureEnabled('legal') && <LegalModal />}
 
         {/* Text Size Scale & Device Background Upload Modal */}
         <DisplayWallpaperModal
@@ -249,28 +264,32 @@ const AppContent: React.FC = () => {
         />
 
         {/* AfriCreator: Subscriptions, Show Tickets & Direct Music Drops */}
-        <CreatorModal />
+        {isFeatureEnabled('creator') && <CreatorModal />}
 
         {/* Anti-Ghost Referral & Invite System */}
-        <ReferralModal />
+        {isFeatureEnabled('referral') && <ReferralModal />}
 
         {/* Celebrity Identity Verification Badge Modal */}
         <CelebrityVerificationModal />
 
-        {/* Merchant Store Registration & Tiers (â‚¦3k / â‚¦7k) */}
-        <StoreRegistrationModal />
+        {/* Merchant Store Registration & Tiers */}
+        {isFeatureEnabled('storeTiers') && <StoreRegistrationModal />}
 
         {/* African Writers Guild (Chapters, Buddy Read, Anti-AI Guarantee) */}
-        <WritersGuildModal />
-        {/* Super Admin Console & Moderation Desk */}
+        {isFeatureEnabled('writers') && <WritersGuildModal />}
+
+        {/* Super Admin Console & Moderation Desk (Always Available to Admin) */}
         <AdminDashboardModal />
-        <TutorCoursesModal />
+
+        {isFeatureEnabled('tutor') && <TutorCoursesModal />}
 
         {/* African Pets Forum & Pet Shop Marketplace */}
-        <PetShopModal
-          isOpen={isPetShopModalOpen}
-          onClose={() => setIsPetShopModalOpen(false)}
-        />
+        {isFeatureEnabled('petShop') && (
+          <PetShopModal
+            isOpen={isPetShopModalOpen}
+            onClose={() => setIsPetShopModalOpen(false)}
+          />
+        )}
       </div>
     </div>
   );

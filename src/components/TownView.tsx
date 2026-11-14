@@ -35,6 +35,7 @@ export const TownView: React.FC = () => {
     createAudioSpace,
     setIsPetShopModalOpen,
     deleteTownCommunity,
+    isFeatureEnabled,
   } = useApp();
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'channels' | 'groups' | 'spaces'>('all');
@@ -259,21 +260,23 @@ export const TownView: React.FC = () => {
             All Town
           </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveFilter('spaces')}
-            className={`py-1.5 rounded-lg flex items-center justify-center gap-1 transition-all ${
-              activeFilter === 'spaces'
-                ? 'bg-white dark:bg-purple-600 text-rose-600 dark:text-white shadow-xs font-bold'
-                : 'text-slate-500 dark:text-purple-300/60 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Radio className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" />
-            <span>Spaces</span>
-            {liveSpaces.length > 0 && (
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
-            )}
-          </button>
+          {isFeatureEnabled('audioSpaces') && (
+            <button
+              type="button"
+              onClick={() => setActiveFilter('spaces')}
+              className={`py-1.5 rounded-lg flex items-center justify-center gap-1 transition-all ${
+                activeFilter === 'spaces'
+                  ? 'bg-white dark:bg-purple-600 text-rose-600 dark:text-white shadow-xs font-bold'
+                  : 'text-slate-500 dark:text-purple-300/60 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Radio className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" />
+              <span>Spaces</span>
+              {liveSpaces.length > 0 && (
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
+              )}
+            </button>
+          )}
 
           <button
             type="button"
@@ -327,7 +330,7 @@ export const TownView: React.FC = () => {
       <div className="p-4 space-y-4">
 
         {/* 1. Live Spaces Section */}
-        {(activeFilter === 'all' || activeFilter === 'spaces') && liveSpaces.length > 0 && (
+        {(activeFilter === 'all' || activeFilter === 'spaces') && isFeatureEnabled('audioSpaces') && liveSpaces.length > 0 && (
           <div className="space-y-2.5">
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-2">
@@ -401,7 +404,7 @@ export const TownView: React.FC = () => {
         )}
 
         {/* Empty State for Spaces Filter */}
-        {activeFilter === 'spaces' && liveSpaces.length === 0 && (
+        {activeFilter === 'spaces' && isFeatureEnabled('audioSpaces') && liveSpaces.length === 0 && (
           <div className="py-12 px-4 text-center bg-white dark:bg-[#120924] rounded-3xl border border-dashed border-purple-300/60 dark:border-purple-800/40">
             <div className="w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-500 flex items-center justify-center mx-auto mb-3">
               <Radio className="w-6 h-6 animate-pulse" />
@@ -441,7 +444,7 @@ export const TownView: React.FC = () => {
             </div>
 
             {/* African Pets Hub Spotlight Banner */}
-            {(selectedCategory === 'All' || selectedCategory === 'Pets & Animals') && (
+            {isFeatureEnabled('petShop') && (selectedCategory === 'All' || selectedCategory === 'Pets & Animals') && (
               <div
                 onClick={() => setIsPetShopModalOpen(true)}
                 className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/15 via-purple-500/10 to-indigo-500/15 border border-amber-500/30 dark:border-amber-500/20 hover:border-amber-500/60 transition-all cursor-pointer flex items-center justify-between gap-3 group shadow-xs hover:shadow-md"

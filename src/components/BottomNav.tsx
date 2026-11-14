@@ -1,5 +1,5 @@
 import React from 'react';
-import { CircleDot, Phone, MessageSquare, Compass, Sparkles, Building2 } from 'lucide-react';
+import { CircleDot, Phone, MessageSquare, Building2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const BottomNav: React.FC = () => {
@@ -11,11 +11,17 @@ export const BottomNav: React.FC = () => {
     statuses,
     currentUser,
     audioSpaces,
+    isFeatureEnabled,
   } = useApp();
 
   const totalUnread = chats.reduce((acc, c) => acc + c.unreadCount, 0);
   const hasNewStatus = statuses.some((s) => !s.isMe);
   const hasLiveSpace = audioSpaces.some((s) => s.isLive);
+
+  // Filter visible tabs based on feature toggles
+  const showStatus = isFeatureEnabled('status');
+  const showCalls = isFeatureEnabled('calls');
+  const showTown = isFeatureEnabled('town');
 
   return (
     <nav
@@ -24,70 +30,76 @@ export const BottomNav: React.FC = () => {
         paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 8px)',
       }}
     >
-      <div className="max-w-md mx-auto grid grid-cols-5 items-center h-16 px-1 smartwatch-nav">
-        {/* 1. Updates Tab (FIRST) */}
-        <button
-          type="button"
-          onClick={() => setActiveTab('status')}
-          className={`flex flex-col items-center justify-center min-h-[48px] py-1 transition-all relative ${
-            activeTab === 'status'
-              ? 'text-purple-600 dark:text-purple-400 font-bold scale-[1.03]'
-              : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-          }`}
-        >
-          <div className="relative">
-            <CircleDot className="w-5 h-5" />
-            {hasNewStatus && (
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-amber-500 rounded-full ring-2 ring-white dark:ring-black" />
-            )}
-          </div>
-          <span className="text-[10px] mt-1 font-medium tracking-tight">
-            Updates
-          </span>
-        </button>
+      <div className="max-w-md mx-auto flex items-center justify-around h-16 px-1 smartwatch-nav">
+        {/* 1. Updates Tab (FIRST) - Disappears when status toggle is OFF */}
+        {showStatus && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('status')}
+            className={`flex-1 flex flex-col items-center justify-center min-h-[48px] py-1 transition-all relative ${
+              activeTab === 'status'
+                ? 'text-purple-600 dark:text-purple-400 font-bold scale-[1.03]'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <div className="relative">
+              <CircleDot className="w-5 h-5" />
+              {hasNewStatus && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-amber-500 rounded-full ring-2 ring-white dark:ring-black" />
+              )}
+            </div>
+            <span className="text-[10px] mt-1 font-medium tracking-tight">
+              Updates
+            </span>
+          </button>
+        )}
 
-        {/* 2. Calls Tab (SECOND) */}
-        <button
-          type="button"
-          onClick={() => setActiveTab('calls')}
-          className={`flex flex-col items-center justify-center min-h-[48px] py-1 transition-all relative ${
-            activeTab === 'calls'
-              ? 'text-purple-600 dark:text-purple-400 font-bold scale-[1.03]'
-              : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-          }`}
-        >
-          <Phone className="w-5 h-5" />
-          <span className="text-[10px] mt-1 font-medium tracking-tight">
-            {t('calls')}
-          </span>
-        </button>
+        {/* 2. Calls Tab (SECOND) - Disappears when calls toggle is OFF */}
+        {showCalls && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('calls')}
+            className={`flex-1 flex flex-col items-center justify-center min-h-[48px] py-1 transition-all relative ${
+              activeTab === 'calls'
+                ? 'text-purple-600 dark:text-purple-400 font-bold scale-[1.03]'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Phone className="w-5 h-5" />
+            <span className="text-[10px] mt-1 font-medium tracking-tight">
+              {t('calls')}
+            </span>
+          </button>
+        )}
 
-        {/* 3. Town Tab (MIDDLE - Groups, Channels & Spaces) */}
-        <button
-          type="button"
-          onClick={() => setActiveTab('town')}
-          className={`flex flex-col items-center justify-center min-h-[48px] py-1 transition-all relative ${
-            activeTab === 'town'
-              ? 'text-purple-600 dark:text-purple-400 font-bold scale-[1.05]'
-              : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-          }`}
-        >
-          <div className="relative">
-            <Building2 className="w-5 h-5" />
-            {hasLiveSpace && (
-              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full ring-2 ring-white dark:ring-black animate-pulse" />
-            )}
-          </div>
-          <span className="text-[10px] mt-1 font-bold tracking-tight">
-            Town
-          </span>
-        </button>
+        {/* 3. Town Tab (MIDDLE) - Disappears when town toggle is OFF */}
+        {showTown && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('town')}
+            className={`flex-1 flex flex-col items-center justify-center min-h-[48px] py-1 transition-all relative ${
+              activeTab === 'town'
+                ? 'text-purple-600 dark:text-purple-400 font-bold scale-[1.05]'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <div className="relative">
+              <Building2 className="w-5 h-5" />
+              {hasLiveSpace && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full ring-2 ring-white dark:ring-black animate-pulse" />
+              )}
+            </div>
+            <span className="text-[10px] mt-1 font-bold tracking-tight">
+              Town
+            </span>
+          </button>
+        )}
 
-        {/* 4. Chats Tab (FOURTH) */}
+        {/* 4. Chats Tab (FOURTH - Core Messaging) */}
         <button
           type="button"
           onClick={() => setActiveTab('chats')}
-          className={`flex flex-col items-center justify-center min-h-[48px] py-1 transition-all relative ${
+          className={`flex-1 flex flex-col items-center justify-center min-h-[48px] py-1 transition-all relative ${
             activeTab === 'chats'
               ? 'text-purple-600 dark:text-purple-400 font-bold scale-[1.03]'
               : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
@@ -106,11 +118,11 @@ export const BottomNav: React.FC = () => {
           </span>
         </button>
 
-        {/* 5. Hub Tab (FIFTH - Personal, Stores, Wallet & Admin) */}
+        {/* 5. Hub Tab (FIFTH - Personal, Stores, Appearance & Admin) */}
         <button
           type="button"
           onClick={() => setActiveTab('settings')}
-          className={`flex flex-col items-center justify-center min-h-[48px] py-1 transition-all relative ${
+          className={`flex-1 flex flex-col items-center justify-center min-h-[48px] py-1 transition-all relative ${
             activeTab === 'settings'
               ? 'text-purple-600 dark:text-purple-400 font-bold scale-[1.03]'
               : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'

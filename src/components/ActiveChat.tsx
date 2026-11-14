@@ -109,6 +109,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     friendRequests,
     acceptFriendRequest,
     declineFriendRequest,
+    isFeatureEnabled,
   } = useApp();
 
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
@@ -617,49 +618,55 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           })()}
         </div>
 
-        {/* Right Action Icons: Video, Voice, Scam Check */}
+        {/* Right Action Icons: Video, Voice, Scam Check - Disappear when toggled off */}
         <div className="flex items-center gap-1 text-white">
-          <button
-            onClick={() =>
-              startCall(
-                currentChat.name,
-                currentChat.phone || '+234 800 000 0000',
-                currentChat.avatar,
-                'video'
-              )
-            }
-            className="p-2 hover:bg-white/10 rounded-full transition-colors"
-            aria-label="Video Call"
-            title="Video Call"
-          >
-            <Video className="w-5 h-5" />
-          </button>
+          {isFeatureEnabled('calls') && (
+            <>
+              <button
+                onClick={() =>
+                  startCall(
+                    currentChat.name,
+                    currentChat.phone || '+234 800 000 0000',
+                    currentChat.avatar,
+                    'video'
+                  )
+                }
+                className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                aria-label="Video Call"
+                title="Video Call"
+              >
+                <Video className="w-5 h-5" />
+              </button>
 
-          <button
-            onClick={() =>
-              startCall(
-                currentChat.name,
-                currentChat.phone || '+234 800 000 0000',
-                currentChat.avatar,
-                'voice'
-              )
-            }
-            className="p-2 hover:bg-white/10 rounded-full transition-colors"
-            aria-label="Voice Call"
-            title="Voice Call"
-          >
-            <Phone className="w-5 h-5" />
-          </button>
+              <button
+                onClick={() =>
+                  startCall(
+                    currentChat.name,
+                    currentChat.phone || '+234 800 000 0000',
+                    currentChat.avatar,
+                    'voice'
+                  )
+                }
+                className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                aria-label="Voice Call"
+                title="Voice Call"
+              >
+                <Phone className="w-5 h-5" />
+              </button>
+            </>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setIsScamCheckerModalOpen(true)}
-            className="p-2 hover:bg-white/10 rounded-full transition-colors text-amber-400"
-            title="Check Scam Reputation"
-            aria-label="Scam Check"
-          >
-            <ShieldAlert className="w-5 h-5" />
-          </button>
+          {isFeatureEnabled('scamChecker') && (
+            <button
+              type="button"
+              onClick={() => setIsScamCheckerModalOpen(true)}
+              className="p-2 hover:bg-white/10 rounded-full transition-colors text-amber-400"
+              title="Check Scam Reputation"
+              aria-label="Scam Check"
+            >
+              <ShieldAlert className="w-5 h-5" />
+            </button>
+          )}
 
           <button
             type="button"
@@ -1841,10 +1848,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           </button>
         </div>
 
-        {inputText.trim() ? (
+        {inputText.trim() || !isFeatureEnabled('voiceNotes') ? (
           <button
             onClick={handleSend}
-            className="w-11 h-11 rounded-full bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center shadow-md shadow-purple-600/30 transition-colors shrink-0"
+            disabled={!inputText.trim()}
+            className="w-11 h-11 rounded-full bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white flex items-center justify-center shadow-md shadow-purple-600/30 transition-colors shrink-0"
             aria-label="Send"
           >
             <Send className="w-5 h-5 ml-0.5" />

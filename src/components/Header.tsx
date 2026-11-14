@@ -344,35 +344,37 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
 
         <div className="flex items-center gap-1.5">
           {/* Paystack Wallet Balance Pill with Toggle to Turn Off Figure */}
-          <div className="smartwatch-hide flex items-center rounded-full bg-white/10 hover:bg-white/15 text-indigo-200 text-xs font-mono font-bold transition-all border border-white/10 shadow-xs">
-            <button
-              type="button"
-              onClick={() => setIsWalletModalOpen(true)}
-              className="flex items-center gap-1.5 pl-2.5 pr-1.5 py-1"
-              title="Open AGC Wallet"
-            >
-              <Wallet className="w-3.5 h-3.5 text-amber-400" />
-              <span>{hideBalanceOnNav ? '₦ ••••••' : formattedShortBalance}</span>
-            </button>
+          {isFeatureEnabled('wallet') && (
+            <div className="smartwatch-hide flex items-center rounded-full bg-white/10 hover:bg-white/15 text-indigo-200 text-xs font-mono font-bold transition-all border border-white/10 shadow-xs">
+              <button
+                type="button"
+                onClick={() => setIsWalletModalOpen(true)}
+                className="flex items-center gap-1.5 pl-2.5 pr-1.5 py-1"
+                title="Open AGC Wallet"
+              >
+                <Wallet className="w-3.5 h-3.5 text-amber-400" />
+                <span>{hideBalanceOnNav ? '₦ ••••••' : formattedShortBalance}</span>
+              </button>
 
-            {/* Eye toggle button to turn off balance figure on the nav */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleHideBalance();
-              }}
-              className="pr-2 pl-1 py-1 text-white/60 hover:text-white transition-colors"
-              title={hideBalanceOnNav ? 'Show balance figure on nav' : 'Hide balance figure on nav (privacy mode)'}
-              aria-label="Toggle balance privacy"
-            >
-              {hideBalanceOnNav ? (
-                <Eye className="w-3.5 h-3.5 text-amber-300" />
-              ) : (
-                <EyeOff className="w-3.5 h-3.5 text-white/60 hover:text-white" />
-              )}
-            </button>
-          </div>
+              {/* Eye toggle button to turn off balance figure on the nav */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleHideBalance();
+                }}
+                className="pr-2 pl-1 py-1 text-white/60 hover:text-white transition-colors"
+                title={hideBalanceOnNav ? 'Show balance figure on nav' : 'Hide balance figure on nav (privacy mode)'}
+                aria-label="Toggle balance privacy"
+              >
+                {hideBalanceOnNav ? (
+                  <Eye className="w-3.5 h-3.5 text-amber-300" />
+                ) : (
+                  <EyeOff className="w-3.5 h-3.5 text-white/60 hover:text-white" />
+                )}
+              </button>
+            </div>
+          )}
 
           {/* Scan QR Button */}
           <button
