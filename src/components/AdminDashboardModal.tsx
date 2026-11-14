@@ -55,6 +55,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { DispatchDeliveryOrder, FeatureFlags, CmsAnnouncement, CmsFaqItem } from '../types';
+import dbFallbackUsers from '../../data_users.json';
 
 interface LiveAdminMetrics {
   uptimeSeconds: number;
@@ -103,6 +104,8 @@ export const AdminDashboardModal: React.FC = () => {
     unbanUser,
     adjustUserWallet,
     kickUserSession,
+    currentUser,
+    isUserOnline,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'dispatch' | 'escrow' | 'broadcast' | 'config' | 'features' | 'cms' | 'telemetry'>('overview');
@@ -242,33 +245,110 @@ export const AdminDashboardModal: React.FC = () => {
 
   if (!isAdminModalOpen) return null;
 
-  // Combine adminUsers and backend registered users
+  // Comprehensive Customer Aggregator:
+  // Combines (1) AppContext adminUsers, (2) live backend metrics/users, (3) data_users.json file, (4) localStorage registries, (5) active currentUser
   const mergedUsers = useMemo(() => {
-    const list = [...adminUsers];
-    if (liveMetrics?.registeredUsers) {
-      liveMetrics.registeredUsers.forEach((ru: any) => {
-        const exists = list.some((u) => u.phoneNumber === ru.phoneNumber || u.id === ru.id);
-        if (!exists) {
-          list.push({
-            id: ru.id || `usr_${Date.now()}`,
-            fullName: ru.fullName || 'Registered User',
-            phoneNumber: ru.phoneNumber || ru.phone || '',
-            avatarUrl: ru.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-            role: ru.role || 'user',
-            verificationBadge: ru.verificationBadge || null,
-            isPhoneVerified: true,
-            status: ru.status || 'active',
-            joinedDate: ru.createdAt ? new Date(ru.createdAt).toLocaleDateString() : 'Recent',
-            walletBalanceNgn: ru.walletBalanceNgn || 50000,
-            ordersCount: ru.ordersCount || 0,
-            isOnline: ru.isOnline || false,
-            lastSeen: ru.lastSeen || null,
-          });
-        }
-      });
+    const map = new Map<string, any>();
+
+    const addUser = (raw: any) => {
+      if (!raw) return;
+      const phone = (raw.phoneNumber || raw.phone || '').trim();
+      const id = raw.id || (phone ? `usr_${phone.replace(/\D/g, '')}` : `usr_${Date.now()}`);
+      const cleanPhone = phone.replace(/\D/g, '');
+      const key = cleanPhone || id;
+      if (!key) return;
+
+      const isCurrent = currentUser?.phoneNumber && (currentUser.phoneNumber === phone || (cleanPhone && currentUser.phoneNumber.replace(/\D/g, '') === cleanPhone));
+      const online = Boolean(
+        isCurrent ||
+        raw.isOnline ||
+        raw.lastSeen === 'online' ||
+        (cleanPhone && isUserOnline?.(cleanPhone)) ||
+        (isUserOnline?.(id))
+      );
+
+      const existing = map.get(key);
+      if (existing) {
+        map.set(key, {
+          ...existing,
+          ...raw,
+          fullName: raw.fullName || raw.name || existing.fullName,
+          avatarUrl: raw.avatarUrl || existing.avatarUrl,
+          status: raw.status || existing.status || 'active',
+          isOnline: existing.isOnline || online,
+          lastSeen: online ? 'online' : (raw.lastSeen || existing.lastSeen || 'Recently active'),
+          walletBalanceNgn: raw.walletBalanceNgn ?? existing.walletBalanceNgn ?? 50000,
+        });
+      } else {
+        map.set(key, {
+          id,
+          fullName: raw.fullName || raw.name || (isCurrent ? (currentUser.fullName || 'You') : 'Registered User'),
+          phoneNumber: phone || (isCurrent ? currentUser.phoneNumber : ''),
+          avatarUrl: raw.avatarUrl || (isCurrent ? currentUser.avatarUrl : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'),
+          role: raw.role || (isCurrent ? (currentUser.role || 'user') : 'user'),
+          verificationBadge: raw.verificationBadge || null,
+          isPhoneVerified: raw.isPhoneVerified !== undefined ? Boolean(raw.isPhoneVerified) : true,
+          status: raw.status || 'active',
+          bannedAt: raw.bannedAt,
+          banReason: raw.banReason,
+          joinedDate: raw.createdAt ? new Date(raw.createdAt).toLocaleDateString() : 'Recent',
+          walletBalanceNgn: raw.walletBalanceNgn ?? 50000,
+          ordersCount: raw.ordersCount || 0,
+          isOnline: online,
+          lastSeen: online ? 'online' : (raw.lastSeen || 'Recently active'),
+        });
+      }
+    };
+
+    // 1. Seed from data_users.json database file
+    if (Array.isArray(dbFallbackUsers)) {
+      dbFallbackUsers.forEach(addUser);
     }
-    return list;
-  }, [adminUsers, liveMetrics?.registeredUsers]);
+
+    // 2. Check localStorage accounts
+    try {
+      const allRaw = localStorage.getItem('AGC_all_registered_users');
+      if (allRaw) {
+        const parsed = JSON.parse(allRaw);
+        if (Array.isArray(parsed)) parsed.forEach(addUser);
+      }
+    } catch (_) {}
+
+    try {
+      const regMapRaw = localStorage.getItem('AGC_registered_phones');
+      if (regMapRaw) {
+        const parsed = JSON.parse(regMapRaw);
+        if (parsed && typeof parsed === 'object') {
+          Object.values(parsed).forEach(addUser);
+        }
+      }
+    } catch (_) {}
+
+    try {
+      const pRaw = localStorage.getItem('AGC_user_profile_v2');
+      if (pRaw) {
+        const parsed = JSON.parse(pRaw);
+        if (parsed?.phoneNumber) addUser(parsed);
+      }
+    } catch (_) {}
+
+    // 3. Logged in currentUser
+    if (currentUser?.phoneNumber) {
+      addUser(currentUser);
+    }
+
+    // 4. AppContext adminUsers state
+    if (Array.isArray(adminUsers)) {
+      adminUsers.forEach(addUser);
+    }
+
+    // 5. Backend live metrics
+    if (liveMetrics?.registeredUsers && Array.isArray(liveMetrics.registeredUsers)) {
+      liveMetrics.registeredUsers.forEach(addUser);
+    }
+
+    return Array.from(map.values());
+  }, [adminUsers, liveMetrics?.registeredUsers, currentUser, isUserOnline]);
 
   // Filtered users by search, role, and status
   const filteredUsers = mergedUsers.filter((u) => {
