@@ -224,6 +224,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [translatedMessages, setTranslatedMessages] = useState<Record<string, boolean>>({});
   const [activeMenuMsgId, setActiveMenuMsgId] = useState<string | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getTranslatedContent = (msg: ChatMessage): string => {
     if (msg.translatedText) {
@@ -1054,10 +1055,27 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
                 {/* Main Speech Bubble */}
                 <div
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveMenuMsgId(activeMenuMsgId === msg.id ? null : msg.id);
+                  onPointerDown={(e) => {
+                    // Start long-press timer (420 ms)
+                    longPressTimerRef.current = setTimeout(() => {
+                      e.stopPropagation();
+                      setActiveMenuMsgId(activeMenuMsgId === msg.id ? null : msg.id);
+                      longPressTimerRef.current = null;
+                    }, 420);
                   }}
+                  onPointerUp={() => {
+                    if (longPressTimerRef.current) {
+                      clearTimeout(longPressTimerRef.current);
+                      longPressTimerRef.current = null;
+                    }
+                  }}
+                  onPointerLeave={() => {
+                    if (longPressTimerRef.current) {
+                      clearTimeout(longPressTimerRef.current);
+                      longPressTimerRef.current = null;
+                    }
+                  }}
+                  onContextMenu={(e) => e.preventDefault()}
                   onMouseUp={(e) => {
                     const sel = window.getSelection()?.toString();
                     if (sel && sel.trim().length > 0) {

@@ -5115,8 +5115,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // Strip blob: URL before cross-device broadcast (blob: URLs are tab-local only)
-    const wireVoiceNote = { ...newMsg.voiceNote!, audioDataUrl: undefined };
-    broadcastLiveMessage(chatId, { ...newMsg, voiceNote: wireVoiceNote });
+    // audioDataUrl is now base64 (not a blob: URL), so it's safe to broadcast cross-device
+    broadcastLiveMessage(chatId, newMsg);
   };
 
   const sendProductCard = (chatId: string, product: Product) => {

@@ -168,15 +168,19 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
     stopAllMediaTracks();
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!activeChatId) return;
     const dur = Math.max(2, seconds);
 
-    // Build ephemeral blob URL for sender's in-tab playback
+    // Convert blob to base64 so audio survives cross-device broadcast
     let audioDataUrl: string | undefined;
     if (audioChunksRef.current.length > 0) {
       const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-      audioDataUrl = URL.createObjectURL(blob);
+      audioDataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
     }
 
     // transcript is whatever the Web Speech API captured (empty string if unsupported)
