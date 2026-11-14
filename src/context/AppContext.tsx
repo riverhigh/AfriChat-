@@ -8780,6 +8780,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         })
         .catch(() => {});
+
+      // Live Supabase SQL Table: fetch all registered phones across all devices
+      if (isSupabaseConfigured) {
+        supabase
+          .from('agc_phone_registry')
+          .select('*')
+          .then(({ data, error }) => {
+            if (!error && Array.isArray(data)) {
+              const sbUsers: AdminUserRecord[] = data.map((row: any) => ({
+                id: `usr_${row.phone_digits || (row.full_phone || '').replace(/\D/g, '')}`,
+                fullName: row.username || 'User',
+                phoneNumber: row.full_phone || (row.phone_digits ? `+${row.phone_digits}` : ''),
+                avatarUrl: row.avatar_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || 'user')}`,
+                role: 'user',
+                verificationBadge: null,
+                isPhoneVerified: true,
+                status: 'active',
+                joinedDate: row.registered_at ? new Date(row.registered_at).toLocaleDateString() : 'Recent',
+                walletBalanceNgn: 50000,
+                ordersCount: 0,
+                isOnline: false,
+                lastSeen: row.updated_at ? new Date(row.updated_at).toLocaleDateString() : undefined,
+              }));
+              setAdminUsers((prev) => {
+                const merged = [...prev];
+                sbUsers.forEach((mu) => {
+                  const idx = merged.findIndex((u) => u.phoneNumber === mu.phoneNumber || u.id === mu.id);
+                  if (idx >= 0) {
+                    merged[idx] = { ...merged[idx], ...mu };
+                  } else {
+                    merged.push(mu);
+                  }
+                });
+                try { localStorage.setItem('AGC_admin_users', JSON.stringify(merged)); } catch (_) {}
+                return merged;
+              });
+            }
+          }, () => {});
+      }
     } catch (_) {}
   }, []);
 

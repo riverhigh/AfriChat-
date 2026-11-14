@@ -56,6 +56,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { DispatchDeliveryOrder, FeatureFlags, CmsAnnouncement, CmsFaqItem } from '../types';
 import dbFallbackUsers from '../../data_users.json';
+import { supabase, isSupabaseConfigured } from '../services/supabase';
 
 interface LiveAdminMetrics {
   uptimeSeconds: number;
@@ -113,6 +114,19 @@ export const AdminDashboardModal: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
   const [liveMetrics, setLiveMetrics] = useState<LiveAdminMetrics | null>(null);
+  const [supabaseUsers, setSupabaseUsers] = useState<any[]>([]);
+
+  const fetchSupabaseUsers = async () => {
+    if (!isSupabaseConfigured) return;
+    try {
+      const { data, error } = await supabase.from('agc_phone_registry').select('*');
+      if (!error && Array.isArray(data)) {
+        setSupabaseUsers(data);
+      }
+    } catch (e) {
+      console.warn('Supabase users fetch notice:', e);
+    }
+  };
 
   // Search & Filter States
   const [userSearchQuery, setUserSearchQuery] = useState('');
@@ -167,6 +181,7 @@ export const AdminDashboardModal: React.FC = () => {
   // Fetch live metrics from backend (relative first via Vite/proxy, then port 3002)
   const fetchLiveMetrics = async () => {
     setIsRefreshing(true);
+    fetchSupabaseUsers();
     try {
       let res: Response | null = null;
       try {
@@ -221,10 +236,35 @@ export const AdminDashboardModal: React.FC = () => {
   useEffect(() => {
     if (!isAdminModalOpen) return;
     fetchLiveMetrics();
+    fetchSupabaseUsers();
 
-    if (!autoRefresh) return;
-    const interval = setInterval(fetchLiveMetrics, 6000);
-    return () => clearInterval(interval);
+    // Live Realtime listener on Supabase agc_phone_registry table
+    let channel: any = null;
+    if (isSupabaseConfigured) {
+      try {
+        channel = supabase
+          .channel('admin_phone_reg_sync')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'agc_phone_registry' },
+            () => {
+              fetchSupabaseUsers();
+            }
+          )
+          .subscribe();
+      } catch (_) {}
+    }
+
+    if (!autoRefresh) return () => { if (channel) supabase.removeChannel(channel); };
+    const interval = setInterval(() => {
+      fetchLiveMetrics();
+      fetchSupabaseUsers();
+    }, 6000);
+
+    return () => {
+      clearInterval(interval);
+      if (channel) supabase.removeChannel(channel);
+    };
   }, [isAdminModalOpen, autoRefresh]);
 
   useEffect(() => {
@@ -342,13 +382,34 @@ export const AdminDashboardModal: React.FC = () => {
       adminUsers.forEach(addUser);
     }
 
-    // 5. Backend live metrics
+    // 5. Live Supabase SQL Database (agc_phone_registry)
+    if (Array.isArray(supabaseUsers) && supabaseUsers.length > 0) {
+      supabaseUsers.forEach((row: any) => {
+        addUser({
+          id: `usr_${row.phone_digits || (row.full_phone || '').replace(/\D/g, '')}`,
+          fullName: row.username || 'User',
+          phoneNumber: row.full_phone || (row.phone_digits ? `+${row.phone_digits}` : ''),
+          avatarUrl: row.avatar_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || 'user')}`,
+          role: 'user',
+          verificationBadge: null,
+          isPhoneVerified: true,
+          status: 'active',
+          joinedDate: row.registered_at ? new Date(row.registered_at).toLocaleDateString() : 'Recent',
+          walletBalanceNgn: 50000,
+          ordersCount: 0,
+          isOnline: Boolean(isUserOnline?.(row.full_phone?.replace(/\D/g, ''))),
+          lastSeen: row.updated_at ? new Date(row.updated_at).toLocaleDateString() : null,
+        });
+      });
+    }
+
+    // 6. Backend live metrics
     if (liveMetrics?.registeredUsers && Array.isArray(liveMetrics.registeredUsers)) {
       liveMetrics.registeredUsers.forEach(addUser);
     }
 
     return Array.from(map.values());
-  }, [adminUsers, liveMetrics?.registeredUsers, currentUser, isUserOnline]);
+  }, [adminUsers, liveMetrics?.registeredUsers, currentUser, isUserOnline, supabaseUsers]);
 
   // Filtered users by search, role, and status
   const filteredUsers = mergedUsers.filter((u) => {
