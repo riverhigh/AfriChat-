@@ -55,7 +55,7 @@ import { CallErrorBoundary } from './components/CallErrorBoundary';
 import { ChatErrorBoundary } from './components/ChatErrorBoundary';
 
 const AppContent: React.FC = () => {
-  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled, isBanned, banInfo, systemConfig, currentUser } = useApp();
+  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled, isBanned, banInfo, systemConfig, currentUser, isAdminModalOpen } = useApp();
   const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('agc_splash_shown'));
   const handleSplashDone = useCallback(() => {
     sessionStorage.setItem('agc_splash_shown', 'true');
@@ -132,6 +132,7 @@ const AppContent: React.FC = () => {
       <>
         <PhoneSignUpBanner />
         <WhatsAppPhoneAuth />
+        {isAdminModalOpen && <AdminDashboardModal />}
       </>
     );
   }

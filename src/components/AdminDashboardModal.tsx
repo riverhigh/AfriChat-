@@ -511,8 +511,8 @@ export const AdminDashboardModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-5xl max-h-[94vh] flex flex-col bg-slate-950 text-slate-100 rounded-3xl shadow-2xl border border-purple-500/30 overflow-hidden font-sans">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="w-full max-w-5xl h-full sm:h-auto sm:max-h-[94vh] flex flex-col bg-slate-950 text-slate-100 rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-purple-500/30 overflow-hidden font-sans">
         
         {/* Top Executive Header */}
         <div className="px-6 py-4 bg-gradient-to-r from-purple-950/90 via-slate-900 to-indigo-950 border-b border-purple-500/20 flex flex-wrap items-center justify-between gap-3 shrink-0">

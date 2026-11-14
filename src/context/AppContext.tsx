@@ -8837,25 +8837,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [activeChatId, currentUser.id, handleIncomingMessage]);
 
+  const checkIsAdminUrl = () => {
+    if (typeof window === 'undefined') return false;
+    const hash = (window.location.hash || '').toLowerCase();
+    const search = (window.location.search || '').toLowerCase();
+    const path = (window.location.pathname || '').toLowerCase().replace(/\/+$/, '');
+    return (
+      hash === '#admin' ||
+      hash.startsWith('#admin') ||
+      hash === '#/admin' ||
+      hash.startsWith('#/admin') ||
+      search.includes('admin=true') ||
+      search.includes('admin=1') ||
+      search.includes('admin') ||
+      path === '/admin' ||
+      path.endsWith('/admin')
+    );
+  };
+
   // 29. Super Admin Console & Moderation State
-  const [isAdminModalOpen, setIsAdminModalOpen] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const hash = window.location.hash.toLowerCase();
-      const search = window.location.search.toLowerCase();
-      const path = window.location.pathname.toLowerCase();
-      return hash === '#admin' || search.includes('admin=true') || search.includes('admin=1') || path === '/admin';
-    }
-    return false;
-  });
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(() => checkIsAdminUrl());
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleUrlChange = () => {
-      const hash = window.location.hash;
-      const hashLower = hash.toLowerCase();
-      const search = window.location.search.toLowerCase();
-      const path = window.location.pathname.toLowerCase();
-      if (hashLower === '#admin' || search.includes('admin=true') || search.includes('admin=1') || path === '/admin') {
+      const hash = window.location.hash || '';
+      const search = (window.location.search || '').toLowerCase();
+      if (checkIsAdminUrl()) {
         setIsAdminModalOpen(true);
       }
 
@@ -8925,9 +8933,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     handleUrlChange();
     window.addEventListener('hashchange', handleUrlChange);
     window.addEventListener('popstate', handleUrlChange);
+    window.addEventListener('focus', handleUrlChange);
     return () => {
       window.removeEventListener('hashchange', handleUrlChange);
       window.removeEventListener('popstate', handleUrlChange);
+      window.removeEventListener('focus', handleUrlChange);
     };
   }, []);
   const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>(() => {

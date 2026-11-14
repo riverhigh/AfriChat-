@@ -110,6 +110,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     acceptFriendRequest,
     declineFriendRequest,
     isFeatureEnabled,
+    setIsAdminModalOpen,
   } = useApp();
 
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
@@ -337,6 +338,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
   const handleSend = () => {
     if (!inputText.trim() || !activeChatId) return;
+    const trimmed = inputText.trim().toLowerCase();
+    if (trimmed === '/admin' || trimmed === '/console' || trimmed === 'admin') {
+      setInputText('');
+      setIsAdminModalOpen(true);
+      return;
+    }
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     sendTypingIndicator(activeChatId, false);
     const replyMeta = replyingTo

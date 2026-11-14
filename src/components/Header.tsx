@@ -172,8 +172,8 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                     </div>
                   )}
 
-                  {/* Admin Console - Hidden from regular users */}
-                  {(currentUser?.role === 'admin' || currentUser?.isAdmin) && !menuSearch && (
+                  {/* Admin Console - Readily available on mobile */}
+                  {(!menuSearch || menuSearch.toLowerCase().includes('admin')) && (
                     <button
                       type="button"
                       onClick={() => {

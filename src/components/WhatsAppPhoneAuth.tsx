@@ -174,7 +174,7 @@ const findExistingAccount = (
 };
 
 export const WhatsAppPhoneAuth: React.FC = () => {
-  const { loginWithPhone } = useApp();
+  const { loginWithPhone, setIsAdminModalOpen } = useApp();
 
   // Added 'device_conflict' step: shown when the number is active on another device
   const [step, setStep] = useState<'phone' | 'confirm_dialog' | 'device_conflict' | 'otp' | 'profile' | 'initializing'>('phone');
@@ -1396,13 +1396,23 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         {/* ========================================================================= */}
         <footer className="px-5 py-3.5 text-center text-[10px] text-purple-300/60 border-t border-purple-500/15 bg-white/[0.01] flex items-center justify-between">
           <span>Web Tab Global Services (RC8554897)</span>
-          <button
-            type="button"
-            onClick={() => setShowLegalModal(true)}
-            className="text-purple-400 hover:text-purple-300 font-bold underline"
-          >
-            Legal & Privacy
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsAdminModalOpen(true)}
+              className="text-purple-400 hover:text-purple-300 font-bold flex items-center gap-1 font-mono"
+            >
+              <span>🛡️</span>
+              <span>/admin</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowLegalModal(true)}
+              className="text-purple-400 hover:text-purple-300 font-bold underline"
+            >
+              Legal & Privacy
+            </button>
+          </div>
         </footer>
       </div>
 
