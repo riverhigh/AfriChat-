@@ -604,6 +604,77 @@ app.patch('/api/dispatch/orders/:id/status', (req: Request, res: Response) => {
   res.json({ success: true, order });
 });
 
+// ── REST: LIVE ADMIN TELEMETRY & COMMAND API ────────────────────────────────
+app.get('/api/admin/metrics', (_req: Request, res: Response) => {
+  const allOrders = Array.from(dispatchOrdersMap.values());
+  const totalVolumeNgn = allOrders.reduce((acc, o: any) => acc + (Number(o.totalFee) || Number(o.estimatedFee) || 0), 0);
+  const totalCommissionNgn = allOrders.reduce((acc, o: any) => acc + (Number(o.platformFee) || Math.round((Number(o.estimatedFee) || 0) * 0.05)), 0);
+  const activeDeliveriesCount = allOrders.filter((o: any) => o.status !== 'delivered').length;
+  const completedDeliveriesCount = allOrders.filter((o: any) => o.status === 'delivered').length;
+
+  const onlineList = Array.from(onlineUsers.values());
+  const registeredUsersList = Array.from(usersByPhone.values());
+
+  const activeStatusesCount = Array.from(statusesMap.values()).filter(
+    (s: any) => !s.expiresAt || new Date(s.expiresAt).getTime() > Date.now()
+  ).length;
+
+  res.json({
+    success: true,
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.floor(process.uptime()),
+    serverMemoryMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+    onlineUsersCount: onlineUsers.size,
+    onlineUsers: onlineList,
+    registeredUsersCount: usersByPhone.size,
+    registeredUsers: registeredUsersList,
+    communitiesCount: communitiesMap.size,
+    communities: Array.from(communitiesMap.values()),
+    activeStatusesCount,
+    dispatch: {
+      totalOrdersCount: allOrders.length,
+      activeDeliveriesCount,
+      completedDeliveriesCount,
+      totalVolumeNgn,
+      totalCommissionNgn,
+      orders: allOrders,
+    },
+    systemStatus: 'healthy',
+  });
+});
+
+app.patch('/api/admin/users/:phone/badge', (req: Request, res: Response) => {
+  const { phone } = req.params;
+  const { verificationBadge, role, status } = req.body;
+  const clean = phone.replace(/\D/g, '');
+  const user = usersByPhone.get(clean);
+  if (user) {
+    if (verificationBadge !== undefined) (user as any).verificationBadge = verificationBadge;
+    if (role !== undefined) (user as any).role = role;
+    if (status !== undefined) (user as any).status = status;
+    usersByPhone.set(clean, user);
+    saveUsersFile();
+    io.emit('user_updated', user);
+    return res.json({ success: true, user });
+  }
+  res.status(404).json({ error: 'User not found' });
+});
+
+app.post('/api/admin/broadcast', (req: Request, res: Response) => {
+  const { title, message, level } = req.body;
+  if (!title || !message) return res.status(400).json({ error: 'Title and message required' });
+  const broadcast = {
+    id: `bc_${Date.now()}`,
+    title,
+    message,
+    level: level || 'info',
+    createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    active: true,
+  };
+  io.emit('system_broadcast', broadcast);
+  res.json({ success: true, broadcast });
+});
+
 // Create raw HTTP server to handle both Express REST and WebSocket upgrades
 const httpServer = createServer(app);
 
