@@ -380,6 +380,38 @@ app.post('/api/communities', (req: Request, res: Response) => {
   res.json({ success: true, community: comm });
 });
 
+// REST: Resend Email Endpoint
+app.post('/api/email/send', async (req: Request, res: Response) => {
+  try {
+    const { to, subject, html, text, from } = req.body;
+    if (!to || !subject) {
+      return res.status(400).json({ error: 'Recipient (to) and subject required' });
+    }
+    const recipients = Array.isArray(to) ? to : [to];
+    const apiKey = process.env.RESEND_API_KEY || '';
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: from || 'onboarding@resend.dev',
+        to: recipients,
+        subject,
+        html: html || `<p>${text || subject}</p>`,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error dispatching email' });
+  }
+});
+
 app.get('/api/statuses', (_req: Request, res: Response) => {
   const now = Date.now();
   const list = Array.from(statusesMap.values()).filter(

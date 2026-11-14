@@ -1043,10 +1043,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          // Prune test/mock communities from initial state
+          // Prune test/mock and Lagos Tech communities from initial state
           const clean = parsed.filter((c: TownCommunity) => {
             const low = `${c.name} ${c.id} ${c.description || ''}`.toLowerCase();
-            return !low.includes('test') && !low.includes('mock') && !low.includes('sample') && !c.id.startsWith('test_') && !c.id.startsWith('__test');
+            return !low.includes('lagos tech') && !low.includes('test') && !low.includes('mock') && !low.includes('sample') && !c.id.startsWith('test_') && !c.id.startsWith('__test');
           });
           return clean;
         }
@@ -1076,7 +1076,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     // 1. Fetch from Supabase town_communities
     if (isSupabaseConfigured) {
-      // Purge any leftover test entities in Supabase
+      // Purge Lagos Tech and any leftover test entities in Supabase
+      supabase.from('town_communities').delete().ilike('name', '%lagos tech%').then(() => {}, () => {});
       supabase.from('town_communities').delete().ilike('name', '%test%').then(() => {}, () => {});
       supabase.from('town_communities').delete().ilike('name', '%mock%').then(() => {}, () => {});
 
@@ -1093,6 +1094,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 const lowerDesc = (row.description || '').toLowerCase();
                 const lowerId = (row.id || '').toLowerCase();
                 if (
+                  lowerName.includes('lagos tech') ||
+                  lowerDesc.includes('lagos tech') ||
                   lowerName.includes('test') ||
                   lowerName.includes('mock') ||
                   lowerName.includes('sample') ||
@@ -1100,7 +1103,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   lowerId.startsWith('test_') ||
                   lowerId.startsWith('__test')
                 ) {
-                  return; // Skip test community
+                  return; // Skip test or lagos tech community
                 }
                 const tags: string[] = Array.isArray(row.tags) ? row.tags : [];
                 const typeTag = tags.find((t: string) => t.startsWith('type:'));

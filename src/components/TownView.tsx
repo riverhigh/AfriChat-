@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Users,
   Radio,
@@ -16,6 +16,7 @@ import {
   Sparkles,
   PawPrint,
   Trash2,
+  ChevronLeft,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { TownCommunity } from '../types';
@@ -42,6 +43,30 @@ export const TownView: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinCodeModal, setShowJoinCodeModal] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState('');
+
+  // Swipe gesture state for Town communities
+  const [swipedCommunityId, setSwipedCommunityId] = useState<string | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const handleTouchStart = (_id: string, e: React.TouchEvent) => {
+    touchStartRef.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY,
+    };
+  };
+
+  const handleTouchEnd = (id: string, e: React.TouchEvent) => {
+    if (!touchStartRef.current) return;
+    const deltaX = e.changedTouches[0].clientX - touchStartRef.current.x;
+    const deltaY = e.changedTouches[0].clientY - touchStartRef.current.y;
+    touchStartRef.current = null;
+
+    if (deltaX < -35 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2) {
+      setSwipedCommunityId(id);
+    } else if (deltaX > 35) {
+      if (swipedCommunityId === id) setSwipedCommunityId(null);
+    }
+  };
 
   const handleJoinByCode = () => {
     const raw = joinCodeInput.trim();
@@ -109,11 +134,13 @@ export const TownView: React.FC = () => {
   const liveSpaces = audioSpaces.filter((s) => s.isLive);
 
   const filteredCommunities = townCommunities.filter((item) => {
-    // 1. Strict filter: purge any test, mock, dummy, or sample entities
+    // 1. Strict filter: purge any test, mock, dummy, sample, or Lagos Tech entities
     const lowerName = item.name.toLowerCase();
     const lowerDesc = (item.description || '').toLowerCase();
     const lowerId = item.id.toLowerCase();
     if (
+      lowerName.includes('lagos tech') ||
+      lowerDesc.includes('lagos tech') ||
       lowerName.includes('test') ||
       lowerName.includes('mock') ||
       lowerName.includes('dummy') ||
@@ -474,115 +501,108 @@ export const TownView: React.FC = () => {
                 </button>
               </div>
             ) : (
-              filteredCommunities.map((item) => (
-                <div
-                  key={item.id}
-                  onClick={(e) => { e.stopPropagation(); openCommunityChat(item); }}
-                  className="p-3.5 rounded-2xl bg-white dark:bg-[#120924] border border-purple-100 dark:border-purple-900/30 hover:border-purple-500/50 hover:shadow-md transition-all cursor-pointer group active:scale-[0.99]"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3.5 min-w-0">
-                      <img
-                        src={item.avatar}
-                        alt={item.name}
-                        className="w-12 h-12 rounded-2xl object-cover shrink-0 border border-slate-200 dark:border-purple-900/50 shadow-xs"
-                      />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                            {item.name}
-                          </h4>
-                          {item.isVerified && (
-                            <span className="w-4 h-4 rounded-full bg-purple-600 text-white flex items-center justify-center text-[10px] font-bold">
-                              ✓
-                            </span>
-                          )}
-                        </div>
+              filteredCommunities.map((item) => {
+                const isSwiped = swipedCommunityId === item.id;
 
-                        <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 dark:text-purple-300/70">
-                          <span
-                            className={`px-1.5 py-0.2 rounded font-bold uppercase text-[9px] ${
-                              item.type === 'channel'
-                                ? 'bg-purple-600/15 text-purple-700 dark:text-purple-300'
-                                : 'bg-emerald-600/15 text-emerald-700 dark:text-emerald-400'
-                            }`}
-                          >
-                            {item.type}
-                          </span>
-                          <span>•</span>
-                          <span className="font-mono font-semibold text-slate-700 dark:text-white">
-                            {item.membersCount} {item.membersCount === 1 ? 'member' : 'members'}
-                          </span>
-                          <span>•</span>
-                          <span className="truncate">{item.category}</span>
-                        </div>
-
-                        {item.description && (
-                          <p className="text-xs text-slate-600 dark:text-purple-200/70 mt-1 line-clamp-1">
-                            {item.description}
-                          </p>
-                        )}
-                      </div>
+                return (
+                  <div
+                    key={item.id}
+                    className="relative rounded-2xl overflow-hidden select-none bg-rose-600"
+                    onTouchStart={(e) => handleTouchStart(item.id, e)}
+                    onTouchEnd={(e) => handleTouchEnd(item.id, e)}
+                  >
+                    {/* Revealed Swipe Action on Right */}
+                    <div className="absolute inset-y-0 right-0 flex items-stretch z-0">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`Delete "${item.name}"? This will remove this ${item.type}.`)) {
+                            deleteTownCommunity(item.id);
+                          }
+                          setSwipedCommunityId(null);
+                        }}
+                        className="w-20 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white flex flex-col items-center justify-center gap-1 text-[11px] font-bold transition-colors cursor-pointer"
+                        title="Delete community"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        <span>Delete</span>
+                      </button>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleJoinTownCommunity(item.id);
-                        }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1 border ${
-                          item.isJoined
-                            ? 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800'
-                            : 'bg-white dark:bg-white/5 text-slate-700 dark:text-white border-slate-200 dark:border-white/10 hover:border-purple-500'
-                        }`}
-                      >
-                        {item.isJoined ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
-                            <span>Joined</span>
-                          </>
-                        ) : (
-                          <>
-                            <Plus className="w-3.5 h-3.5" />
-                            <span>Join</span>
-                          </>
-                        )}
-                      </button>
+                    {/* Main Foreground Card (Slides Left when Swiped) */}
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isSwiped) {
+                          setSwipedCommunityId(null);
+                          return;
+                        }
+                        openCommunityChat(item);
+                      }}
+                      style={{
+                        transform: isSwiped ? 'translateX(-80px)' : 'translateX(0)',
+                      }}
+                      className="p-3.5 rounded-2xl bg-white dark:bg-[#120924] border border-purple-100 dark:border-purple-900/30 hover:border-purple-500/50 hover:shadow-md transition-transform duration-200 ease-out cursor-pointer relative z-10 active:scale-[0.99] flex items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <img
+                          src={item.avatar}
+                          alt={item.name}
+                          className="w-12 h-12 rounded-2xl object-cover shrink-0 border border-slate-200 dark:border-purple-900/50 shadow-xs"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                              {item.name}
+                            </h4>
+                            {item.isVerified && (
+                              <span className="w-4 h-4 rounded-full bg-purple-600 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                                ✓
+                              </span>
+                            )}
+                          </div>
 
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openCommunityChat(item);
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shadow-xs transition-transform active:scale-95 flex items-center gap-1"
-                        title="Open group discussion"
-                      >
-                        <span>Chat</span>
-                        <ArrowRight className="w-3 h-3" />
-                      </button>
+                          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 dark:text-purple-300/70">
+                            <span
+                              className={`px-1.5 py-0.2 rounded font-bold uppercase text-[9px] ${
+                                item.type === 'channel'
+                                  ? 'bg-purple-600/15 text-purple-700 dark:text-purple-300'
+                                  : 'bg-emerald-600/15 text-emerald-700 dark:text-emerald-400'
+                              }`}
+                            >
+                              {item.type}
+                            </span>
+                            <span>•</span>
+                            <span className="truncate">{item.category}</span>
+                          </div>
 
-                      {(item.adminName === currentUser.fullName || item.adminName === 'You' || item.creatorId === currentUser.id) && (
+                          {item.description && (
+                            <p className="text-xs text-slate-600 dark:text-purple-200/70 mt-1 line-clamp-1">
+                              {item.description}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right side: Chevron trigger for desktop mouse users / swipe hint */}
+                      <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (window.confirm(`Permanently delete "${item.name}"? This will remove this ${item.type} for all members.`)) {
-                              deleteTownCommunity(item.id);
-                            }
+                            setSwipedCommunityId(isSwiped ? null : item.id);
                           }}
-                          className="p-1.5 rounded-xl text-rose-500 hover:bg-rose-500/10 border border-rose-500/30 hover:border-rose-500 transition-colors"
-                          title={`Delete ${item.type} (Creator)`}
+                          className="text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 p-1.5 rounded-lg opacity-60 hover:opacity-100 transition-opacity cursor-pointer"
+                          title={isSwiped ? 'Close actions' : 'Swipe to delete'}
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <ChevronLeft className={`w-4 h-4 transition-transform ${isSwiped ? 'rotate-180' : ''}`} />
                         </button>
-                      )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         )}

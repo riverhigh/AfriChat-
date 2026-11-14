@@ -18,6 +18,7 @@ import {
   Monitor,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { sendResendEmail, ADMIN_EMAIL } from '../services/resendEmail';
 
 interface AccountCenterModalProps {
   isOpen: boolean;
@@ -33,6 +34,7 @@ export const AccountCenterModal: React.FC<AccountCenterModalProps> = ({ isOpen, 
   const [emailInput, setEmailInput] = useState(currentUser.email || '');
   const [emailSaved, setEmailSaved] = useState(Boolean(currentUser.email));
   const [emailMessage, setEmailMessage] = useState<string | null>(null);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
 
   // Password state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -102,17 +104,47 @@ export const AccountCenterModal: React.FC<AccountCenterModalProps> = ({ isOpen, 
 
   if (!isOpen) return null;
 
-  const handleSaveEmail = (e: React.FormEvent) => {
+  const handleSaveEmail = async (e: React.FormEvent) => {
     e.preventDefault();
     const clean = emailInput.trim();
     if (!clean || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) {
       setEmailMessage('Please enter a valid email address.');
       return;
     }
+    setIsSendingEmail(true);
+    setEmailMessage('Connecting email & sending verification via Resend...');
+
     updateUserProfile({ email: clean });
     setEmailSaved(true);
-    setEmailMessage('Email verified and connected to your AfriChat account!');
-    setTimeout(() => setEmailMessage(null), 4000);
+
+    try {
+      const res = await sendResendEmail({
+        to: [clean, ADMIN_EMAIL],
+        subject: 'AfriChat Security: Email Connected',
+        html: `
+          <div style="font-family: Arial, sans-serif; background: #0c0817; color: #ffffff; padding: 28px; border-radius: 16px;">
+            <h2 style="color: #a855f7;">AfriChat Account Center</h2>
+            <p style="font-size: 15px; color: #e2e8f0;">Hello <strong>${currentUser.fullName || 'AGC User'}</strong>,</p>
+            <p style="font-size: 14px; color: #cbd5e1;">Your email address <strong>${clean}</strong> has been successfully linked to your AfriChat account for security recovery, transaction notifications, and passkeys.</p>
+            <div style="background: #1e1338; border-left: 4px solid #a855f7; padding: 12px 16px; margin: 20px 0; border-radius: 8px;">
+              <p style="margin: 0; font-size: 13px; color: #e9d5ff;">Phone: <strong>${currentUser.phoneNumber || 'AfriChat User'}</strong></p>
+            </div>
+            <p style="font-size: 12px; color: #94a3b8;">If you did not authorize this change, please check your AfriChat Security Settings.</p>
+          </div>
+        `,
+      });
+
+      if (res.success) {
+        setEmailMessage(`Email connected and verified! Confirmation dispatched via Resend.`);
+      } else {
+        setEmailMessage(`Email saved to profile (${res.error || 'Verified'}).`);
+      }
+    } catch (_) {
+      setEmailMessage('Email saved to AfriChat profile.');
+    } finally {
+      setIsSendingEmail(false);
+      setTimeout(() => setEmailMessage(null), 6000);
+    }
   };
 
   const handleUpdatePassword = (e: React.FormEvent) => {
@@ -278,9 +310,17 @@ export const AccountCenterModal: React.FC<AccountCenterModalProps> = ({ isOpen, 
                   />
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shrink-0"
+                    disabled={isSendingEmail}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shrink-0 flex items-center gap-1"
                   >
-                    {emailSaved ? 'Update' : 'Connect'}
+                    {isSendingEmail ? (
+                      <>
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                        <span>Sending...</span>
+                      </>
+                    ) : (
+                      <span>{emailSaved ? 'Update' : 'Connect'}</span>
+                    )}
                   </button>
                 </form>
 
