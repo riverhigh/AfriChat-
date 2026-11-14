@@ -879,23 +879,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return Boolean(featureFlags[key] !== false);
   };
 
+  // Helper to reliably call admin API: relative first (Vite/proxy), then port 3002 (Node server)
+  const callAdminApi = async (path: string, options?: RequestInit) => {
+    const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+    let res: Response | null = null;
+    try {
+      res = await fetch(path, options);
+      if (res.ok) return res;
+    } catch (_) {}
+    try {
+      const fallbackUrl = `http://${host}:3002${path.startsWith('/') ? path : '/' + path}`;
+      res = await fetch(fallbackUrl, options);
+      if (res.ok) return res;
+    } catch (_) {}
+    return res;
+  };
+
+  const adminSyncChannelRef = useRef<BroadcastChannel | null>(null);
+
   const toggleFeatureFlag = (key: keyof FeatureFlags) => {
-    setFeatureFlags((prev: FeatureFlags) => {
-      const next = { ...prev, [key]: !prev[key] };
-      try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(next)); } catch (_) {}
-      return next;
-    });
+    updateAdminFeatureFlag(key);
   };
 
   const updateSystemConfig = async (updates: Partial<AdminSystemConfig>) => {
+    let nextConfig: AdminSystemConfig = { ...systemConfig, ...updates };
     setSystemConfig((prev) => {
-      const next = { ...prev, ...updates };
-      try { localStorage.setItem('AGC_system_config_v1', JSON.stringify(next)); } catch (_) {}
-      return next;
+      nextConfig = { ...prev, ...updates };
+      try { localStorage.setItem('AGC_system_config_v1', JSON.stringify(nextConfig)); } catch (_) {}
+      return nextConfig;
     });
     try {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      await fetch(`http://${host}:3002/api/admin/config`, {
+      adminSyncChannelRef.current?.postMessage({ type: 'config', data: nextConfig });
+    } catch (_) {}
+    try {
+      await callAdminApi('/api/admin/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -908,14 +925,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateAdminFeatureFlag = async (key: keyof FeatureFlags, val?: boolean) => {
     const nextVal = val !== undefined ? val : !featureFlags[key];
     const updates = { [key]: nextVal };
+    let nextFlags: FeatureFlags = { ...featureFlags, ...updates };
     setFeatureFlags((prev) => {
-      const next = { ...prev, ...updates };
-      try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(next)); } catch (_) {}
-      return next;
+      nextFlags = { ...prev, ...updates };
+      try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(nextFlags)); } catch (_) {}
+      return nextFlags;
     });
     try {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      await fetch(`http://${host}:3002/api/admin/features`, {
+      adminSyncChannelRef.current?.postMessage({ type: 'features', data: nextFlags });
+    } catch (_) {}
+    try {
+      await callAdminApi('/api/admin/features', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -926,14 +946,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateCmsData = async (updates: Partial<AdminCmsData>) => {
+    let nextCms: AdminCmsData = { ...cmsData, ...updates };
     setCmsData((prev) => {
-      const next = { ...prev, ...updates };
-      try { localStorage.setItem('AGC_cms_data_v1', JSON.stringify(next)); } catch (_) {}
-      return next;
+      nextCms = { ...prev, ...updates };
+      try { localStorage.setItem('AGC_cms_data_v1', JSON.stringify(nextCms)); } catch (_) {}
+      return nextCms;
     });
     try {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      await fetch(`http://${host}:3002/api/admin/cms`, {
+      adminSyncChannelRef.current?.postMessage({ type: 'cms', data: nextCms });
+    } catch (_) {}
+    try {
+      await callAdminApi('/api/admin/cms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -6287,6 +6310,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('Socket user register notice:', e);
     }
 
+    // Update adminUsers state immediately so Customer Directory has this user
+    setAdminUsers((prev) => {
+      const exists = prev.some(
+        (u) => u.phoneNumber === updatedUser.phoneNumber || u.id === updatedUser.id
+      );
+      if (exists) {
+        return prev.map((u) =>
+          u.phoneNumber === updatedUser.phoneNumber || u.id === updatedUser.id ? { ...u, ...updatedUser } : u
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: updatedUser.id || `usr_${Date.now()}`,
+          fullName: updatedUser.fullName || 'User',
+          phoneNumber: updatedUser.phoneNumber,
+          avatarUrl: updatedUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+          role: updatedUser.role || 'user',
+          verificationBadge: updatedUser.verificationBadge || null,
+          isPhoneVerified: Boolean(updatedUser.isPhoneVerified),
+          status: 'active',
+          joinedDate: 'Just now',
+          walletBalanceNgn: 50000,
+          ordersCount: 0,
+          isOnline: true,
+          lastSeen: 'online',
+        },
+      ];
+    });
+
     // 3. Register with local server REST API
     try {
       const payload = JSON.stringify(updatedUser);
@@ -8668,8 +8721,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         })
         .catch(() => {});
 
-      fetch(`http://${socketHost}:3002/api/admin/config`)
-        .then((r) => (r.ok ? r.json() : null))
+      // Fetch Admin System Config, Feature Flags, and CMS Content
+      callAdminApi('/api/admin/config')
+        .then((r) => (r && r.ok ? r.json() : null))
         .then((data) => {
           if (data?.success) {
             if (data.config) {
@@ -8684,6 +8738,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               setCmsData((prev) => ({ ...prev, ...data.cms }));
               try { localStorage.setItem('AGC_cms_data_v1', JSON.stringify(data.cms)); } catch (_) {}
             }
+          }
+        })
+        .catch(() => {});
+
+      // Fetch all registered platform users so Admin Dashboard has full customer directory
+      callAdminApi('/api/users')
+        .then((r) => (r && r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.users && Array.isArray(data.users)) {
+            const mappedUsers: AdminUserRecord[] = data.users.map((u: any) => ({
+              id: u.id || `usr_${(u.phoneNumber || '').replace(/\D/g, '') || Date.now()}`,
+              fullName: u.fullName || u.name || 'Registered User',
+              phoneNumber: u.phoneNumber || u.phone || '',
+              avatarUrl: u.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+              role: u.role || 'user',
+              verificationBadge: u.verificationBadge || null,
+              isPhoneVerified: Boolean(u.isPhoneVerified),
+              status: u.status || 'active',
+              bannedAt: u.bannedAt,
+              banReason: u.banReason,
+              joinedDate: u.createdAt ? new Date(u.createdAt).toLocaleDateString() : 'Recent',
+              walletBalanceNgn: u.walletBalanceNgn ?? 50000,
+              ordersCount: u.ordersCount || 0,
+              isOnline: u.lastSeen === 'online',
+              lastSeen: u.lastSeen || null,
+            }));
+            setAdminUsers((prev) => {
+              const merged = [...prev];
+              mappedUsers.forEach((mu) => {
+                const idx = merged.findIndex((u) => u.phoneNumber === mu.phoneNumber || u.id === mu.id);
+                if (idx >= 0) {
+                  merged[idx] = { ...merged[idx], ...mu };
+                } else {
+                  merged.push(mu);
+                }
+              });
+              try { localStorage.setItem('AGC_admin_users', JSON.stringify(merged)); } catch (_) {}
+              return merged;
+            });
           }
         })
         .catch(() => {});
@@ -8871,6 +8964,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {}
   }, [systemBroadcast]);
 
+  // Real-Time Multi-Tab / Multi-Window Admin State Synchronization
+  useEffect(() => {
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('AGC_system_admin_sync');
+      adminSyncChannelRef.current = bc;
+      bc.onmessage = (e) => {
+        const msg = e.data;
+        if (!msg || !msg.type) return;
+        if (msg.type === 'config' && msg.data) {
+          setSystemConfig(msg.data);
+          try { localStorage.setItem('AGC_system_config_v1', JSON.stringify(msg.data)); } catch (_) {}
+        } else if (msg.type === 'features' && msg.data) {
+          setFeatureFlags(msg.data);
+          try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(msg.data)); } catch (_) {}
+        } else if (msg.type === 'cms' && msg.data) {
+          setCmsData(msg.data);
+          try { localStorage.setItem('AGC_cms_data_v1', JSON.stringify(msg.data)); } catch (_) {}
+        } else if (msg.type === 'ban') {
+          const myPhoneClean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
+          const targetClean = (msg.phoneOrId || '').replace(/\D/g, '');
+          if (currentUser?.id === msg.phoneOrId || (myPhoneClean && targetClean && myPhoneClean === targetClean)) {
+            setIsBanned(true);
+            setBanInfo({
+              reason: msg.reason || 'Violation of AfriChat platform terms and conditions.',
+              bannedAt: msg.bannedAt || new Date().toISOString(),
+            });
+            try {
+              localStorage.setItem('AGC_banned_state', JSON.stringify({
+                isBanned: true,
+                reason: msg.reason,
+                bannedAt: msg.bannedAt,
+                phone: currentUser?.phoneNumber,
+              }));
+            } catch (_) {}
+          }
+          setAdminUsers((prev) =>
+            prev.map((u) =>
+              u.id === msg.phoneOrId || u.phoneNumber === msg.phoneOrId || (targetClean && u.phoneNumber.replace(/\D/g, '') === targetClean)
+                ? { ...u, status: 'banned', bannedAt: msg.bannedAt, banReason: msg.reason, isOnline: false }
+                : u
+            )
+          );
+        } else if (msg.type === 'unban') {
+          const myPhoneClean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
+          const targetClean = (msg.phoneOrId || '').replace(/\D/g, '');
+          if (currentUser?.id === msg.phoneOrId || (myPhoneClean && targetClean && myPhoneClean === targetClean)) {
+            setIsBanned(false);
+            setBanInfo(null);
+            try { localStorage.removeItem('AGC_banned_state'); } catch (_) {}
+          }
+          setAdminUsers((prev) =>
+            prev.map((u) =>
+              u.id === msg.phoneOrId || u.phoneNumber === msg.phoneOrId || (targetClean && u.phoneNumber.replace(/\D/g, '') === targetClean)
+                ? { ...u, status: 'active', bannedAt: undefined, banReason: undefined }
+                : u
+            )
+          );
+        } else if (msg.type === 'wallet_adjusted') {
+          const myPhoneClean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
+          const targetClean = (msg.phoneOrId || '').replace(/\D/g, '');
+          if (currentUser?.id === msg.phoneOrId || (myPhoneClean && targetClean && myPhoneClean === targetClean)) {
+            if (msg.newBalance !== undefined) {
+              setWallet((prev) => ({ ...prev, balance: msg.newBalance }));
+            }
+          }
+          setAdminUsers((prev) =>
+            prev.map((u) => {
+              if (u.id === msg.phoneOrId || u.phoneNumber === msg.phoneOrId || (targetClean && u.phoneNumber.replace(/\D/g, '') === targetClean)) {
+                return { ...u, walletBalanceNgn: msg.newBalance ?? u.walletBalanceNgn };
+              }
+              return u;
+            })
+          );
+        }
+      };
+    } catch (_) {}
+    return () => {
+      if (bc) bc.close();
+    };
+  }, [currentUser]);
+
   const toggleUserVerification = (userId: string, badge: 'blue' | 'gold' | 'creator_plus' | null) => {
     setAdminUsers((prev) =>
       prev.map((u) => (u.id === userId ? { ...u, verificationBadge: badge } : u))
@@ -8931,15 +9106,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const bannedAt = new Date().toISOString();
     setAdminUsers((prev) =>
       prev.map((u) =>
-        u.id === phoneOrId || u.phoneNumber === phoneOrId || u.phoneNumber.replace(/\D/g, '') === clean
+        u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
           ? { ...u, status: 'banned', bannedAt, banReason, isOnline: false }
           : u
       )
     );
     try {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      adminSyncChannelRef.current?.postMessage({
+        type: 'ban',
+        phoneOrId,
+        reason: banReason,
+        bannedAt,
+      });
+    } catch (_) {}
+    try {
       if (clean) {
-        await fetch(`http://${host}:3002/api/admin/users/${clean}/ban`, {
+        await callAdminApi(`/api/admin/users/${clean}/ban`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reason: banReason }),
@@ -8954,15 +9136,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const clean = phoneOrId.replace(/\D/g, '');
     setAdminUsers((prev) =>
       prev.map((u) =>
-        u.id === phoneOrId || u.phoneNumber === phoneOrId || u.phoneNumber.replace(/\D/g, '') === clean
+        u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
           ? { ...u, status: 'active', bannedAt: undefined, banReason: undefined }
           : u
       )
     );
     try {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      adminSyncChannelRef.current?.postMessage({ type: 'unban', phoneOrId });
+    } catch (_) {}
+    try {
       if (clean) {
-        await fetch(`http://${host}:3002/api/admin/users/${clean}/unban`, {
+        await callAdminApi(`/api/admin/users/${clean}/unban`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
         });
@@ -8974,19 +9158,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const adjustUserWallet = async (phoneOrId: string, deltaOrNew: number, isAbsolute: boolean = false) => {
     const clean = phoneOrId.replace(/\D/g, '');
+    let resolvedNewBal = deltaOrNew;
     setAdminUsers((prev) =>
       prev.map((u) => {
-        if (u.id === phoneOrId || u.phoneNumber === phoneOrId || u.phoneNumber.replace(/\D/g, '') === clean) {
+        if (u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)) {
           const newBal = isAbsolute ? deltaOrNew : Math.max(0, (u.walletBalanceNgn || 0) + deltaOrNew);
+          resolvedNewBal = newBal;
           return { ...u, walletBalanceNgn: newBal };
         }
         return u;
       })
     );
     try {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      adminSyncChannelRef.current?.postMessage({
+        type: 'wallet_adjusted',
+        phoneOrId,
+        newBalance: resolvedNewBal,
+      });
+    } catch (_) {}
+    try {
       if (clean) {
-        await fetch(`http://${host}:3002/api/admin/users/${clean}/adjust-wallet`, {
+        await callAdminApi(`/api/admin/users/${clean}/adjust-wallet`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(isAbsolute ? { newBalance: deltaOrNew } : { deltaNgn: deltaOrNew }),
@@ -9000,9 +9192,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const kickUserSession = async (phoneOrId: string) => {
     const clean = phoneOrId.replace(/\D/g, '');
     try {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      adminSyncChannelRef.current?.postMessage({ type: 'kick', phoneOrId });
+    } catch (_) {}
+    try {
       if (clean) {
-        await fetch(`http://${host}:3002/api/admin/users/${clean}/kick`, {
+        await callAdminApi(`/api/admin/users/${clean}/kick`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
         });
