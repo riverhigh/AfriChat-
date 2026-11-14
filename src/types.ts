@@ -1063,6 +1063,8 @@ export interface AdminUserRecord {
   lastSeen?: string; // ISO date string or 'online'
   isOnline?: boolean;
   deviceInfo?: string;
+  bannedAt?: string;
+  banReason?: string;
 }
 
 export interface AdminSystemBroadcast {

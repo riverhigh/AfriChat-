@@ -49,6 +49,9 @@ import {
   PlusCircle,
   Trash2,
   Edit3,
+  UserX,
+  Smartphone,
+  ShieldAlert,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { DispatchDeliveryOrder, FeatureFlags, CmsAnnouncement, CmsFaqItem } from '../types';
@@ -96,6 +99,10 @@ export const AdminDashboardModal: React.FC = () => {
     cmsData,
     updateCmsData,
     setUserStatus,
+    banUser,
+    unbanUser,
+    adjustUserWallet,
+    kickUserSession,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'dispatch' | 'escrow' | 'broadcast' | 'config' | 'features' | 'cms' | 'telemetry'>('overview');
@@ -107,8 +114,15 @@ export const AdminDashboardModal: React.FC = () => {
   // Search & Filter States
   const [userSearchQuery, setUserSearchQuery] = useState('');
   const [userRoleFilter, setUserRoleFilter] = useState<'all' | 'user' | 'creator' | 'merchant' | 'admin'>('all');
+  const [userStatusFilter, setUserStatusFilter] = useState<'all' | 'active' | 'suspended' | 'banned' | 'flagged'>('all');
   const [dispatchFilter, setDispatchFilter] = useState<'all' | 'active' | 'delivered'>('all');
   const [escrowFilter, setEscrowFilter] = useState<'all' | 'escrow_secured' | 'funds_released' | 'disputed'>('all');
+
+  // Customer Info Dossier Modal state
+  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
+  const [customerBanReason, setCustomerBanReason] = useState('');
+  const [customerWalletDelta, setCustomerWalletDelta] = useState('');
+  const [customerWalletSuccess, setCustomerWalletSuccess] = useState(false);
 
   // Broadcast compose form state
   const [bcTitle, setBcTitle] = useState('');
@@ -219,14 +233,20 @@ export const AdminDashboardModal: React.FC = () => {
     return list;
   }, [adminUsers, liveMetrics?.registeredUsers]);
 
-  // Filtered users
+  // Filtered users by search, role, and status
   const filteredUsers = mergedUsers.filter((u) => {
+    const q = userSearchQuery.toLowerCase();
     const matchesSearch =
-      u.fullName.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
-      u.phoneNumber.includes(userSearchQuery) ||
-      u.id.toLowerCase().includes(userSearchQuery.toLowerCase());
+      !q ||
+      u.fullName.toLowerCase().includes(q) ||
+      u.phoneNumber.includes(q) ||
+      (u.id && u.id.toLowerCase().includes(q));
     const matchesRole = userRoleFilter === 'all' || u.role === userRoleFilter;
-    return matchesSearch && matchesRole;
+    const matchesStatus =
+      userStatusFilter === 'all' ||
+      (userStatusFilter === 'active' && (!u.status || u.status === 'active')) ||
+      u.status === userStatusFilter;
+    return matchesSearch && matchesRole && matchesStatus;
   });
 
   // Filtered escrows
@@ -700,33 +720,96 @@ export const AdminDashboardModal: React.FC = () => {
           )}
 
           {/* ═════════════════════════════════════════════════════════════════ */}
-          {/* 2. USERS & BADGES DIRECTORY                                      */}
+          {/* 2. CUSTOMER INFO DASHBOARD & PERMANENT BAN DESK                  */}
           {/* ═════════════════════════════════════════════════════════════════ */}
           {activeTab === 'users' && (
             <div className="space-y-4 animate-in fade-in duration-150">
-              {/* Filter & Search Bar */}
-              <div className="flex flex-col sm:flex-row gap-2">
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    value={userSearchQuery}
-                    onChange={(e) => setUserSearchQuery(e.target.value)}
-                    placeholder="Search by name, phone (+234...), or user ID..."
-                    className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-800 bg-slate-900 text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
-                  />
+              
+              {/* Header KPI Strip */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="p-3 rounded-2xl bg-slate-900/90 border border-slate-800">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Platform Users</span>
+                  <div className="text-xl font-black font-mono text-white mt-0.5">{mergedUsers.length} Registered</div>
+                </div>
+                <div className="p-3 rounded-2xl bg-emerald-950/40 border border-emerald-800/40">
+                  <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">Live Online Sockets</span>
+                  <div className="text-xl font-black font-mono text-emerald-300 mt-0.5 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>{liveMetrics?.onlineUsersCount || mergedUsers.filter((u) => u.isOnline).length} Active</span>
+                  </div>
+                </div>
+                <div className="p-3 rounded-2xl bg-rose-950/40 border border-rose-800/40">
+                  <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider block">Permanently Banned</span>
+                  <div className="text-xl font-black font-mono text-rose-300 mt-0.5">
+                    {mergedUsers.filter((u) => u.status === 'banned').length} Accounts
+                  </div>
+                </div>
+                <div className="p-3 rounded-2xl bg-amber-950/40 border border-amber-800/40">
+                  <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block">Verified Badges</span>
+                  <div className="text-xl font-black font-mono text-amber-300 mt-0.5">
+                    {mergedUsers.filter((u) => u.verificationBadge).length} Checked
+                  </div>
+                </div>
+              </div>
+
+              {/* Search & Multi-Filter Bar */}
+              <div className="space-y-2">
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={userSearchQuery}
+                      onChange={(e) => setUserSearchQuery(e.target.value)}
+                      placeholder="Search live users by name, phone (+234...), or customer ID..."
+                      className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-800 bg-slate-900 text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    />
+                  </div>
+
+                  {/* Status Pills */}
+                  <div className="flex items-center gap-1 overflow-x-auto text-xs font-semibold pb-1 sm:pb-0">
+                    {(['all', 'active', 'banned', 'suspended', 'flagged'] as const).map((st) => {
+                      const count = st === 'all'
+                        ? mergedUsers.length
+                        : st === 'active'
+                        ? mergedUsers.filter((u) => !u.status || u.status === 'active').length
+                        : mergedUsers.filter((u) => u.status === st).length;
+
+                      return (
+                        <button
+                          key={st}
+                          type="button"
+                          onClick={() => setUserStatusFilter(st)}
+                          className={`px-2.5 py-1.5 rounded-xl capitalize text-[11px] shrink-0 font-mono transition-all flex items-center gap-1 ${
+                            userStatusFilter === st
+                              ? st === 'banned'
+                                ? 'bg-rose-600 text-white font-bold shadow-md shadow-rose-600/30'
+                                : st === 'active'
+                                ? 'bg-emerald-600 text-white font-bold'
+                                : 'bg-purple-600 text-white font-bold'
+                              : 'bg-slate-900 text-slate-400 hover:bg-slate-800'
+                          }`}
+                        >
+                          <span>{st}</span>
+                          <span className="text-[9px] opacity-75">({count})</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-semibold">
+                {/* Role Filter Pills */}
+                <div className="flex items-center gap-1 overflow-x-auto text-[11px]">
+                  <span className="text-slate-500 text-[10px] font-mono uppercase tracking-wider mr-1">Role:</span>
                   {(['all', 'user', 'creator', 'merchant', 'admin'] as const).map((role) => (
                     <button
                       key={role}
                       type="button"
                       onClick={() => setUserRoleFilter(role)}
-                      className={`px-3 py-1.5 rounded-xl capitalize text-[11px] shrink-0 transition-colors ${
+                      className={`px-2 py-1 rounded-lg capitalize shrink-0 transition-colors ${
                         userRoleFilter === role
-                          ? 'bg-purple-600 text-white font-bold'
-                          : 'bg-slate-900 text-slate-400 hover:bg-slate-800'
+                          ? 'bg-slate-700 text-white font-bold'
+                          : 'bg-slate-900/60 text-slate-400 hover:bg-slate-800'
                       }`}
                     >
                       {role}
@@ -735,148 +818,456 @@ export const AdminDashboardModal: React.FC = () => {
                 </div>
               </div>
 
-              {/* Users Table */}
+              {/* Users Directory Table */}
               <div className="space-y-2">
                 {filteredUsers.length === 0 ? (
-                  <div className="text-center py-12 text-slate-500 text-xs">
-                    No users match your filter criteria.
+                  <div className="text-center py-12 text-slate-500 text-xs bg-slate-900/40 rounded-2xl border border-slate-800/60">
+                    No customers match your search criteria.
                   </div>
                 ) : (
-                  filteredUsers.map((user) => (
-                    <div
-                      key={user.id}
-                      className={`p-3.5 rounded-2xl border transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
-                        user.status === 'suspended'
-                          ? 'bg-rose-950/20 border-rose-900/40'
-                          : 'bg-slate-900/70 border-slate-800/80 hover:border-purple-500/40'
-                      }`}
-                    >
-                      {/* User Info */}
-                      <div className="flex items-center gap-3">
-                        <div className="relative">
-                          <img
-                            src={user.avatarUrl}
-                            alt={user.fullName}
-                            className="w-11 h-11 rounded-full object-cover border border-slate-700"
-                          />
-                          {user.verificationBadge === 'blue' && (
-                            <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-sky-500 text-white rounded-full flex items-center justify-center text-[9px] font-bold shadow-xs">
-                              ✓
-                            </span>
-                          )}
-                          {user.verificationBadge === 'gold' && (
-                            <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-amber-400 text-slate-950 rounded-full flex items-center justify-center text-[9px] font-bold shadow-xs">
-                              ★
-                            </span>
-                          )}
-                        </div>
+                  filteredUsers.map((user) => {
+                    const isBanned = user.status === 'banned';
+                    const isSuspended = user.status === 'suspended';
 
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h4 className="text-xs font-bold text-white">
-                              {user.fullName}
-                            </h4>
-                            <span className="text-[10px] px-1.5 py-0.2 rounded font-mono uppercase font-semibold bg-slate-800 text-slate-300">
-                              {user.role}
-                            </span>
-                            {user.status === 'suspended' && (
-                              <span className="text-[9px] px-1.5 py-0.2 rounded font-bold uppercase bg-rose-600 text-white">
-                                Suspended
+                    return (
+                      <div
+                        key={user.id}
+                        className={`p-3.5 rounded-2xl border transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+                          isBanned
+                            ? 'bg-rose-950/30 border-rose-900/60 hover:border-rose-600/60'
+                            : isSuspended
+                            ? 'bg-amber-950/20 border-amber-900/40'
+                            : 'bg-slate-900/70 border-slate-800/80 hover:border-purple-500/40'
+                        }`}
+                      >
+                        {/* User Identity Column */}
+                        <div
+                          className="flex items-center gap-3 cursor-pointer flex-1 min-w-0"
+                          onClick={() => setSelectedCustomer(user)}
+                          title="Click to view full customer dossier"
+                        >
+                          <div className="relative shrink-0">
+                            <img
+                              src={user.avatarUrl}
+                              alt={user.fullName}
+                              className={`w-12 h-12 rounded-full object-cover border ${
+                                isBanned ? 'border-rose-500 grayscale' : 'border-slate-700'
+                              }`}
+                            />
+                            {user.verificationBadge === 'blue' && (
+                              <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-sky-500 text-white rounded-full flex items-center justify-center text-[9px] font-bold shadow-xs">
+                                ✓
+                              </span>
+                            )}
+                            {user.verificationBadge === 'gold' && (
+                              <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-amber-400 text-slate-950 rounded-full flex items-center justify-center text-[9px] font-bold shadow-xs">
+                                ★
+                              </span>
+                            )}
+                            {isBanned && (
+                              <span className="absolute -top-1 -left-1 w-4 h-4 bg-rose-600 text-white rounded-full flex items-center justify-center text-[8px] font-bold">
+                                🚫
                               </span>
                             )}
                           </div>
 
-                          <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 mt-0.5">
-                            <span>{user.phoneNumber}</span>
-                            <span>•</span>
-                            <span className="text-emerald-400 font-bold">
-                              {formatPrice(user.walletBalanceNgn, 'NGN')}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <span className={`w-1.5 h-1.5 rounded-full ${(user as any).isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-                            <span className={`text-[10px] font-mono ${(user as any).isOnline ? 'text-emerald-400 font-bold' : 'text-slate-500'}`}>
-                              {(user as any).isOnline ? 'Online now' : `Last seen: ${formatLastSeen((user as any).lastSeen)}`}
-                            </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="text-xs font-bold text-white hover:text-purple-300 transition-colors truncate">
+                                {user.fullName}
+                              </h4>
+                              <span className="text-[10px] px-1.5 py-0.2 rounded font-mono uppercase font-semibold bg-slate-800 text-slate-300">
+                                {user.role}
+                              </span>
+
+                              {isBanned ? (
+                                <span className="text-[9px] px-2 py-0.5 rounded-full font-black uppercase bg-rose-600 text-white flex items-center gap-1 shadow-sm">
+                                  <span>🚫 BANNED</span>
+                                </span>
+                              ) : isSuspended ? (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded font-bold uppercase bg-amber-600 text-white">
+                                  Suspended
+                                </span>
+                              ) : (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold uppercase bg-emerald-950 text-emerald-400 border border-emerald-800/40">
+                                  Active
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 mt-0.5">
+                              <span>{user.phoneNumber}</span>
+                              <span>•</span>
+                              <span className="text-emerald-400 font-bold">
+                                {formatPrice(user.walletBalanceNgn, 'NGN')}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2 mt-1 text-[10px] font-mono">
+                              <span className="flex items-center gap-1">
+                                <span className={`w-1.5 h-1.5 rounded-full ${user.isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+                                <span className={user.isOnline ? 'text-emerald-400 font-bold' : 'text-slate-500'}>
+                                  {user.isOnline ? 'Online now' : `Last seen: ${formatLastSeen(user.lastSeen)}`}
+                                </span>
+                              </span>
+                              <span className="text-slate-600">•</span>
+                              <span className="text-slate-500 truncate">{user.deviceInfo || 'Mobile'}</span>
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Action Badges */}
-                      <div className="flex items-center gap-1.5 self-end sm:self-center">
-                        {/* Blue VIP Creator Badge */}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            toggleUserVerification(
-                              user.id,
-                              user.verificationBadge === 'blue' ? null : 'blue'
-                            )
-                          }
-                          className={`px-2.5 py-1 rounded-xl text-[10px] font-bold border transition-all flex items-center gap-1 ${
-                            user.verificationBadge === 'blue'
-                              ? 'bg-sky-500 text-white border-sky-400'
-                              : 'bg-slate-800 text-slate-300 border-slate-700 hover:border-sky-500 hover:text-sky-300'
-                          }`}
-                          title="Grant Blue VIP Creator Checkmark"
-                        >
-                          <Crown className="w-3 h-3" />
-                          <span>{user.verificationBadge === 'blue' ? 'Blue ✓' : '+Blue'}</span>
-                        </button>
+                        {/* Action Buttons Column */}
+                        <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+                          {/* Inspect Dossier Button */}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedCustomer(user)}
+                            className="px-2.5 py-1.5 rounded-xl text-[10px] font-bold bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 hover:text-white border border-indigo-500/40 flex items-center gap-1 transition-all"
+                            title="Open full customer info dossier & controls"
+                          >
+                            <Eye className="w-3 h-3" />
+                            <span>Dossier</span>
+                          </button>
 
-                        {/* Gold Official Merchant Badge */}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            toggleUserVerification(
-                              user.id,
-                              user.verificationBadge === 'gold' ? null : 'gold'
-                            )
-                          }
-                          className={`px-2.5 py-1 rounded-xl text-[10px] font-bold border transition-all flex items-center gap-1 ${
-                            user.verificationBadge === 'gold'
-                              ? 'bg-amber-400 text-slate-950 border-amber-300 font-black'
-                              : 'bg-slate-800 text-slate-300 border-slate-700 hover:border-amber-400 hover:text-amber-300'
-                          }`}
-                          title="Grant Gold Official Merchant Checkmark"
-                        >
-                          <Store className="w-3 h-3" />
-                          <span>{user.verificationBadge === 'gold' ? 'Gold ★' : '+Gold'}</span>
-                        </button>
-
-                        {/* Suspend or Restore Account */}
-                        <button
-                          type="button"
-                          onClick={() => toggleUserSuspension(user.id)}
-                          className={`p-1.5 rounded-xl text-[10px] border transition-all ${
-                            user.status === 'suspended'
-                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500/30'
-                              : 'bg-rose-500/20 text-rose-400 border-rose-500/40 hover:bg-rose-500/30'
-                          }`}
-                          title={user.status === 'suspended' ? 'Restore User' : 'Suspend Account'}
-                        >
-                          {user.status === 'suspended' ? (
-                            <RotateCcw className="w-3.5 h-3.5" />
+                          {/* Permanent Ban / Unban Direct Action */}
+                          {isBanned ? (
+                            <button
+                              type="button"
+                              onClick={() => unbanUser(user.phoneNumber || user.id)}
+                              className="px-2.5 py-1.5 rounded-xl text-[10px] font-bold bg-emerald-600/30 hover:bg-emerald-600 text-emerald-200 hover:text-white border border-emerald-500/40 flex items-center gap-1 transition-all"
+                              title="Unban and restore customer access"
+                            >
+                              <Check className="w-3 h-3 text-emerald-300" />
+                              <span>Unban</span>
+                            </button>
                           ) : (
-                            <Ban className="w-3.5 h-3.5" />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const reason = prompt(
+                                  `PERMANENTLY BAN ${user.fullName} (${user.phoneNumber})?\n\nThis will disconnect all active sessions and block the phone permanently.\n\nEnter reason:`,
+                                  'Violation of platform terms and fraudulent activity'
+                                );
+                                if (reason !== null && reason.trim()) {
+                                  banUser(user.phoneNumber || user.id, reason.trim());
+                                }
+                              }}
+                              className="px-2.5 py-1.5 rounded-xl text-[10px] font-bold bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40 flex items-center gap-1 transition-all"
+                              title="Permanently block and ban user from platform"
+                            >
+                              <Ban className="w-3 h-3 text-rose-400" />
+                              <span>Ban</span>
+                            </button>
                           )}
-                        </button>
 
-                        {/* Status Select */}
+                          {/* Blue Checkmark */}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toggleUserVerification(
+                                user.id,
+                                user.verificationBadge === 'blue' ? null : 'blue'
+                              )
+                            }
+                            className={`p-1.5 rounded-xl text-[10px] border transition-all ${
+                              user.verificationBadge === 'blue'
+                                ? 'bg-sky-500 text-white border-sky-400'
+                                : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-sky-300'
+                            }`}
+                            title="Toggle Blue VIP Check"
+                          >
+                            <Crown className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Gold Merchant Checkmark */}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toggleUserVerification(
+                                user.id,
+                                user.verificationBadge === 'gold' ? null : 'gold'
+                              )
+                            }
+                            className={`p-1.5 rounded-xl text-[10px] border transition-all ${
+                              user.verificationBadge === 'gold'
+                                ? 'bg-amber-400 text-slate-950 border-amber-300 font-bold'
+                                : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-amber-300'
+                            }`}
+                            title="Toggle Gold Merchant Check"
+                          >
+                            <Store className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ═════════════════════════════════════════════════════════════════ */}
+          {/* CUSTOMER INFO DOSSIER & BAN MODAL (OVERLAY)                       */}
+          {/* ═════════════════════════════════════════════════════════════════ */}
+          {selectedCustomer && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
+              <div className="w-full max-w-2xl bg-slate-950 border border-purple-500/40 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                
+                {/* Dossier Header */}
+                <div className="px-6 py-4 bg-gradient-to-r from-purple-950 via-slate-900 to-indigo-950 border-b border-purple-500/20 flex items-center justify-between">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="relative shrink-0">
+                      <img
+                        src={selectedCustomer.avatarUrl}
+                        alt={selectedCustomer.fullName}
+                        className="w-12 h-12 rounded-full object-cover border-2 border-purple-400 shadow-md"
+                      />
+                      {selectedCustomer.status === 'banned' && (
+                        <span className="absolute -bottom-1 -right-1 w-5 h-5 bg-rose-600 text-white rounded-full flex items-center justify-center text-[10px] font-bold">
+                          🚫
+                        </span>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-black text-white truncate font-display">
+                          {selectedCustomer.fullName}
+                        </h3>
+                        <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full uppercase ${
+                          selectedCustomer.status === 'banned'
+                            ? 'bg-rose-600 text-white'
+                            : selectedCustomer.status === 'suspended'
+                            ? 'bg-amber-500 text-slate-950'
+                            : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        }`}>
+                          {selectedCustomer.status || 'Active'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 font-mono mt-0.5">
+                        {selectedCustomer.phoneNumber} • ID: <span className="text-purple-300">{selectedCustomer.id}</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCustomer(null);
+                      setCustomerBanReason('');
+                      setCustomerWalletDelta('');
+                    }}
+                    className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Dossier Body */}
+                <div className="p-5 space-y-4 overflow-y-auto flex-1">
+                  
+                  {/* Banned Alert Banner if account is currently blocked */}
+                  {selectedCustomer.status === 'banned' && (
+                    <div className="p-4 rounded-2xl bg-rose-950/60 border border-rose-600/60 space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-black text-rose-400 uppercase tracking-wide flex items-center gap-1.5">
+                          <span>🚫 ACCOUNT PERMANENTLY BANNED</span>
+                        </span>
+                        {selectedCustomer.bannedAt && (
+                          <span className="text-[10px] font-mono text-slate-400">
+                            Banned: {new Date(selectedCustomer.bannedAt).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-rose-200">
+                        Reason: <strong>{selectedCustomer.banReason || 'Policy violation and network abuse'}</strong>
+                      </p>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await unbanUser(selectedCustomer.phoneNumber || selectedCustomer.id);
+                          setSelectedCustomer({ ...selectedCustomer, status: 'active', bannedAt: undefined, banReason: undefined });
+                        }}
+                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1.5 transition-colors shadow-md shadow-emerald-600/30"
+                      >
+                        <Check className="w-4 h-4" />
+                        <span>Reactivate & Restore Account Access</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* 1. Identity & Device Info Grid */}
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5">
+                    <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <Smartphone className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Customer Identity & Connection Info</span>
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs font-mono">
+                      <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                        <span className="text-[10px] text-slate-500 block">Status:</span>
+                        <span className="font-bold text-white capitalize">{selectedCustomer.status || 'Active'}</span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                        <span className="text-[10px] text-slate-500 block">Role:</span>
                         <select
-                          value={(user as any).status || 'active'}
-                          onChange={(e) => setUserStatus(user.id || user.phoneNumber, e.target.value as any)}
-                          className="text-[10px] font-mono rounded-xl bg-slate-800 border border-slate-700 text-slate-200 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-purple-500 cursor-pointer"
+                          value={selectedCustomer.role || 'user'}
+                          onChange={(e) => {
+                            const newRole = e.target.value as any;
+                            setUserStatus(selectedCustomer.id || selectedCustomer.phoneNumber, selectedCustomer.status);
+                            setSelectedCustomer({ ...selectedCustomer, role: newRole });
+                          }}
+                          className="bg-transparent font-bold text-purple-400 focus:outline-none cursor-pointer"
                         >
-                          <option value="active">Active</option>
-                          <option value="suspended">Suspended</option>
-                          <option value="banned">Banned</option>
-                          <option value="flagged">Flagged</option>
+                          <option value="user" className="bg-slate-900 text-white">User</option>
+                          <option value="creator" className="bg-slate-900 text-white">Creator</option>
+                          <option value="merchant" className="bg-slate-900 text-white">Merchant</option>
+                          <option value="admin" className="bg-slate-900 text-white">Admin</option>
                         </select>
                       </div>
+                      <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                        <span className="text-[10px] text-slate-500 block">Joined Date:</span>
+                        <span className="font-bold text-white">{selectedCustomer.joinedDate || 'Recent'}</span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                        <span className="text-[10px] text-slate-500 block">Presence:</span>
+                        <span className={selectedCustomer.isOnline ? 'font-bold text-emerald-400' : 'text-slate-400'}>
+                          {selectedCustomer.isOnline ? '🟢 Online' : 'Offline'}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 sm:col-span-2">
+                        <span className="text-[10px] text-slate-500 block">Platform / Device:</span>
+                        <span className="font-bold text-slate-300 truncate block">{selectedCustomer.deviceInfo || 'AfriChat Web / PWA'}</span>
+                      </div>
                     </div>
-                  ))
-                )}
+                  </div>
+
+                  {/* 2. Wallet & Balance Ledger (Live in DB) */}
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Live Wallet Ledger (Persisted in DB)</span>
+                      </h4>
+                      <span className="text-xs font-mono font-bold text-emerald-400">
+                        Available: {formatPrice(selectedCustomer.walletBalanceNgn || 0, 'NGN')}
+                      </span>
+                    </div>
+
+                    {/* Direct Admin Balance Adjuster */}
+                    <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                      <label className="text-[11px] font-bold text-slate-400 block">
+                        Direct Balance Credit / Debit Adjustment:
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-500 font-mono text-sm">₦</span>
+                        <input
+                          type="number"
+                          value={customerWalletDelta}
+                          onChange={(e) => setCustomerWalletDelta(e.target.value)}
+                          placeholder="e.g. 5000 or -2000"
+                          className="flex-1 px-3 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-700 bg-slate-900 text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
+                        <button
+                          type="button"
+                          disabled={!customerWalletDelta || isNaN(Number(customerWalletDelta))}
+                          onClick={async () => {
+                            const delta = Number(customerWalletDelta);
+                            await adjustUserWallet(selectedCustomer.phoneNumber || selectedCustomer.id, delta, false);
+                            const updatedBal = Math.max(0, (selectedCustomer.walletBalanceNgn || 0) + delta);
+                            setSelectedCustomer({ ...selectedCustomer, walletBalanceNgn: updatedBal });
+                            setCustomerWalletDelta('');
+                            setCustomerWalletSuccess(true);
+                            setTimeout(() => setCustomerWalletSuccess(false), 2500);
+                          }}
+                          className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white transition-colors flex items-center gap-1"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Apply Live</span>
+                        </button>
+                      </div>
+                      {customerWalletSuccess && (
+                        <div className="text-[11px] text-emerald-400 font-bold flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Wallet balance updated and synced to server DB!</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 3. Permanent Ban & Account Moderation Desk */}
+                  <div className="p-4 rounded-2xl bg-rose-950/20 border border-rose-900/40 space-y-3">
+                    <h4 className="text-xs font-bold text-rose-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Security & Permanent Account Ban Desk</span>
+                    </h4>
+
+                    {selectedCustomer.status !== 'banned' ? (
+                      <div className="space-y-2.5">
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                            Permanent Ban Reason Note:
+                          </label>
+                          <input
+                            type="text"
+                            value={customerBanReason}
+                            onChange={(e) => setCustomerBanReason(e.target.value)}
+                            placeholder="e.g. Confirmed scam report, chargeback fraud, terms violation..."
+                            className="w-full px-3 py-2 text-xs rounded-xl border border-rose-900/60 bg-slate-950 text-white focus:outline-none focus:ring-1 focus:ring-rose-500"
+                          />
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const reason = customerBanReason.trim() || 'Account permanently banned for policy violation.';
+                              if (confirm(`Permanently ban and block ${selectedCustomer.fullName} (${selectedCustomer.phoneNumber})?\n\nThis will disconnect all open sockets and lock them out permanently.`)) {
+                                await banUser(selectedCustomer.phoneNumber || selectedCustomer.id, reason);
+                                setSelectedCustomer({
+                                  ...selectedCustomer,
+                                  status: 'banned',
+                                  bannedAt: new Date().toISOString(),
+                                  banReason: reason,
+                                });
+                                setCustomerBanReason('');
+                              }
+                            }}
+                            className="px-4 py-2 rounded-xl text-xs font-black bg-rose-600 hover:bg-rose-700 text-white transition-all flex items-center gap-1.5 shadow-lg shadow-rose-600/30"
+                          >
+                            <Ban className="w-4 h-4" />
+                            <span>Permanently Ban Account</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setUserStatus(selectedCustomer.phoneNumber || selectedCustomer.id, 'suspended');
+                              setSelectedCustomer({ ...selectedCustomer, status: 'suspended' });
+                            }}
+                            className="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-600/30 hover:bg-amber-600 text-amber-200 hover:text-white border border-amber-500/40 transition-colors"
+                          >
+                            <span>Suspend 24 Hours</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await kickUserSession(selectedCustomer.phoneNumber || selectedCustomer.id);
+                              alert(`Active session for ${selectedCustomer.phoneNumber} terminated.`);
+                            }}
+                            className="px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+                          >
+                            <span>Force Logout / Kick Session</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-rose-300">
+                        This customer is currently permanently banned from accessing the AfriChat super-app platform. Use the Reactivate button above to remove the block.
+                      </p>
+                    )}
+                  </div>
+
+                </div>
               </div>
             </div>
           )}

@@ -652,6 +652,12 @@ interface AppContextType {
   cmsData: AdminCmsData;
   updateCmsData: (updates: Partial<AdminCmsData>) => Promise<void>;
   setUserStatus: (userIdOrPhone: string, status: 'active' | 'suspended' | 'banned' | 'flagged') => void;
+  banUser: (phoneOrId: string, reason?: string) => Promise<void>;
+  unbanUser: (phoneOrId: string) => Promise<void>;
+  adjustUserWallet: (phoneOrId: string, deltaOrNew: number, isAbsolute?: boolean) => Promise<void>;
+  kickUserSession: (phoneOrId: string) => Promise<void>;
+  isBanned: boolean;
+  banInfo: { reason?: string; bannedAt?: string } | null;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -8515,7 +8521,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSystemBroadcast(bc);
       try { localStorage.setItem('AGC_system_broadcast', JSON.stringify(bc)); } catch (_) {}
     };
+    const handleAccountBanned = (payload: any) => {
+      setIsBanned(true);
+      setBanInfo(payload);
+    };
 
+    socket.on('account_banned', handleAccountBanned);
     socket.on('group_created', handleGroupCreated);
     socket.on('friend_request', handleFriendRequestSocket);
     socket.on('dispatch_order_created', handleDispatchOrderCreated);
@@ -8890,6 +8901,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (_) {}
   };
 
+  const [isBanned, setIsBanned] = useState(false);
+  const [banInfo, setBanInfo] = useState<{ reason?: string; bannedAt?: string } | null>(null);
+
   const setUserStatus = (userIdOrPhone: string, status: 'active' | 'suspended' | 'banned' | 'flagged') => {
     setAdminUsers((prev) =>
       prev.map((u) =>
@@ -8909,6 +8923,91 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }).catch(() => {});
       }
     } catch (_) {}
+  };
+
+  const banUser = async (phoneOrId: string, reason?: string) => {
+    const clean = phoneOrId.replace(/\D/g, '');
+    const banReason = reason || 'Violation of AfriChat platform terms and conditions.';
+    const bannedAt = new Date().toISOString();
+    setAdminUsers((prev) =>
+      prev.map((u) =>
+        u.id === phoneOrId || u.phoneNumber === phoneOrId || u.phoneNumber.replace(/\D/g, '') === clean
+          ? { ...u, status: 'banned', bannedAt, banReason, isOnline: false }
+          : u
+      )
+    );
+    try {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      if (clean) {
+        await fetch(`http://${host}:3002/api/admin/users/${clean}/ban`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: banReason }),
+        });
+      }
+    } catch (e) {
+      console.warn('Failed to ban user on server:', e);
+    }
+  };
+
+  const unbanUser = async (phoneOrId: string) => {
+    const clean = phoneOrId.replace(/\D/g, '');
+    setAdminUsers((prev) =>
+      prev.map((u) =>
+        u.id === phoneOrId || u.phoneNumber === phoneOrId || u.phoneNumber.replace(/\D/g, '') === clean
+          ? { ...u, status: 'active', bannedAt: undefined, banReason: undefined }
+          : u
+      )
+    );
+    try {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      if (clean) {
+        await fetch(`http://${host}:3002/api/admin/users/${clean}/unban`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    } catch (e) {
+      console.warn('Failed to unban user on server:', e);
+    }
+  };
+
+  const adjustUserWallet = async (phoneOrId: string, deltaOrNew: number, isAbsolute: boolean = false) => {
+    const clean = phoneOrId.replace(/\D/g, '');
+    setAdminUsers((prev) =>
+      prev.map((u) => {
+        if (u.id === phoneOrId || u.phoneNumber === phoneOrId || u.phoneNumber.replace(/\D/g, '') === clean) {
+          const newBal = isAbsolute ? deltaOrNew : Math.max(0, (u.walletBalanceNgn || 0) + deltaOrNew);
+          return { ...u, walletBalanceNgn: newBal };
+        }
+        return u;
+      })
+    );
+    try {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      if (clean) {
+        await fetch(`http://${host}:3002/api/admin/users/${clean}/adjust-wallet`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(isAbsolute ? { newBalance: deltaOrNew } : { deltaNgn: deltaOrNew }),
+        });
+      }
+    } catch (e) {
+      console.warn('Failed to adjust wallet on server:', e);
+    }
+  };
+
+  const kickUserSession = async (phoneOrId: string) => {
+    const clean = phoneOrId.replace(/\D/g, '');
+    try {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      if (clean) {
+        await fetch(`http://${host}:3002/api/admin/users/${clean}/kick`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    } catch (e) {}
   };
 
   const adminResolveEscrow = (orderId: string, action: 'release_to_seller' | 'refund_to_buyer', note: string) => {
@@ -9367,6 +9466,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         cmsData,
         updateCmsData,
         setUserStatus,
+        banUser,
+        unbanUser,
+        adjustUserWallet,
+        kickUserSession,
+        isBanned,
+        banInfo,
       }}
     >
       {children}

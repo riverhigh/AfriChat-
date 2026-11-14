@@ -55,7 +55,7 @@ import { CallErrorBoundary } from './components/CallErrorBoundary';
 import { ChatErrorBoundary } from './components/ChatErrorBoundary';
 
 const AppContent: React.FC = () => {
-  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled } = useApp();
+  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled, isBanned, banInfo, systemConfig, currentUser } = useApp();
   const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('agc_splash_shown'));
   const handleSplashDone = useCallback(() => {
     sessionStorage.setItem('agc_splash_shown', 'true');
@@ -289,6 +289,53 @@ const AppContent: React.FC = () => {
             isOpen={isPetShopModalOpen}
             onClose={() => setIsPetShopModalOpen(false)}
           />
+        )}
+        {/* Permanent Ban Lockdown Screen */}
+        {isBanned && (
+          <div className="fixed inset-0 z-[9999] bg-slate-950/98 backdrop-blur-xl text-white flex flex-col items-center justify-center p-6 text-center select-none font-sans animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-20 h-20 rounded-3xl bg-rose-600/20 border-2 border-rose-500/80 flex items-center justify-center mb-5 shadow-2xl shadow-rose-600/40">
+              <span className="text-4xl">🚫</span>
+            </div>
+            <span className="px-3.5 py-1 rounded-full text-[11px] font-mono font-black uppercase tracking-wider bg-rose-600 text-white mb-2 shadow-sm">
+              Account Permanently Banned
+            </span>
+            <h2 className="text-2xl font-black text-white font-display mb-2">
+              Platform Access Terminated
+            </h2>
+            <p className="text-xs text-slate-400 max-w-md mb-4 leading-relaxed">
+              Your registered phone number <strong className="text-white font-mono">{currentUser?.phoneNumber || 'on record'}</strong> has been permanently blocked from accessing the AfriChat super-app platform.
+            </p>
+            {banInfo?.reason && (
+              <div className="p-4 rounded-2xl bg-rose-950/50 border border-rose-800/50 text-xs text-rose-200 max-w-md w-full mb-6 text-left shadow-inner">
+                <div className="font-bold text-rose-400 mb-0.5 text-[11px] uppercase tracking-wide">Official Ban Reason:</div>
+                <div className="leading-relaxed">{banInfo.reason}</div>
+                {banInfo.bannedAt && (
+                  <div className="text-[10px] text-slate-500 font-mono mt-2 pt-2 border-t border-rose-900/40">
+                    Enacted: {new Date(banInfo.bannedAt).toLocaleString()}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xs">
+              <a
+                href={`tel:${systemConfig?.supportContactPhone || '+234800000000'}`}
+                className="w-full py-3 px-4 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition-all text-center flex items-center justify-center gap-2 shadow-lg shadow-purple-600/30"
+              >
+                <span>Call Security Desk</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  localStorage.clear();
+                  sessionStorage.clear();
+                  window.location.reload();
+                }}
+                className="w-full py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-all text-center border border-slate-700"
+              >
+                Switch Account
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>

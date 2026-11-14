@@ -183,6 +183,8 @@ interface RegisteredUser {
   lastSeen?: string;
   isOnline?: boolean;
   deviceInfo?: string;
+  bannedAt?: string;
+  banReason?: string;
 }
 
 const usersByPhone = new Map<string, RegisteredUser>();
@@ -439,6 +441,14 @@ app.post('/api/users/register', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Phone number required' });
   }
   const cleanPhone = phoneNumber.replace(/\D/g, '');
+  const existingCheck = usersByPhone.get(cleanPhone);
+  if (existingCheck && existingCheck.status === 'banned') {
+    return res.status(403).json({
+      error: 'This phone number has been permanently banned from registration.',
+      code: 'AGC_USER_BANNED',
+      banned: true,
+    });
+  }
   const user: RegisteredUser = {
     id: id || `usr_${Date.now()}`,
     fullName: fullName || 'AGC User',
@@ -491,10 +501,18 @@ app.get('/api/users/check-phone', (req: Request, res: Response) => {
     }
   }
   if (existing) {
+    if (existing.status === 'banned') {
+      return res.status(403).json({
+        banned: true,
+        error: 'This account has been permanently banned from the network.',
+        banReason: existing.banReason || 'Violation of terms',
+      });
+    }
     return res.json({
       registered: true,
       name: existing.fullName,
       avatarUrl: existing.avatarUrl,
+      status: existing.status,
       sessionToken: (existing as any).sessionToken,
     });
   }
@@ -805,20 +823,170 @@ app.patch('/api/admin/users/:phone/badge', (req: Request, res: Response) => {
 
 app.patch('/api/admin/users/:phone/status', (req: Request, res: Response) => {
   const { phone } = req.params;
-  const { status, verificationBadge, role, walletBalanceNgn } = req.body;
+  const { status, verificationBadge, role, walletBalanceNgn, reason } = req.body;
   const clean = phone.replace(/\D/g, '');
-  const user = usersByPhone.get(clean);
+  let user = usersByPhone.get(clean);
+  if (!user) {
+    for (const [p, u] of usersByPhone.entries()) {
+      if (p.endsWith(clean) || clean.endsWith(p)) {
+        user = u;
+        break;
+      }
+    }
+  }
   if (user) {
-    if (status !== undefined) user.status = status;
+    if (status !== undefined) {
+      user.status = status;
+      if (status === 'banned') {
+        user.bannedAt = new Date().toISOString();
+        user.banReason = reason || 'Account permanently banned by platform administrator.';
+        user.isOnline = false;
+        io.to(`phone:${user.cleanPhone || clean}`).emit('account_banned', {
+          banned: true,
+          reason: user.banReason,
+          bannedAt: user.bannedAt,
+        });
+        const sockId = phoneToSocketId.get(user.cleanPhone || clean);
+        if (sockId) {
+          const s = io.sockets.sockets.get(sockId);
+          if (s) {
+            s.emit('account_banned', { banned: true, reason: user.banReason, bannedAt: user.bannedAt });
+            s.disconnect(true);
+          }
+        }
+      } else if (status === 'active') {
+        delete user.bannedAt;
+        delete user.banReason;
+      }
+    }
     if (verificationBadge !== undefined) user.verificationBadge = verificationBadge;
     if (role !== undefined) user.role = role;
     if (walletBalanceNgn !== undefined) user.walletBalanceNgn = walletBalanceNgn;
-    usersByPhone.set(clean, user);
+    usersByPhone.set(user.cleanPhone || clean, user);
     saveUsersFile();
     io.emit('user_updated', user);
     return res.json({ success: true, user });
   }
   res.status(404).json({ error: 'User not found' });
+});
+
+// Admin Permanent Ban Endpoint
+app.post('/api/admin/users/:phone/ban', (req: Request, res: Response) => {
+  const { phone } = req.params;
+  const { reason } = req.body;
+  const clean = phone.replace(/\D/g, '');
+  let user = usersByPhone.get(clean);
+  if (!user) {
+    for (const [p, u] of usersByPhone.entries()) {
+      if (p.endsWith(clean) || clean.endsWith(p)) {
+        user = u;
+        break;
+      }
+    }
+  }
+  if (user) {
+    user.status = 'banned';
+    user.bannedAt = new Date().toISOString();
+    user.banReason = reason || 'Permanently blocked by administrator for policy violation.';
+    user.isOnline = false;
+    usersByPhone.set(user.cleanPhone || clean, user);
+    saveUsersFile();
+
+    // Kick and lock out socket
+    io.to(`phone:${user.cleanPhone || clean}`).emit('account_banned', {
+      banned: true,
+      reason: user.banReason,
+      bannedAt: user.bannedAt,
+    });
+    const sockId = phoneToSocketId.get(user.cleanPhone || clean);
+    if (sockId) {
+      const s = io.sockets.sockets.get(sockId);
+      if (s) {
+        s.emit('account_banned', { banned: true, reason: user.banReason, bannedAt: user.bannedAt });
+        s.disconnect(true);
+      }
+    }
+
+    io.emit('user_updated', user);
+    console.log(`🚫 [USER BANNED PERMANENTLY]: ${user.fullName} (${user.phoneNumber})`);
+    return res.json({ success: true, user });
+  }
+  res.status(404).json({ error: 'User not found' });
+});
+
+// Admin Unban / Restore Endpoint
+app.post('/api/admin/users/:phone/unban', (req: Request, res: Response) => {
+  const { phone } = req.params;
+  const clean = phone.replace(/\D/g, '');
+  let user = usersByPhone.get(clean);
+  if (!user) {
+    for (const [p, u] of usersByPhone.entries()) {
+      if (p.endsWith(clean) || clean.endsWith(p)) {
+        user = u;
+        break;
+      }
+    }
+  }
+  if (user) {
+    user.status = 'active';
+    delete user.bannedAt;
+    delete user.banReason;
+    usersByPhone.set(user.cleanPhone || clean, user);
+    saveUsersFile();
+    io.emit('user_updated', user);
+    console.log(`✅ [USER UNBANNED]: ${user.fullName} (${user.phoneNumber})`);
+    return res.json({ success: true, user });
+  }
+  res.status(404).json({ error: 'User not found' });
+});
+
+// Admin Wallet Direct Adjuster
+app.post('/api/admin/users/:phone/adjust-wallet', (req: Request, res: Response) => {
+  const { phone } = req.params;
+  const { newBalance, deltaNgn, note } = req.body;
+  const clean = phone.replace(/\D/g, '');
+  let user = usersByPhone.get(clean);
+  if (!user) {
+    for (const [p, u] of usersByPhone.entries()) {
+      if (p.endsWith(clean) || clean.endsWith(p)) {
+        user = u;
+        break;
+      }
+    }
+  }
+  if (user) {
+    let balance = user.walletBalanceNgn || 0;
+    if (newBalance !== undefined) {
+      balance = Math.max(0, Number(newBalance));
+    } else if (deltaNgn !== undefined) {
+      balance = Math.max(0, balance + Number(deltaNgn));
+    }
+    user.walletBalanceNgn = balance;
+    usersByPhone.set(user.cleanPhone || clean, user);
+    saveUsersFile();
+    io.emit('user_updated', user);
+    io.to(`phone:${user.cleanPhone || clean}`).emit('wallet_updated', {
+      balance,
+      note: note || 'Adjusted by administrator',
+    });
+    return res.json({ success: true, user, balance });
+  }
+  res.status(404).json({ error: 'User not found' });
+});
+
+// Admin Force Terminate / Kick Session
+app.post('/api/admin/users/:phone/kick', (req: Request, res: Response) => {
+  const { phone } = req.params;
+  const clean = phone.replace(/\D/g, '');
+  const sockId = phoneToSocketId.get(clean);
+  if (sockId) {
+    const s = io.sockets.sockets.get(sockId);
+    if (s) {
+      s.emit('force_logout', { reason: 'admin_kick', message: 'Your session was terminated by an administrator.' });
+      s.disconnect(true);
+    }
+  }
+  return res.json({ success: true, message: 'Session terminated' });
 });
 
 app.post('/api/admin/broadcast', (req: Request, res: Response) => {
@@ -867,9 +1035,20 @@ io.on('connection', (socket: Socket) => {
     if (userData?.phoneNumber) {
       const clean = userData.phoneNumber.replace(/\D/g, '');
       (socket as any)._userCleanPhone = clean;
+      phoneToSocketId.set(clean, socket.id);
       socket.join(`phone:${clean}`);
       const existing = usersByPhone.get(clean);
       if (existing) {
+        if (existing.status === 'banned') {
+          console.warn(`🚫 [BANNED USER ATTEMPT]: ${existing.fullName} (${clean}) rejected.`);
+          socket.emit('account_banned', {
+            banned: true,
+            reason: existing.banReason || 'Your account is permanently banned.',
+            bannedAt: existing.bannedAt || new Date().toISOString(),
+          });
+          socket.disconnect(true);
+          return;
+        }
         existing.isOnline = true;
         existing.lastSeen = 'online';
         if (userData.userName) existing.fullName = userData.userName;
