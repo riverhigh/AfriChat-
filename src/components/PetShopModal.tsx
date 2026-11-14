@@ -54,88 +54,10 @@ interface PetShopModalProps {
   onClose: () => void;
 }
 
-// ─── Mock Data ────────────────────────────────────────────────────────────────
+// ─── Live Data (No Mocks) ───────────────────────────────────────────────────
 
-const MOCK_POSTS: ForumPost[] = [
-  {
-    id: 'p1',
-    authorName: 'Pet Lover ***342',
-    authorAvatar: '🐾',
-    timeAgo: '2h ago',
-    text: 'My Golden Retriever just had 6 beautiful puppies! 🐶 They are so adorable. Anyone interested in adopting? They will be ready in 8 weeks.',
-    category: 'Dogs',
-    likeCount: 24,
-    commentCount: 8,
-    liked: false,
-  },
-  {
-    id: 'p2',
-    authorName: 'Cat Mom ***891',
-    authorAvatar: '🐱',
-    timeAgo: '5h ago',
-    text: 'Sharing this tip: adding a little coconut oil to your cat\'s food once a week keeps their coat shiny and healthy. My Persian has never looked better! 🌟',
-    category: 'Cats',
-    likeCount: 41,
-    commentCount: 13,
-    liked: true,
-  },
-  {
-    id: 'p3',
-    authorName: 'Bird Watcher ***567',
-    authorAvatar: '🦜',
-    timeAgo: '1d ago',
-    text: 'My African Grey parrot learned to say "how far" in Yoruba 😂 These birds are incredibly intelligent. Anyone else have parrots that speak local languages?',
-    category: 'Birds',
-    likeCount: 87,
-    commentCount: 32,
-    liked: false,
-  },
-];
-
-const MOCK_LISTINGS: PetListing[] = [
-  {
-    id: 'l1',
-    title: 'Pure Breed Rottweiler Puppy',
-    price: 85000,
-    location: 'Lagos, Lekki',
-    breed: 'Rottweiler',
-    age: '10 weeks',
-    category: 'Dogs',
-    description: 'Healthy, vaccinated, dewormed. Papers available. Both parents on-site.',
-    sellerName: 'Top Kennel ***214',
-    sellerPhone: '+2348012345214',
-    photoBase64: '',
-    rating: 4.8,
-  },
-  {
-    id: 'l2',
-    title: 'Scottish Fold Kitten',
-    price: 55000,
-    location: 'Abuja, Wuse 2',
-    breed: 'Scottish Fold',
-    age: '8 weeks',
-    category: 'Cats',
-    description: 'Adorable folded-ear kittens, litter trained, very playful and social.',
-    sellerName: 'Cat Haven ***773',
-    sellerPhone: '+2348098765773',
-    photoBase64: '',
-    rating: 4.5,
-  },
-  {
-    id: 'l3',
-    title: 'African Grey Parrot',
-    price: 120000,
-    location: 'Port Harcourt, GRA',
-    breed: 'African Grey',
-    age: '1 year',
-    category: 'Birds',
-    description: 'Talking parrot, hand-tamed, very friendly. Comes with cage and accessories.',
-    sellerName: 'Exotic Pets ***088',
-    sellerPhone: '+2348011223088',
-    photoBase64: '',
-    rating: 4.9,
-  },
-];
+const INITIAL_POSTS: ForumPost[] = [];
+const INITIAL_LISTINGS: PetListing[] = [];
 
 const FORUM_CATEGORIES: ForumCategory[] = ['All', 'Dogs', 'Cats', 'Birds', 'Fish', 'Reptiles', 'Small Pets'];
 const SHOP_CATEGORIES: ShopCategory[] = ['Dogs', 'Cats', 'Birds', 'Fish', 'Reptiles', 'Accessories', 'Vet Services'];
@@ -579,12 +501,12 @@ export const PetShopModal: React.FC<PetShopModalProps> = ({ isOpen, onClose }) =
   const [activeTab, setLocalActiveTab] = useState<ActiveTab>('forum');
 
   // Forum state
-  const [posts, setPosts] = useState<ForumPost[]>(MOCK_POSTS);
+  const [posts, setPosts] = useState<ForumPost[]>(INITIAL_POSTS);
   const [selectedForumCategory, setSelectedForumCategory] = useState<ForumCategory>('All');
   const [showNewPostForm, setShowNewPostForm] = useState(false);
 
   // Shop state
-  const [listings, setListings] = useState<PetListing[]>(MOCK_LISTINGS);
+  const [listings, setListings] = useState<PetListing[]>(INITIAL_LISTINGS);
   const [selectedShopCategory, setSelectedShopCategory] = useState<ShopCategory | 'All'>('All');
   const [showNewListingForm, setShowNewListingForm] = useState(false);
 

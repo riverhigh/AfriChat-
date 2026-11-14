@@ -661,12 +661,27 @@ export const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
 
 // ─── Data Version Nuke ───────────────────────────────────────────────────────
 // Bump this string whenever you need to wipe all stale cached/mock data.
-const AGC_DATA_VERSION = 'v3_clean_2026';
+const AGC_DATA_VERSION = 'v5_purged_all_mocks_live_2026';
 (function nukeStaleMockData() {
   if (typeof window === 'undefined') return;
   const stored = localStorage.getItem('AGC_data_version');
   if (stored !== AGC_DATA_VERSION) {
-    const keepKeys = new Set(['AGC_data_version', 'AGC_font_size', 'AGC_low_data_mode', 'AGC_language', 'AGC_currency', 'AGC_hide_phone_town', 'AGC_user_profile_v2', 'AGC_is_authenticated', 'AGC_device_contacts', 'AGC_registered_users_cache', 'AGC_registered_phones', 'AGC_taken_usernames', 'AGC_session_token', 'AGC_all_registered_users']);
+    const keepKeys = new Set([
+      'AGC_data_version',
+      'AGC_font_size',
+      'AGC_low_data_mode',
+      'AGC_language',
+      'AGC_currency',
+      'AGC_hide_phone_town',
+      'AGC_user_profile_v2',
+      'AGC_is_authenticated',
+      'AGC_device_contacts',
+      'AGC_registered_users_cache',
+      'AGC_registered_phones',
+      'AGC_taken_usernames',
+      'AGC_session_token',
+      'AGC_all_registered_users',
+    ]);
     const toRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -676,59 +691,11 @@ const AGC_DATA_VERSION = 'v3_clean_2026';
     }
     toRemove.forEach((k) => localStorage.removeItem(k));
     localStorage.setItem('AGC_data_version', AGC_DATA_VERSION);
-    console.log('[AGC] Stale data cleared, starting fresh.');
+    console.log('[AGC] Stale mock data purged, 100% live system running.');
   }
 })();
 
-
-const INITIAL_ERRAND_RUNNERS: ErrandRunner[] = [
-  {
-    id: 'runner_kelvin',
-    userId: 'usr_kelvin',
-    name: 'Kelvin Okafor (FastRunner Lekki)',
-    phone: '+2348021112233',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
-    location: 'Lekki / Victoria Island',
-    bio: 'Professional market shopper. Fresh meat, fish, curry & farm produce delivery in 45 mins.',
-    rating: 4.9,
-    reviewsCount: 38,
-    completedCount: 32, // Gold Errand Master milestone unlocked!
-    deliveryBaseFee: 1500,
-    currency: 'NGN',
-    isOnline: true,
-    isRegistered: true,
-    itemsForSale: [
-      { id: 'item_1', name: 'Fresh Whole Chicken', price: 3800, unit: 'kg', category: 'Meat & Poultry', inStock: true },
-      { id: 'item_2', name: 'Fresh Titus Fish (Mackerel)', price: 2900, unit: 'kg', category: 'Meat & Poultry', inStock: true },
-      { id: 'item_3', name: 'Oloyin Honey Beans', price: 1400, unit: 'derica', category: 'Food Stuffs', inStock: true },
-      { id: 'item_4', name: 'Ducros Curry Powder', price: 650, unit: 'pack', category: 'Spices & Seasoning', inStock: true },
-      { id: 'item_5', name: 'Nescafe Classic Coffee', price: 2400, unit: 'jar', category: 'Groceries', inStock: true },
-      { id: 'item_6', name: 'Fresh Bell Peppers (Tatase)', price: 1200, unit: 'basket', category: 'Food Stuffs', inStock: true },
-    ],
-  },
-  {
-    id: 'runner_amina',
-    userId: 'usr_amina',
-    name: 'Amina Bello (Garki Market Express)',
-    phone: '+2348035556677',
-    avatar: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=200&auto=format&fit=crop&q=80',
-    location: 'Wuse / Garki, Abuja',
-    bio: 'Direct market purchases from wholesale dealers. Freshness guaranteed or money refunded.',
-    rating: 4.8,
-    reviewsCount: 22,
-    completedCount: 18,
-    deliveryBaseFee: 2000,
-    currency: 'NGN',
-    isOnline: true,
-    isRegistered: true,
-    itemsForSale: [
-      { id: 'item_7', name: 'Beef Cut & Cleaned', price: 4200, unit: 'kg', category: 'Meat & Poultry', inStock: true },
-      { id: 'item_8', name: 'Brown Beans', price: 1300, unit: 'derica', category: 'Food Stuffs', inStock: true },
-      { id: 'item_9', name: 'Groundnut Oil (Devon Kings)', price: 3200, unit: 'litre', category: 'Groceries', inStock: true },
-      { id: 'item_10', name: 'Catfish Live/Cleaned', price: 3500, unit: 'kg', category: 'Meat & Poultry', inStock: true },
-    ],
-  },
-];
+const INITIAL_ERRAND_RUNNERS: ErrandRunner[] = [];
 
 const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   wallet: true,
@@ -797,53 +764,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const saved = localStorage.getItem('AGC_errand_runners_v1');
       if (saved) return JSON.parse(saved);
     } catch (_) {}
-    return [
-      {
-        id: 'runner_kelvin',
-        userId: 'usr_kelvin',
-        name: 'Kelvin Okafor (FastRunner Lekki)',
-        phone: '+2348021112233',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
-        location: 'Lekki / Victoria Island',
-        bio: 'Professional market shopper. Fresh meat, fish, curry & farm produce delivery in 45 mins.',
-        rating: 4.9,
-        reviewsCount: 38,
-        completedCount: 32,
-        deliveryBaseFee: 1500,
-        currency: 'NGN',
-        isOnline: true,
-        isRegistered: true,
-        itemsForSale: [
-          { id: 'item_1', name: 'Fresh Whole Chicken', price: 3800, unit: 'kg', category: 'Meat & Poultry', inStock: true },
-          { id: 'item_2', name: 'Fresh Titus Fish (Mackerel)', price: 2900, unit: 'kg', category: 'Meat & Poultry', inStock: true },
-          { id: 'item_3', name: 'Oloyin Honey Beans', price: 1400, unit: 'derica', category: 'Food Stuffs', inStock: true },
-          { id: 'item_4', name: 'Ducros Curry Powder', price: 650, unit: 'pack', category: 'Spices & Seasoning', inStock: true },
-          { id: 'item_5', name: 'Nescafe Classic Coffee', price: 2400, unit: 'jar', category: 'Groceries', inStock: true },
-          { id: 'item_6', name: 'Fresh Bell Peppers (Tatase)', price: 1200, unit: 'basket', category: 'Food Stuffs', inStock: true },
-        ],
-      },
-      {
-        id: 'runner_amina',
-        userId: 'usr_amina',
-        name: 'Amina Bello (Garki Market Express)',
-        phone: '+2348035556677',
-        avatar: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=200&auto=format&fit=crop&q=80',
-        location: 'Wuse / Garki, Abuja',
-        bio: 'Direct market purchases from wholesale dealers. Freshness guaranteed.',
-        rating: 4.8,
-        reviewsCount: 22,
-        completedCount: 18,
-        deliveryBaseFee: 2000,
-        currency: 'NGN',
-        isOnline: true,
-        isRegistered: true,
-        itemsForSale: [
-          { id: 'item_7', name: 'Beef Cut & Cleaned', price: 4200, unit: 'kg', category: 'Meat & Poultry', inStock: true },
-          { id: 'item_8', name: 'Brown Beans', price: 1300, unit: 'derica', category: 'Food Stuffs', inStock: true },
-          { id: 'item_9', name: 'Groundnut Oil (Devon Kings)', price: 3200, unit: 'litre', category: 'Groceries', inStock: true },
-        ],
-      },
-    ];
+    return [];
   });
 
   const [errandOrders, setErrandOrders] = useState<ErrandOrder[]>(() => {
@@ -2227,16 +2148,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 3. Scam Alert & Reputation Checker State
   const [scamDatabase, setScamDatabase] = useState<Record<string, ScamEntity>>(() => {
-    // Load from localStorage first (persists user-submitted reports between sessions)
     try {
       const saved = localStorage.getItem('AGC_scam_database_v2');
       if (saved) {
-        const parsed = JSON.parse(saved);
-        // Merge with MOCK_SCAM_DATABASE so built-in entries are always present
-        return { ...MOCK_SCAM_DATABASE, ...parsed };
+        return JSON.parse(saved);
       }
     } catch (_) {}
-    return { ...MOCK_SCAM_DATABASE };
+    return {};
   });
   const [isScamCheckerModalOpen, setIsScamCheckerModalOpen] = useState(false);
   const [scamLookupEntity, setScamLookupEntity] = useState<ScamEntity | null>(null);
@@ -3370,7 +3288,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse dispatch orders:', e);
     }
-    return MOCK_DISPATCH_ORDERS;
+    return [];
   });
   const [isDispatchModalOpen, setIsDispatchModalOpen] = useState(false);
 
@@ -3385,7 +3303,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse jobs:', e);
     }
-    return MOCK_JOB_POSTINGS;
+    return [];
   });
   const [isJobBoardModalOpen, setIsJobBoardModalOpen] = useState(false);
   const [isPostJobModalOpen, setIsPostJobModalOpen] = useState(false);
@@ -7492,7 +7410,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.warn('Failed to parse creator files:', e);
     }
-    return MOCK_CREATOR_FILES;
+    return [];
   });
 
   const buyCreatorFile = (fileId: string) => {

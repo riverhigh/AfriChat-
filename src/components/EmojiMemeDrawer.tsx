@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, Smile, Sparkles, Upload, Trash2, Image as ImageIcon, Send } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { MOCK_MEME_TEMPLATES } from '../data/mockData';
+
 import { UserUploadedMeme } from '../types';
 
 const POPULAR_AFRICAN_EMOJIS = [

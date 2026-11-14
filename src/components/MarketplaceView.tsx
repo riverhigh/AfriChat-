@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { fetchProducts, supabase } from '../services/supabase';
 import {
   GraduationCap,
@@ -11,7 +11,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { MOCK_PRODUCTS } from '../data/mockData';
+
 import { Product } from '../types';
 
 export const MarketplaceView: React.FC = () => {

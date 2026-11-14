@@ -78,11 +78,8 @@ export const AudioSpaceModal: React.FC = () => {
   // Local state for interactive stage management
   const [speakersList, setSpeakersList] = useState<AudioSpaceSpeaker[]>(() => {
     if (!activeAudioSpace) return [];
-    // Ensure host, co-host, and sponsor are well-represented
     const current = activeAudioSpace.speakers || [];
     const hasHost = current.some((s) => s.role === 'host');
-    const hasCoHost = current.some((s) => s.role === 'co-host');
-    const hasSponsor = current.some((s) => s.role === 'sponsor');
 
     let enhanced = [...current];
     if (!hasHost) {
@@ -96,44 +93,12 @@ export const AudioSpaceModal: React.FC = () => {
       });
     }
 
-    if (!hasCoHost && enhanced.length > 1) {
-      enhanced[1] = { ...enhanced[1], role: 'co-host' };
-    }
-
-    if (!hasSponsor) {
-      enhanced.push({
-        id: 'sp_sponsor',
-        name: 'Kente Pay Africa',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-        role: 'sponsor',
-        isSpeaking: false,
-        isMuted: false,
-        sponsorBrand: 'Kente Pay',
-        sponsorTagline: 'Zero-Fee African Merchant Remittances',
-      });
-    }
-
     return enhanced;
   });
 
-  const [raisedHandsQueue, setRaisedHandsQueue] = useState<{ id: string; name: string; avatar: string; time: string }[]>([
-    {
-      id: 'rh_1',
-      name: 'Amara Okafor',
-      avatar: 'https://api.dicebear.com/8.x/initials/svg?seed=Amara&backgroundColor=581c87&textColor=ffffff',
-      time: '1m ago',
-    },
-    {
-      id: 'rh_2',
-      name: 'Kofi Mensah',
-      avatar: 'https://api.dicebear.com/8.x/initials/svg?seed=Kofi&backgroundColor=065f46&textColor=ffffff',
-      time: 'Just now',
-    },
-  ]);
+  const [raisedHandsQueue, setRaisedHandsQueue] = useState<{ id: string; name: string; avatar: string; time: string }[]>([]);
 
-  const [pinnedNote, setPinnedNote] = useState<string>(
-    '📢 Welcome to Street Radio! Q&A session starts in 10 mins. Raise your hand to speak.'
-  );
+  const [pinnedNote, setPinnedNote] = useState<string>(activeAudioSpace?.pinnedAnnouncement || '');
   const [isEditingPin, setIsEditingPin] = useState(false);
   const [pinInput, setPinInput] = useState(pinnedNote);
 

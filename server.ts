@@ -192,64 +192,19 @@ const communitiesMap = new Map<string, any>();
 const statusesMap = new Map<string, any>();
 const dispatchOrdersMap = new Map<string, any>();
 
-const INITIAL_DISPATCH_ORDERS = [
-  {
-    id: 'disp_gokada_101',
-    trackingCode: 'GKD-LAG-84920',
-    provider: 'gokada',
-    senderAddress: 'Shop 14, Balogun Ultra-Modern Complex, Lagos Island',
-    senderPhone: '+2348031234567',
-    recipientName: 'Chioma Adebayo',
-    recipientPhone: '+2348030001122',
-    recipientAddress: '14 Admiralty Way, Lekki Phase 1, Lagos',
-    packageDescription: 'Super-Wax Gold & Emerald Dutch Ankara (6 Yards)',
-    vehicleType: 'bike',
-    estimatedFee: 2400,
-    platformFee: 120,
-    totalFee: 2520,
-    currency: 'NGN',
-    status: 'delivered',
-    riderName: 'Babatunde Alao (Gokada Express)',
-    riderPhone: '+2348038884921',
-    riderPlate: 'GKD-782-IKJ',
-    createdAt: new Date(Date.now() - 3600 * 1000 * 5).toISOString(),
-  },
-  {
-    id: 'disp_pickkr_102',
-    trackingCode: 'PCK-INT-49201',
-    provider: 'pickkr',
-    senderAddress: 'Computer Village, 12 Pepple St, Ikeja',
-    senderPhone: '+2348028889911',
-    recipientName: 'Emeka Nwosu',
-    recipientPhone: '+2348123456789',
-    recipientAddress: 'Plot 4, Bodija Estate, Ibadan, Oyo State',
-    packageDescription: 'Google Pixel 8 (Grade A+ Refurbished with warranty)',
-    vehicleType: 'van',
-    estimatedFee: 4800,
-    platformFee: 240,
-    totalFee: 5040,
-    currency: 'NGN',
-    status: 'in_transit',
-    riderName: 'Oluwaseun PickkR Hub #12',
-    riderPhone: '+2348091122334',
-    riderPlate: 'PCK-504-OYO',
-    createdAt: new Date(Date.now() - 3600 * 1000 * 2).toISOString(),
-  },
-];
+const INITIAL_DISPATCH_ORDERS: any[] = [];
 
 try {
   if (fs.existsSync(DISPATCH_FILE)) {
     const raw = JSON.parse(fs.readFileSync(DISPATCH_FILE, 'utf8'));
     if (Array.isArray(raw)) {
       for (const d of raw) {
-        if (d.id) dispatchOrdersMap.set(d.id, d);
+        // Filter out any legacy mock dispatch items
+        if (d.id && !d.id.startsWith('disp_gokada_') && !d.id.startsWith('disp_pickkr_')) {
+          dispatchOrdersMap.set(d.id, d);
+        }
       }
     }
-  } else {
-    for (const d of INITIAL_DISPATCH_ORDERS) {
-      dispatchOrdersMap.set(d.id, d);
-    }
-    fs.writeFileSync(DISPATCH_FILE, JSON.stringify(INITIAL_DISPATCH_ORDERS, null, 2));
   }
 } catch (e) {
   console.warn('Notice loading dispatch orders:', e);
