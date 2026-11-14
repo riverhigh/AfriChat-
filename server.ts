@@ -187,8 +187,81 @@ const phoneToSocketId = new Map<string, string>();
 const USERS_FILE = path.join(__dirname, 'data_users.json');
 const COMMUNITIES_FILE = path.join(__dirname, 'data_communities.json');
 const STATUSES_FILE = path.join(__dirname, 'data_statuses.json');
+const DISPATCH_FILE = path.join(__dirname, 'data_dispatch_orders.json');
 const communitiesMap = new Map<string, any>();
 const statusesMap = new Map<string, any>();
+const dispatchOrdersMap = new Map<string, any>();
+
+const INITIAL_DISPATCH_ORDERS = [
+  {
+    id: 'disp_gokada_101',
+    trackingCode: 'GKD-LAG-84920',
+    provider: 'gokada',
+    senderAddress: 'Shop 14, Balogun Ultra-Modern Complex, Lagos Island',
+    senderPhone: '+2348031234567',
+    recipientName: 'Chioma Adebayo',
+    recipientPhone: '+2348030001122',
+    recipientAddress: '14 Admiralty Way, Lekki Phase 1, Lagos',
+    packageDescription: 'Super-Wax Gold & Emerald Dutch Ankara (6 Yards)',
+    vehicleType: 'bike',
+    estimatedFee: 2400,
+    platformFee: 120,
+    totalFee: 2520,
+    currency: 'NGN',
+    status: 'delivered',
+    riderName: 'Babatunde Alao (Gokada Express)',
+    riderPhone: '+2348038884921',
+    riderPlate: 'GKD-782-IKJ',
+    createdAt: new Date(Date.now() - 3600 * 1000 * 5).toISOString(),
+  },
+  {
+    id: 'disp_pickkr_102',
+    trackingCode: 'PCK-INT-49201',
+    provider: 'pickkr',
+    senderAddress: 'Computer Village, 12 Pepple St, Ikeja',
+    senderPhone: '+2348028889911',
+    recipientName: 'Emeka Nwosu',
+    recipientPhone: '+2348123456789',
+    recipientAddress: 'Plot 4, Bodija Estate, Ibadan, Oyo State',
+    packageDescription: 'Google Pixel 8 (Grade A+ Refurbished with warranty)',
+    vehicleType: 'van',
+    estimatedFee: 4800,
+    platformFee: 240,
+    totalFee: 5040,
+    currency: 'NGN',
+    status: 'in_transit',
+    riderName: 'Oluwaseun PickkR Hub #12',
+    riderPhone: '+2348091122334',
+    riderPlate: 'PCK-504-OYO',
+    createdAt: new Date(Date.now() - 3600 * 1000 * 2).toISOString(),
+  },
+];
+
+try {
+  if (fs.existsSync(DISPATCH_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(DISPATCH_FILE, 'utf8'));
+    if (Array.isArray(raw)) {
+      for (const d of raw) {
+        if (d.id) dispatchOrdersMap.set(d.id, d);
+      }
+    }
+  } else {
+    for (const d of INITIAL_DISPATCH_ORDERS) {
+      dispatchOrdersMap.set(d.id, d);
+    }
+    fs.writeFileSync(DISPATCH_FILE, JSON.stringify(INITIAL_DISPATCH_ORDERS, null, 2));
+  }
+} catch (e) {
+  console.warn('Notice loading dispatch orders:', e);
+}
+
+function saveDispatchFile() {
+  try {
+    fs.writeFileSync(DISPATCH_FILE, JSON.stringify(Array.from(dispatchOrdersMap.values()), null, 2));
+  } catch (e) {
+    console.warn('Notice saving dispatch registry:', e);
+  }
+}
 
 try {
   if (fs.existsSync(STATUSES_FILE)) {
@@ -429,6 +502,108 @@ app.post('/api/statuses', (req: Request, res: Response) => {
   res.json({ success: true, status: st });
 });
 
+// ── REST: LIVE DISPATCH ORDERS WITH 5% PLATFORM FEE ──────────────────────────
+const RIDER_POOL = [
+  { name: 'Tunde Balogun (Gokada Express)', phone: '+2348039988112', plate: 'GKD-481-APP' },
+  { name: 'Ibrahim Musa (AGC Swift Rider)', phone: '+2348128392011', plate: 'GKD-912-LG' },
+  { name: 'Chukwuma Eze (City Cargo Van)', phone: '+2348067711200', plate: 'PCK-334-IKJ' },
+  { name: 'Femi Adeleke (FastTrack Dispatch)', phone: '+2348154432198', plate: 'GKD-105-VI' },
+  { name: 'Babatunde Alao (Gokada Elite)', phone: '+2348038884921', plate: 'GKD-782-IKJ' },
+  { name: 'Oluwaseun PickkR Hub #12', phone: '+2348091122334', plate: 'PCK-504-OYO' },
+];
+
+app.get('/api/dispatch/orders', (_req: Request, res: Response) => {
+  const orders = Array.from(dispatchOrdersMap.values()).sort((a: any, b: any) => {
+    const tA = new Date(a.createdAt).getTime() || 0;
+    const tB = new Date(b.createdAt).getTime() || 0;
+    return tB - tA;
+  });
+  res.json({ success: true, orders });
+});
+
+app.post('/api/dispatch/orders', (req: Request, res: Response) => {
+  try {
+    const body = req.body;
+    if (!body) return res.status(400).json({ error: 'Order data required' });
+
+    const baseFee = Number(body.estimatedFee) || (body.vehicleType === 'van' ? 6500 : 2400);
+    // 5% Platform commission calculation
+    const platformFee = Math.round(baseFee * 0.05);
+    const totalFee = baseFee + platformFee;
+
+    const provider = body.provider || (body.vehicleType === 'van' ? 'pickkr' : 'gokada');
+    const prefix = provider === 'gokada' ? 'GKD' : 'PCK';
+    const trackingCode = `AGC-${prefix}-${Math.floor(10000 + Math.random() * 90000)}`;
+
+    const randomRider = RIDER_POOL[Math.floor(Math.random() * RIDER_POOL.length)];
+
+    const newOrder = {
+      id: body.id || `disp_${Date.now()}`,
+      trackingCode: body.trackingCode || trackingCode,
+      provider,
+      senderAddress: body.senderAddress || 'Shop 14, Balogun Ultra-Modern Complex, Lagos Island',
+      senderPhone: body.senderPhone || '+2348031234567',
+      recipientName: body.recipientName || 'Recipient',
+      recipientPhone: body.recipientPhone || '+2348000000000',
+      recipientAddress: body.recipientAddress || 'Lagos, Nigeria',
+      packageDescription: body.packageDescription || 'Parcel package',
+      vehicleType: body.vehicleType || 'bike',
+      estimatedFee: baseFee,
+      platformFee,
+      totalFee,
+      currency: body.currency || 'NGN',
+      status: 'rider_assigned',
+      riderName: body.riderName || randomRider.name,
+      riderPhone: body.riderPhone || randomRider.phone,
+      riderPlate: body.riderPlate || randomRider.plate,
+      createdAt: body.createdAt || new Date().toISOString(),
+    };
+
+    dispatchOrdersMap.set(newOrder.id, newOrder);
+    saveDispatchFile();
+
+    io.emit('dispatch_order_created', newOrder);
+
+    // Live automatic progress simulation for active delivery tracking
+    setTimeout(() => {
+      const existing = dispatchOrdersMap.get(newOrder.id);
+      if (existing && existing.status === 'rider_assigned') {
+        existing.status = 'in_transit';
+        dispatchOrdersMap.set(existing.id, existing);
+        saveDispatchFile();
+        io.emit('dispatch_status_updated', { id: existing.id, status: 'in_transit', order: existing });
+      }
+    }, 15000);
+
+    setTimeout(() => {
+      const existing = dispatchOrdersMap.get(newOrder.id);
+      if (existing && existing.status === 'in_transit') {
+        existing.status = 'delivered';
+        dispatchOrdersMap.set(existing.id, existing);
+        saveDispatchFile();
+        io.emit('dispatch_status_updated', { id: existing.id, status: 'delivered', order: existing });
+      }
+    }, 45000);
+
+    res.json({ success: true, order: newOrder });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to create dispatch order' });
+  }
+});
+
+app.patch('/api/dispatch/orders/:id/status', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  const order = dispatchOrdersMap.get(id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  order.status = status;
+  dispatchOrdersMap.set(id, order);
+  saveDispatchFile();
+  io.emit('dispatch_status_updated', { id, status, order });
+  res.json({ success: true, order });
+});
+
 // Create raw HTTP server to handle both Express REST and WebSocket upgrades
 const httpServer = createServer(app);
 
@@ -656,6 +831,25 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('call_signal', (payload: { roomId: string; event: string; data: any }) => {
     socket.to(`call:${payload.roomId}`).emit('call_signal', payload);
+  });
+
+  // 7. Live Courier Dispatch Handlers
+  socket.on('dispatch_order_create', (payload: any) => {
+    if (payload?.id) {
+      dispatchOrdersMap.set(payload.id, payload);
+      saveDispatchFile();
+      socket.broadcast.emit('dispatch_order_created', payload);
+    }
+  });
+
+  socket.on('dispatch_status_update', (payload: { id: string; status: string }) => {
+    if (payload?.id && dispatchOrdersMap.has(payload.id)) {
+      const ord = dispatchOrdersMap.get(payload.id);
+      ord.status = payload.status;
+      dispatchOrdersMap.set(payload.id, ord);
+      saveDispatchFile();
+      io.emit('dispatch_status_updated', { id: ord.id, status: ord.status, order: ord });
+    }
   });
 
   // Disconnect handler

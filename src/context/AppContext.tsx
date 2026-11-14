@@ -3363,11 +3363,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [dispatchOrders, setDispatchOrders] = useState<DispatchDeliveryOrder[]>(() => {
     try {
       const saved = localStorage.getItem('AGC_dispatch_orders');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
     } catch (e) {
       console.warn('Failed to parse dispatch orders:', e);
     }
-    return [];
+    return MOCK_DISPATCH_ORDERS;
   });
   const [isDispatchModalOpen, setIsDispatchModalOpen] = useState(false);
 
@@ -6633,12 +6636,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const createDispatchOrder = (
     orderData: Omit<DispatchDeliveryOrder, 'id' | 'trackingCode' | 'createdAt' | 'status'>
   ): DispatchDeliveryOrder => {
+    const baseFee = orderData.estimatedFee || (orderData.vehicleType === 'van' ? 6500 : 2400);
+    // 5% Platform commission calculation
+    const platformFee = Math.round(baseFee * 0.05);
+    const totalFee = baseFee + platformFee;
+
     const prefix = orderData.provider === 'gokada' ? 'GKD' : 'PCK';
-    const code = `${prefix}-${Math.floor(10000 + Math.random() * 90000)}`;
+    const code = `AGC-${prefix}-${Math.floor(10000 + Math.random() * 90000)}`;
     const newOrder: DispatchDeliveryOrder = {
       ...orderData,
       id: `disp_${Date.now()}`,
       trackingCode: code,
+      estimatedFee: baseFee,
+      platformFee,
+      totalFee,
       status: 'rider_assigned',
       riderName: orderData.provider === 'gokada' ? 'Tunde Balogun (Gokada Express)' : 'Chijioke PickkR Hub #8',
       riderPhone: '+2348039988112',
@@ -6647,10 +6658,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setDispatchOrders((prev) => {
-      const updated = [newOrder, ...prev];
+      const updated = [newOrder, ...prev.filter((o) => o.id !== newOrder.id)];
       localStorage.setItem('AGC_dispatch_orders', JSON.stringify(updated));
       return updated;
     });
+
+    try {
+      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      fetch(`http://${socketHost}:3002/api/dispatch/orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newOrder),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.success && data.order) {
+            setDispatchOrders((prev) => {
+              const updated = prev.map((o) => (o.id === newOrder.id ? data.order : o));
+              localStorage.setItem('AGC_dispatch_orders', JSON.stringify(updated));
+              return updated;
+            });
+          }
+        })
+        .catch(() => {});
+    } catch (_) {}
 
     return newOrder;
   };
@@ -8347,8 +8378,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (request) handleIncomingFriendRequest(request);
     };
 
+    const handleDispatchOrderCreated = (order: DispatchDeliveryOrder) => {
+      if (!order?.id) return;
+      setDispatchOrders((prev) => {
+        if (prev.some((o) => o.id === order.id)) return prev;
+        const updated = [order, ...prev];
+        localStorage.setItem('AGC_dispatch_orders', JSON.stringify(updated));
+        return updated;
+      });
+    };
+
+    const handleDispatchStatusUpdated = ({ id, status, order }: any) => {
+      if (!id) return;
+      setDispatchOrders((prev) => {
+        const updated = prev.map((o) => {
+          if (o.id === id) {
+            return { ...(order || o), status };
+          }
+          return o;
+        });
+        localStorage.setItem('AGC_dispatch_orders', JSON.stringify(updated));
+        return updated;
+      });
+    };
+
     socket.on('group_created', handleGroupCreated);
     socket.on('friend_request', handleFriendRequestSocket);
+    socket.on('dispatch_order_created', handleDispatchOrderCreated);
+    socket.on('dispatch_status_updated', handleDispatchStatusUpdated);
 
     // 2. BroadcastChannel listener (instant multi-tab / window sync)
     let bc: BroadcastChannel | null = null;
@@ -8455,12 +8512,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('new_message', handleIncomingMessage);
       socket.off('group_created', handleGroupCreated);
       socket.off('friend_request', handleFriendRequestSocket);
+      socket.off('dispatch_order_created', handleDispatchOrderCreated);
+      socket.off('dispatch_status_updated', handleDispatchStatusUpdated);
       if (bc) bc.close();
       if (sbInboxChannel) sbInboxChannel.unsubscribe();
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
       if (sbTownFeed) sbTownFeed.unsubscribe();
     };
   }, [currentUser, activeChatId, handleIncomingMessage]);
+
+  // Initial fetch for live dispatch orders from backend API
+  useEffect(() => {
+    try {
+      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      fetch(`http://${socketHost}:3002/api/dispatch/orders`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.success && Array.isArray(data.orders) && data.orders.length > 0) {
+            setDispatchOrders(data.orders);
+            localStorage.setItem('AGC_dispatch_orders', JSON.stringify(data.orders));
+          }
+        })
+        .catch(() => {});
+    } catch (_) {}
+  }, []);
 
   // Offline/Online Reconnection Sync (Flushes pending 1-check messages to 2-check delivered)
   useEffect(() => {

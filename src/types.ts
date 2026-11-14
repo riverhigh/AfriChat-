@@ -419,6 +419,8 @@ export interface DispatchDeliveryOrder {
   packageDescription: string;
   vehicleType: 'bike' | 'van';
   estimatedFee: number;
+  platformFee?: number;
+  totalFee?: number;
   currency: CurrencyCode;
   status: 'finding_rider' | 'rider_assigned' | 'in_transit' | 'delivered';
   riderName?: string;
