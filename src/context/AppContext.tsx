@@ -401,7 +401,7 @@ interface AppContextType {
   acceptFriendRequest: (requestId: string) => void;
   declineFriendRequest: (requestId: string) => void;
   respondToGroupInvitation: (chatId: string, accept: boolean) => void;
-  endAudioSpace: (spaceId: string) => void;
+  endAudioSpace: (spaceId: string, customStats?: { durationFormatted?: string; peakListeners?: number }) => void;
   spaceEndedSummary: { spaceId: string; title: string; durationFormatted: string; peakListeners: number } | null;
   setSpaceEndedSummary: (val: { spaceId: string; title: string; durationFormatted: string; peakListeners: number } | null) => void;
   // Live Supabase Presence & Typing Indicators
@@ -5277,6 +5277,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hostName: myName,
       hostAvatar: myAvatar,
       listenersCount: 1,
+      peakListeners: 1,
+      startedAt: Date.now(),
       isLive: true,
       isLowBandwidthMode: isLowBandwidth,
       speakers: [
@@ -5327,9 +5329,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isAlreadyMember = space.speakers?.some((s) => s.id === currentUser.id) ||
       space.listeners?.some((l) => l.id === currentUser.id);
 
+    const currentListenersCount = isAlreadyMember ? space.listenersCount : (space.listenersCount || 0) + 1;
     const updatedSpace: AudioSpace = {
       ...space,
-      listenersCount: isAlreadyMember ? space.listenersCount : (space.listenersCount || 0) + 1,
+      startedAt: space.startedAt || Date.now(),
+      peakListeners: Math.max(space.peakListeners || 0, currentListenersCount),
+      listenersCount: currentListenersCount,
       listeners: isAlreadyMember
         ? space.listeners
         : [
@@ -5378,14 +5383,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveAudioSpace((prev) => (prev ? { ...prev, isLowBandwidthMode: !prev.isLowBandwidthMode } : null));
   };
 
-  const endAudioSpace = (spaceId: string) => {
+  const endAudioSpace = (spaceId: string, customStats?: { durationFormatted?: string; peakListeners?: number }) => {
     const space = audioSpaces.find((s) => s.id === spaceId) || activeAudioSpace;
-    const peakListeners = space ? (space.listenersCount || 1) + 4 : 5;
-    const durationFormatted = '42m 18s';
+    const startTime = space?.startedAt || activeAudioSpace?.startedAt || Date.now();
+    const elapsedMs = Math.max(1000, Date.now() - startTime);
+
+    const totalSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const computedDuration =
+      hours > 0 ? `${hours}h ${minutes}m ${seconds}s` : minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+
+    const durationFormatted = customStats?.durationFormatted || computedDuration;
+    const peakListeners = customStats?.peakListeners ?? Math.max(
+      space?.peakListeners || 0,
+      space?.listenersCount || 0,
+      activeAudioSpace?.peakListeners || 0,
+      activeAudioSpace?.listenersCount || 0,
+      1
+    );
 
     setSpaceEndedSummary({
       spaceId,
-      title: space?.title || 'Live Community Space',
+      title: space?.title || activeAudioSpace?.title || 'Live Community Space',
       durationFormatted,
       peakListeners,
     });

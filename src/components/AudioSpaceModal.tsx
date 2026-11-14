@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Mic,
@@ -43,6 +43,37 @@ export const AudioSpaceModal: React.FC = () => {
   const [hasRequestedMic, setHasRequestedMic] = useState(false);
   const [showManageDeck, setShowManageDeck] = useState(false);
   const [selectedSpeakerForAction, setSelectedSpeakerForAction] = useState<AudioSpaceSpeaker | null>(null);
+
+  // Live duration timer & live peak listeners
+  const [liveSeconds, setLiveSeconds] = useState(0);
+  const [livePeak, setLivePeak] = useState(() => activeAudioSpace?.listenersCount || 1);
+
+  useEffect(() => {
+    if (!activeAudioSpace) return;
+    const start = activeAudioSpace.startedAt || Date.now();
+    setLiveSeconds(Math.max(0, Math.floor((Date.now() - start) / 1000)));
+
+    const timer = setInterval(() => {
+      setLiveSeconds(Math.max(0, Math.floor((Date.now() - start) / 1000)));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [activeAudioSpace?.id, activeAudioSpace?.startedAt]);
+
+  const formatLiveDuration = (totalSec: number): string => {
+    const hours = Math.floor(totalSec / 3600);
+    const minutes = Math.floor((totalSec % 3600) / 60);
+    const seconds = totalSec % 60;
+    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+    if (minutes > 0) return `${minutes}m ${seconds}s`;
+    return `${seconds}s`;
+  };
+
+  const formatClockDisplay = (totalSec: number): string => {
+    const minutes = Math.floor(totalSec / 60);
+    const seconds = totalSec % 60;
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  };
 
   // Local state for interactive stage management
   const [speakersList, setSpeakersList] = useState<AudioSpaceSpeaker[]>(() => {
@@ -249,6 +280,11 @@ export const AudioSpaceModal: React.FC = () => {
               <Radio className="w-4 h-4" />
               <span>Street Radio Live</span>
             </div>
+            {/* Live Ticking Duration Clock */}
+            <div className="flex items-center gap-1 text-[11px] font-mono font-bold text-amber-300 bg-amber-500/10 px-2.5 py-0.5 rounded-full border border-amber-500/20">
+              <Clock className="w-3 h-3 text-amber-400" />
+              <span>{formatClockDisplay(liveSeconds)}</span>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
@@ -308,9 +344,10 @@ export const AudioSpaceModal: React.FC = () => {
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-purple-600/30 border border-purple-500/40 text-purple-300 uppercase font-bold tracking-wider">
                 {activeAudioSpace.category}
               </span>
-              <span className="text-[11px] font-mono text-purple-300/80 flex items-center gap-1">
-                <Users className="w-3 h-3 text-purple-400" />
-                <span>{activeAudioSpace.listenersCount} tuned in</span>
+              <span className="text-[11px] font-mono text-purple-300/80 flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-white font-semibold">{activeAudioSpace.listenersCount} tuned in</span>
+                <span className="text-[10px] text-purple-400 font-medium">· Peak: {livePeak}</span>
               </span>
             </div>
             <h2 className="text-xl font-black font-display mt-1 leading-snug text-white">
@@ -642,8 +679,13 @@ export const AudioSpaceModal: React.FC = () => {
           {isHost && (
             <button
               type="button"
-              onClick={() => endAudioSpace(activeAudioSpace.id)}
-              className="py-3 px-4 bg-rose-600/80 hover:bg-rose-600 text-white border border-rose-500 rounded-2xl text-xs font-bold transition-all shadow-md active:scale-95 flex items-center gap-1.5"
+              onClick={() =>
+                endAudioSpace(activeAudioSpace.id, {
+                  durationFormatted: formatLiveDuration(liveSeconds),
+                  peakListeners: livePeak,
+                })
+              }
+              className="py-3 px-4 bg-rose-600/80 hover:bg-rose-600 text-white border border-rose-500 rounded-2xl text-xs font-bold transition-all shadow-md active:scale-95 flex items-center gap-1.5 cursor-pointer"
             >
               <XCircle className="w-4 h-4" />
               <span>End Space</span>

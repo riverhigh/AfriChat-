@@ -92,6 +92,8 @@ export interface AudioSpace {
   hostName: string;
   hostAvatar: string;
   listenersCount: number;
+  peakListeners?: number;
+  startedAt?: number;
   speakers: AudioSpaceSpeaker[];
   listeners?: { id: string; name: string; avatar: string; isMuted?: boolean; isSpeaking?: boolean }[];
   isLive: boolean;
