@@ -1503,8 +1503,26 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 {activeMenuMsgId === msg.id && (
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className={`absolute -top-26 z-40 ${isUser ? 'right-0' : 'left-0'} bg-[#242428]/95 dark:bg-[#1a1a1e]/95 text-white backdrop-blur-md rounded-2xl p-2 shadow-2xl border border-white/15 w-64 animate-in zoom-in-95 duration-150 select-none`}
+                    className={`absolute -top-36 z-40 ${isUser ? 'right-0' : 'left-0'} bg-[#242428]/95 dark:bg-[#1a1a1e]/95 text-white backdrop-blur-md rounded-2xl p-2 shadow-2xl border border-white/15 w-64 animate-in zoom-in-95 duration-150 select-none`}
                   >
+                    {/* Quick Emoji Reaction Row */}
+                    <div className="flex items-center justify-between px-1 pb-1.5 mb-1.5 border-b border-white/10">
+                      {['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥'].map((emoji) => (
+                        <button
+                          key={emoji}
+                          type="button"
+                          onClick={() => {
+                            if (activeChatId) reactToMessage(activeChatId, msg.id, emoji);
+                            setActiveMenuMsgId(null);
+                          }}
+                          className="w-7 h-7 rounded-full hover:bg-white/15 active:scale-125 flex items-center justify-center text-base transition-transform cursor-pointer"
+                          title={`React ${emoji}`}
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+
                     {/* Row 1: Copy, Forward, Favorite, Delete, Select */}
                     <div className="grid grid-cols-5 gap-1 text-center pb-1.5 border-b border-white/10">
                       <button
@@ -2597,10 +2615,23 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   </div>
                 )}
 
-                {/* Timestamp & Delivery Ticks */}
-                <div className={`flex items-center justify-end gap-1 mt-1 text-[10px] font-mono ${
+                {/* Timestamp, Quick React Trigger & Delivery Ticks */}
+                <div className={`flex items-center justify-end gap-1.5 mt-1 text-[10px] font-mono ${
                   isUser ? 'text-purple-200' : 'text-slate-400 dark:text-slate-500'
                 }`}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveMenuMsgId(activeMenuMsgId === msg.id ? null : msg.id);
+                    }}
+                    className={`p-0.5 rounded-full transition-colors ${
+                      isUser ? 'hover:bg-white/15 text-purple-200/80' : 'hover:bg-slate-200/70 dark:hover:bg-white/10 text-slate-400'
+                    }`}
+                    title="React or message actions"
+                  >
+                    <Smile className="w-3 h-3" />
+                  </button>
                   <span>{msg.timestamp}</span>
                   {isUser && (
                     <span title={msg.status === 'read' ? 'Read' : msg.status === 'delivered' ? 'Delivered' : 'Sent'}>

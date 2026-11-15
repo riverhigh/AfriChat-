@@ -86,6 +86,18 @@ export const emitLiveMessage = (chatId: string, message: ChatMessage, targetPhon
   s?.emit('send_message', { chatId, message, targetPhone, memberPhones, chat });
 };
 
+export const emitMessageReaction = (
+  chatId: string,
+  messageId: string,
+  emoji: string,
+  reactorName: string,
+  memberPhones?: string[],
+  targetPhone?: string
+) => {
+  const s = getSocket();
+  s?.emit('message_reaction', { chatId, messageId, emoji, reactorName, memberPhones, targetPhone });
+};
+
 export const emitCreateGroup = (chat: any, memberPhones: string[]) => {
   const s = getSocket();
   s?.emit('create_group', { chat, memberPhones });

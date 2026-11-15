@@ -45,6 +45,7 @@ export const TownView: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinCodeModal, setShowJoinCodeModal] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [joinCodeError, setJoinCodeError] = useState<string | null>(null);
 
   // Swipe gesture state for Town communities
   const [swipedCommunityId, setSwipedCommunityId] = useState<string | null>(null);
@@ -73,6 +74,7 @@ export const TownView: React.FC = () => {
   const handleJoinByCode = () => {
     const raw = joinCodeInput.trim();
     if (!raw) return;
+    setJoinCodeError(null);
     const cleanCode = raw.toUpperCase().replace(/^.*\//, '');
 
     // Check Audio Spaces
@@ -83,6 +85,7 @@ export const TownView: React.FC = () => {
       joinAudioSpace(spaceMatch);
       setShowJoinCodeModal(false);
       setJoinCodeInput('');
+      setJoinCodeError(null);
       return;
     }
 
@@ -95,19 +98,11 @@ export const TownView: React.FC = () => {
       openCommunityChat(commMatch);
       setShowJoinCodeModal(false);
       setJoinCodeInput('');
+      setJoinCodeError(null);
       return;
     }
 
-    // Dynamically join community with this code
-    const isChan = cleanCode.startsWith('C');
-    addTownCommunity(
-      `Group ${cleanCode}`,
-      isChan ? 'channel' : 'group',
-      'Tech & Hustle',
-      `Joined with unique invite code ${cleanCode}`
-    );
-    setShowJoinCodeModal(false);
-    setJoinCodeInput('');
+    setJoinCodeError('No matching community or live space found for that invite code. Please check the code and try again.');
   };
 
   const [newCommunityName, setNewCommunityName] = useState('');
@@ -207,7 +202,10 @@ export const TownView: React.FC = () => {
             {/* Join Code Button */}
             <button
               type="button"
-              onClick={() => setShowJoinCodeModal(true)}
+              onClick={() => {
+                setJoinCodeError(null);
+                setShowJoinCodeModal(true);
+              }}
               className="p-1.5 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-slate-700 dark:text-purple-200 hover:bg-purple-50 dark:hover:bg-purple-900/30 transition-colors"
               title="Join by invite code"
             >
@@ -760,13 +758,21 @@ export const TownView: React.FC = () => {
               <input
                 type="text"
                 value={joinCodeInput}
-                onChange={(e) => setJoinCodeInput(e.target.value)}
+                onChange={(e) => {
+                  setJoinCodeInput(e.target.value);
+                  if (joinCodeError) setJoinCodeError(null);
+                }}
                 onKeyDown={(e) => e.key === 'Enter' && handleJoinByCode()}
                 placeholder="e.g. G9X7A2 or paste link..."
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-[#1a0e33] border border-slate-200 dark:border-purple-900/50 text-xs text-slate-900 dark:text-white font-mono tracking-wider placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
               />
+              {joinCodeError && (
+                <p className="text-[11px] text-rose-500 font-semibold leading-snug">
+                  {joinCodeError}
+                </p>
+              )}
               <p className="text-[10px] text-slate-400 dark:text-purple-300/50">
-                Join any private or public group, channel, or street radio live space.
+                Join any existing public or private group, channel, or street radio live space.
               </p>
             </div>
 

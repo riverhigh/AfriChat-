@@ -28,22 +28,26 @@ export const WalletModal: React.FC = () => {
     CURRENCY_RATES,
   } = useApp();
 
-  const [walletTab, setWalletTab] = useState<'overview' | 'topup' | 'withdraw'>('overview');
+  const [walletTab, setWalletTab] = useState<'overview' | 'history' | 'topup' | 'withdraw'>('overview');
+  const [txFilter, setTxFilter] = useState<'all' | 'incoming' | 'outgoing' | 'escrow'>('all');
   const rate = CURRENCY_RATES[currency] || 1;
   const topUpOptions = [10000, 25000, 50000, 100000].map((v) => Math.round(v * rate));
   const [topUpAmount, setTopUpAmount] = useState<number>(() => Math.round(25000 * rate));
   const [withdrawAmount, setWithdrawAmount] = useState<number>(10000);
   const [selectedBank, setSelectedBank] = useState('GTBank Nigeria');
   const [accountNumber, setAccountNumber] = useState('0123456789');
-  const [accountName, setAccountName] = useState('Chioma Adebayo');
+  const [accountName, setAccountName] = useState(currentUser.fullName || '');
   const [withdrawPin, setWithdrawPin] = useState('');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Always pull true wallet balance from server when opening WalletModal
+  // Always pull true wallet balance & ledger transactions from server when opening WalletModal
   useEffect(() => {
     if (isWalletModalOpen) {
       refreshWalletFromServer();
+      if (currentUser.fullName && !accountName) {
+        setAccountName(currentUser.fullName);
+      }
     }
   }, [isWalletModalOpen]);
 
@@ -171,6 +175,32 @@ export const WalletModal: React.FC = () => {
           </button>
         </div>
 
+        {/* Segmented Navigation Bar */}
+        <div className="px-5 pt-2.5 pb-1 border-b border-slate-100 dark:border-slate-800 shrink-0 grid grid-cols-4 gap-1 bg-slate-50/70 dark:bg-[#141126]">
+          {([
+            { id: 'overview', label: 'Overview' },
+            { id: 'history', label: 'History' },
+            { id: 'topup', label: 'Top Up' },
+            { id: 'withdraw', label: 'Withdraw' },
+          ] as const).map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => {
+                setFeedback(null);
+                setWalletTab(tab.id);
+              }}
+              className={`py-2 rounded-xl text-xs font-semibold transition-colors ${
+                walletTab === tab.id
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
         {/* Scrollable Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {feedback && (
@@ -244,66 +274,211 @@ export const WalletModal: React.FC = () => {
                 </div>
               </div>
 
-              {/* Transactions Ledger */}
+              {/* Recent Activity Preview */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs font-semibold text-slate-400 uppercase tracking-wider px-1">
-                  <span>Wallet Activity Log</span>
-                  <span className="font-mono text-[10px] normal-case text-indigo-600 dark:text-indigo-400 font-bold">
-                    Persistent & Verified
-                  </span>
+                  <span>Recent Activity</span>
+                  <button
+                    type="button"
+                    onClick={() => setWalletTab('history')}
+                    className="font-mono text-[11px] normal-case text-indigo-600 dark:text-indigo-400 font-bold hover:underline"
+                  >
+                    Full Payment History →
+                  </button>
                 </div>
 
                 <div className="bg-slate-50 dark:bg-[#11101e] rounded-2xl border border-slate-200/80 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800">
-                  {wallet.transactions.map((tx) => (
-                    <div key={tx.id} className="p-3 flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
-                            tx.type === 'topup'
-                              ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400'
-                              : tx.type === 'escrow_lock'
-                              ? 'bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400'
-                              : 'bg-indigo-100 text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-400'
-                          }`}
-                        >
-                          {tx.type === 'topup' && <ArrowDownLeft className="w-4 h-4" />}
-                          {tx.type === 'escrow_lock' && <Lock className="w-4 h-4" />}
-                          {tx.type === 'escrow_release' && <CheckCircle2 className="w-4 h-4" />}
-                          {tx.type === 'withdrawal' && <ArrowUpRight className="w-4 h-4" />}
-                        </div>
-
-                        <div>
-                          <div className="font-semibold text-slate-900 dark:text-slate-100">
-                            {tx.title}
-                          </div>
-                          <div className="text-[10px] text-slate-400 font-mono">
-                            {tx.timestamp} · {tx.reference}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="text-right">
-                        <div
-                          className={`font-mono font-bold ${
-                            tx.type === 'topup'
-                              ? 'text-emerald-600 dark:text-emerald-400'
-                              : tx.type === 'escrow_lock'
-                              ? 'text-amber-600 dark:text-amber-400'
-                              : 'text-slate-800 dark:text-slate-200'
-                          }`}
-                        >
-                          {tx.type === 'topup' ? '+' : '-'}
-                          {formatPrice(tx.amount, tx.currency)}
-                        </div>
-                        <span className="text-[9px] text-slate-400 uppercase font-semibold">
-                          {tx.channel}
-                        </span>
-                      </div>
+                  {wallet.transactions.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-slate-400">
+                      No wallet activity yet. Top up or transfer funds to record transactions.
                     </div>
-                  ))}
+                  ) : (
+                    wallet.transactions.slice(0, 5).map((tx) => {
+                      const isIncoming = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release'].includes(tx.type);
+                      const isEscrow = tx.type === 'escrow_lock';
+                      return (
+                        <div key={tx.id} className="p-3 flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div
+                              className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                                isIncoming
+                                  ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400'
+                                  : isEscrow
+                                  ? 'bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400'
+                                  : 'bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400'
+                              }`}
+                            >
+                              {isIncoming && <ArrowDownLeft className="w-4 h-4" />}
+                              {isEscrow && <Lock className="w-4 h-4" />}
+                              {!isIncoming && !isEscrow && <ArrowUpRight className="w-4 h-4" />}
+                            </div>
+
+                            <div className="min-w-0">
+                              <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                                {tx.description || tx.title}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono truncate">
+                                {tx.createdAt ? new Date(tx.createdAt).toLocaleString() : tx.timestamp} · {tx.referenceId || tx.reference}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0 ml-2">
+                            <div
+                              className={`font-mono font-bold ${
+                                isIncoming
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : isEscrow
+                                  ? 'text-amber-600 dark:text-amber-400'
+                                  : 'text-rose-600 dark:text-rose-400'
+                              }`}
+                            >
+                              {isIncoming ? '+' : isEscrow ? '🔒 ' : '-'}
+                              {formatPrice(Math.abs(tx.amount), tx.currency || 'NGN')}
+                            </div>
+                            {typeof tx.balanceAfter === 'number' && (
+                              <span className="text-[9px] text-slate-400 font-mono block">
+                                Bal: ₦{tx.balanceAfter.toLocaleString()}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             </>
+          )}
+
+          {/* Full Payment & Activity History Tab (Unified Ledger) */}
+          {walletTab === 'history' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Payment &amp; Activity History
+                  </h4>
+                  <p className="text-[11px] text-slate-400">
+                    Unified immutable ledger across transfers, Paystack, stores &amp; escrow
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => refreshWalletFromServer()}
+                  className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-indigo-500"
+                  title="Refresh ledger"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                {([
+                  { id: 'all', label: 'All' },
+                  { id: 'incoming', label: 'Incoming' },
+                  { id: 'outgoing', label: 'Outgoing' },
+                  { id: 'escrow', label: 'Escrow' },
+                ] as const).map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => setTxFilter(f.id)}
+                    className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap border ${
+                      txFilter === f.id
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              {(() => {
+                const incomingTypes = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release'];
+                const escrowTypes = ['escrow_lock'];
+                const filteredTxs = wallet.transactions.filter((tx) => {
+                  if (txFilter === 'incoming') return incomingTypes.includes(tx.type);
+                  if (txFilter === 'escrow') return escrowTypes.includes(tx.type);
+                  if (txFilter === 'outgoing') return !incomingTypes.includes(tx.type) && !escrowTypes.includes(tx.type);
+                  return true;
+                });
+
+                if (filteredTxs.length === 0) {
+                  return (
+                    <div className="p-8 rounded-2xl bg-slate-50 dark:bg-[#11101e] border border-slate-200/80 dark:border-slate-800 text-center text-xs text-slate-400">
+                      No transactions recorded for this filter.
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="bg-slate-50 dark:bg-[#11101e] rounded-2xl border border-slate-200/80 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800">
+                    {filteredTxs.map((tx) => {
+                      const isIncoming = incomingTypes.includes(tx.type);
+                      const isEscrow = escrowTypes.includes(tx.type);
+                      return (
+                        <div key={tx.id} className="p-3 flex items-start justify-between gap-2 text-xs">
+                          <div className="flex items-start gap-2.5 min-w-0">
+                            <div
+                              className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+                                isIncoming
+                                  ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400'
+                                  : isEscrow
+                                  ? 'bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400'
+                                  : 'bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400'
+                              }`}
+                            >
+                              {isIncoming && <ArrowDownLeft className="w-4 h-4" />}
+                              {isEscrow && <Lock className="w-4 h-4" />}
+                              {!isIncoming && !isEscrow && <ArrowUpRight className="w-4 h-4" />}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="font-semibold text-slate-900 dark:text-slate-100">
+                                {tx.description || tx.title}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                {tx.createdAt ? new Date(tx.createdAt).toLocaleString() : tx.timestamp}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono flex flex-wrap gap-2 mt-0.5">
+                                <span>Ref: {tx.referenceId || tx.reference}</span>
+                                {typeof tx.fee === 'number' && tx.fee > 0 && (
+                                  <span>· Fee: ₦{tx.fee.toLocaleString()}</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <div
+                              className={`font-mono font-bold ${
+                                isIncoming
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : isEscrow
+                                  ? 'text-amber-600 dark:text-amber-400'
+                                  : 'text-rose-600 dark:text-rose-400'
+                              }`}
+                            >
+                              {isIncoming ? '+' : isEscrow ? '🔒 ' : '-'}
+                              {formatPrice(Math.abs(tx.amount), tx.currency || 'NGN')}
+                            </div>
+                            <span className="text-[9px] uppercase font-semibold text-slate-400 block">
+                              {tx.type.replace('_', ' ')}
+                            </span>
+                            {typeof tx.balanceAfter === 'number' && (
+                              <span className="text-[9px] text-slate-400 font-mono block">
+                                Bal: ₦{tx.balanceAfter.toLocaleString()}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
           )}
 
           {/* Top-Up View (via Paystack) */}

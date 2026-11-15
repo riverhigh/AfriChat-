@@ -2,18 +2,12 @@ import React, { useState } from 'react';
 import {
   X,
   Send,
-  Clock,
   ShieldCheck,
   AlertTriangle,
-  RotateCcw,
-  FastForward,
-  User,
-  Phone,
   CheckCircle2,
   Lock,
-  ArrowRight,
-  Eye,
-  EyeOff,
+  Loader2,
+  Zap,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -21,10 +15,10 @@ export const DelayedTransferModal: React.FC = () => {
   const {
     isTransferModalOpen,
     setIsTransferModalOpen,
+    setIsSecurityModalOpen,
     delayedTransfers,
     sendDelayedTransfer,
-    cancelDelayedTransfer,
-    fastForwardTransferRelease,
+    getTransferLimitsUsage,
     wallet,
     formatPrice,
     deviceContacts,
@@ -35,27 +29,41 @@ export const DelayedTransferModal: React.FC = () => {
     systemConfig,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'send' | 'pending' | 'history'>('send');
+  const [activeTab, setActiveTab] = useState<'send' | 'history'>('send');
   const [recipientPhone, setRecipientPhone] = useState('');
   const [recipientName, setRecipientName] = useState('');
   const rate = CURRENCY_RATES[currency] || 1;
-  const chipValues = [5000, 10000, 25000, 50000, 100000].map(v => Math.round(v * rate));
+  const chipValues = [5000, 10000, 25000, 50000, 100000].map((v) => Math.round(v * rate));
   const [amountStr, setAmountStr] = useState(() => String(Math.round(15000 * rate)));
-  const [delayHours, setDelayHours] = useState<number>(36); // Default 1.5 days (1-2 days)
   const [note, setNote] = useState('');
   const [paymentPin, setPaymentPin] = useState('');
+  const [isSending, setIsSending] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   if (!isTransferModalOpen) return null;
+
+  const { dailyUsed, dailyLimit, weeklyUsed, weeklyLimit } = getTransferLimitsUsage();
+  const dailyPct = dailyLimit > 0 ? Math.min(100, Math.round((dailyUsed / dailyLimit) * 100)) : 0;
+  const weeklyPct = weeklyLimit > 0 ? Math.min(100, Math.round((weeklyUsed / weeklyLimit) * 100)) : 0;
+  const hasPinConfigured = Boolean(securitySettings.hasPaymentPin && securitySettings.paymentPin);
 
   const handleSelectContact = (phone: string, name: string) => {
     setRecipientPhone(phone);
     setRecipientName(name);
   };
 
-  const handleSend = (e: React.FormEvent) => {
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSending) return;
     setStatusMessage(null);
+
+    if (!hasPinConfigured) {
+      setStatusMessage({
+        type: 'error',
+        text: 'Please create your Security Questions & 4-Digit Payment PIN in Hub before sending money.',
+      });
+      return;
+    }
 
     const amountNum = parseFloat(amountStr);
     if (!amountNum || amountNum <= 0) {
@@ -63,9 +71,8 @@ export const DelayedTransferModal: React.FC = () => {
       return;
     }
 
-    const amountInNGN = currency === "NGN" ? amountNum : amountNum / (CURRENCY_RATES[currency] || 1);
+    const amountInNGN = Math.round(currency === 'NGN' ? amountNum : amountNum / rate);
     const minTransfer = systemConfig?.minTransferAmountNgn ?? 100;
-    const maxTransfer = systemConfig?.maxDailyTransferNgn ?? 5000000;
     if (amountInNGN < minTransfer) {
       setStatusMessage({
         type: 'error',
@@ -73,10 +80,17 @@ export const DelayedTransferModal: React.FC = () => {
       });
       return;
     }
-    if (maxTransfer > 0 && amountInNGN > maxTransfer) {
+    if (dailyLimit > 0 && dailyUsed + amountInNGN > dailyLimit) {
       setStatusMessage({
         type: 'error',
-        text: `Amount exceeds maximum daily transfer limit of ${formatPrice(maxTransfer, 'NGN')}.`,
+        text: `Transfer exceeds your Daily Limit (${formatPrice(dailyLimit, 'NGN')}). Remaining today: ${formatPrice(Math.max(0, dailyLimit - dailyUsed), 'NGN')}.`,
+      });
+      return;
+    }
+    if (weeklyLimit > 0 && weeklyUsed + amountInNGN > weeklyLimit) {
+      setStatusMessage({
+        type: 'error',
+        text: `Transfer exceeds your Weekly Limit (${formatPrice(weeklyLimit, 'NGN')}). Remaining this week: ${formatPrice(Math.max(0, weeklyLimit - weeklyUsed), 'NGN')}.`,
       });
       return;
     }
@@ -93,27 +107,29 @@ export const DelayedTransferModal: React.FC = () => {
       return;
     }
 
-    // Verify 4-digit PIN if set
-    if (securitySettings.hasPaymentPin && securitySettings.paymentPin) {
-      if (paymentPin.trim() !== securitySettings.paymentPin.trim()) {
-        setStatusMessage({ type: 'error', text: 'Invalid 4-digit Payment PIN. Please try again.' });
-        return;
-      }
+    if (paymentPin.trim() !== securitySettings.paymentPin?.trim()) {
+      setStatusMessage({ type: 'error', text: 'Invalid 4-digit Payment PIN. Please try again.' });
+      return;
     }
 
-    const result = sendDelayedTransfer(recipientPhone, recipientName, amountNum, note, delayHours);
-    if (result.success) {
-      setStatusMessage({ type: 'success', text: result.message || 'Transfer scheduled with 1-2 days delay!' });
-      setPaymentPin('');
-      setNote('');
-      setActiveTab('pending');
-    } else {
-      setStatusMessage({ type: 'error', text: result.message || 'Failed to dispatch transfer.' });
+    setIsSending(true);
+    try {
+      const result = await sendDelayedTransfer(recipientPhone, recipientName, amountInNGN, note);
+      if (result.success) {
+        setStatusMessage({
+          type: 'success',
+          text: result.message || `${formatPrice(amountInNGN, 'NGN')} sent instantly to ${recipientName}!`,
+        });
+        setPaymentPin('');
+        setNote('');
+        setActiveTab('history');
+      } else {
+        setStatusMessage({ type: 'error', text: result.message || 'Instant transfer failed.' });
+      }
+    } finally {
+      setIsSending(false);
     }
   };
-
-  const pendingTransfers = delayedTransfers.filter((t) => t.status === 'pending_clearance');
-  const pastTransfers = delayedTransfers.filter((t) => t.status !== 'pending_clearance');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
@@ -122,22 +138,23 @@ export const DelayedTransferModal: React.FC = () => {
         <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-neutral-800 bg-white dark:bg-black shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-2xl bg-purple-600 text-white flex items-center justify-center shadow-md">
-              <Clock className="w-5 h-5" />
+              <Zap className="w-5 h-5" />
             </div>
             <div>
               <h2 className="text-base font-bold leading-tight font-display text-slate-900 dark:text-white flex items-center gap-1.5">
-                <span>Delayed Money Transfer</span>
-                <span className="text-[10px] font-mono bg-purple-100 dark:bg-purple-950/70 text-purple-700 dark:text-purple-300 font-bold px-1.5 py-0.2 rounded-full">
-                  1-2 Days Buffer
+                <span>Instant P2P Transfer</span>
+                <span className="text-[10px] font-mono bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 font-bold px-1.5 py-0.2 rounded-full">
+                  Paystack Secured
                 </span>
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-neutral-400">
-                Anti-fraud delayed escrow settlement & scam cancellation grace
+                Real-time wallet settlement with Daily & Weekly Limits
               </p>
             </div>
           </div>
 
           <button
+            type="button"
             onClick={() => setIsTransferModalOpen(false)}
             className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-neutral-200 rounded-full hover:bg-slate-100 dark:hover:bg-neutral-900 transition-colors"
           >
@@ -146,8 +163,9 @@ export const DelayedTransferModal: React.FC = () => {
         </div>
 
         {/* Tab Switcher */}
-        <div className="grid grid-cols-3 p-1.5 bg-slate-100 dark:bg-neutral-950 border-b border-slate-200 dark:border-neutral-800 text-xs font-semibold shrink-0">
+        <div className="grid grid-cols-2 p-1.5 bg-slate-100 dark:bg-neutral-950 border-b border-slate-200 dark:border-neutral-800 text-xs font-semibold shrink-0">
           <button
+            type="button"
             onClick={() => {
               setActiveTab('send');
               setStatusMessage(null);
@@ -158,27 +176,10 @@ export const DelayedTransferModal: React.FC = () => {
                 : 'text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            Send Money
+            Send Money Instantly
           </button>
           <button
-            onClick={() => {
-              setActiveTab('pending');
-              setStatusMessage(null);
-            }}
-            className={`py-2 rounded-xl transition-all relative ${
-              activeTab === 'pending'
-                ? 'bg-white dark:bg-black text-purple-600 dark:text-purple-400 shadow-xs'
-                : 'text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <span>In Clearance</span>
-            {pendingTransfers.length > 0 && (
-              <span className="ml-1 px-1.5 py-0.2 text-[10px] font-mono bg-purple-600 text-white rounded-full">
-                {pendingTransfers.length}
-              </span>
-            )}
-          </button>
-          <button
+            type="button"
             onClick={() => {
               setActiveTab('history');
               setStatusMessage(null);
@@ -189,7 +190,7 @@ export const DelayedTransferModal: React.FC = () => {
                 : 'text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            Past Settlements
+            Transfer History ({delayedTransfers.length})
           </button>
         </div>
 
@@ -213,18 +214,73 @@ export const DelayedTransferModal: React.FC = () => {
             </div>
           )}
 
-          {/* TAB 1: SEND MONEY WITH 1-2 DAYS DELAY */}
+          {/* TAB 1: INSTANT P2P TRANSFER */}
           {activeTab === 'send' && (
             <form onSubmit={handleSend} className="space-y-4">
-              {/* African Fraud Safeguard Banner */}
-              <div className="p-3 bg-purple-500/10 dark:bg-purple-950/20 border border-purple-500/20 rounded-2xl space-y-1">
-                <div className="flex items-center gap-1.5 text-xs font-bold text-purple-700 dark:text-purple-300">
-                  <ShieldCheck className="w-4 h-4 text-purple-600" />
-                  <span>How the 1-2 Days Delay Protects You</span>
+              {/* Missing PIN Guard Banner */}
+              {!hasPinConfigured && (
+                <div className="p-3.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 rounded-2xl space-y-2">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-amber-800 dark:text-amber-300">
+                    <Lock className="w-4 h-4" />
+                    <span>Payment PIN Not Set Yet</span>
+                  </div>
+                  <p className="text-[11px] text-amber-900/80 dark:text-amber-200/80 leading-relaxed">
+                    To protect your funds, please set 2 Security Questions and create your 4-digit Payment PIN in Hub before making instant transfers.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsTransferModalOpen(false);
+                      setIsSecurityModalOpen(true);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold transition-colors"
+                  >
+                    Set Up Security PIN
+                  </button>
                 </div>
-                <p className="text-[11px] text-purple-900/80 dark:text-purple-200/80 leading-relaxed">
-                  Money sent is held in <strong>Delayed Escrow</strong> for 24 to 48 hours before final settlement into the recipient&apos;s pocket. If anything looks like a scam, defective product, or duplicate charge, you can cancel and reclaim 100% of your funds at any time.
-                </p>
+              )}
+
+              {/* Daily & Weekly Limits Card */}
+              <div className="p-3.5 rounded-2xl bg-purple-500/10 dark:bg-purple-950/25 border border-purple-500/20 space-y-2.5">
+                <div className="flex items-center justify-between text-xs font-bold text-purple-700 dark:text-purple-300">
+                  <span className="flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-purple-600" />
+                    <span>Transfer Limits & Instant Settlement</span>
+                  </span>
+                  <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">Live</span>
+                </div>
+
+                <div className="space-y-2 text-[11px]">
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-slate-600 dark:text-neutral-300">Daily Limit (24h)</span>
+                      <span className="font-mono font-bold text-slate-900 dark:text-white">
+                        {formatPrice(dailyUsed, 'NGN')} / {formatPrice(dailyLimit, 'NGN')}
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-neutral-800 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${dailyPct >= 90 ? 'bg-rose-500' : 'bg-purple-600'}`}
+                        style={{ width: `${dailyPct}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-slate-600 dark:text-neutral-300">Weekly Limit (7d)</span>
+                      <span className="font-mono font-bold text-slate-900 dark:text-white">
+                        {formatPrice(weeklyUsed, 'NGN')} / {formatPrice(weeklyLimit, 'NGN')}
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-neutral-800 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${weeklyPct >= 90 ? 'bg-rose-500' : 'bg-emerald-500'}`}
+                        style={{ width: `${weeklyPct}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Wallet Available Balance Pill */}
@@ -302,82 +358,35 @@ export const DelayedTransferModal: React.FC = () => {
                 </label>
                 <div className="relative">
                   <span className="absolute left-3 top-2.5 text-base font-bold font-mono text-purple-600 dark:text-purple-400">
-                    ₦
+                    {CURRENCY_SYMBOLS[currency].trim()}
                   </span>
                   <input
                     type="number"
                     value={amountStr}
                     onChange={(e) => setAmountStr(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-base font-bold font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
+                    className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-base font-bold font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
                     required
                   />
                 </div>
 
-                <div className="flex items-center gap-1.5 mt-2">
-                  {['5000', '10000', '25000', '50000', '100000'].map((val) => (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => setAmountStr(val)}
-                      className={`px-2 py-1 text-[11px] font-mono rounded-lg border transition-all ${
-                        amountStr === val
-                          ? 'border-purple-600 bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 font-bold'
-                          : 'border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
-                      }`}
-                    >
-                      ₦{parseInt(val, 10).toLocaleString()}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Select Security Delay Duration */}
-              <div>
-                <label className="text-xs font-bold text-slate-700 dark:text-neutral-300 block mb-1.5">
-                  Select Anti-Fraud Delay Window
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <div
-                    onClick={() => setDelayHours(24)}
-                    className={`p-3 rounded-2xl border cursor-pointer transition-all ${
-                      delayHours === 24
-                        ? 'border-purple-600 bg-purple-50/70 dark:bg-purple-950/40 ring-1 ring-purple-600'
-                        : 'border-slate-200 dark:border-neutral-800 hover:border-purple-300'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs text-slate-900 dark:text-white">
-                        24 Hours Delay
-                      </span>
-                      <span className="text-[10px] font-mono bg-purple-600 text-white font-bold px-1.5 py-0.2 rounded">
-                        1 Day
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-slate-500 dark:text-neutral-400 mt-1">
-                      Ideal for verified friends & routine vendor orders.
-                    </p>
-                  </div>
-
-                  <div
-                    onClick={() => setDelayHours(48)}
-                    className={`p-3 rounded-2xl border cursor-pointer transition-all ${
-                      delayHours === 48
-                        ? 'border-purple-600 bg-purple-50/70 dark:bg-purple-950/40 ring-1 ring-purple-600'
-                        : 'border-slate-200 dark:border-neutral-800 hover:border-purple-300'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs text-slate-900 dark:text-white">
-                        48 Hours Delay
-                      </span>
-                      <span className="text-[10px] font-mono bg-purple-600 text-white font-bold px-1.5 py-0.2 rounded">
-                        2 Days
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-slate-500 dark:text-neutral-400 mt-1">
-                      Maximum protection for new sellers, electronics & parcels.
-                    </p>
-                  </div>
+                <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                  {chipValues.map((val) => {
+                    const strVal = String(val);
+                    return (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setAmountStr(strVal)}
+                        className={`px-2 py-1 text-[11px] font-mono rounded-lg border transition-all ${
+                          amountStr === strVal
+                            ? 'border-purple-600 bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 font-bold'
+                            : 'border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        {CURRENCY_SYMBOLS[currency].trim()}{val.toLocaleString()}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -390,13 +399,13 @@ export const DelayedTransferModal: React.FC = () => {
                   type="text"
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
-                  placeholder="e.g. Deposit for 2 bales of lace, Waybill order #492"
+                  placeholder="e.g. Payment for invoice #492"
                   className="w-full p-2.5 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
                 />
               </div>
 
               {/* 4-Digit Payment PIN */}
-              {securitySettings.hasPaymentPin && (
+              {hasPinConfigured && (
                 <div>
                   <label className="text-xs font-bold text-slate-700 dark:text-neutral-300 block mb-1 flex items-center justify-between">
                     <span>Enter 4-Digit Payment PIN</span>
@@ -404,9 +413,10 @@ export const DelayedTransferModal: React.FC = () => {
                   </label>
                   <input
                     type="password"
+                    inputMode="numeric"
                     maxLength={4}
                     value={paymentPin}
-                    onChange={(e) => setPaymentPin(e.target.value)}
+                    onChange={(e) => setPaymentPin(e.target.value.replace(/\D/g, ''))}
                     placeholder="••••"
                     className="w-full p-2.5 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-center text-lg font-mono tracking-widest text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
                     required
@@ -416,141 +426,53 @@ export const DelayedTransferModal: React.FC = () => {
 
               <button
                 type="submit"
-                className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all"
+                disabled={isSending || !hasPinConfigured}
+                className="w-full py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all"
               >
-                <Clock className="w-4 h-4" />
-                <span>Lock & Send with {delayHours}h Delay</span>
+                {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                <span>{isSending ? 'Settling Transfer...' : 'Send Money Instantly'}</span>
               </button>
             </form>
           )}
 
-          {/* TAB 2: PENDING CLEARANCE QUEUE (WITH CANCEL & TEST SIMULATION) */}
-          {activeTab === 'pending' && (
-            <div className="space-y-3">
-              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider px-1">
-                Active Delayed Transfers ({pendingTransfers.length})
-              </div>
-
-              {pendingTransfers.length === 0 ? (
-                <div className="py-12 text-center text-slate-500 dark:text-neutral-400 text-xs">
-                  No transfers currently pending clearance. All previous funds have settled!
-                </div>
-              ) : (
-                pendingTransfers.map((tx) => (
-                  <div
-                    key={tx.id}
-                    className="p-3.5 rounded-2xl bg-white dark:bg-neutral-950 border border-purple-200 dark:border-purple-900/60 shadow-2xs space-y-3"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="text-xs font-semibold text-slate-500">Recipient:</div>
-                        <h4 className="font-bold text-sm text-slate-900 dark:text-white">
-                          {tx.recipientName}
-                        </h4>
-                        <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                          {tx.recipientPhone}
-                        </div>
-                      </div>
-
-                      <div className="text-right">
-                        <div className="text-base font-black font-mono text-purple-600 dark:text-purple-400">
-                          {formatPrice(tx.amount, tx.currency)}
-                        </div>
-                        <span className="text-[10px] font-mono font-bold bg-amber-500/20 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded-full inline-block mt-0.5">
-                          {tx.delayHours}h Escrow Lock
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="p-2.5 bg-slate-50 dark:bg-neutral-900 rounded-xl text-xs space-y-1">
-                      <div className="flex items-center justify-between text-slate-600 dark:text-neutral-300">
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3.5 h-3.5 text-purple-600" />
-                          <span>Clearance Release:</span>
-                        </span>
-                        <strong className="font-mono text-slate-900 dark:text-white">{tx.scheduledReleaseTime}</strong>
-                      </div>
-                      <p className="text-[11px] text-slate-500 italic pt-1 border-t border-slate-200 dark:border-neutral-800">
-                        &ldquo;{tx.note}&rdquo;
-                      </p>
-                    </div>
-
-                    {/* Actions: Cancel (Refunds) or Fast-Forward (Simulation) */}
-                    <div className="grid grid-cols-2 gap-2 pt-1">
-                      <button
-                        onClick={() => {
-                          const res = cancelDelayedTransfer(tx.id);
-                          setStatusMessage({
-                            type: res.success ? 'success' : 'error',
-                            text: res.message,
-                          });
-                        }}
-                        className="py-2 px-3 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors border border-rose-200 dark:border-rose-900"
-                        title="Cancel this transfer and immediately refund your wallet"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Cancel & Refund</span>
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          const res = fastForwardTransferRelease(tx.id);
-                          setStatusMessage({
-                            type: res.success ? 'success' : 'error',
-                            text: res.message,
-                          });
-                        }}
-                        className="py-2 px-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors"
-                        title="Simulate delay countdown expiration and credit receiver immediately"
-                      >
-                        <FastForward className="w-3.5 h-3.5" />
-                        <span>Clear Delay (Test)</span>
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-
-          {/* TAB 3: PAST SETTLEMENTS HISTORY */}
+          {/* TAB 2: TRANSFER HISTORY */}
           {activeTab === 'history' && (
             <div className="space-y-3">
               <div className="text-xs font-bold text-slate-400 uppercase tracking-wider px-1">
-                Settled & Cancelled Transfers
+                Recent P2P Transfers
               </div>
 
-              {pastTransfers.length === 0 ? (
+              {delayedTransfers.length === 0 ? (
                 <div className="py-12 text-center text-slate-500 dark:text-neutral-400 text-xs">
-                  No historical delayed transfers yet.
+                  No P2P transfers sent yet.
                 </div>
               ) : (
-                pastTransfers.map((tx) => (
+                delayedTransfers.map((tx) => (
                   <div
                     key={tx.id}
-                    className="p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 flex items-center justify-between"
+                    className="p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 flex items-center justify-between gap-2"
                   >
-                    <div>
-                      <div className="font-bold text-xs text-slate-900 dark:text-white">
+                    <div className="min-w-0">
+                      <div className="font-bold text-xs text-slate-900 dark:text-white truncate">
                         {tx.recipientName} ({tx.recipientPhone})
                       </div>
-                      <div className="text-[11px] text-slate-500 mt-0.5">
+                      <div className="text-[11px] text-slate-500 mt-0.5 truncate">
                         {tx.createdAt} · {tx.note}
                       </div>
                     </div>
 
-                    <div className="text-right">
+                    <div className="text-right shrink-0">
                       <div className="font-bold font-mono text-sm text-slate-900 dark:text-white">
                         {formatPrice(tx.amount, tx.currency)}
                       </div>
                       <span
                         className={`text-[10px] font-mono font-bold uppercase ${
-                          tx.status === 'cleared'
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : 'text-rose-600 dark:text-rose-400'
+                          tx.status === 'cancelled_by_sender'
+                            ? 'text-rose-600 dark:text-rose-400'
+                            : 'text-emerald-600 dark:text-emerald-400'
                         }`}
                       >
-                        {tx.status === 'cleared' ? 'Cleared' : 'Cancelled'}
+                        {tx.status === 'cancelled_by_sender' ? 'Cancelled' : 'Settled'}
                       </span>
                     </div>
                   </div>
@@ -563,3 +485,4 @@ export const DelayedTransferModal: React.FC = () => {
     </div>
   );
 };
+

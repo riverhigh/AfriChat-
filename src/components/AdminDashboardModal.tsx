@@ -65,7 +65,7 @@ import {
 } from '../services/supabaseAdminSync';
 
 type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'comms' | 'security';
-type FinanceSubTab = 'escrows' | 'disputes' | 'dispatch' | 'webhooks' | 'payouts';
+type FinanceSubTab = 'escrows' | 'ledger' | 'disputes' | 'dispatch' | 'webhooks' | 'payouts';
 type UsersSubTab = 'directory' | 'kyc' | 'artisans';
 type CommsSubTab = 'nodes' | 'broadcast' | 'cms';
 type SecuritySubTab = 'waf' | 'audit' | 'features' | 'config' | 'rbac';
@@ -291,7 +291,8 @@ export const AdminDashboardModal: React.FC = () => {
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
 
-  // Config form local state (mirrors systemConfig)
+  // Config form local state (mirrors systemConfig — hydrated only on open, never overwritten mid-edit)
+  const wasAdminOpenRef = useRef(false);
   const [cfgMaintenanceMode, setCfgMaintenanceMode] = useState(false);
   const [cfgMaintenanceMsg, setCfgMaintenanceMsg] = useState('');
   const [cfgAllowReg, setCfgAllowReg] = useState(true);
@@ -302,12 +303,20 @@ export const AdminDashboardModal: React.FC = () => {
   const [cfgCreatorComm, setCfgCreatorComm] = useState(15);
   const [cfgMinTransfer, setCfgMinTransfer] = useState(100);
   const [cfgMaxDailyTransfer, setCfgMaxDailyTransfer] = useState(500000);
+  const [cfgMaxWeeklyTransfer, setCfgMaxWeeklyTransfer] = useState(2000000);
+  const [cfgSponsoredAdFee, setCfgSponsoredAdFee] = useState(2500);
   const [cfgDelayMins, setCfgDelayMins] = useState(10);
   const [cfgSupportPhone, setCfgSupportPhone] = useState('');
   const [configSaved, setConfigSaved] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [featureStatusMsg, setFeatureStatusMsg] = useState<string | null>(null);
   const [badgeStatusMsg, setBadgeStatusMsg] = useState<string | null>(null);
+
+  // Immutable Transaction Ledger Super-View state
+  const [ledgerTxs, setLedgerTxs] = useState<any[]>([]);
+  const [ledgerSearch, setLedgerSearch] = useState('');
+  const [ledgerTypeFilter, setLedgerTypeFilter] = useState('all');
+  const [ledgerLoading, setLedgerLoading] = useState(false);
 
   // CMS form state
   const [cmsNewAnnTitle, setCmsNewAnnTitle] = useState('');
@@ -323,6 +332,7 @@ export const AdminDashboardModal: React.FC = () => {
   const [adCaptionDraft, setAdCaptionDraft] = useState('');
   const [adCtaDraft, setAdCtaDraft] = useState('Shop Now');
   const [adTargetUrlDraft, setAdTargetUrlDraft] = useState('');
+  const [adReviewBusyId, setAdReviewBusyId] = useState<string | null>(null);
 
   const notify = (text: string, tone: 'ok' | 'err' = 'ok') => {
     setActionNotice({ text, tone });
@@ -529,6 +539,30 @@ export const AdminDashboardModal: React.FC = () => {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isAdminModalOpen, globalSearchOpen]);
+
+  const fetchLedgerTransactions = async (q = ledgerSearch, type = ledgerTypeFilter) => {
+    setLedgerLoading(true);
+    try {
+      const res = await fetch(
+        `/api/admin/wallet-transactions?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.transactions)) {
+          setLedgerTxs(data.transactions);
+        }
+      }
+    } catch (_) {
+    } finally {
+      setLedgerLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isAdminModalOpen && activeSection === 'finance' && financeTab === 'ledger') {
+      fetchLedgerTransactions(ledgerSearch, ledgerTypeFilter);
+    }
+  }, [isAdminModalOpen, activeSection, financeTab, ledgerSearch, ledgerTypeFilter]);
 
   // Live metrics + health polling + Supabase realtime + Socket.IO security/audit stream
   useEffect(() => {
@@ -867,28 +901,36 @@ export const AdminDashboardModal: React.FC = () => {
     return Array.from(map.values());
   }, [liveMetrics?.artisans, artisanStation, serviceProviders]);
 
-  // Keep config/CMS form mirrors synced
+  // Hydrate config & CMS form drafts ONLY when Admin modal opens (prevents 6s live poll from overwriting edits)
   useEffect(() => {
-    if (!isAdminModalOpen || !systemConfig) return;
-    setCfgMaintenanceMode(systemConfig.maintenanceMode ?? false);
-    setCfgMaintenanceMsg(systemConfig.maintenanceMessage ?? '');
-    setCfgAllowReg(systemConfig.allowNewRegistrations ?? true);
-    setCfgRequireOtp(systemConfig.requirePhoneOtp ?? false);
-    setCfgDispatchComm(systemConfig.dispatchCommissionPercent ?? 5);
-    setCfgEscrowComm(systemConfig.escrowCommissionPercent ?? 1.5);
-    setCfgArtisanComm(systemConfig.artisanCommissionPercent ?? 2);
-    setCfgCreatorComm(systemConfig.creatorCommissionPercent ?? 5);
-    setCfgMinTransfer(systemConfig.minTransferAmountNgn ?? 100);
-    setCfgMaxDailyTransfer(systemConfig.maxDailyTransferNgn ?? 5000000);
-    setCfgDelayMins(systemConfig.delayedSendHoldDurationMins ?? 15);
-    setCfgSupportPhone(systemConfig.supportContactPhone ?? '');
-  }, [isAdminModalOpen, systemConfig]);
+    if (!isAdminModalOpen) {
+      wasAdminOpenRef.current = false;
+      return;
+    }
+    if (wasAdminOpenRef.current) return;
+    wasAdminOpenRef.current = true;
 
-  useEffect(() => {
-    if (!isAdminModalOpen || !cmsData) return;
-    if (cmsData.communityGuidelines !== undefined) setCmsGuidelines(cmsData.communityGuidelines);
-    if (cmsData.marqueeBanner?.text !== undefined) setCmsMarqueeDraft(cmsData.marqueeBanner.text);
-  }, [isAdminModalOpen, cmsData]);
+    if (systemConfig) {
+      setCfgMaintenanceMode(systemConfig.maintenanceMode ?? false);
+      setCfgMaintenanceMsg(systemConfig.maintenanceMessage ?? '');
+      setCfgAllowReg(systemConfig.allowNewRegistrations ?? true);
+      setCfgRequireOtp(systemConfig.requirePhoneOtp ?? false);
+      setCfgDispatchComm(systemConfig.dispatchCommissionPercent ?? 5);
+      setCfgEscrowComm(systemConfig.escrowCommissionPercent ?? 1.5);
+      setCfgArtisanComm(systemConfig.artisanCommissionPercent ?? 2);
+      setCfgCreatorComm(systemConfig.creatorCommissionPercent ?? 5);
+      setCfgMinTransfer(systemConfig.minTransferAmountNgn ?? 100);
+      setCfgMaxDailyTransfer(systemConfig.maxDailyTransferNgn ?? 500000);
+      setCfgMaxWeeklyTransfer(systemConfig.maxWeeklyTransferNgn ?? 2000000);
+      setCfgSponsoredAdFee(systemConfig.sponsoredAdFeeNgn ?? 2500);
+      setCfgDelayMins(systemConfig.delayedSendHoldDurationMins ?? 15);
+      setCfgSupportPhone(systemConfig.supportContactPhone ?? '');
+    }
+    if (cmsData) {
+      if (cmsData.communityGuidelines !== undefined) setCmsGuidelines(cmsData.communityGuidelines);
+      if (cmsData.marqueeBanner?.text !== undefined) setCmsMarqueeDraft(cmsData.marqueeBanner.text);
+    }
+  }, [isAdminModalOpen, systemConfig, cmsData]);
 
   // Synchronize selectedCustomer with live updates
   useEffect(() => {
@@ -1417,6 +1459,39 @@ export const AdminDashboardModal: React.FC = () => {
     setTimeout(() => setBcNotice(null), 3500);
   };
 
+  const handleReviewSponsoredAd = async (adId: string, decision: 'approve' | 'reject') => {
+    setAdReviewBusyId(adId);
+    try {
+      const res = await fetch('/api/admin/ads/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adId,
+          decision,
+          reason: decision === 'reject' ? 'Declined by moderation (fee refunded automatically)' : undefined,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
+        if (data.cms) {
+          await updateCmsData({ sponsoredStatuses: data.cms.sponsoredStatuses });
+        }
+        notify(
+          decision === 'approve'
+            ? 'Sponsored Ad approved and live in Updates feed'
+            : 'Sponsored Ad rejected & wallet fee refunded'
+        );
+        fetchLiveMetrics();
+      } else {
+        notify(data?.error || 'Failed to review ad', 'err');
+      }
+    } catch (_) {
+      notify('Failed to review ad', 'err');
+    } finally {
+      setAdReviewBusyId(null);
+    }
+  };
+
   const handleSaveConfig = async () => {
     setConfigError(null);
     const ok = await updateSystemConfig({
@@ -1430,6 +1505,8 @@ export const AdminDashboardModal: React.FC = () => {
       creatorCommissionPercent: cfgCreatorComm,
       minTransferAmountNgn: cfgMinTransfer,
       maxDailyTransferNgn: cfgMaxDailyTransfer,
+      maxWeeklyTransferNgn: cfgMaxWeeklyTransfer,
+      sponsoredAdFeeNgn: cfgSponsoredAdFee,
       delayedSendHoldDurationMins: cfgDelayMins,
       supportContactPhone: cfgSupportPhone,
     });
@@ -2068,6 +2145,7 @@ export const AdminDashboardModal: React.FC = () => {
                 <div className="flex items-center gap-1.5 overflow-x-auto">
                   {([
                     { id: 'escrows', label: 'Active Escrows' },
+                    { id: 'ledger', label: 'Transaction Ledger' },
                     { id: 'disputes', label: 'Dispute Resolution' },
                     { id: 'dispatch', label: 'Dispatch (5%)' },
                     { id: 'webhooks', label: 'Paystack Webhook Logs' },
@@ -2222,6 +2300,128 @@ export const AdminDashboardModal: React.FC = () => {
                               </td>
                             </tr>
                           ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* 2A-2. Immutable Unified Transaction Ledger Super-View */}
+              {financeTab === 'ledger' && (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[240px]">
+                      <div className="relative flex-1 max-w-sm">
+                        <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={ledgerSearch}
+                          onChange={(e) => setLedgerSearch(e.target.value)}
+                          placeholder="Search user name, phone, referenceId..."
+                          className="w-full pl-9 pr-3 py-2 text-xs rounded-xl bg-zinc-900/70 border border-zinc-800 text-white focus:outline-none focus:border-violet-500"
+                        />
+                      </div>
+                      <select
+                        value={ledgerTypeFilter}
+                        onChange={(e) => setLedgerTypeFilter(e.target.value)}
+                        className="px-3 py-2 text-xs rounded-xl bg-zinc-900/70 border border-zinc-800 text-zinc-200"
+                      >
+                        <option value="all">All Transaction Types</option>
+                        <option value="topup">Top Up / Deposit</option>
+                        <option value="transfer_out">Transfer Sent</option>
+                        <option value="received">Transfer Received</option>
+                        <option value="withdrawal">Bank Withdrawal</option>
+                        <option value="escrow_lock">Escrow Lock</option>
+                        <option value="escrow_release">Escrow Release</option>
+                        <option value="ad_payment">Sponsored Ad Fee</option>
+                        <option value="store_subscription">Store Subscription</option>
+                        <option value="artisan_reg">Artisan Registration</option>
+                        <option value="refund">Refund</option>
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => fetchLedgerTransactions(ledgerSearch, ledgerTypeFilter)}
+                      className="px-3 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-medium text-zinc-200 flex items-center gap-1.5"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 text-violet-400 ${ledgerLoading ? 'animate-spin' : ''}`} />
+                      <span>Refresh ({ledgerTxs.length})</span>
+                    </button>
+                  </div>
+
+                  <div className="rounded-2xl backdrop-blur-md bg-zinc-900/50 border border-zinc-800/90 overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-zinc-800 text-zinc-400 font-medium bg-zinc-950/60">
+                          <th className="py-3 px-4">Reference &amp; Time</th>
+                          <th className="py-3 px-4">User / Phone</th>
+                          <th className="py-3 px-4">Type &amp; Description</th>
+                          <th className="py-3 px-4 text-right">Amount / Fee</th>
+                          <th className="py-3 px-4 text-right">Balance After</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-800/70">
+                        {ledgerTxs.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-10 text-center text-zinc-500">
+                              {ledgerLoading ? 'Loading immutable ledger...' : 'No wallet_transactions entries match your query.'}
+                            </td>
+                          </tr>
+                        ) : (
+                          ledgerTxs.map((tx: any, idx: number) => {
+                            const isIncoming = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release'].includes(tx.type);
+                            const isEscrow = tx.type === 'escrow_lock';
+                            return (
+                              <tr key={tx.id || idx} className="hover:bg-zinc-900/70 transition-colors">
+                                <td className="py-3 px-4">
+                                  <div className="font-mono font-semibold text-violet-400">
+                                    {tx.referenceId || tx.reference || tx.id}
+                                  </div>
+                                  <div className="text-[10px] text-zinc-500 font-mono">
+                                    {tx.createdAt ? new Date(tx.createdAt).toLocaleString() : tx.timestamp}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <div className="text-zinc-200 font-medium">{tx.userName || 'AGC User'}</div>
+                                  <div className="text-[11px] font-mono text-zinc-500">{tx.userPhone || '—'}</div>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <span
+                                    className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono uppercase font-semibold mr-1.5 ${
+                                      isIncoming
+                                        ? 'bg-emerald-500/15 text-emerald-300'
+                                        : isEscrow
+                                        ? 'bg-amber-500/15 text-amber-300'
+                                        : 'bg-rose-500/15 text-rose-300'
+                                    }`}
+                                  >
+                                    {String(tx.type || 'tx').replace('_', ' ')}
+                                  </span>
+                                  <span className="text-zinc-300">{tx.description || tx.title}</span>
+                                </td>
+                                <td className="py-3 px-4 text-right font-mono tabular-nums">
+                                  <div
+                                    className={`font-bold ${
+                                      isIncoming
+                                        ? 'text-emerald-400'
+                                        : isEscrow
+                                        ? 'text-amber-400'
+                                        : 'text-rose-400'
+                                    }`}
+                                  >
+                                    {isIncoming ? '+' : isEscrow ? '🔒 ' : '-'}₦{Math.abs(Number(tx.amount) || 0).toLocaleString()}
+                                  </div>
+                                  {Number(tx.fee) > 0 && (
+                                    <div className="text-[10px] text-zinc-500">Fee: ₦{Number(tx.fee).toLocaleString()}</div>
+                                  )}
+                                </td>
+                                <td className="py-3 px-4 text-right font-mono text-zinc-200 tabular-nums">
+                                  {typeof tx.balanceAfter === 'number' ? `₦${tx.balanceAfter.toLocaleString()}` : '—'}
+                                </td>
+                              </tr>
+                            );
+                          })
                         )}
                       </tbody>
                     </table>
@@ -2654,6 +2854,7 @@ export const AdminDashboardModal: React.FC = () => {
                                   onClick={() =>
                                     handleStoreMutation(store, {
                                       status: store.status === 'active' ? 'suspended' : 'active',
+                                      ...(store.status === 'pending' ? { verified: true } : {}),
                                     })
                                   }
                                   className={`px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap ${
@@ -2662,7 +2863,11 @@ export const AdminDashboardModal: React.FC = () => {
                                       : 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-600/30'
                                   }`}
                                 >
-                                  {store.status === 'active' ? 'Suspend' : 'Activate'}
+                                  {store.status === 'active'
+                                    ? 'Suspend'
+                                    : store.status === 'pending'
+                                    ? 'Approve Store'
+                                    : 'Activate'}
                                 </button>
                               </div>
                             </td>
@@ -3489,52 +3694,99 @@ export const AdminDashboardModal: React.FC = () => {
 
                     {(cmsData?.sponsoredStatuses || []).length > 0 && (
                       <div className="divide-y divide-zinc-800/70 pt-1">
-                        {(cmsData?.sponsoredStatuses || []).map((ad, idx) => (
-                          <div key={ad.id || idx} className="py-2.5 flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-3 min-w-0">
-                              <div className="w-10 h-10 rounded-full p-0.5 bg-gradient-to-tr from-amber-500 via-violet-600 to-indigo-600 shrink-0">
-                                <img
-                                  src={ad.mediaUrl}
-                                  alt={ad.brandName}
-                                  className="w-full h-full rounded-full object-cover"
-                                />
-                              </div>
-                              <div className="min-w-0">
-                                <div className="font-semibold text-white flex items-center gap-1.5">
-                                  <span className="truncate">{ad.brandName}</span>
-                                  <span className="px-1.5 py-0.2 rounded bg-amber-500 text-black text-[9px] font-black">
-                                    AD
-                                  </span>
+                        {(cmsData?.sponsoredStatuses || []).map((ad: any, idx: number) => {
+                          const approval = ad.approvalStatus || (ad.active ? 'approved' : 'pending');
+                          const isPending = approval === 'pending';
+                          const isRejected = approval === 'rejected';
+                          return (
+                            <div key={ad.id || idx} className="py-2.5 flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-10 h-10 rounded-full p-0.5 bg-gradient-to-tr from-amber-500 via-violet-600 to-indigo-600 shrink-0">
+                                  <img
+                                    src={ad.mediaUrl}
+                                    alt={ad.brandName}
+                                    className="w-full h-full rounded-full object-cover"
+                                  />
                                 </div>
-                                <p className="text-zinc-400 truncate mt-0.5">{ad.caption}</p>
+                                <div className="min-w-0">
+                                  <div className="font-semibold text-white flex items-center gap-1.5 flex-wrap">
+                                    <span className="truncate">{ad.brandName}</span>
+                                    <span className="px-1.5 py-0.2 rounded bg-amber-500 text-black text-[9px] font-black">
+                                      AD
+                                    </span>
+                                    <span
+                                      className={`px-1.5 py-0.2 rounded text-[9px] font-mono uppercase font-bold ${
+                                        isPending
+                                          ? 'bg-amber-500/20 text-amber-300'
+                                          : isRejected
+                                          ? 'bg-rose-500/20 text-rose-300'
+                                          : 'bg-emerald-500/20 text-emerald-300'
+                                      }`}
+                                    >
+                                      {approval}
+                                    </span>
+                                    {ad.paidAmount ? (
+                                      <span className="text-[10px] font-mono text-zinc-400">
+                                        · ₦{Number(ad.paidAmount).toLocaleString()} paid
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <p className="text-zinc-400 truncate mt-0.5">{ad.caption}</p>
+                                  {ad.submittedByName && (
+                                    <p className="text-[10px] text-zinc-500 font-mono mt-0.5">
+                                      By {ad.submittedByName} ({ad.submittedByPhone || 'Admin'})
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {isPending ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={adReviewBusyId === ad.id}
+                                      onClick={() => handleReviewSponsoredAd(ad.id, 'approve')}
+                                      className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold disabled:opacity-50"
+                                    >
+                                      Approve &amp; Go Live
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={adReviewBusyId === ad.id}
+                                      onClick={() => handleReviewSponsoredAd(ad.id, 'reject')}
+                                      className="px-2.5 py-1 rounded bg-rose-600/20 text-rose-300 border border-rose-500/30 hover:bg-rose-600/30 text-[11px] font-semibold disabled:opacity-50"
+                                    >
+                                      Reject &amp; Refund
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = [...(cmsData?.sponsoredStatuses || [])];
+                                      updated[idx] = { ...updated[idx], active: !updated[idx].active };
+                                      updateCmsData({ sponsoredStatuses: updated });
+                                    }}
+                                    className="px-2 py-1 rounded bg-zinc-800 text-zinc-200 text-[11px]"
+                                  >
+                                    {ad.active ? 'Live' : 'Paused'}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateCmsData({
+                                      sponsoredStatuses: (cmsData?.sponsoredStatuses || []).filter((_, i) => i !== idx),
+                                    })
+                                  }
+                                  className="p-1 text-rose-400 hover:bg-rose-950/40 rounded"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
                               </div>
                             </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const updated = [...(cmsData?.sponsoredStatuses || [])];
-                                  updated[idx] = { ...updated[idx], active: !updated[idx].active };
-                                  updateCmsData({ sponsoredStatuses: updated });
-                                }}
-                                className="px-2 py-1 rounded bg-zinc-800 text-zinc-200 text-[11px]"
-                              >
-                                {ad.active ? 'Live' : 'Paused'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateCmsData({
-                                    sponsoredStatuses: (cmsData?.sponsoredStatuses || []).filter((_, i) => i !== idx),
-                                  })
-                                }
-                                className="p-1 text-rose-400 hover:bg-rose-950/40 rounded"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -3947,7 +4199,7 @@ export const AdminDashboardModal: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-zinc-400 block mb-1">Min Transfer (₦)</label>
+                      <label className="text-zinc-400 block mb-1">Min Instant Transfer (₦)</label>
                       <input
                         type="number"
                         value={cfgMinTransfer}
@@ -3956,7 +4208,7 @@ export const AdminDashboardModal: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-zinc-400 block mb-1">Max Daily (₦)</label>
+                      <label className="text-zinc-400 block mb-1">Max Daily Limit (₦)</label>
                       <input
                         type="number"
                         value={cfgMaxDailyTransfer}
@@ -3965,11 +4217,20 @@ export const AdminDashboardModal: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-zinc-400 block mb-1">Hold Window (Mins)</label>
+                      <label className="text-zinc-400 block mb-1">Max Weekly Limit (₦)</label>
                       <input
                         type="number"
-                        value={cfgDelayMins}
-                        onChange={(e) => setCfgDelayMins(parseInt(e.target.value, 10) || 10)}
+                        value={cfgMaxWeeklyTransfer}
+                        onChange={(e) => setCfgMaxWeeklyTransfer(parseInt(e.target.value, 10) || 0)}
+                        className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-zinc-400 block mb-1">Sponsored Ad Fee (₦)</label>
+                      <input
+                        type="number"
+                        value={cfgSponsoredAdFee}
+                        onChange={(e) => setCfgSponsoredAdFee(parseInt(e.target.value, 10) || 0)}
                         className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-white"
                       />
                     </div>

@@ -79,9 +79,18 @@ export const MarketplaceView: React.FC = () => {
     };
   }, []);
 
+  const isPendingStore = Boolean(
+    storeSubscription?.isRegistered &&
+      !storeSubscription?.active &&
+      storeSubscription?.approvalStatus !== 'suspended'
+  );
+
+  const visibleOwnerProducts = hasActiveStore ? myStoreProducts : [];
+  const publicApprovedDbProducts = dbProducts.filter((dp) => dp.isApproved !== false);
+
   const combinedProducts = [
-    ...myStoreProducts,
-    ...dbProducts.filter((dp) => !myStoreProducts.some((mp) => mp.id === dp.id)),
+    ...visibleOwnerProducts,
+    ...publicApprovedDbProducts.filter((dp) => !visibleOwnerProducts.some((mp) => mp.id === dp.id)),
   ];
 
   const filteredProducts = combinedProducts.filter((prod) => {
@@ -205,11 +214,13 @@ export const MarketplaceView: React.FC = () => {
             </div>
             <div>
               <div className="text-[11px] font-bold text-slate-800 dark:text-white leading-tight">
-                {hasActiveStore ? 'My Store' : 'Open Store'}
+                {hasActiveStore ? 'My Store' : isPendingStore ? 'Store Pending' : 'Open Store'}
               </div>
               <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">
                 {hasActiveStore
                   ? `${myStoreProducts.length || storeSubscription.itemsCount || storeSubscription.itemsUsed || 0}/${storeSubscription.itemLimit || storeSubscription.itemsLimit || 30}`
+                  : isPendingStore
+                  ? 'Awaiting Admin'
                   : '₦3k / ₦7k'}
               </div>
             </div>
@@ -217,10 +228,28 @@ export const MarketplaceView: React.FC = () => {
         </div>
       </div>
 
+      {isPendingStore && (
+        <div className="mx-3 mt-2 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-2 text-xs text-amber-800 dark:text-amber-200">
+          <div>
+            <span className="font-bold">Store Pending Admin Approval:</span>{' '}
+            <span className="opacity-85">
+              "{storeSubscription.storeName}" will go live in Stores once verified by Admin.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsStoreRegModalOpen(true)}
+            className="px-2.5 py-1 rounded-lg bg-amber-500 text-black font-bold text-[11px] shrink-0"
+          >
+            Status
+          </button>
+        </div>
+      )}
+
       {/* Product List */}
       <div className="p-3 space-y-3">
         <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-1">
-          Featured Stores & Verified Inventories
+          Featured Stores &amp; Verified Inventories
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

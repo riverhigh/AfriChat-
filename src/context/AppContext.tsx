@@ -4,6 +4,7 @@ import {
   joinChatRoom,
   leaveChatRoom,
   emitLiveMessage,
+  emitMessageReaction,
   emitGroupInvite,
   emitGroupInviteResponse,
   emitPhoneCallSignal,
@@ -415,6 +416,7 @@ import {
   UserUploadedMeme,
   DispatchDeliveryOrder,
   JobPosting,
+  SecurityQuestionEntry,
   SecuritySettings,
   ServiceProvider,
   ServiceBooking,
@@ -570,7 +572,10 @@ interface AppContextType {
   addThoughtStatus: (thoughtText: string, themeBg: string) => void;
   addDeviceMediaStatus: (caption: string, mediaUrl: string, mediaType?: 'image' | 'video') => void;
   addDeviceVideoStatus: (caption: string, videoUrl: string, thumbnail?: string) => void;
-  addSponsoredStatus: (ad: { brand: string; caption: string; mediaUrl: string; ctaLabel?: string; targetUrl?: string }) => void;
+  addSponsoredStatus: (
+    ad: { brand: string; caption: string; mediaUrl: string; ctaLabel?: string; targetUrl?: string },
+    paymentPin?: string
+  ) => Promise<{ success: boolean; message: string; pending?: boolean }>;
   deleteStatus: (statusId: string) => void;
   handleAdClick: (statusId: string, targetUrl?: string) => Promise<void>;
   wallet: UserWallet;
@@ -823,6 +828,8 @@ interface AppContextType {
   setPaymentPin: (pin: string) => void;
   updatePaymentPin: (newPin: string, oldPin?: string) => { success: boolean; message: string };
   setSecurityQuestion: (question: string, answer: string) => void;
+  setSecurityQuestions: (questions: SecurityQuestionEntry[]) => { success: boolean; message: string };
+  resetPaymentPinWithQuestions: (answers: [string, string], newPin: string) => { success: boolean; message: string };
   verifyPaymentPin: (pin: string) => boolean;
   verifyPaymentPinDetailed: (pin: string) => { success: boolean; message?: string; lockedUntil?: number | null };
   resetPinLockout: () => void;
@@ -843,17 +850,18 @@ interface AppContextType {
   registerAsServiceProvider: (
     provider: Omit<ServiceProvider, 'id' | 'rating' | 'reviewCount' | 'isVerified'>
   ) => void;
-  // 15. Money Transfer with 1-2 Days Security Delay
+  // 15. Instant P2P Money Transfer with Daily & Weekly Limits
   delayedTransfers: DelayedTransfer[];
   isTransferModalOpen: boolean;
   setIsTransferModalOpen: (val: boolean) => void;
+  getTransferLimitsUsage: () => { dailyUsed: number; dailyLimit: number; weeklyUsed: number; weeklyLimit: number };
   sendDelayedTransfer: (
     recipientPhone: string,
     recipientName: string,
     amount: number,
     note: string,
     delayHours?: number
-  ) => { success: boolean; transfer?: DelayedTransfer; message?: string };
+  ) => Promise<{ success: boolean; transfer?: DelayedTransfer; message?: string }>;
   cancelDelayedTransfer: (transferId: string) => { success: boolean; message: string };
   fastForwardTransferRelease: (transferId: string) => { success: boolean; message: string };
   // 16. Payroll & Recurring Auto-Debit
@@ -1149,7 +1157,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     artisanCommissionPercent: 2,
     creatorCommissionPercent: 5,
     minTransferAmountNgn: 100,
-    maxDailyTransferNgn: 5000000,
+    maxDailyTransferNgn: 500000,
+    maxWeeklyTransferNgn: 2000000,
+    sponsoredAdFeeNgn: 2500,
     delayedSendHoldDurationMins: 15,
     lowBandwidthDefault: false,
     supportContactPhone: '+234800000000',
@@ -1201,10 +1211,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     communityGuidelines: '1. Treat all community members with respect.\n2. No fraudulent listings, phishing links, or unauthorized transactions.\n3. Verified badges are subject to continuous compliance with AfriChat terms.',
     termsOfService: 'AfriChat provides communication, marketplace escrow mediation, and logistical dispatch coordination across African regions.',
     sponsorSpotlight: {
-      enabled: true,
-      brandName: 'Kente Pay Africa',
-      tagline: 'Zero-Fee African Merchant Remittances',
-      bannerUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      enabled: false,
+      brandName: '',
+      tagline: '',
+      bannerUrl: '',
       linkUrl: '',
     },
     sponsoredStatuses: [],
@@ -1648,7 +1658,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
   };
+  const townCommunitiesRef = useRef<TownCommunity[]>(townCommunities);
   useEffect(() => {
+    townCommunitiesRef.current = townCommunities;
     try {
       localStorage.setItem('AGC_town_communities_v2', JSON.stringify(townCommunities));
     } catch (e) {}
@@ -1719,6 +1731,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     const cExisting = cPrev[existingIdx];
                     const updatedChat: ChatThread = {
                       ...cExisting,
+                      isGroup: commType !== 'channel',
+                      isChannel: commType === 'channel',
                       membersCount: actualCount,
                       members: parsedMembers.length > 0 ? parsedMembers : cExisting.members,
                     };
@@ -1778,28 +1792,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .on('broadcast', { event: 'community_created' }, ({ payload }) => {
           if (!payload || !payload.id) return;
           handleCommunityCreated(payload);
-          // Also register corresponding chat thread
-          const chatId = `town_comm_${payload.id}`;
-          setChats((prev) => {
-            if (prev.some((c) => c.id === chatId)) return prev;
-            const newThread: ChatThread = {
-              id: chatId,
-              name: payload.name,
-              avatar: payload.avatar,
-              isGroup: true,
-              membersCount: payload.membersCount || 1,
-              verifiedStore: false,
-              location: `${payload.type === 'channel' ? 'Broadcast Channel' : 'Town Group'} · ${payload.category}`,
-              unreadCount: 0,
-              lastMessage: payload.description || 'Community live',
-              lastMessageTime: 'Just now',
-              catalog: [],
-              isOnline: true,
-            };
-            const updated = [newThread, ...prev];
-            persistPartitionedChats(updated, currentUser.phoneNumber);
-            return updated;
-          });
         })
         .on('broadcast', { event: 'members_updated' }, ({ payload }: any) => {
           if (!payload?.chatName) return;
@@ -1882,11 +1874,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Create corresponding ChatThread so the group/channel appears in chat list
     const communityChatId = `town_comm_${newCommunity.id}`;
+    const creatorDisplay = currentUser.fullName || 'You';
     const newThread: ChatThread = {
       id: communityChatId,
       name: newCommunity.name,
       avatar: newCommunity.avatar,
-      isGroup: true,
+      isGroup: type !== 'channel',
+      isChannel: type === 'channel',
+      creatorId: currentUser.id,
+      admins: [creatorDisplay, 'You'],
+      adminIds: currentUser.id ? [currentUser.id] : [],
+      members: currentUser.phoneNumber ? [currentUser.phoneNumber] : [],
       membersCount: 1,
       verifiedStore: false,
       location: `${type === 'channel' ? 'Broadcast Channel' : 'Town Group'} · ${category}`,
@@ -1899,6 +1897,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setChats((prev) => {
       const updated = [newThread, ...prev.filter((c) => c.id !== communityChatId)];
       persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
+
+    const welcomeMsg: ChatMessage = {
+      id: `msg_comm_init_${Date.now()}`,
+      chatId: communityChatId,
+      sender: 'system',
+      senderName: newCommunity.name,
+      type: 'text',
+      text:
+        type === 'channel'
+          ? `📢 Welcome to ${newCommunity.name} broadcast channel! ${newCommunity.description}`
+          : `👋 Welcome to ${newCommunity.name}! ${newCommunity.description}`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'read',
+    };
+    setMessages((prev) => {
+      const existing = prev[communityChatId] || [];
+      if (existing.length > 0) return prev;
+      const updated = { ...prev, [communityChatId]: [welcomeMsg] };
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -1968,13 +1987,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const openCommunityChat = (community: TownCommunity) => {
     const chatId = `town_comm_${community.id}`;
+    const isOwner = Boolean(
+      community.adminName &&
+        (community.adminName === currentUser.fullName || community.adminName === 'You')
+    );
     setChats((prev) => {
-      if (prev.some((c) => c.id === chatId)) return prev;
+      if (prev.some((c) => c.id === chatId)) {
+        const updated = prev.map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                isGroup: community.type !== 'channel',
+                isChannel: community.type === 'channel',
+                creatorId: c.creatorId || (isOwner ? currentUser.id : undefined),
+                admins:
+                  c.admins && c.admins.length > 0
+                    ? c.admins
+                    : isOwner
+                    ? [currentUser.fullName || 'You', 'You']
+                    : c.admins,
+                adminIds:
+                  c.adminIds && c.adminIds.length > 0
+                    ? c.adminIds
+                    : isOwner && currentUser.id
+                    ? [currentUser.id]
+                    : c.adminIds,
+              }
+            : c
+        );
+        persistPartitionedChats(updated, currentUser.phoneNumber);
+        return updated;
+      }
       const newThread: ChatThread = {
         id: chatId,
         name: community.name,
         avatar: community.avatar,
-        isGroup: true,
+        isGroup: community.type !== 'channel',
+        isChannel: community.type === 'channel',
+        creatorId: isOwner ? currentUser.id : undefined,
+        admins: isOwner ? [currentUser.fullName || 'You', 'You'] : community.adminName ? [community.adminName] : [],
+        adminIds: isOwner && currentUser.id ? [currentUser.id] : [],
         membersCount: community.membersCount || 1,
         verifiedStore: false,
         location: `${community.type === 'channel' ? 'Broadcast Channel' : 'Town Group'} · ${community.category}`,
@@ -1986,6 +2038,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       const updated = [newThread, ...prev];
       persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
+
+    setMessages((prev) => {
+      if ((prev[chatId] || []).length > 0) return prev;
+      const welcomeMsg: ChatMessage = {
+        id: `msg_comm_open_${Date.now()}`,
+        chatId,
+        sender: 'system',
+        senderName: community.name,
+        type: 'text',
+        text:
+          community.type === 'channel'
+            ? `📢 ${community.name} Broadcast Channel: ${community.description || 'Official updates and posts appear here.'}`
+            : `👋 ${community.name}: ${community.description || 'Welcome to the community room!'}`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        status: 'read',
+      };
+      const updated = { ...prev, [chatId]: [welcomeMsg] };
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -2271,21 +2343,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
+    let newTx: WalletTransaction | null = null;
     if (paymentMethod === 'wallet') {
-      const newTx: WalletTransaction = {
+      newTx = {
         id: `tx_artisan_reg_${Date.now()}`,
-        type: 'transfer_out',
+        type: 'artisan_reg',
         title: 'Artisan Station Registration Fee (₦5,000)',
+        description: `Artisan station registration: ${stationData.stationName || 'Master Station'}`,
         amount: regFee,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - regFee,
         currency: 'NGN',
         timestamp: 'Just now',
+        createdAt: new Date().toISOString(),
         status: 'completed',
+        reference: `ART_${Date.now()}`,
+        referenceId: `ART_${Date.now()}`,
         channel: 'wallet',
       };
       setWallet((prev) => ({
         ...prev,
         availableBalance: prev.availableBalance - regFee,
-        transactions: [newTx, ...prev.transactions],
+        transactions: [newTx!, ...prev.transactions],
       }));
     }
 
@@ -2301,7 +2380,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       workshopAddress: stationData.workshopAddress || 'Block 5, Commercial Avenue, Lagos',
       about: stationData.about || 'Verified high-precision African workshop station with Escrow guarantees.',
       avatar: stationData.avatar || currentUser.avatarUrl,
-      isApproved: true,
+      isApproved: false,
+      approvalStatus: 'pending',
       registrationFeePaid: true,
       registrationFeeAmount: regFee,
       registrationPaymentMethod: paymentMethod,
@@ -2330,7 +2410,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setArtisanStation(newStation);
     localStorage.setItem('AGC_artisan_station', JSON.stringify(newStation));
 
-    // 🌐 LIVE SYSTEM: Publish Artisan Station to Supabase and broadcast live to network
+    if (newTx) {
+      fetch('/api/wallet/ledger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...newTx,
+          userId: currentUser.id,
+          userPhone: currentUser.phoneNumber,
+          userName: currentUser.fullName,
+        }),
+      }).catch(() => {});
+    }
+
+    fetch('/api/artisans/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: newStation.id,
+        stationName: newStation.stationName,
+        category: newStation.categoryLabel || newStation.category,
+        location: newStation.location,
+        workshopAddress: newStation.workshopAddress,
+        ownerName: newStation.ownerName,
+        ownerPhone: newStation.ownerPhone,
+        registrationFeePaid: true,
+      }),
+    }).catch(() => {});
+
+    // 🌐 LIVE SYSTEM: Publish Artisan Station to Supabase (pending approval)
     if (isSupabaseConfigured) {
       createArtisanStationInDb({
         station_name: newStation.stationName,
@@ -2340,7 +2448,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         workshop_address: newStation.workshopAddress,
         about: newStation.about,
         avatar: newStation.avatar,
-        is_approved: true,
+        is_approved: false,
         registration_fee_paid: true,
         operating_hours: newStation.operatingHours as any,
       }).catch((e) => console.warn('Supabase create station notice:', e));
@@ -2355,7 +2463,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
 
-    return { success: true, message: 'Artisan Station successfully registered and live on AGC Network!', station: newStation };
+    return {
+      success: true,
+      message: 'Artisan Station submitted! Pending Admin Approval before appearing publicly.',
+      station: newStation,
+    };
   };
 
   const addArtisanListing = (
@@ -2984,16 +3096,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isHydratingWalletRef.current = false;
 
     let cancelled = false;
-    // Always hydrate authoritative wallet balance & ledger directly from the backend server
-    fetch(`/api/wallet/${encodeURIComponent(phone)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((res) => {
+    // Always hydrate authoritative wallet balance & unified ledger directly from the backend server
+    Promise.all([
+      fetch(`/api/wallet/${encodeURIComponent(phone)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`/api/wallet/transactions?phone=${encodeURIComponent(phone)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ])
+      .then(([res, txRes]) => {
         if (cancelled || !res?.success || !res?.wallet) return;
+        const baseTxs: WalletTransaction[] = Array.isArray(res.wallet.transactions) ? res.wallet.transactions : [];
+        const ledgerTxs: WalletTransaction[] = Array.isArray(txRes?.transactions) ? txRes.transactions : [];
+        const txMap = new Map<string, WalletTransaction>();
+        [...ledgerTxs, ...baseTxs].forEach((tx) => {
+          if (tx?.id && !txMap.has(tx.id)) txMap.set(tx.id, tx);
+        });
         const serverWallet: UserWallet = {
           availableBalance: Number(res.wallet.availableBalance) || 0,
           escrowLockedBalance: Number(res.wallet.escrowLockedBalance) || 0,
           currency: res.wallet.currency || 'NGN',
-          transactions: Array.isArray(res.wallet.transactions) ? res.wallet.transactions : [],
+          transactions: Array.from(txMap.values()),
         };
         isHydratingWalletRef.current = true;
         setWallet(serverWallet);
@@ -4415,21 +4535,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isJobBoardModalOpen, setIsJobBoardModalOpen] = useState(false);
   const [isPostJobModalOpen, setIsPostJobModalOpen] = useState(false);
 
-  // 13. Security Settings (Payment PIN & Security Questions)
-  const [securitySettings, setSecuritySettings] = useState<SecuritySettings>(() => {
+  // 13. Security Settings (Payment PIN & Security Questions — NO default PIN)
+  const getSecurityStorageKey = (phone?: string) =>
+    getUserStorageKey('AGC_security_settings_v2', phone || currentUserRef.current?.phoneNumber || getSavedUserCleanPhone());
+
+  const loadPartitionedSecuritySettings = (phone?: string): SecuritySettings => {
+    const emptyDefault: SecuritySettings = {
+      hasPaymentPin: false,
+      paymentPin: undefined,
+      securityQuestions: [],
+      failedAttempts: 0,
+      lockoutUntil: null,
+    };
     try {
-      const saved = localStorage.getItem('AGC_security_settings');
-      if (saved) return JSON.parse(saved);
+      const key = getUserStorageKey('AGC_security_settings_v2', phone || getSavedUserCleanPhone());
+      const saved = localStorage.getItem(key);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          const pin = parsed.paymentPin && parsed.paymentPin !== '1234' ? String(parsed.paymentPin) : undefined;
+          const questions: SecurityQuestionEntry[] = Array.isArray(parsed.securityQuestions)
+            ? parsed.securityQuestions.filter((q: any) => q?.question && q?.answer)
+            : parsed.securityQuestion && parsed.securityAnswer
+            ? [{ question: parsed.securityQuestion, answer: parsed.securityAnswer }]
+            : [];
+          return {
+            ...emptyDefault,
+            ...parsed,
+            hasPaymentPin: Boolean(pin && parsed.hasPaymentPin !== false),
+            paymentPin: pin,
+            securityQuestions: questions,
+          };
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse security settings:', e);
     }
-    return {
-      hasPaymentPin: true,
-      paymentPin: '1234',
-      securityQuestion: "What is your mother's maiden name?",
-      securityAnswer: 'Adebayo',
-    };
-  });
+    return emptyDefault;
+  };
+
+  const [securitySettings, setSecuritySettings] = useState<SecuritySettings>(() =>
+    loadPartitionedSecuritySettings()
+  );
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
 
   // 14. African Services & Appointment Booking State
@@ -4566,19 +4713,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const recordLedgerTransaction = (params: {
+    id?: string;
+    type: WalletTransaction['type'];
+    title: string;
+    description?: string;
+    amount: number;
+    fee?: number;
+    balanceAfter?: number;
+    currency?: CurrencyCode;
+    status?: 'completed' | 'pending';
+    referenceId?: string;
+    channel?: 'paystack' | 'wallet' | 'bank_transfer';
+    metadata?: Record<string, any>;
+  }): WalletTransaction => {
+    const nowIso = new Date().toISOString();
+    const ref = params.referenceId || `REF_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+    const tx: WalletTransaction = {
+      id: params.id || `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
+      userId: currentUserRef.current?.id,
+      userPhone: currentUserRef.current?.phoneNumber,
+      userName: currentUserRef.current?.fullName,
+      type: params.type,
+      title: params.title,
+      description: params.description || params.title,
+      amount: Math.abs(Number(params.amount) || 0),
+      fee: Number(params.fee || 0),
+      balanceAfter: params.balanceAfter,
+      currency: params.currency || 'NGN',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      createdAt: nowIso,
+      status: params.status || 'completed',
+      reference: ref,
+      referenceId: ref,
+      channel: params.channel || 'wallet',
+      metadata: params.metadata,
+    };
+    fetch('/api/wallet/ledger', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(tx),
+    }).catch(() => {});
+    return tx;
+  };
+
   const refreshWalletFromServer = async () => {
     const phone = currentUserRef.current?.phoneNumber;
     if (!phone) return;
     try {
-      const resp = await fetch(`/api/wallet/${encodeURIComponent(phone)}`);
+      const [resp, txResp] = await Promise.all([
+        fetch(`/api/wallet/${encodeURIComponent(phone)}`),
+        fetch(`/api/wallet/transactions?phone=${encodeURIComponent(phone)}`).catch(() => null),
+      ]);
       if (!resp.ok) return;
       const data = await resp.json();
+      const txJson = txResp && txResp.ok ? await txResp.json().catch(() => null) : null;
       if (data?.success && data?.wallet) {
+        const baseTxs: WalletTransaction[] = Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [];
+        const ledgerTxs: WalletTransaction[] = Array.isArray(txJson?.transactions) ? txJson.transactions : [];
+        const txMap = new Map<string, WalletTransaction>();
+        [...ledgerTxs, ...baseTxs].forEach((tx) => {
+          if (tx?.id && !txMap.has(tx.id)) txMap.set(tx.id, tx);
+        });
         const nextWallet: UserWallet = {
           availableBalance: Number(data.wallet.availableBalance) || 0,
           escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
           currency: data.wallet.currency || 'NGN',
-          transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+          transactions: Array.from(txMap.values()),
         };
         setWallet(nextWallet);
         walletRef.current = nextWallet;
@@ -4939,46 +5140,86 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     publishStatusLive(newStatus);
   };
 
-  const addSponsoredStatus = (ad: {
-    brand: string;
-    caption: string;
-    mediaUrl: string;
-    ctaLabel?: string;
-    targetUrl?: string;
-  }) => {
-    const newStatus: UserStatus = {
-      id: `status_ad_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      userId: currentUser.id,
-      userPhone: currentUser.phoneNumber,
-      userName: ad.brand.trim() || currentUser.fullName || 'Sponsored',
-      userAvatar: currentUser.avatarUrl || ad.mediaUrl,
-      isMe: true,
-      statusType: 'sponsored',
-      mediaUrl: ad.mediaUrl,
-      caption: ad.caption.trim() || 'Promoted vendor update',
-      createdAt: 'Sponsored',
-      createdAtISO: new Date().toISOString(),
-      expiresInHours: 24,
-      viewsCount: 0,
-      likesCount: 0,
-      hasLikedByMe: false,
-      viewers: [],
-      isSponsored: true,
-      sponsorBrand: ad.brand.trim() || 'Sponsored Brand',
-      ctaLabel: ad.ctaLabel?.trim() || 'Visit Offer',
-      targetUrl: ad.targetUrl?.trim() || '',
-      adClicksCount: 0,
-    };
+  const addSponsoredStatus = async (
+    ad: {
+      brand: string;
+      caption: string;
+      mediaUrl: string;
+      ctaLabel?: string;
+      targetUrl?: string;
+    },
+    paymentPin?: string
+  ): Promise<{ success: boolean; message: string; pending?: boolean }> => {
+    const adFee = Number(systemConfigRef.current?.sponsoredAdFeeNgn ?? 2500);
+    if (!securitySettings.hasPaymentPin || !securitySettings.paymentPin) {
+      return {
+        success: false,
+        message: 'Configure your Payment PIN in Hub > Payment PIN & Security before paying for Sponsored Ads.',
+      };
+    }
+    const pinCheck = verifyPaymentPinDetailed(paymentPin || '');
+    if (!pinCheck.success) {
+      return { success: false, message: pinCheck.message || 'Invalid Payment PIN.' };
+    }
+    if (wallet.availableBalance < adFee) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance. Sponsored Status Ad costs ₦${adFee.toLocaleString()}.`,
+      };
+    }
 
-    setStatuses((prev) => {
-      const updated = [newStatus, ...prev.filter((s) => s.id !== newStatus.id)];
-      try {
-        localStorage.setItem('AGC_statuses_v2', JSON.stringify(updated));
-      } catch (_) {}
-      return updated;
+    const nextBal = wallet.availableBalance - adFee;
+    const refId = `AD_${Date.now()}`;
+    const tx = recordLedgerTransaction({
+      type: 'ad_payment',
+      title: `Sponsored Ad Submission: ${ad.brand.trim() || 'Brand'}`,
+      description: `Sponsored status ad fee (${ad.brand.trim() || 'Brand'})`,
+      amount: adFee,
+      fee: 0,
+      balanceAfter: nextBal,
+      referenceId: refId,
+      channel: 'wallet',
     });
 
-    publishStatusLive(newStatus);
+    setWallet((prev) => ({
+      ...prev,
+      availableBalance: Math.max(0, prev.availableBalance - adFee),
+      transactions: [tx, ...prev.transactions],
+    }));
+
+    try {
+      const resp = await fetch('/api/ads/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brandName: ad.brand.trim() || 'Sponsored Brand',
+          caption: ad.caption.trim() || 'Promoted vendor update',
+          mediaUrl: ad.mediaUrl,
+          ctaLabel: ad.ctaLabel?.trim() || 'Visit Offer',
+          targetUrl: ad.targetUrl?.trim() || '#market',
+          avatarUrl: currentUser.avatarUrl || ad.mediaUrl,
+          submittedByPhone: currentUser.phoneNumber,
+          submittedByName: currentUser.fullName || ad.brand,
+          paidAmount: adFee,
+        }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (data?.cms) {
+        cmsDataRef.current = data.cms;
+        setCmsData(data.cms);
+      }
+      return {
+        success: true,
+        pending: true,
+        message: `₦${adFee.toLocaleString()} paid! Your Sponsored Ad "${ad.brand.trim()}" is now Pending Admin Approval.`,
+      };
+    } catch (_) {
+      return {
+        success: true,
+        pending: true,
+        message: `Sponsored Ad submitted (₦${adFee.toLocaleString()}) and queued for Admin Approval.`,
+      };
+    }
   };
 
   const addDeviceMediaStatus = async (caption: string, mediaUrl: string, mediaType: 'image' | 'video' = 'image') => {
@@ -5924,18 +6165,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       sendGroupInvitesToTargets(newThread, resolvedTargets);
     }
 
-    if (isSupabaseConfigured) {
-      createTownCommunityInDb({
-        name,
-        type: 'group',
-        category: 'Tech & Hustle',
-        description: description || 'Community group',
-        avatar: newThread.avatar,
-        members_count: 1,
-        members: [myName],
-      }).catch((e) => console.warn('Supabase group persist notice:', e));
-    }
-
     setActiveChatId(newChatId);
     return newChatId;
   };
@@ -6106,10 +6335,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const applyRemoteMessageReaction = useCallback(
+    (payload: { chatId: string; messageId: string; emoji: string; reactorName?: string; userName?: string }) => {
+      const { chatId, messageId, emoji } = payload || {};
+      const reactor = (payload?.reactorName || payload?.userName || '').trim();
+      if (!chatId || !messageId || !emoji || !reactor) return;
+      const myName = currentUserRef.current?.fullName || 'You';
+      if (reactor === myName) return;
+
+      setMessages((prev) => {
+        const list = prev[chatId];
+        if (!Array.isArray(list)) return prev;
+        let touched = false;
+        const updatedList = list.map((m) => {
+          if (m.id !== messageId) return m;
+          touched = true;
+          const reactions = { ...(m.reactions || {}) };
+          const users = reactions[emoji] || [];
+          if (users.includes(reactor)) {
+            reactions[emoji] = users.filter((u) => u !== reactor);
+            if (reactions[emoji].length === 0) delete reactions[emoji];
+          } else {
+            reactions[emoji] = [...users, reactor];
+          }
+          return { ...m, reactions };
+        });
+        if (!touched) return prev;
+        const updated = { ...prev, [chatId]: updatedList };
+        persistPartitionedMessages(updated, currentUserRef.current?.phoneNumber);
+        return updated;
+      });
+    },
+    []
+  );
+
   const reactToMessage = (chatId: string, messageId: string, emoji: string) => {
+    const myName = currentUser.fullName || 'You';
     setMessages((prev) => {
       const list = prev[chatId] || [];
-      const myName = currentUser.fullName || 'You';
       const updatedList = list.map((m) => {
         if (m.id === messageId) {
           const reactions = { ...(m.reactions || {}) };
@@ -6128,6 +6391,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
+
+    const currentChat = chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
+    const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    let targetCleanPhone = currentChat?.phone?.replace(/\D/g, '');
+    if (!targetCleanPhone && chatId.startsWith('dm_')) {
+      const parts = chatId.replace('dm_', '').split('_');
+      targetCleanPhone = parts.find((p) => !phonesMatch(p, myCleanPhone)) || parts[0];
+    }
+    const memberPhones = currentChat?.memberPhones || [];
+
+    emitMessageReaction(chatId, messageId, emoji, myName, memberPhones, targetCleanPhone);
+
+    try {
+      const bc = new BroadcastChannel('AGC_chats_sync');
+      bc.postMessage({ type: 'message_reaction', chatId, messageId, emoji, reactorName: myName, senderId: currentUser.id });
+      bc.close();
+    } catch (_) {}
+
+    if (isSupabaseConfigured) {
+      try {
+        const getOrSubscribeCh = (name: string): ReturnType<typeof supabase.channel> => {
+          const existing = inboxChannelRefsRef.current.get(name);
+          if (existing) return existing;
+          const ch = supabase.channel(name, { config: { broadcast: { self: false } } });
+          ch.subscribe();
+          inboxChannelRefsRef.current.set(name, ch);
+          return ch;
+        };
+        const chatCh = getOrSubscribeCh(`chat_${chatId}`);
+        chatCh.send({
+          type: 'broadcast',
+          event: 'message_reaction',
+          payload: { chatId, messageId, emoji, reactorName: myName, senderId: currentUser.id },
+        }).catch(() => {});
+        if (targetCleanPhone) {
+          const targets = new Set([targetCleanPhone, normalizePhoneDigits(targetCleanPhone)].filter(Boolean));
+          targets.forEach((t) => {
+            getOrSubscribeCh(`inbox_${t}`).send({
+              type: 'broadcast',
+              event: 'message_reaction',
+              payload: { chatId, messageId, emoji, reactorName: myName, senderId: currentUser.id },
+            }).catch(() => {});
+          });
+        }
+        memberPhones.forEach((p) => {
+          const cp = p.replace(/\D/g, '');
+          if (cp && !phonesMatch(cp, myCleanPhone)) {
+            getOrSubscribeCh(`inbox_${cp}`).send({
+              type: 'broadcast',
+              event: 'message_reaction',
+              payload: { chatId, messageId, emoji, reactorName: myName, senderId: currentUser.id },
+            }).catch(() => {});
+          }
+        });
+      } catch (_) {}
+    }
   };
 
   // Unified Multi-Transport Live Message Broadcaster
@@ -6875,17 +7194,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // Deduct from wallet and lock in escrow
-      const tx: WalletTransaction = {
-        id: `tx_${Date.now()}`,
+      const tx = recordLedgerTransaction({
         type: 'escrow_lock',
         title: `Escrow Lock for ${product.title}`,
+        description: `Marketplace escrow lock: ${product.title}`,
         amount: product.price,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - product.price,
         currency: product.currency,
-        timestamp: 'Just now',
-        status: 'completed',
-        reference: `ESC_${orderId}`,
+        referenceId: `ESC_${orderId}`,
         channel: 'wallet',
-      };
+      });
 
       setWallet((prev) => ({
         ...prev,
@@ -6895,17 +7214,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
     } else {
       // Paystack Direct Checkout
-      const tx: WalletTransaction = {
-        id: `tx_${Date.now()}`,
-        type: 'escrow_lock',
+      const tx = recordLedgerTransaction({
+        type: 'store_purchase',
         title: `Paystack Escrow: ${product.title}`,
+        description: `Marketplace purchase via Paystack: ${product.title}`,
         amount: product.price,
+        fee: 0,
+        balanceAfter: wallet.availableBalance,
         currency: product.currency,
-        timestamp: 'Just now',
-        status: 'completed',
-        reference: paystackRef,
+        referenceId: paystackRef,
         channel: 'paystack',
-      };
+      });
 
       setWallet((prev) => ({
         ...prev,
@@ -6968,23 +7287,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setEscrowOrders(updated);
 
     // Update wallet escrow balance
+    const relTx = recordLedgerTransaction({
+      type: 'escrow_release',
+      title: `Released Escrow Payout: ${order.product.title}`,
+      description: `Escrow released to ${order.sellerName} (${order.product.title})`,
+      amount: order.totalAmount,
+      fee: 0,
+      balanceAfter: wallet.availableBalance,
+      currency: order.currency,
+      referenceId: `REL_${order.id}`,
+      channel: 'wallet',
+    });
     setWallet((prev) => ({
       ...prev,
       escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - order.totalAmount),
-      transactions: [
-        {
-          id: `tx_${Date.now()}`,
-          type: 'escrow_release',
-          title: `Released Escrow Payout: ${order.product.title}`,
-          amount: order.totalAmount,
-          currency: order.currency,
-          timestamp: 'Just now',
-          status: 'completed',
-          reference: `REL_${order.id}`,
-          channel: 'wallet',
-        },
-        ...prev.transactions,
-      ],
+      transactions: [relTx, ...prev.transactions],
     }));
 
     const releaseMsg: ChatMessage = {
@@ -8277,24 +8594,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (!hasAlreadyStaked) {
+      const pollTx = recordLedgerTransaction({
+        type: 'escrow_lock',
+        title: `Poll Stake: ${poll.title.slice(0, 24)}...`,
+        description: `Group financial poll stake (${poll.title})`,
+        amount: poll.stakePerVote,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - poll.stakePerVote,
+        currency: poll.currency,
+        referenceId: `POL_${pollId}`,
+        channel: 'wallet',
+      });
       setWallet((prev) => ({
         ...prev,
         availableBalance: prev.availableBalance - poll.stakePerVote,
         escrowLockedBalance: prev.escrowLockedBalance + poll.stakePerVote,
-        transactions: [
-          {
-            id: `tx_${Date.now()}`,
-            type: 'escrow_lock',
-            title: `Poll Stake: ${poll.title.slice(0, 24)}...`,
-            amount: poll.stakePerVote,
-            currency: poll.currency,
-            timestamp: 'Just now',
-            status: 'completed',
-            reference: `POL_${pollId}`,
-            channel: 'wallet',
-          },
-          ...prev.transactions,
-        ],
+        transactions: [pollTx, ...prev.transactions],
       }));
     }
 
@@ -8550,64 +8865,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           if (incomingGame.status === 'won') {
             const iWon = phonesMatch(myPhone, incomingGame.winnerPhone);
+            const settleTx = recordLedgerTransaction(
+              iWon
+                ? {
+                    id: `tx_xo_win_${incomingGame.id}`,
+                    type: 'game_win',
+                    title: `X/O Win Payout (1% fee: ${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${fee.toLocaleString()})`,
+                    description: `Won X/O wager match`,
+                    amount: payout,
+                    fee,
+                    balanceAfter: walletRef.current.availableBalance + payout,
+                    currency: incomingGame.currency || 'NGN',
+                    referenceId: `XO_${incomingGame.id}`,
+                    channel: 'wallet',
+                  }
+                : {
+                    id: `tx_xo_loss_${incomingGame.id}`,
+                    type: 'escrow_release',
+                    title: `X/O Match Settled (${incomingGame.winnerName || 'Opponent'} won)`,
+                    description: `X/O match settled (${incomingGame.winnerName || 'Opponent'} won)`,
+                    amount: stake,
+                    fee: 0,
+                    balanceAfter: walletRef.current.availableBalance,
+                    currency: incomingGame.currency || 'NGN',
+                    referenceId: `XO_${incomingGame.id}`,
+                    channel: 'wallet',
+                  }
+            );
             setWallet((prev) => ({
               ...prev,
               availableBalance: iWon ? prev.availableBalance + payout : prev.availableBalance,
               escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - stake),
-              transactions: [
-                ...(iWon
-                  ? [
-                      {
-                        id: `tx_xo_win_${incomingGame.id}`,
-                        type: 'escrow_release' as const,
-                        title: `X/O Win Payout (1% fee: ${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${fee.toLocaleString()})`,
-                        amount: payout,
-                        currency: incomingGame.currency || 'NGN',
-                        timestamp: 'Just now',
-                        status: 'completed' as const,
-                        reference: `XO_${incomingGame.id}`,
-                        channel: 'wallet' as const,
-                      },
-                    ]
-                  : [
-                      {
-                        id: `tx_xo_loss_${incomingGame.id}`,
-                        type: 'escrow_release' as const,
-                        title: `X/O Match Settled (${incomingGame.winnerName || 'Opponent'} won)`,
-                        amount: stake,
-                        currency: incomingGame.currency || 'NGN',
-                        timestamp: 'Just now',
-                        status: 'completed' as const,
-                        reference: `XO_${incomingGame.id}`,
-                        channel: 'wallet' as const,
-                      },
-                    ]),
-                ...prev.transactions,
-              ],
+              transactions: [settleTx, ...prev.transactions],
             }));
           } else {
             // Draw, Declined, or Cancelled -> full stake refund from escrow
+            const refTx = recordLedgerTransaction({
+              id: `tx_xo_ref_${incomingGame.id}`,
+              type: 'refund',
+              title:
+                incomingGame.status === 'draw'
+                  ? 'X/O Match Draw (Stake Refunded)'
+                  : 'X/O Challenge Cancelled (Stake Refunded)',
+              description:
+                incomingGame.status === 'draw'
+                  ? 'X/O match draw stake refunded'
+                  : 'X/O challenge cancelled stake refunded',
+              amount: stake,
+              fee: 0,
+              balanceAfter: walletRef.current.availableBalance + stake,
+              currency: incomingGame.currency || 'NGN',
+              referenceId: `XO_${incomingGame.id}`,
+              channel: 'wallet',
+            });
             setWallet((prev) => ({
               ...prev,
               availableBalance: prev.availableBalance + stake,
               escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - stake),
-              transactions: [
-                {
-                  id: `tx_xo_ref_${incomingGame.id}`,
-                  type: 'escrow_release' as const,
-                  title:
-                    incomingGame.status === 'draw'
-                      ? 'X/O Match Draw (Stake Refunded)'
-                      : 'X/O Challenge Cancelled (Stake Refunded)',
-                  amount: stake,
-                  currency: incomingGame.currency || 'NGN',
-                  timestamp: 'Just now',
-                  status: 'completed' as const,
-                  reference: `XO_${incomingGame.id}`,
-                  channel: 'wallet' as const,
-                },
-                ...prev.transactions,
-              ],
+              transactions: [refTx, ...prev.transactions],
             }));
           }
         }
@@ -8696,24 +9011,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (mode === 'bet' && cleanBet > 0) {
       setXoFlag(getXoLockedStorageKey(myPhone), gameId);
+      const wagerTx = recordLedgerTransaction({
+        id: `tx_xo_lock_${gameId}`,
+        type: 'game_wager',
+        title: `X/O Bet Escrow Lock (${targetChat?.name || 'Match'})`,
+        description: `X/O challenge wager (${targetChat?.name || 'Match'})`,
+        amount: cleanBet,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - cleanBet,
+        currency: newGame.currency,
+        referenceId: `XO_${gameId}`,
+        channel: 'wallet',
+      });
       setWallet((prev) => ({
         ...prev,
         availableBalance: prev.availableBalance - cleanBet,
         escrowLockedBalance: prev.escrowLockedBalance + cleanBet,
-        transactions: [
-          {
-            id: `tx_xo_lock_${gameId}`,
-            type: 'escrow_lock',
-            title: `X/O Bet Escrow Lock (${targetChat?.name || 'Match'})`,
-            amount: cleanBet,
-            currency: newGame.currency,
-            timestamp: 'Just now',
-            status: 'completed',
-            reference: `XO_${gameId}`,
-            channel: 'wallet',
-          },
-          ...prev.transactions,
-        ],
+        transactions: [wagerTx, ...prev.transactions],
       }));
     }
 
@@ -8800,24 +9114,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (finalGame.mode === 'bet' && finalGame.betAmount > 0 && !hasXoFlag(getXoLockedStorageKey(myPhone), finalGame.id)) {
       setXoFlag(getXoLockedStorageKey(myPhone), finalGame.id);
+      const acceptTx = recordLedgerTransaction({
+        id: `tx_xo_acc_${finalGame.id}`,
+        type: 'game_wager',
+        title: `X/O Match Bet Stake (${finalGame.challengerName})`,
+        description: `Accepted X/O wager from ${finalGame.challengerName}`,
+        amount: finalGame.betAmount,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - finalGame.betAmount,
+        currency: finalGame.currency || 'NGN',
+        referenceId: `XO_${finalGame.id}`,
+        channel: 'wallet',
+      });
       setWallet((prev) => ({
         ...prev,
         availableBalance: prev.availableBalance - finalGame.betAmount,
         escrowLockedBalance: prev.escrowLockedBalance + finalGame.betAmount,
-        transactions: [
-          {
-            id: `tx_xo_acc_${finalGame.id}`,
-            type: 'escrow_lock',
-            title: `X/O Match Bet Stake (${finalGame.challengerName})`,
-            amount: finalGame.betAmount,
-            currency: finalGame.currency || 'NGN',
-            timestamp: 'Just now',
-            status: 'completed',
-            reference: `XO_${finalGame.id}`,
-            channel: 'wallet',
-          },
-          ...prev.transactions,
-        ],
+        transactions: [acceptTx, ...prev.transactions],
       }));
     }
 
@@ -9397,6 +9710,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     messagesRef.current = localChatState.messages;
     setWallet(localWalletState);
     walletRef.current = localWalletState;
+    setSecuritySettings(loadPartitionedSecuritySettings(phoneNumber));
 
     setCurrentUser(updatedUser);
     currentUserRef.current = updatedUser;
@@ -10224,10 +10538,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  // 13. Security Handlers & Anti-Brute-Force Protection
+  // 13. Security Handlers & Anti-Brute-Force Protection (No '1234' default + 2 Security Questions prerequisite)
   const WEAK_PINS = ['0000', '1111', '2222', '3333', '4444', '5555', '6666', '7777', '8888', '9999', '1234', '4321', '0123', '9876'];
 
+  const saveSecuritySettingsState = (updated: SecuritySettings) => {
+    try {
+      localStorage.setItem(getSecurityStorageKey(), JSON.stringify(updated));
+    } catch (_) {}
+  };
+
   const verifyPaymentPinDetailed = (pin: string): { success: boolean; message?: string; lockedUntil?: number | null } => {
+    if (!securitySettings.hasPaymentPin || !securitySettings.paymentPin) {
+      return {
+        success: false,
+        message: 'No Payment PIN configured. Go to Hub > Payment PIN & Security to set 2 Security Questions and create your PIN.',
+      };
+    }
+
     const now = Date.now();
     if (securitySettings.lockoutUntil && securitySettings.lockoutUntil > now) {
       const remainingSeconds = Math.ceil((securitySettings.lockoutUntil - now) / 1000);
@@ -10238,12 +10565,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    const currentPin = (securitySettings.paymentPin || '1234').trim();
+    const currentPin = securitySettings.paymentPin.trim();
     if (currentPin === pin.trim()) {
       if ((securitySettings.failedAttempts ?? 0) > 0 || securitySettings.lockoutUntil) {
         setSecuritySettings((prev) => {
           const updated = { ...prev, failedAttempts: 0, lockoutUntil: null };
-          localStorage.setItem('AGC_security_settings', JSON.stringify(updated));
+          saveSecuritySettingsState(updated);
           return updated;
         });
       }
@@ -10256,7 +10583,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setSecuritySettings((prev) => {
       const updated = { ...prev, failedAttempts: nextAttempts, lockoutUntil };
-      localStorage.setItem('AGC_security_settings', JSON.stringify(updated));
+      saveSecuritySettingsState(updated);
       return updated;
     });
 
@@ -10282,16 +10609,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const resetPinLockout = () => {
     setSecuritySettings((prev) => {
       const updated = { ...prev, failedAttempts: 0, lockoutUntil: null };
-      localStorage.setItem('AGC_security_settings', JSON.stringify(updated));
+      saveSecuritySettingsState(updated);
       return updated;
     });
   };
 
+  const setSecurityQuestions = (questions: SecurityQuestionEntry[]): { success: boolean; message: string } => {
+    const cleaned = (questions || []).map((q) => ({
+      question: (q.question || '').trim(),
+      answer: (q.answer || '').trim(),
+    }));
+    if (cleaned.length < 2 || !cleaned[0].question || !cleaned[0].answer || !cleaned[1].question || !cleaned[1].answer) {
+      return { success: false, message: 'Please provide 2 Security Questions and both Answers.' };
+    }
+    if (cleaned[0].question.toLowerCase() === cleaned[1].question.toLowerCase()) {
+      return { success: false, message: 'Please select 2 different Security Questions.' };
+    }
+
+    setSecuritySettings((prev) => {
+      const updated: SecuritySettings = {
+        ...prev,
+        securityQuestions: cleaned.slice(0, 2),
+        securityQuestion: cleaned[0].question,
+        securityAnswer: cleaned[0].answer,
+      };
+      saveSecuritySettingsState(updated);
+      return updated;
+    });
+
+    return { success: true, message: '2 Security Questions saved! You can now create or manage your Payment PIN.' };
+  };
+
   const updatePaymentPin = (newPin: string, oldPin?: string): { success: boolean; message: string } => {
-    const currentPin = (securitySettings.paymentPin || '1234').trim();
-    
-    // Verify old PIN if one was already set
-    if (securitySettings.hasPaymentPin && currentPin) {
+    if (!Array.isArray(securitySettings.securityQuestions) || securitySettings.securityQuestions.length < 2) {
+      return {
+        success: false,
+        message: 'Please set 2 Security Questions & Answers before creating your Payment PIN.',
+      };
+    }
+
+    if (securitySettings.hasPaymentPin && securitySettings.paymentPin) {
       if (!oldPin) {
         return { success: false, message: 'Current 4-digit PIN is required to change PIN.' };
       }
@@ -10311,11 +10668,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setSecuritySettings((prev) => {
       const updated = { ...prev, hasPaymentPin: true, paymentPin: newPin, failedAttempts: 0, lockoutUntil: null };
-      localStorage.setItem('AGC_security_settings', JSON.stringify(updated));
+      saveSecuritySettingsState(updated);
       return updated;
     });
 
-    return { success: true, message: 'Payment PIN successfully updated and secured!' };
+    return { success: true, message: 'Payment PIN successfully saved and secured!' };
+  };
+
+  const resetPaymentPinWithQuestions = (
+    answers: [string, string],
+    newPin: string
+  ): { success: boolean; message: string } => {
+    const savedQuestions = securitySettings.securityQuestions || [];
+    if (savedQuestions.length < 2) {
+      return { success: false, message: 'Two Security Questions must be configured first.' };
+    }
+
+    const ans0 = (answers[0] || '').trim().toLowerCase();
+    const ans1 = (answers[1] || '').trim().toLowerCase();
+    if (
+      ans0 !== savedQuestions[0].answer.trim().toLowerCase() ||
+      ans1 !== savedQuestions[1].answer.trim().toLowerCase()
+    ) {
+      return { success: false, message: 'One or both security question answers do not match.' };
+    }
+
+    if (!newPin || newPin.length !== 4 || !/^\d{4}$/.test(newPin)) {
+      return { success: false, message: 'New PIN must be exactly 4 numeric digits.' };
+    }
+
+    if (WEAK_PINS.includes(newPin)) {
+      return { success: false, message: 'PIN is too weak or common (e.g. 1234, 0000, 1111). Please choose a stronger PIN.' };
+    }
+
+    setSecuritySettings((prev) => {
+      const updated = { ...prev, hasPaymentPin: true, paymentPin: newPin, failedAttempts: 0, lockoutUntil: null };
+      saveSecuritySettingsState(updated);
+      return updated;
+    });
+
+    return { success: true, message: 'Security answers verified! Payment PIN has been reset.' };
   };
 
   const setPaymentPin = (pin: string) => {
@@ -10324,8 +10716,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const setSecurityQuestion = (question: string, answer: string) => {
     setSecuritySettings((prev) => {
-      const updated = { ...prev, securityQuestion: question, securityAnswer: answer };
-      localStorage.setItem('AGC_security_settings', JSON.stringify(updated));
+      const existingSecond = prev.securityQuestions?.[1];
+      const nextQuestions: SecurityQuestionEntry[] = existingSecond
+        ? [{ question, answer }, existingSecond]
+        : [{ question, answer }];
+      const updated = { ...prev, securityQuestion: question, securityAnswer: answer, securityQuestions: nextQuestions };
+      saveSecuritySettingsState(updated);
       return updated;
     });
   };
@@ -10346,17 +10742,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // If payment mode is escrow or wallet, log and deduct if sufficient
     if (booking.paymentMode === 'escrow') {
-      const tx: WalletTransaction = {
-        id: `tx_${Date.now()}`,
+      const tx = recordLedgerTransaction({
         type: 'escrow_lock',
         title: `Service Escrow: ${booking.serviceTitle} with ${booking.providerName}`,
+        description: `Artisan service escrow lock: ${booking.serviceTitle}`,
         amount: booking.totalPrice,
+        fee: 0,
+        balanceAfter: Math.max(0, wallet.availableBalance - booking.totalPrice),
         currency: booking.currency,
-        timestamp: 'Just now',
-        status: 'completed',
-        reference: `SRV_ESC_${newBooking.id}`,
+        referenceId: `SRV_ESC_${newBooking.id}`,
         channel: 'wallet',
-      };
+      });
 
       setWallet((prev) => ({
         ...prev,
@@ -10379,25 +10775,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setServiceBookings((prev) => {
       const target = prev.find((b) => b.id === bookingId);
       if (target && target.paymentMode === 'escrow') {
-        // Refund escrow locked balance
+        const refTx = recordLedgerTransaction({
+          type: 'refund',
+          title: `Refund: Cancelled ${target.serviceTitle}`,
+          description: `Refund for cancelled service booking (${target.serviceTitle})`,
+          amount: target.totalPrice,
+          fee: 0,
+          balanceAfter: walletRef.current.availableBalance + target.totalPrice,
+          currency: target.currency,
+          referenceId: `REF_${bookingId}`,
+          channel: 'wallet',
+        });
         setWallet((w) => ({
           ...w,
           availableBalance: w.availableBalance + target.totalPrice,
           escrowLockedBalance: Math.max(0, w.escrowLockedBalance - target.totalPrice),
-          transactions: [
-            {
-              id: `tx_${Date.now()}`,
-              type: 'escrow_release',
-              title: `Refund: Cancelled ${target.serviceTitle}`,
-              amount: target.totalPrice,
-              currency: target.currency,
-              timestamp: 'Just now',
-              status: 'completed',
-              reference: `REF_${bookingId}`,
-              channel: 'wallet',
-            },
-            ...w.transactions,
-          ],
+          transactions: [refTx, ...w.transactions],
         }));
       }
 
@@ -10413,23 +10806,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setServiceBookings((prev) => {
       const target = prev.find((b) => b.id === bookingId);
       if (target && target.paymentMode === 'escrow') {
+        const relTx = recordLedgerTransaction({
+          type: 'escrow_release',
+          title: `Service Escrow Released: ${target.serviceTitle} to ${target.providerName}`,
+          description: `Released service escrow payout to ${target.providerName}`,
+          amount: target.totalPrice,
+          fee: 0,
+          balanceAfter: walletRef.current.availableBalance,
+          currency: target.currency,
+          referenceId: `REL_SRV_${bookingId}`,
+          channel: 'wallet',
+        });
         setWallet((w) => ({
           ...w,
           escrowLockedBalance: Math.max(0, w.escrowLockedBalance - target.totalPrice),
-          transactions: [
-            {
-              id: `tx_${Date.now()}`,
-              type: 'escrow_release',
-              title: `Service Escrow Released: ${target.serviceTitle} to ${target.providerName}`,
-              amount: target.totalPrice,
-              currency: target.currency,
-              timestamp: 'Just now',
-              status: 'completed',
-              reference: `REL_SRV_${bookingId}`,
-              channel: 'wallet',
-            },
-            ...w.transactions,
-          ],
+          transactions: [relTx, ...w.transactions],
         }));
       }
 
@@ -10448,9 +10839,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...provider,
       id: `serv_${Date.now()}`,
       rating: 5.0,
-      reviewCount: 1,
-      isVerified: true,
-      badge: 'Verified African Pro',
+      reviewCount: 0,
+      isVerified: false,
+      approvalStatus: 'pending',
+      badge: 'Pending Admin Approval',
     };
 
     setServiceProviders((prev) => {
@@ -10458,16 +10850,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('AGC_service_providers', JSON.stringify(updated));
       return updated;
     });
+
+    fetch('/api/artisans/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: newProvider.id,
+        stationName: newProvider.businessName || newProvider.name,
+        category: newProvider.categoryLabel || newProvider.category,
+        location: newProvider.location,
+        ownerName: newProvider.name,
+        ownerPhone: newProvider.phone || currentUser.phoneNumber,
+        registrationFeePaid: true,
+      }),
+    }).catch(() => {});
   };
 
-  // 15. Money Transfer with 1-2 Days Security Delay Handlers
-  const sendDelayedTransfer = (
+  // 15. Instant P2P Money Transfer with Rolling 24h Daily & 7d Weekly Limits
+  const getTransferLimitsUsage = () => {
+    const dailyLimit = systemConfigRef.current?.maxDailyTransferNgn ?? 500000;
+    const weeklyLimit = systemConfigRef.current?.maxWeeklyTransferNgn ?? 2000000;
+    const nowMs = Date.now();
+    const dayCutoff = nowMs - 24 * 60 * 60 * 1000;
+    const weekCutoff = nowMs - 7 * 24 * 60 * 60 * 1000;
+
+    let dailyUsed = 0;
+    let weeklyUsed = 0;
+
+    (walletRef.current?.transactions || []).forEach((tx) => {
+      if (tx.type !== 'sent' && tx.type !== 'transfer_out' && tx.type !== 'transfer_delayed') return;
+      let ts = tx.createdAt ? Date.parse(tx.createdAt) : 0;
+      if (!ts && tx.id) {
+        const matchTs = tx.id.match(/(\d{13})/);
+        if (matchTs) ts = Number(matchTs[1]);
+      }
+      if (!ts) return;
+      const amt = Number(tx.amount) || 0;
+      if (ts >= weekCutoff) weeklyUsed += amt;
+      if (ts >= dayCutoff) dailyUsed += amt;
+    });
+
+    return { dailyUsed, dailyLimit, weeklyUsed, weeklyLimit };
+  };
+
+  const sendDelayedTransfer = async (
     recipientPhone: string,
     recipientName: string,
     amount: number,
-    note: string,
-    delayHours: number = 36 // Default 1.5 days (1-2 days)
-  ) => {
+    note: string
+  ): Promise<{ success: boolean; transfer?: DelayedTransfer; message?: string }> => {
+    const minAmt = systemConfigRef.current?.minTransferAmountNgn ?? 100;
+    if (amount < minAmt) {
+      return { success: false, message: `Minimum transfer amount is ₦${minAmt.toLocaleString()}.` };
+    }
     if (wallet.availableBalance < amount) {
       return {
         success: false,
@@ -10475,90 +10910,106 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    const releaseMs = Date.now() + delayHours * 3600 * 1000;
-    const scheduledDate = new Date(releaseMs).toLocaleString([], {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    const { dailyUsed, dailyLimit, weeklyUsed, weeklyLimit } = getTransferLimitsUsage();
+    if (dailyLimit > 0 && dailyUsed + amount > dailyLimit) {
+      return {
+        success: false,
+        message: `Daily transfer limit of ₦${dailyLimit.toLocaleString()} exceeded. Remaining today: ₦${Math.max(0, dailyLimit - dailyUsed).toLocaleString()}.`,
+      };
+    }
+    if (weeklyLimit > 0 && weeklyUsed + amount > weeklyLimit) {
+      return {
+        success: false,
+        message: `Weekly transfer limit of ₦${weeklyLimit.toLocaleString()} exceeded. Remaining this week: ₦${Math.max(0, weeklyLimit - weeklyUsed).toLocaleString()}.`,
+      };
+    }
 
-    const newTransfer: DelayedTransfer = {
-      id: `dtx_${Math.floor(100000 + Math.random() * 900000)}`,
-      senderId: currentUser.id,
-      senderName: currentUser.fullName,
-      recipientPhone,
-      recipientName,
-      amount,
-      currency: 'NGN',
-      note: note || 'Transfer via AGC Delayed Escrow',
-      delayHours,
-      scheduledReleaseTime: `${scheduledDate} (${delayHours}h security delay)`,
-      releaseTimestampMs: releaseMs,
-      status: 'pending_clearance',
-      createdAt: 'Just now',
-      securityReason: 'Mandatory 1-2 Days Security Delay Buffer: Protects against unauthorized transfers, scam vendors & phishing before funds settle.',
-    };
+    try {
+      const resp = await fetch('/api/wallet/transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromPhone: currentUser.phoneNumber,
+          toPhone: recipientPhone,
+          recipientName,
+          amount,
+          note: note || 'Instant Transfer via AGC Wallet',
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.success) {
+        return { success: false, message: data?.message || 'Transfer failed server validation.' };
+      }
 
-    // Deduct from available balance, add to locked and record transaction
-    const tx: WalletTransaction = {
-      id: `tx_${Date.now()}`,
-      type: 'transfer_delayed',
-      title: `Transfer to ${recipientName} (1-2 Days Delay)`,
-      amount,
-      currency: 'NGN',
-      timestamp: 'Just now',
-      status: 'pending',
-      reference: newTransfer.id,
-      channel: 'wallet',
-    };
+      if (data.wallet) {
+        const nextWallet: UserWallet = {
+          availableBalance: Number(data.wallet.availableBalance) || 0,
+          escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
+          currency: data.wallet.currency || 'NGN',
+          transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+        };
+        setWallet(nextWallet);
+        walletRef.current = nextWallet;
+        persistPartitionedWallet(nextWallet, currentUser.phoneNumber);
+      }
 
-    setWallet((prev) => ({
-      ...prev,
-      availableBalance: prev.availableBalance - amount,
-      escrowLockedBalance: prev.escrowLockedBalance + amount,
-      transactions: [tx, ...prev.transactions],
-    }));
+      const instantRecord: DelayedTransfer = {
+        id: data.reference || `trf_${Date.now()}`,
+        senderId: currentUser.id,
+        senderName: currentUser.fullName,
+        recipientPhone,
+        recipientName,
+        amount,
+        currency: 'NGN',
+        note: note || 'Instant P2P Transfer',
+        delayHours: 0,
+        scheduledReleaseTime: 'Settled Instantly',
+        releaseTimestampMs: Date.now(),
+        status: 'cleared',
+        createdAt: 'Just now',
+        securityReason: 'Instant settlement protected by Daily & Weekly Transfer Limits + Security PIN.',
+      };
 
-    setDelayedTransfers((prev) => {
-      const updated = [newTransfer, ...prev];
-      localStorage.setItem('AGC_delayed_transfers', JSON.stringify(updated));
-      return updated;
-    });
+      setDelayedTransfers((prev) => {
+        const updated = [instantRecord, ...prev];
+        localStorage.setItem('AGC_delayed_transfers', JSON.stringify(updated));
+        return updated;
+      });
 
-    return {
-      success: true,
-      transfer: newTransfer,
-      message: `₦${amount.toLocaleString()} scheduled to ${recipientName}. Funds will clear in ${delayHours} hours under anti-fraud delay. You can cancel at any time before settlement.`,
-    };
+      return {
+        success: true,
+        transfer: instantRecord,
+        message: `₦${amount.toLocaleString()} sent instantly to ${recipientName}!`,
+      };
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Unable to reach transfer server.' };
+    }
   };
 
   const cancelDelayedTransfer = (transferId: string) => {
     const target = delayedTransfers.find((t) => t.id === transferId);
     if (!target) return { success: false, message: 'Transfer not found.' };
     if (target.status !== 'pending_clearance') {
-      return { success: false, message: 'Only transfers pending clearance can be cancelled.' };
+      return { success: false, message: 'Instant settled transfers cannot be cancelled.' };
     }
 
-    // Refund locked balance back to available
+    const refTx = recordLedgerTransaction({
+      type: 'refund',
+      title: `Cancelled Transfer Refund: ${target.recipientName}`,
+      description: `Refunded cancelled transfer to ${target.recipientName}`,
+      amount: target.amount,
+      fee: 0,
+      balanceAfter: wallet.availableBalance + target.amount,
+      currency: target.currency,
+      referenceId: `CAN_${transferId}`,
+      channel: 'wallet',
+    });
+
     setWallet((prev) => ({
       ...prev,
       availableBalance: prev.availableBalance + target.amount,
       escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - target.amount),
-      transactions: [
-        {
-          id: `tx_${Date.now()}`,
-          type: 'escrow_release',
-          title: `Cancelled Transfer Refund: ${target.recipientName}`,
-          amount: target.amount,
-          currency: target.currency,
-          timestamp: 'Just now',
-          status: 'completed',
-          reference: `CAN_${transferId}`,
-          channel: 'wallet',
-        },
-        ...prev.transactions,
-      ],
+      transactions: [refTx, ...prev.transactions],
     }));
 
     setDelayedTransfers((prev) => {
@@ -10575,40 +11026,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  const fastForwardTransferRelease = (transferId: string) => {
-    const target = delayedTransfers.find((t) => t.id === transferId);
-    if (!target) return { success: false, message: 'Transfer not found.' };
-
-    setWallet((prev) => ({
-      ...prev,
-      escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - target.amount),
-      transactions: [
-        {
-          id: `tx_${Date.now()}`,
-          type: 'escrow_release',
-          title: `Cleared 1-2 Days Delay Payout to ${target.recipientName}`,
-          amount: target.amount,
-          currency: target.currency,
-          timestamp: 'Just now',
-          status: 'completed',
-          reference: `CLR_${transferId}`,
-          channel: 'wallet',
-        },
-        ...prev.transactions,
-      ],
-    }));
-
-    setDelayedTransfers((prev) => {
-      const updated = prev.map((t) =>
-        t.id === transferId ? { ...t, status: 'cleared' as const } : t
-      );
-      localStorage.setItem('AGC_delayed_transfers', JSON.stringify(updated));
-      return updated;
-    });
-
+  const fastForwardTransferRelease = (_transferId: string) => {
     return {
-      success: true,
-      message: `Delay cleared! ₦${target.amount.toLocaleString()} settled to ${target.recipientName}.`,
+      success: false,
+      message: 'All Paystack-backed wallet transfers now settle instantly.',
     };
   };
 
@@ -10667,8 +11088,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newLogs: PayrollRunLog[] = [];
     const newTxList: WalletTransaction[] = [];
 
+    let runningBal = wallet.availableBalance;
     targets.forEach((e) => {
       const ref = `PAY_${Math.floor(100000 + Math.random() * 900000)}`;
+      runningBal = Math.max(0, runningBal - e.salary);
       newLogs.push({
         id: `prun_${Date.now()}_${e.id}`,
         employeeId: e.id,
@@ -10681,17 +11104,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         reference: ref,
       });
 
-      newTxList.push({
-        id: `tx_${Date.now()}_${e.id}`,
-        type: 'payroll_debit',
-        title: `Auto-Debit Salary: ${e.fullName} (${e.role})`,
-        amount: e.salary,
-        currency: e.currency,
-        timestamp: 'Just now',
-        status: 'completed',
-        reference: ref,
-        channel: 'wallet',
-      });
+      newTxList.push(
+        recordLedgerTransaction({
+          id: `tx_${Date.now()}_${e.id}`,
+          type: 'payroll_debit',
+          title: `Auto-Debit Salary: ${e.fullName} (${e.role})`,
+          description: `Payroll disbursement to ${e.fullName} (${e.role})`,
+          amount: e.salary,
+          fee: 0,
+          balanceAfter: runningBal,
+          currency: e.currency,
+          referenceId: ref,
+          channel: 'wallet',
+        })
+      );
     });
 
     setWallet((prev) => ({
@@ -10817,8 +11243,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           storeName: parsed.storeName || '',
           description: parsed.description || '',
           category: parsed.category || '',
-          active: isActive,
-          isRegistered: isActive,
+          active: Boolean(parsed.active && parsed.tier && parsed.tier !== 'none' && parsed.approvalStatus !== 'suspended' && parsed.approvalStatus !== 'rejected'),
+          isRegistered: Boolean((parsed.isRegistered || parsed.active) && parsed.tier && parsed.tier !== 'none'),
+          approvalStatus: parsed.approvalStatus || (parsed.active ? 'approved' : parsed.isRegistered ? 'pending' : undefined),
           expiresAt: parsed.expiresAt || '',
           paymentMethod: parsed.paymentMethod || 'wallet',
         };
@@ -10845,9 +11272,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const hasActiveStore = Boolean(
     storeSubscription &&
-    (storeSubscription.active || storeSubscription.isRegistered) &&
+    storeSubscription.active &&
     storeSubscription.tier &&
-    storeSubscription.tier !== 'none'
+    storeSubscription.tier !== 'none' &&
+    storeSubscription.approvalStatus !== 'suspended' &&
+    storeSubscription.approvalStatus !== 'rejected'
   );
 
   const [myStoreProducts, setMyStoreProducts] = useState<Product[]>(() => {
@@ -10861,8 +11290,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addStoreProduct = (
     prod: Omit<Product, 'id' | 'sellerId' | 'sellerName' | 'inStock' | 'stockCount'>
   ): { success: boolean; product?: Product; message: string } => {
-    if (!hasActiveStore) {
-      return { success: false, message: 'Please activate a Merchant Store tier before adding catalog products.' };
+    if (!storeSubscription?.isRegistered || storeSubscription.tier === 'none') {
+      return { success: false, message: 'Please submit a Merchant Store plan before adding catalog products.' };
     }
     const limit = storeSubscription.itemLimit || storeSubscription.itemsLimit || 30;
     if (myStoreProducts.length >= limit) {
@@ -10892,7 +11321,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('AGC_store_sub', JSON.stringify(nextSub));
     } catch (_) {}
 
-    return { success: true, product: newProduct, message: `"${newProduct.title}" added to your store catalog!` };
+    return {
+      success: true,
+      product: newProduct,
+      message: storeSubscription.active
+        ? `"${newProduct.title}" added to your store catalog!`
+        : `"${newProduct.title}" saved! Your store will go live once Admin approves it.`,
+    };
   };
 
   const subscribeStoreTier = (
@@ -10913,16 +11348,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (paymentMethod === 'wallet') {
-      const newTx: WalletTransaction = {
+      const newTx = recordLedgerTransaction({
         id: `tx_store_reg_${Date.now()}`,
-        type: 'transfer_out',
+        type: 'store_subscription',
         title: `Store Registration (${tier === 'starter_30' ? 'Starter 30-Items' : 'Pro 100-Items'})`,
+        description: `Merchant store subscription: ${storeName || 'AGC Store'} (${tier})`,
         amount: fee,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - fee,
         currency: 'NGN',
-        timestamp: 'Just now',
-        status: 'completed',
+        referenceId: `STORE_SUB_${Date.now()}`,
         channel: 'wallet',
-      };
+      });
       setWallet((prev) => ({
         ...prev,
         availableBalance: prev.availableBalance - fee,
@@ -10931,6 +11368,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const currentCount = myStoreProducts.length || storeSubscription?.itemsCount || 0;
+    const storeId = `store_${Date.now()}`;
     const updatedSub: StoreSubscription = {
       tier,
       monthlyFee: fee,
@@ -10941,8 +11379,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       storeName: storeName || (currentUser.fullName ? `${currentUser.fullName}'s Official Store` : 'AGC Store'),
       description: description || 'Verified African merchant catalog.',
       category: category || 'General Trade',
-      active: true,
+      active: false,
       isRegistered: true,
+      approvalStatus: 'pending',
       expiresAt: 'In 30 days',
       paymentMethod,
     };
@@ -10950,7 +11389,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setStoreSubscription(updatedSub);
     localStorage.setItem('AGC_store_sub', JSON.stringify(updatedSub));
 
-    // 🌐 LIVE SYSTEM: Publish Store Subscription to Supabase and broadcast live to network
+    fetch('/api/stores/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: storeId,
+        storeName: updatedSub.storeName,
+        description: updatedSub.description,
+        category: updatedSub.category,
+        tier: updatedSub.tier,
+        itemsLimit: updatedSub.itemLimit,
+        itemsCount: updatedSub.itemsCount,
+        ownerName: currentUser.fullName,
+        ownerPhone: currentUser.phoneNumber,
+        paymentMethod: updatedSub.paymentMethod,
+      }),
+    }).catch(() => {});
+
+    // 🌐 LIVE SYSTEM: Publish Store Subscription to Supabase (pending admin approval)
     if (isSupabaseConfigured) {
       createStoreSubscriptionInDb({
         store_name: updatedSub.storeName,
@@ -10958,7 +11414,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         category: updatedSub.category,
         tier: updatedSub.tier,
         items_limit: updatedSub.itemLimit,
-        is_active: true,
+        is_active: false,
         payment_method: updatedSub.paymentMethod,
       }).catch((e) => console.warn('Supabase store create notice:', e));
 
@@ -10974,7 +11430,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `🎉 Store successfully registered live under ${tier === 'starter_30' ? 'Starter (30 Items Limit - ₦3k/mo)' : 'Pro (100 Items Limit - ₦7k/mo)'}!`,
+      message: `Store submitted under ${tier === 'starter_30' ? 'Starter (₦3k/mo)' : 'Pro (₦7k/mo)'}! Pending Admin Approval before appearing in Marketplace.`,
     };
   };
 
@@ -11003,16 +11459,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    const newTx: WalletTransaction = {
+    const newTx = recordLedgerTransaction({
       id: `tx_file_buy_${Date.now()}`,
-      type: 'transfer_out',
+      type: 'store_purchase',
       title: `Digital Product: ${file.title}`,
+      description: `Purchased digital file: ${file.title}`,
       amount: file.price,
+      fee: 0,
+      balanceAfter: wallet.availableBalance - file.price,
       currency: file.currency,
-      timestamp: 'Just now',
-      status: 'completed',
+      referenceId: `FILE_${fileId}`,
       channel: 'wallet',
-    };
+    });
 
     setWallet((prev) => ({
       ...prev,
@@ -11829,7 +12287,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } catch (_) {}
           return finalUpdated;
         } else {
-          // Do not auto-insert a group or channel if the user declined or hasn't accepted the pending invite yet
+          // Never auto-insert unjoined Town communities, channels, declined groups, or pending invites into personal chats
+          if (resolvedChatId.startsWith('town_comm_') || chatId.startsWith('town_comm_')) {
+            return prev;
+          }
           if (
             isGroupChat &&
             (declinedGroupIdsRef.current.has(resolvedChatId) ||
@@ -11929,6 +12390,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 1. Socket.io listeners
     socket.on('new_message', handleIncomingMessage);
+    socket.on('message_reaction', applyRemoteMessageReaction);
 
     const handleGroupCreated = (payload: any) => {
       if (!payload?.chat) return;
@@ -12139,6 +12601,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       bc = new BroadcastChannel('AGC_chats_sync');
       bc.onmessage = (e) => {
+        if (e.data && e.data.type === 'message_reaction' && e.data.chatId && e.data.messageId) {
+          applyRemoteMessageReaction(e.data);
+          return;
+        }
         if (e.data && e.data.type === 'xo_game_update' && e.data.game) {
           applyXoGameUpdate(e.data.game);
           return;
@@ -12202,6 +12668,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             handleIncomingMessage(payload);
           }
         })
+        .on('broadcast', { event: 'message_reaction' }, ({ payload }: any) => {
+          if (payload?.chatId && payload?.messageId) {
+            applyRemoteMessageReaction(payload);
+          }
+        })
         .on('broadcast', { event: 'xo_game_update' }, ({ payload }: any) => {
           if (payload?.game) {
             applyXoGameUpdate(payload.game);
@@ -12251,6 +12722,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               handleIncomingMessage(payload);
             }
           })
+          .on('broadcast', { event: 'message_reaction' }, ({ payload }: any) => {
+            if (payload?.chatId && payload?.messageId) {
+              applyRemoteMessageReaction(payload);
+            }
+          })
           .on('broadcast', { event: 'xo_game_update' }, ({ payload }: any) => {
             if (payload?.game) {
               applyXoGameUpdate(payload.game);
@@ -12292,7 +12768,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 4. Persistent Supabase Realtime Town Feed Listener
+    // 4. Persistent Supabase Realtime Town Feed Listener (only for communities the user has joined/opened)
     let sbTownFeed: any = null;
     if (isSupabaseConfigured) {
       sbTownFeed = supabase.channel('town_community_feed', {
@@ -12301,7 +12777,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       sbTownFeed
         .on('broadcast', { event: 'new_message' }, ({ payload }: any) => {
           if (payload && payload.message && payload.senderId !== currentUser.id) {
-            handleIncomingMessage(payload);
+            const hasThread =
+              chatsRef.current.some((c) => c.id === payload.chatId) ||
+              townCommunitiesRef.current.some((tc) => `town_comm_${tc.id}` === payload.chatId && tc.isJoined);
+            if (hasThread) {
+              handleIncomingMessage(payload);
+            }
           }
         })
         .subscribe();
@@ -12311,6 +12792,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('connect', registerRoomsOnConnect);
       socket.off('account_banned', handleAccountBanned);
       socket.off('new_message', handleIncomingMessage);
+      socket.off('message_reaction', applyRemoteMessageReaction);
       socket.off('group_created', handleGroupCreated);
       socket.off('group_invite', handleGroupInviteSocket);
       socket.off('group_invite_response', handleGroupInviteResponse);
@@ -12325,7 +12807,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
       if (sbTownFeed) sbTownFeed.unsubscribe();
     };
-  }, [currentUser, activeChatId, isAuthenticated, handleIncomingMessage, applyXoGameUpdate]);
+  }, [currentUser, activeChatId, isAuthenticated, handleIncomingMessage, applyXoGameUpdate, applyRemoteMessageReaction]);
 
   const syncCurrentUserFromRecord = useCallback((me?: AdminUserRecord) => {
     if (!me || !currentUser?.phoneNumber) return;
@@ -12554,6 +13036,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 itemLimit: nextLimit,
                 itemsLimit: nextLimit,
                 active: nextActive,
+                approvalStatus: (match.status === 'active' ? 'approved' : match.status) || prev.approvalStatus,
               };
               try { localStorage.setItem('AGC_store_sub', JSON.stringify(nextSub)); } catch (_) {}
               return nextSub;
@@ -12565,8 +13048,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setArtisanStation((prev) => {
               if (!prev) return prev;
               const match = artisanMap[prev.id];
-              if (!match || match.isApproved === undefined || match.isApproved === prev.isApproved) return prev;
-              const nextStation = { ...prev, isApproved: Boolean(match.isApproved) };
+              if (!match || (match.isApproved === undefined && match.approvalStatus === undefined)) return prev;
+              const nextApproved = match.isApproved !== undefined ? Boolean(match.isApproved) : prev.isApproved;
+              const nextStatus = match.approvalStatus || (nextApproved ? 'approved' : prev.approvalStatus);
+              if (nextApproved === prev.isApproved && nextStatus === prev.approvalStatus) return prev;
+              const nextStation = { ...prev, isApproved: nextApproved, approvalStatus: nextStatus };
               try { localStorage.setItem('AGC_artisan_station', JSON.stringify(nextStation)); } catch (_) {}
               return nextStation;
             });
@@ -12576,7 +13062,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 const match = artisanMap[sp.id];
                 if (match && match.isApproved !== undefined && Boolean(match.isApproved) !== sp.isVerified) {
                   changed = true;
-                  return { ...sp, isVerified: Boolean(match.isApproved) };
+                  return {
+                    ...sp,
+                    isVerified: Boolean(match.isApproved),
+                    approvalStatus: match.approvalStatus || (match.isApproved ? 'approved' : 'suspended'),
+                  };
                 }
                 return sp;
               });
@@ -12962,6 +13452,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           handleIncomingMessage(payload);
         }
       })
+      .on('broadcast', { event: 'message_reaction' }, ({ payload }) => {
+        if (payload?.chatId && payload?.messageId) {
+          applyRemoteMessageReaction(payload);
+        }
+      })
       .on('broadcast', { event: 'xo_game_update' }, ({ payload }) => {
         if (payload?.game) {
           applyXoGameUpdate(payload.game);
@@ -12974,7 +13469,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       sbChannel.unsubscribe();
       if (sbXoChannel) sbXoChannel.unsubscribe();
     };
-  }, [activeChatId, currentUser.id, handleIncomingMessage, applyXoGameUpdate]);
+  }, [activeChatId, currentUser.id, handleIncomingMessage, applyXoGameUpdate, applyRemoteMessageReaction]);
 
   const checkIsAdminUrl = () => {
     if (typeof window === 'undefined') return false;
@@ -14126,6 +14621,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setPaymentPin,
         updatePaymentPin,
         setSecurityQuestion,
+        setSecurityQuestions,
+        resetPaymentPinWithQuestions,
         verifyPaymentPin,
         verifyPaymentPinDetailed,
         resetPinLockout,
@@ -14142,10 +14639,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         cancelServiceBooking,
         completeServiceBooking,
         registerAsServiceProvider,
-        // 15. Money Transfer with 1-2 Days Security Delay
+        // 15. Instant P2P Money Transfer with Daily & Weekly Limits
         delayedTransfers,
         isTransferModalOpen,
         setIsTransferModalOpen,
+        getTransferLimitsUsage,
         sendDelayedTransfer,
         cancelDelayedTransfer,
         fastForwardTransferRelease,

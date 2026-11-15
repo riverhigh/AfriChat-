@@ -98,6 +98,9 @@ export const StatusView: React.FC = () => {
     setIsCreatorModalOpen,
     deviceContacts,
     setIsContactsModalOpen,
+    setIsSecurityModalOpen,
+    securitySettings,
+    systemConfig,
     cmsData,
     t,
   } = useApp();
@@ -117,45 +120,33 @@ export const StatusView: React.FC = () => {
   const [adCaption, setAdCaption] = useState('');
   const [adCtaLabel, setAdCtaLabel] = useState('Shop Now');
   const [adTargetUrl, setAdTargetUrl] = useState('');
+  const [adPaymentPin, setAdPaymentPin] = useState('');
+  const [isSubmittingAd, setIsSubmittingAd] = useState(false);
+  const [adSubmittedNotice, setAdSubmittedNotice] = useState<string | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
   const myStatuses = useMemo(() => statuses.filter((s) => s.isMe && !s.isSponsored), [statuses]);
 
-  // Sponsored status ads bypass device contact filtering so all users discover promoted vendor stories
+  const myPendingAds = useMemo(() => {
+    const rawAds = Array.isArray(cmsData?.sponsoredStatuses) ? cmsData.sponsoredStatuses : [];
+    const myPhone = (currentUser.phoneNumber || '').replace(/\D/g, '').slice(-9);
+    return rawAds.filter((a: any) => {
+      if (a.approvalStatus !== 'pending' && a.status !== 'pending') return false;
+      if (!myPhone) return false;
+      const adPhone = String(a.submittedByPhone || '').replace(/\D/g, '').slice(-9);
+      return adPhone === myPhone;
+    });
+  }, [cmsData?.sponsoredStatuses, currentUser.phoneNumber]);
+
+  // Sponsored status ads only show admin-approved live ads (no synthetic/unapproved fallback)
   const sponsoredStatuses = useMemo(() => {
-    const explicitAds = statuses.filter(
-      (s) => Boolean(s.isSponsored || s.statusType === 'sponsored')
+    return statuses.filter(
+      (s) =>
+        Boolean(s.isSponsored || s.statusType === 'sponsored') &&
+        s.approvalStatus !== 'pending' &&
+        s.approvalStatus !== 'rejected'
     );
-
-    if (
-      cmsData?.sponsorSpotlight?.enabled &&
-      cmsData.sponsorSpotlight.brandName &&
-      !explicitAds.some((s) => s.id === 'cms_spotlight_ad')
-    ) {
-      const spotlightAd: UserStatus = {
-        id: 'cms_spotlight_ad',
-        userId: 'sponsor_spotlight',
-        userName: cmsData.sponsorSpotlight.brandName,
-        userAvatar: '/src/assets/images/african_textiles_wax_1794210824926.jpg',
-        isMe: false,
-        statusType: 'sponsored',
-        mediaUrl: '/src/assets/images/african_textiles_wax_1794210824926.jpg',
-        caption: cmsData.sponsorSpotlight.tagline || 'Featured marketplace sponsor on AGC',
-        createdAt: 'Sponsored',
-        expiresInHours: 24,
-        viewsCount: 0,
-        likesCount: 0,
-        viewers: [],
-        isSponsored: true,
-        sponsorBrand: cmsData.sponsorSpotlight.brandName,
-        ctaLabel: 'Explore Marketplace',
-        targetUrl: '#market',
-      };
-      return [spotlightAd, ...explicitAds];
-    }
-
-    return explicitAds;
-  }, [statuses, cmsData?.sponsorSpotlight]);
+  }, [statuses]);
 
   // Strict Privacy for personal stories: only show non-sponsored statuses from saved device contacts
   const otherStatuses = useMemo(() => {
@@ -313,25 +304,48 @@ export const StatusView: React.FC = () => {
     setModalMode('none');
   };
 
-  const handlePostSponsoredAd = (e: React.FormEvent) => {
+  const sponsoredAdFee = Number(systemConfig?.sponsoredAdFeeNgn ?? 2500);
+
+  const handlePostSponsoredAd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!adBrand.trim() || !adCaption.trim()) {
       setStatusError('Enter brand name and promo message.');
       return;
     }
+    if (!securitySettings.hasPaymentPin) {
+      setStatusError('Set your 4-digit Payment PIN in Hub → Security & Recovery first.');
+      return;
+    }
+    if (adPaymentPin.trim().length < 4) {
+      setStatusError('Enter your 4-digit Payment PIN to authorize the ad fee.');
+      return;
+    }
     const visualUrl = deviceMediaPreview || '/src/assets/images/lagos_tech_smartphones_1794210826603.jpg';
-    addSponsoredStatus({
-      brand: adBrand.trim(),
-      caption: adCaption.trim(),
-      mediaUrl: visualUrl,
-      ctaLabel: adCtaLabel.trim() || 'Shop Now',
-      targetUrl: adTargetUrl.trim() || '#market',
-    });
+    setIsSubmittingAd(true);
+    setStatusError(null);
+    const res = await addSponsoredStatus(
+      {
+        brand: adBrand.trim(),
+        caption: adCaption.trim(),
+        mediaUrl: visualUrl,
+        ctaLabel: adCtaLabel.trim() || 'Shop Now',
+        targetUrl: adTargetUrl.trim() || '#market',
+      },
+      adPaymentPin.trim()
+    );
+    setIsSubmittingAd(false);
+    if (!res.success) {
+      setStatusError(res.message);
+      return;
+    }
     setDeviceMediaPreview('');
     setAdCaption('');
     setAdTargetUrl('');
+    setAdPaymentPin('');
     setStatusError(null);
     setModalMode('none');
+    setAdSubmittedNotice(res.message);
+    setTimeout(() => setAdSubmittedNotice(null), 6000);
   };
 
   const openGroupStories = (group: ContactStoryGroup) => {
@@ -362,6 +376,7 @@ export const StatusView: React.FC = () => {
           onClick={() => {
             setStatusError(null);
             setDeviceMediaPreview('');
+            setAdPaymentPin('');
             setModalMode('sponsored_ad');
           }}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 text-xs font-semibold transition-colors whitespace-nowrap"
@@ -370,6 +385,33 @@ export const StatusView: React.FC = () => {
           <span>Promote Ad</span>
         </button>
       </div>
+
+      {(adSubmittedNotice || myPendingAds.length > 0) && (
+        <div className="mx-4 mt-3 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-800 dark:text-amber-200 flex items-start justify-between gap-2">
+          <div className="space-y-0.5">
+            <div className="font-bold flex items-center gap-1.5">
+              <Megaphone className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span>
+                {adSubmittedNotice
+                  ? adSubmittedNotice
+                  : `${myPendingAds.length} Sponsored Ad${myPendingAds.length > 1 ? 's' : ''} Pending Admin Approval`}
+              </span>
+            </div>
+            <p className="text-[11px] opacity-80">
+              Paid ads go live once approved by Admin. Rejected ads are refunded automatically to your wallet.
+            </p>
+          </div>
+          {adSubmittedNotice && (
+            <button
+              type="button"
+              onClick={() => setAdSubmittedNotice(null)}
+              className="text-amber-500 hover:text-amber-400 shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Horizontal Stories & Sponsored Ad Rings Carousel */}
       <div className="px-4 py-3.5 border-b border-slate-100 dark:border-neutral-800 bg-slate-50/40 dark:bg-zinc-950/60">
@@ -1281,11 +1323,49 @@ export const StatusView: React.FC = () => {
                 />
               </div>
 
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-amber-700 dark:text-amber-300">24h Promotion Fee</span>
+                  <span className="font-mono font-bold text-amber-700 dark:text-amber-300">
+                    ₦{sponsoredAdFee.toLocaleString()}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-neutral-400">
+                  Debited from your wallet upon submission. Goes live after Admin Approval (full auto-refund if declined).
+                </p>
+                {!securitySettings.hasPaymentPin ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalMode('none');
+                      setIsSecurityModalOpen(true);
+                    }}
+                    className="w-full py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold"
+                  >
+                    Set Security Questions &amp; Payment PIN in Hub
+                  </button>
+                ) : (
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={adPaymentPin}
+                    onChange={(e) => setAdPaymentPin(e.target.value.replace(/\D/g, ''))}
+                    placeholder="Enter 4-digit Payment PIN to confirm"
+                    required
+                    className="w-full px-3 py-2 bg-white dark:bg-black border border-amber-500/40 rounded-xl text-xs font-mono tracking-widest text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                )}
+              </div>
+
               <button
                 type="submit"
-                className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-violet-600 text-white rounded-xl text-xs font-bold shadow-md hover:opacity-95 transition-opacity"
+                disabled={isSubmittingAd || !securitySettings.hasPaymentPin}
+                className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-violet-600 text-white rounded-xl text-xs font-bold shadow-md hover:opacity-95 transition-opacity disabled:opacity-50"
               >
-                Launch Sponsored Ad Story
+                {isSubmittingAd
+                  ? 'Processing Payment...'
+                  : `Pay ₦${sponsoredAdFee.toLocaleString()} & Submit for Approval`}
               </button>
             </form>
           </div>

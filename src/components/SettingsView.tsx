@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   Smartphone,
   Clock,
+  Send,
   Repeat,
   Type,
   Image as ImageIcon,
@@ -973,8 +974,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       onClick={() => setIsTransferModalOpen(true)}
                       className="py-2 bg-white/20 hover:bg-white/25 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
                     >
-                      <Clock className="w-3.5 h-3.5 text-amber-300" />
-                      <span>Send (1-2 Days Delay)</span>
+                      <Send className="w-3.5 h-3.5 text-emerald-300" />
+                      <span>Instant Transfer</span>
                     </button>
                   )}
 

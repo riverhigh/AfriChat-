@@ -1,16 +1,5 @@
 {
-  "announcements": [
-    {
-      "id": "ann_welcome",
-      "title": "Welcome to AfriChat Super-App",
-      "content": "Experience secure African remittances, peer-to-peer escrow, and on-demand local dispatch.",
-      "level": "info",
-      "audience": "all",
-      "actionUrl": "",
-      "active": true,
-      "createdAt": "2026-11-15T09:30:15.966Z"
-    }
-  ],
+  "announcements": [],
   "marqueeBanner": {
     "enabled": true,
     "text": "⚡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.",
@@ -21,33 +10,35 @@
   "faqArticles": [
     {
       "id": "faq_escrow",
-      "question": "How does Balogun Escrow Protection work?",
       "answer": "When you purchase goods or book an artisan, your payment is held securely in an encrypted vault until you confirm satisfactory delivery.",
       "category": "escrow",
+      "question": "How does Balogun Escrow Protection work?",
       "published": true
     },
     {
       "id": "faq_dispatch",
-      "question": "How do PickkR and Gokada dispatch deliveries work?",
       "answer": "Our dispatch system matches nearby verified riders. A 5% platform fee guarantees insurance and GPS parcel tracking.",
       "category": "dispatch",
+      "question": "How do PickkR and Gokada dispatch deliveries work?",
       "published": true
     },
     {
       "id": "faq_safety",
-      "question": "How do I avoid scammers on P2P payments?",
       "answer": "Use the Scam Shield tool in the 3-dot menu before sending funds. Never release escrow funds until you inspect items physically.",
       "category": "security",
+      "question": "How do I avoid scammers on P2P payments?",
       "published": true
     }
   ],
   "communityGuidelines": "1. Treat all community members with respect.\n2. No fraudulent listings, phishing links, or unauthorized transactions.\n3. Verified badges are subject to continuous compliance with AfriChat terms.",
   "termsOfService": "AfriChat provides communication, marketplace escrow mediation, and logistical dispatch coordination across African regions.",
   "sponsorSpotlight": {
-    "enabled": true,
+    "enabled": false,
     "brandName": "Kente Pay Africa",
     "tagline": "Zero-Fee African Merchant Remittances",
     "bannerUrl": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
     "linkUrl": ""
-  }
+  },
+  "sponsoredStatuses": [],
+  "updatedAt": "2026-11-15T20:02:32.064Z"
 }

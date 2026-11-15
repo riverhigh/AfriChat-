@@ -18,6 +18,7 @@ import {
   Check,
   Clock,
   ChevronDown,
+  ChevronLeft,
   MessageCircle,
   SmilePlus,
   Send,
@@ -49,6 +50,8 @@ const RemoteAudioPlayer: React.FC<{ stream: MediaStream }> = ({ stream }) => {
 export const AudioSpaceModal: React.FC = () => {
   const {
     activeAudioSpace,
+    isAudioSpaceMinimized,
+    setIsAudioSpaceMinimized,
     leaveAudioSpace,
     endAudioSpace,
     spaceEndedSummary,
@@ -241,7 +244,7 @@ export const AudioSpaceModal: React.FC = () => {
     );
   }
 
-  if (!activeAudioSpace) return null;
+  if (!activeAudioSpace || isAudioSpaceMinimized) return null;
 
   const isCoHost = myRole === 'co-host';
   const canManage = isCreator || isCoHost;
@@ -313,9 +316,20 @@ export const AudioSpaceModal: React.FC = () => {
           </div>
 
           <div className="px-5 pt-2 pb-4 flex items-center justify-between shrink-0">
-            <span className="text-xs font-extrabold tracking-wider uppercase text-[#8b6cff]">
-              LIVE
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={leaveAudioSpace}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-200 text-xs font-semibold transition-colors"
+                aria-label="Back to Spaces"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span>Back</span>
+              </button>
+              <span className="text-xs font-extrabold tracking-wider uppercase text-[#8b6cff]">
+                LIVE
+              </span>
+            </div>
             <button
               type="button"
               onClick={leaveAudioSpace}
@@ -333,28 +347,32 @@ export const AudioSpaceModal: React.FC = () => {
 
             {/* Clean 4-column avatar grid */}
             <div className="grid grid-cols-4 gap-x-3 gap-y-5">
-              {speakersList.map((speaker) => {
+              {(Array.isArray(speakersList) ? speakersList : []).filter(Boolean).map((speaker) => {
+                const safeSpeakerName = speaker?.name || 'Speaker';
                 const roleLabel =
-                  speaker.role === 'host'
+                  speaker?.role === 'host'
                     ? 'Host'
-                    : speaker.role === 'co-host'
+                    : speaker?.role === 'co-host'
                     ? 'Co-host'
-                    : speaker.role === 'sponsor'
+                    : speaker?.role === 'sponsor'
                     ? 'Sponsor'
                     : 'Speaker';
                 return (
-                  <div key={speaker.id} className="flex flex-col items-center text-center min-w-0">
+                  <div key={speaker.id || safeSpeakerName} className="flex flex-col items-center text-center min-w-0">
                     <div className="w-14 h-14 rounded-full overflow-hidden bg-zinc-900">
                       <img
-                        src={speaker.avatar}
-                        alt={speaker.name}
+                        src={
+                          speaker.avatar ||
+                          `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(safeSpeakerName)}`
+                        }
+                        alt={safeSpeakerName}
                         referrerPolicy="no-referrer"
                         className="w-full h-full object-cover"
                       />
                     </div>
                     <div className="mt-2 w-full flex items-center justify-center gap-0.5 min-w-0">
                       <span className="text-xs font-bold text-white truncate">
-                        {speaker.name}
+                        {safeSpeakerName}
                       </span>
                       {(speaker.isVerified || speaker.role === 'host') && (
                         <BadgeCheck className="w-3.5 h-3.5 text-sky-500 shrink-0" />
@@ -439,11 +457,12 @@ export const AudioSpaceModal: React.FC = () => {
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
-              onClick={() => setHasStartedListening(false)}
-              className="p-1 -ml-1 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors"
-              title="Minimize to preview"
+              onClick={() => setIsAudioSpaceMinimized(true)}
+              className="flex items-center gap-0.5 px-2 py-1 -ml-1 rounded-full text-zinc-300 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-semibold transition-colors shrink-0"
+              title="Back & keep listening in background"
             >
-              <ChevronDown className="w-5 h-5" />
+              <ChevronLeft className="w-4 h-4" />
+              <span>Back</span>
             </button>
             <div className="flex items-center gap-1.5 text-xs font-bold truncate">
               <span className="text-[#8b6cff] uppercase tracking-wide">LIVE</span>
@@ -594,8 +613,9 @@ export const AudioSpaceModal: React.FC = () => {
 
           {/* Clean 4-Column Stage Grid (No Heavy Boxes) */}
           <div className="grid grid-cols-4 gap-x-3 gap-y-5 pt-1">
-            {speakersList.map((speaker) => {
-              const isMe = speaker.id === currentUser.id;
+            {(Array.isArray(speakersList) ? speakersList : []).filter(Boolean).map((speaker) => {
+              const safeSpeakerName = speaker?.name || 'Speaker';
+              const isMe = speaker.id === currentUser?.id;
               const isSpeakingLive =
                 !speaker.isMuted && Boolean(speakingPeers[speaker.id] || speaker.isSpeaking);
               const activeEmoji = avatarReactions[speaker.id]?.emoji;
@@ -611,7 +631,7 @@ export const AudioSpaceModal: React.FC = () => {
 
               return (
                 <div
-                  key={speaker.id}
+                  key={speaker.id || safeSpeakerName}
                   onClick={() => {
                     if (canManage && speaker.role !== 'host') {
                       setSelectedSpeakerForAction(speaker);
@@ -630,8 +650,11 @@ export const AudioSpaceModal: React.FC = () => {
                       }`}
                     >
                       <img
-                        src={speaker.avatar}
-                        alt={speaker.name}
+                        src={
+                          speaker.avatar ||
+                          `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(safeSpeakerName)}`
+                        }
+                        alt={safeSpeakerName}
                         referrerPolicy="no-referrer"
                         className="w-full h-full object-cover"
                       />
@@ -677,7 +700,7 @@ export const AudioSpaceModal: React.FC = () => {
 
                   <div className="mt-2 w-full flex items-center justify-center gap-0.5 min-w-0">
                     <span className="text-xs font-bold text-white truncate">
-                      {isMe ? 'You' : speaker.name}
+                      {isMe ? 'You' : safeSpeakerName}
                     </span>
                     {(speaker.isVerified || speaker.role === 'host') && (
                       <BadgeCheck className="w-3.5 h-3.5 text-sky-500 shrink-0" />
@@ -777,41 +800,44 @@ export const AudioSpaceModal: React.FC = () => {
                   <p className="text-xs text-zinc-500">No listeners requesting to speak right now.</p>
                 ) : (
                   <div className="space-y-2 max-h-36 overflow-y-auto">
-                    {raisedHandsQueue.map((hand) => (
-                      <div
-                        key={hand.id}
-                        className="flex items-center justify-between p-2 rounded-xl bg-black/60 border border-zinc-800 text-xs"
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <img
-                            src={
-                              hand.avatar ||
-                              `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(hand.name)}`
-                            }
-                            alt={hand.name}
-                            className="w-7 h-7 rounded-full object-cover"
-                          />
-                          <span className="font-semibold text-white truncate">{hand.name}</span>
+                    {(Array.isArray(raisedHandsQueue) ? raisedHandsQueue : []).filter(Boolean).map((hand) => {
+                      const handName = hand?.name || 'Listener';
+                      return (
+                        <div
+                          key={hand.id || handName}
+                          className="flex items-center justify-between p-2 rounded-xl bg-black/60 border border-zinc-800 text-xs"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <img
+                              src={
+                                hand.avatar ||
+                                `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(handName)}`
+                              }
+                              alt={handName}
+                              className="w-7 h-7 rounded-full object-cover"
+                            />
+                            <span className="font-semibold text-white truncate">{handName}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => approveHand(hand.id)}
+                              className="px-2.5 py-1 rounded-full bg-[#7856ff] hover:bg-[#6a45ff] text-white font-bold text-[11px] flex items-center gap-1"
+                            >
+                              <Check className="w-3 h-3" />
+                              <span>Invite</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => declineHand(hand.id)}
+                              className="p-1 text-zinc-400 hover:text-rose-400"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => approveHand(hand.id)}
-                            className="px-2.5 py-1 rounded-full bg-[#7856ff] hover:bg-[#6a45ff] text-white font-bold text-[11px] flex items-center gap-1"
-                          >
-                            <Check className="w-3 h-3" />
-                            <span>Invite</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => declineHand(hand.id)}
-                            className="p-1 text-zinc-400 hover:text-rose-400"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -927,7 +953,7 @@ export const AudioSpaceModal: React.FC = () => {
           </div>
         </div>
 
-        {/* ── PARTICIPANTS BOTTOM SHEET (Matches Twitter/X IMG_7139.png) ──────── */}
+        {/* ── PARTICIPANTS BOTTOM SHEET ──────────────────────────────────── */}
         {showParticipantsSheet && (
           <div
             onClick={() => setShowParticipantsSheet(false)}
@@ -937,12 +963,34 @@ export const AudioSpaceModal: React.FC = () => {
               onClick={(e) => e.stopPropagation()}
               className="w-full bg-black border-t border-zinc-800 rounded-t-[28px] max-h-[82vh] flex flex-col animate-in slide-in-from-bottom"
             >
-              <div className="pt-3 pb-2 flex justify-center shrink-0">
+              <div className="pt-3 pb-1 flex justify-center shrink-0">
                 <div className="w-9 h-1 rounded-full bg-zinc-700" />
               </div>
 
+              <div className="px-5 py-2 border-b border-zinc-900 flex items-center justify-between shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowParticipantsSheet(false)}
+                  className="flex items-center gap-1 text-xs font-semibold text-zinc-300 hover:text-white py-1 pr-2"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span>Back</span>
+                </button>
+                <h4 className="text-sm font-extrabold text-white">
+                  Participants ({totalListeningCount})
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setShowParticipantsSheet(false)}
+                  className="p-1 text-zinc-400 hover:text-white"
+                  aria-label="Close participants"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
               {/* Filter Pills: All, Co-hosts, Speakers, Listeners */}
-              <div className="px-5 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+              <div className="px-5 py-2.5 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
                 {(
                   [
                     { id: 'all', label: 'All' },
@@ -971,22 +1019,28 @@ export const AudioSpaceModal: React.FC = () => {
                 {participantFilter === 'all' && hostSpeakers.length > 0 && (
                   <div className="space-y-3">
                     <h4 className="text-base font-extrabold text-white">Host</h4>
-                    {hostSpeakers.map((h) => (
-                      <div key={h.id} className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <img src={h.avatar} alt={h.name} className="w-10 h-10 rounded-full object-cover" />
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1 text-sm font-bold text-white truncate">
-                              <span>{h.name}</span>
-                              <BadgeCheck className="w-4 h-4 text-sky-500 shrink-0" />
-                            </div>
-                            <div className="text-xs text-zinc-500 truncate">
-                              {h.handle || `@${h.name.toLowerCase().replace(/\s+/g, '')}`}
+                    {hostSpeakers.filter(Boolean).map((h) => {
+                      const hName = String(h?.name || 'Host');
+                      const hAvatar =
+                        h?.avatar ||
+                        `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(hName)}`;
+                      return (
+                        <div key={h.id || hName} className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <img src={hAvatar} alt={hName} className="w-10 h-10 rounded-full object-cover" />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1 text-sm font-bold text-white truncate">
+                                <span>{hName}</span>
+                                <BadgeCheck className="w-4 h-4 text-sky-500 shrink-0" />
+                              </div>
+                              <div className="text-xs text-zinc-500 truncate">
+                                {h.handle || `@${hName.toLowerCase().replace(/\s+/g, '')}`}
+                              </div>
                             </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 
@@ -1000,31 +1054,37 @@ export const AudioSpaceModal: React.FC = () => {
                     {coHostSpeakers.length === 0 ? (
                       <p className="text-xs text-zinc-500">No co-hosts assigned yet.</p>
                     ) : (
-                      coHostSpeakers.map((ch) => (
-                        <div key={ch.id} className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <img src={ch.avatar} alt={ch.name} className="w-10 h-10 rounded-full object-cover" />
-                            <div className="min-w-0">
-                              <div className="text-sm font-bold text-white truncate">{ch.name}</div>
-                              <div className="text-xs text-zinc-500 truncate">
-                                {ch.handle || `@${ch.name.toLowerCase().replace(/\s+/g, '')}`}
+                      coHostSpeakers.filter(Boolean).map((ch) => {
+                        const chName = String(ch?.name || 'Co-host');
+                        const chAvatar =
+                          ch?.avatar ||
+                          `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(chName)}`;
+                        return (
+                          <div key={ch.id || chName} className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <img src={chAvatar} alt={chName} className="w-10 h-10 rounded-full object-cover" />
+                              <div className="min-w-0">
+                                <div className="text-sm font-bold text-white truncate">{chName}</div>
+                                <div className="text-xs text-zinc-500 truncate">
+                                  {ch.handle || `@${chName.toLowerCase().replace(/\s+/g, '')}`}
+                                </div>
                               </div>
                             </div>
+                            {canManage && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowParticipantsSheet(false);
+                                  setSelectedSpeakerForAction(ch);
+                                }}
+                                className="text-xs text-zinc-400 hover:text-white px-2.5 py-1 rounded-full border border-zinc-800"
+                              >
+                                Manage
+                              </button>
+                            )}
                           </div>
-                          {canManage && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setShowParticipantsSheet(false);
-                                setSelectedSpeakerForAction(ch);
-                              }}
-                              className="text-xs text-zinc-400 hover:text-white px-2.5 py-1 rounded-full border border-zinc-800"
-                            >
-                              Manage
-                            </button>
-                          )}
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 )}
@@ -1039,31 +1099,37 @@ export const AudioSpaceModal: React.FC = () => {
                     {stageSpeakers.length === 0 ? (
                       <p className="text-xs text-zinc-500">Only host on stage right now.</p>
                     ) : (
-                      stageSpeakers.map((sp) => (
-                        <div key={sp.id} className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <img src={sp.avatar} alt={sp.name} className="w-10 h-10 rounded-full object-cover" />
-                            <div className="min-w-0">
-                              <div className="text-sm font-bold text-white truncate">{sp.name}</div>
-                              <div className="text-xs text-zinc-500 truncate">
-                                {sp.isMuted ? 'Muted' : 'Mic active'}
+                      stageSpeakers.filter(Boolean).map((sp) => {
+                        const spName = String(sp?.name || 'Speaker');
+                        const spAvatar =
+                          sp?.avatar ||
+                          `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(spName)}`;
+                        return (
+                          <div key={sp.id || spName} className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <img src={spAvatar} alt={spName} className="w-10 h-10 rounded-full object-cover" />
+                              <div className="min-w-0">
+                                <div className="text-sm font-bold text-white truncate">{spName}</div>
+                                <div className="text-xs text-zinc-500 truncate">
+                                  {sp.isMuted ? 'Muted' : 'Mic active'}
+                                </div>
                               </div>
                             </div>
+                            {canManage && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowParticipantsSheet(false);
+                                  setSelectedSpeakerForAction(sp);
+                                }}
+                                className="text-xs text-zinc-400 hover:text-white px-2.5 py-1 rounded-full border border-zinc-800"
+                              >
+                                Manage
+                              </button>
+                            )}
                           </div>
-                          {canManage && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setShowParticipantsSheet(false);
-                                setSelectedSpeakerForAction(sp);
-                              }}
-                              className="text-xs text-zinc-400 hover:text-white px-2.5 py-1 rounded-full border border-zinc-800"
-                            >
-                              Manage
-                            </button>
-                          )}
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 )}
@@ -1078,33 +1144,36 @@ export const AudioSpaceModal: React.FC = () => {
                     {listenersList.length === 0 ? (
                       <p className="text-xs text-zinc-500">No listeners in the audience yet.</p>
                     ) : (
-                      listenersList.map((ln) => (
-                        <div key={ln.id} className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <img
-                              src={
-                                ln.avatar ||
-                                `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(ln.name || 'L')}`
-                              }
-                              alt={ln.name}
-                              className="w-10 h-10 rounded-full object-cover"
-                            />
-                            <div className="min-w-0">
-                              <div className="text-sm font-bold text-white truncate">{ln.name}</div>
-                              <div className="text-xs text-zinc-500">Listener</div>
+                      listenersList.filter(Boolean).map((ln) => {
+                        const lnName = String(ln?.name || 'Listener');
+                        return (
+                          <div key={ln.id || lnName} className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <img
+                                src={
+                                  ln.avatar ||
+                                  `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(lnName)}`
+                                }
+                                alt={lnName}
+                                className="w-10 h-10 rounded-full object-cover"
+                              />
+                              <div className="min-w-0">
+                                <div className="text-sm font-bold text-white truncate">{lnName}</div>
+                                <div className="text-xs text-zinc-500">Listener</div>
+                              </div>
                             </div>
+                            {canManage && (
+                              <button
+                                type="button"
+                                onClick={() => approveHand(ln.id)}
+                                className="px-3 py-1 rounded-full bg-[#7856ff]/20 text-[#9c82ff] hover:bg-[#7856ff] hover:text-white text-xs font-bold transition-colors"
+                              >
+                                Invite to speak
+                              </button>
+                            )}
                           </div>
-                          {canManage && (
-                            <button
-                              type="button"
-                              onClick={() => approveHand(ln.id)}
-                              className="px-3 py-1 rounded-full bg-[#7856ff]/20 text-[#9c82ff] hover:bg-[#7856ff] hover:text-white text-xs font-bold transition-colors"
-                            >
-                              Invite to speak
-                            </button>
-                          )}
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 )}
@@ -1124,41 +1193,53 @@ export const AudioSpaceModal: React.FC = () => {
               className="w-full bg-black border-t border-zinc-800 rounded-t-[28px] h-[68vh] flex flex-col animate-in slide-in-from-bottom"
             >
               <div className="px-5 py-3 border-b border-zinc-900 flex items-center justify-between shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowChatSheet(false)}
+                  className="flex items-center gap-1 text-xs font-semibold text-zinc-300 hover:text-white py-1 pr-2"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span>Back</span>
+                </button>
                 <h4 className="text-sm font-extrabold text-white">Space Chat</h4>
                 <button
                   type="button"
                   onClick={() => setShowChatSheet(false)}
                   className="p-1 text-zinc-400 hover:text-white"
+                  aria-label="Close space chat"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
               <div ref={chatScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3">
-                {chatMessages.length === 0 ? (
+                {!Array.isArray(chatMessages) || chatMessages.length === 0 ? (
                   <div className="text-center py-12 text-xs text-zinc-500">
                     No messages yet. Say hello to everyone in the Space!
                   </div>
                 ) : (
-                  chatMessages.map((m) => (
-                    <div key={m.id} className="flex items-start gap-2.5 text-xs">
-                      <img
-                        src={
-                          m.userAvatar ||
-                          `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(m.userName)}`
-                        }
-                        alt={m.userName}
-                        className="w-7 h-7 rounded-full object-cover shrink-0 mt-0.5"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline gap-2">
-                          <span className="font-bold text-white">{m.userName}</span>
-                          <span className="text-[10px] text-zinc-500">{m.timestamp}</span>
+                  chatMessages.filter(Boolean).map((m) => {
+                    const msgUserName = String(m?.userName || 'Listener');
+                    return (
+                      <div key={m.id || msgUserName} className="flex items-start gap-2.5 text-xs">
+                        <img
+                          src={
+                            m.userAvatar ||
+                            `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(msgUserName)}`
+                          }
+                          alt={msgUserName}
+                          className="w-7 h-7 rounded-full object-cover shrink-0 mt-0.5"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-baseline gap-2">
+                            <span className="font-bold text-white">{msgUserName}</span>
+                            <span className="text-[10px] text-zinc-500">{m.timestamp || 'Now'}</span>
+                          </div>
+                          <p className="text-zinc-200 mt-0.5 break-words">{m.text || ''}</p>
                         </div>
-                        <p className="text-zinc-200 mt-0.5 break-words">{m.text}</p>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
 

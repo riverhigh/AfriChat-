@@ -132,7 +132,29 @@ export const StoreRegistrationModal: React.FC = () => {
             </div>
           )}
 
-          {/* Current Active Plan Status */}
+          {/* Current Active or Pending Plan Status */}
+          {storeSubscription && storeSubscription.isRegistered && !storeSubscription.active && (
+            <div className="p-4 rounded-3xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3">
+              <div>
+                <span className="text-[10px] font-mono uppercase tracking-wider text-amber-300 font-bold block">
+                  {storeSubscription.approvalStatus === 'suspended' ? 'Store Suspended' : 'Pending Admin Approval'}
+                </span>
+                <span className="text-sm font-black text-white flex items-center gap-1.5 mt-0.5 font-display">
+                  <Clock className="w-4 h-4 text-amber-400" />
+                  <span>{storeSubscription.storeName}</span>
+                </span>
+                <span className="text-[11px] text-amber-200/80 block mt-0.5">
+                  {storeSubscription.approvalStatus === 'suspended'
+                    ? 'Your store storefront is paused by moderation. Contact Admin support.'
+                    : 'Submitted and awaiting Admin Approval before going live in Marketplace.'}
+                </span>
+              </div>
+              <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/30 text-[10px] font-bold uppercase shrink-0">
+                {storeSubscription.approvalStatus || 'pending'}
+              </span>
+            </div>
+          )}
+
           {storeSubscription && storeSubscription.active && (
             <div className="p-4 rounded-3xl bg-[#170b33] border border-purple-500/25 flex items-center justify-between shadow-xl shadow-purple-950/40">
               <div>
@@ -355,7 +377,7 @@ export const StoreRegistrationModal: React.FC = () => {
                   {selectedTier === 'starter_30' ? 'Starter Plan (30 items limit)' : 'Pro Plan (100 items limit)'}
                 </span>
                 <span className="text-[11px] text-purple-300/70">
-                  Instant activation · Auto-renews monthly · Cancel anytime
+                  Requires Admin Approval before going live · Monthly tier
                 </span>
               </div>
               <div className="text-right">
@@ -373,8 +395,8 @@ export const StoreRegistrationModal: React.FC = () => {
               <Store className="w-4 h-4" />
               <span>
                 {isProcessing
-                  ? 'Activating Store...'
-                  : `Pay ₦${fee.toLocaleString()} & Activate Store (${itemLimit} Items Limit)`}
+                  ? 'Submitting Store...'
+                  : `Pay ₦${fee.toLocaleString()} & Submit for Approval (${itemLimit} Items)`}
               </span>
             </button>
           </form>

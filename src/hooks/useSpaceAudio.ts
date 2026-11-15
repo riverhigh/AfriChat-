@@ -133,9 +133,16 @@ export function useSpaceAudio({
       return;
     }
 
+    const rawSpeakers = Array.isArray(space.speakers) ? space.speakers.filter(Boolean) : [];
     const baseSpeakers =
-      space.speakers && space.speakers.length > 0
-        ? space.speakers
+      rawSpeakers.length > 0
+        ? rawSpeakers.map((sp) => ({
+            ...sp,
+            id: sp.id || `sp_${Math.random().toString(36).slice(2, 7)}`,
+            name: sp.name || 'Speaker',
+            avatar: sp.avatar || '',
+            role: sp.role || ('speaker' as const),
+          }))
         : [
             {
               id: space.hostId || `host_${space.id}`,
@@ -148,8 +155,16 @@ export function useSpaceAudio({
           ];
 
     setSpeakers(baseSpeakers);
-    setListeners(space.listeners || []);
-    setRaisedHands(space.raisedHands || []);
+    setListeners(
+      (Array.isArray(space.listeners) ? space.listeners : [])
+        .filter(Boolean)
+        .map((ln) => ({ ...ln, id: ln.id || `ln_${Math.random()}`, name: ln.name || 'Listener', avatar: ln.avatar || '' }))
+    );
+    setRaisedHands(
+      (Array.isArray(space.raisedHands) ? space.raisedHands : [])
+        .filter(Boolean)
+        .map((rh) => ({ ...rh, id: rh.id || `rh_${Math.random()}`, name: rh.name || 'Listener', avatar: rh.avatar || '' }))
+    );
     setPinnedNote(space.pinnedAnnouncement || '');
     setListenersCount(Math.max(1, space.listenersCount || baseSpeakers.length));
     setPeakListeners((prev) => Math.max(prev, space.peakListeners || space.listenersCount || 1));
@@ -603,10 +618,49 @@ export function useSpaceAudio({
 
     const applyRoomSnapshot = (snap: any) => {
       if (!snap || snap.spaceId !== spaceId) return;
-      if (Array.isArray(snap.speakers)) setSpeakers(snap.speakers);
-      if (Array.isArray(snap.listeners)) setListeners(snap.listeners);
-      if (Array.isArray(snap.raisedHands)) setRaisedHands(snap.raisedHands);
-      if (Array.isArray(snap.chatMessages)) setChatMessages(snap.chatMessages);
+      if (Array.isArray(snap.speakers)) {
+        setSpeakers(
+          snap.speakers.filter(Boolean).map((sp: any) => ({
+            ...sp,
+            id: sp.id || `sp_${Math.random().toString(36).slice(2, 7)}`,
+            name: sp.name || sp.fullName || 'Speaker',
+            avatar: sp.avatar || '',
+            role: sp.role || 'speaker',
+          }))
+        );
+      }
+      if (Array.isArray(snap.listeners)) {
+        setListeners(
+          snap.listeners.filter(Boolean).map((ln: any) => ({
+            ...ln,
+            id: ln.id || `ln_${Math.random().toString(36).slice(2, 7)}`,
+            name: ln.name || ln.fullName || 'Listener',
+            avatar: ln.avatar || '',
+          }))
+        );
+      }
+      if (Array.isArray(snap.raisedHands)) {
+        setRaisedHands(
+          snap.raisedHands.filter(Boolean).map((rh: any) => ({
+            ...rh,
+            id: rh.id || `rh_${Math.random().toString(36).slice(2, 7)}`,
+            name: rh.name || 'Listener',
+            avatar: rh.avatar || '',
+            time: rh.time || 'Just now',
+          }))
+        );
+      }
+      if (Array.isArray(snap.chatMessages)) {
+        setChatMessages(
+          snap.chatMessages.filter(Boolean).map((m: any) => ({
+            ...m,
+            id: m.id || `spchat_${Math.random().toString(36).slice(2, 7)}`,
+            userName: m.userName || m.senderName || 'Listener',
+            text: String(m.text || ''),
+            timestamp: m.timestamp || 'Now',
+          }))
+        );
+      }
       if (typeof snap.pinnedNote === 'string') setPinnedNote(snap.pinnedNote);
       if (typeof snap.listenersCount === 'number') setListenersCount(snap.listenersCount);
       if (typeof snap.peakListeners === 'number') {
@@ -664,8 +718,15 @@ export function useSpaceAudio({
     };
     const onChatMsg = (payload: any) => {
       if (payload?.spaceId !== spaceId || !payload?.message) return;
+      const msgSafe = {
+        ...payload.message,
+        id: payload.message.id || `spchat_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        userName: payload.message.userName || payload.message.senderName || 'Listener',
+        text: String(payload.message.text || ''),
+        timestamp: payload.message.timestamp || 'Now',
+      };
       setChatMessages((prev) =>
-        prev.some((m) => m.id === payload.message.id) ? prev : [...prev.slice(-99), payload.message]
+        prev.some((m) => m.id === msgSafe.id) ? prev : [...prev.slice(-99), msgSafe]
       );
     };
     const onWebRTCSig = (payload: any) => {

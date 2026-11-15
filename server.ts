@@ -433,7 +433,9 @@ const DEFAULT_SYSTEM_CONFIG = {
   artisanCommissionPercent: 2,
   creatorCommissionPercent: 5,
   minTransferAmountNgn: 100,
-  maxDailyTransferNgn: 5000000,
+  maxDailyTransferNgn: 500000,
+  maxWeeklyTransferNgn: 2000000,
+  sponsoredAdFeeNgn: 2500,
   delayedSendHoldDurationMins: 15,
   lowBandwidthDefault: false,
   supportContactPhone: '+234800000000',
@@ -515,12 +517,13 @@ const DEFAULT_CMS_DATA = {
   communityGuidelines: '1. Treat all community members with respect.\n2. No fraudulent listings, phishing links, or unauthorized transactions.\n3. Verified badges are subject to continuous compliance with AfriChat terms.',
   termsOfService: 'AfriChat provides communication, marketplace escrow mediation, and logistical dispatch coordination across African regions.',
   sponsorSpotlight: {
-    enabled: true,
+    enabled: false,
     brandName: 'Kente Pay Africa',
     tagline: 'Zero-Fee African Merchant Remittances',
     bannerUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
     linkUrl: '',
   },
+  sponsoredStatuses: [] as any[],
 };
 
 let systemConfig = { ...DEFAULT_SYSTEM_CONFIG };
@@ -1343,16 +1346,45 @@ app.patch('/api/users/profile', async (req: Request, res: Response) => {
 
 // ── Authoritative Server Wallet Ledger & Anti-Tampering Engine ──────────────
 const WALLETS_FILE = path.join(__dirname, 'data_wallets.json');
+const WALLET_LEDGER_FILE = path.join(__dirname, 'data_wallet_transactions.json');
+
 interface ServerWalletTx {
   id: string;
-  type: 'topup' | 'escrow_lock' | 'escrow_release' | 'withdrawal' | 'transfer_delayed' | 'payroll_debit' | 'transfer_in' | 'transfer_out';
+  userId?: string;
+  userPhone?: string;
+  userName?: string;
+  type:
+    | 'topup'
+    | 'deposit'
+    | 'escrow_lock'
+    | 'escrow_release'
+    | 'withdrawal'
+    | 'transfer_delayed'
+    | 'payroll_debit'
+    | 'transfer_in'
+    | 'transfer_out'
+    | 'sent'
+    | 'received'
+    | 'store_purchase'
+    | 'game_wager'
+    | 'game_win'
+    | 'ad_payment'
+    | 'store_subscription'
+    | 'artisan_reg'
+    | 'refund';
   title: string;
+  description?: string;
   amount: number;
+  fee?: number;
+  balanceAfter?: number;
   currency: 'NGN' | 'KES' | 'GHS' | 'ZAR';
   timestamp: string;
+  createdAt?: string;
   status: 'completed' | 'pending' | 'failed';
   reference: string;
+  referenceId?: string;
   channel: 'paystack' | 'wallet' | 'bank_transfer';
+  metadata?: Record<string, any>;
 }
 interface ServerWalletRecord {
   phoneKey: string;
@@ -1366,6 +1398,7 @@ interface ServerWalletRecord {
 
 const serverWallets = new Map<string, ServerWalletRecord>();
 const processedPaymentRefs = new Set<string>();
+let unifiedLedger: ServerWalletTx[] = [];
 
 try {
   if (fs.existsSync(WALLETS_FILE)) {
@@ -1393,6 +1426,70 @@ try {
   }
 } catch (e) {
   console.warn('Notice loading server wallet ledger:', e);
+}
+
+try {
+  if (fs.existsSync(WALLET_LEDGER_FILE)) {
+    const rawLedger = JSON.parse(fs.readFileSync(WALLET_LEDGER_FILE, 'utf8'));
+    if (Array.isArray(rawLedger)) {
+      unifiedLedger = rawLedger.slice(0, 5000);
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading unified wallet ledger:', e);
+}
+
+function saveUnifiedLedgerFile() {
+  try {
+    fs.writeFileSync(WALLET_LEDGER_FILE, JSON.stringify(unifiedLedger.slice(0, 5000), null, 2));
+  } catch (e) {
+    console.warn('Notice saving unified wallet ledger:', e);
+  }
+}
+
+function appendUnifiedLedgerTx(entry: ServerWalletTx) {
+  const normalized: ServerWalletTx = {
+    ...entry,
+    createdAt: entry.createdAt || new Date().toISOString(),
+    referenceId: entry.referenceId || entry.reference,
+    description: entry.description || entry.title,
+    fee: Number(entry.fee ?? 0),
+  };
+  unifiedLedger = [normalized, ...unifiedLedger.filter((t) => t.id !== normalized.id)].slice(0, 5000);
+  saveUnifiedLedgerFile();
+
+  const sbKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+  if (SUPABASE_URL && sbKey) {
+    fetch(`${SUPABASE_URL}/rest/v1/wallet_transactions`, {
+      method: 'POST',
+      headers: {
+        apikey: sbKey,
+        Authorization: `Bearer ${sbKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify({
+        id: normalized.id,
+        user_id: normalized.userId || null,
+        user_phone: normalized.userPhone || null,
+        user_name: normalized.userName || null,
+        type: normalized.type,
+        title: normalized.title,
+        description: normalized.description,
+        amount: normalized.amount,
+        fee: normalized.fee || 0,
+        balance_after: normalized.balanceAfter ?? null,
+        currency: normalized.currency || 'NGN',
+        status: normalized.status || 'completed',
+        reference: normalized.reference,
+        reference_id: normalized.referenceId,
+        channel: normalized.channel || 'wallet',
+        metadata: normalized.metadata || {},
+        created_at: normalized.createdAt,
+      }),
+    }).catch(() => {});
+  }
+  return normalized;
 }
 
 function saveWalletsFile() {
@@ -1503,22 +1600,33 @@ function creditAuthoritativeWallet(params: {
   processedPaymentRefs.add(reference);
   wallet.availableBalance = Math.max(0, Number(wallet.availableBalance || 0) + Number(amount || 0));
   wallet.updatedAt = new Date().toISOString();
+  const match = findUserEntry(phoneOrId);
+  const nowIso = wallet.updatedAt;
   const tx: ServerWalletTx = {
     id: `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
-    type: 'topup',
+    userId: match?.user.id,
+    userPhone: match?.user.phoneNumber || wallet.phoneNumber,
+    userName: match?.user.fullName || 'AGC User',
+    type: 'deposit',
     title,
+    description: title,
     amount,
+    fee,
+    balanceAfter: wallet.availableBalance,
     currency,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    createdAt: nowIso,
     status: 'completed',
     reference,
+    referenceId: reference,
     channel: 'paystack',
+    metadata,
   };
   wallet.transactions = [tx, ...wallet.transactions].slice(0, 100);
   serverWallets.set(wallet.phoneKey, wallet);
   saveWalletsFile();
+  appendUnifiedLedgerTx(tx);
 
-  const match = findUserEntry(phoneOrId);
   if (match) {
     match.user.walletBalanceNgn = wallet.availableBalance;
     (match.user as any).updatedAt = wallet.updatedAt;
@@ -1678,22 +1786,31 @@ app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
   const ref = `WDR_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
   wallet.availableBalance = Math.max(0, wallet.availableBalance - numericAmt);
   wallet.updatedAt = new Date().toISOString();
+  const match = findUserEntry(String(phoneNumber));
   const tx: ServerWalletTx = {
     id: `tx_${Date.now()}`,
+    userId: match?.user.id,
+    userPhone: match?.user.phoneNumber || wallet.phoneNumber,
+    userName: match?.user.fullName || 'AGC User',
     type: 'withdrawal',
     title: `Payout to ${String(bankName || 'Bank')} (${String(accountNumber || '0000').slice(-4)})`,
+    description: `Withdrawal to ${String(bankName || 'Bank')} - ${String(accountName || 'Account')}`,
     amount: numericAmt,
+    fee: 0,
+    balanceAfter: wallet.availableBalance,
     currency: wallet.currency,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    createdAt: wallet.updatedAt,
     status: 'completed',
     reference: ref,
+    referenceId: ref,
     channel: 'bank_transfer',
   };
   wallet.transactions = [tx, ...wallet.transactions].slice(0, 100);
   serverWallets.set(wallet.phoneKey, wallet);
   saveWalletsFile();
+  appendUnifiedLedgerTx(tx);
 
-  const match = findUserEntry(String(phoneNumber));
   if (match) {
     match.user.walletBalanceNgn = wallet.availableBalance;
     (match.user as any).updatedAt = wallet.updatedAt;
@@ -1715,18 +1832,142 @@ app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
   });
 });
 
-// REST: Server-validated atomic P2P transfer
+// REST: Unified Transaction Ledger endpoints (User + Admin Super-View)
+app.get('/api/wallet/transactions', (req: Request, res: Response) => {
+  const phone = String(req.query.phone || '').trim();
+  const userId = String(req.query.userId || '').trim();
+  const cleanDigits = phone.replace(/\D/g, '').slice(-9);
+  const filtered = unifiedLedger.filter((tx) => {
+    if (userId && tx.userId && tx.userId === userId) return true;
+    if (cleanDigits && tx.userPhone && tx.userPhone.replace(/\D/g, '').slice(-9) === cleanDigits) return true;
+    return false;
+  });
+  res.json({ success: true, transactions: filtered.slice(0, 300) });
+});
+
+app.post('/api/wallet/ledger', (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    if (!body.type || body.amount === undefined) {
+      return res.status(400).json({ error: 'Transaction type and amount required' });
+    }
+    const phoneStr = String(body.userPhone || '');
+    const match = phoneStr ? findUserEntry(phoneStr) : undefined;
+    const tx: ServerWalletTx = {
+      id: String(body.id || `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`),
+      userId: body.userId || match?.user.id,
+      userPhone: body.userPhone || match?.user.phoneNumber || '',
+      userName: body.userName || match?.user.fullName || 'AGC User',
+      type: body.type,
+      title: String(body.title || body.description || body.type),
+      description: String(body.description || body.title || body.type),
+      amount: Math.abs(Number(body.amount) || 0),
+      fee: Number(body.fee || 0),
+      balanceAfter: body.balanceAfter !== undefined ? Number(body.balanceAfter) : undefined,
+      currency: body.currency || 'NGN',
+      timestamp: body.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      createdAt: body.createdAt || new Date().toISOString(),
+      status: body.status || 'completed',
+      reference: String(body.reference || body.referenceId || `REF_${Date.now()}`),
+      referenceId: String(body.referenceId || body.reference || `REF_${Date.now()}`),
+      channel: body.channel || 'wallet',
+      metadata: body.metadata || {},
+    };
+    const saved = appendUnifiedLedgerTx(tx);
+    // Keep server wallet balance snapshot aligned on recorded client debits/credits when user matches
+    if (phoneStr && typeof body.balanceAfter === 'number') {
+      const w = getOrCreateServerWallet(phoneStr);
+      w.availableBalance = Math.max(0, Number(body.balanceAfter));
+      w.transactions = [saved, ...w.transactions.filter((t) => t.id !== saved.id)].slice(0, 100);
+      w.updatedAt = new Date().toISOString();
+      serverWallets.set(w.phoneKey, w);
+      saveWalletsFile();
+      if (match) {
+        match.user.walletBalanceNgn = w.availableBalance;
+        usersByPhone.set(match.key, match.user);
+        saveUsersFile();
+      }
+    }
+    res.json({ success: true, transaction: saved });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to append ledger entry' });
+  }
+});
+
+app.get('/api/admin/wallet-transactions', (req: Request, res: Response) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const typeFilter = String(req.query.type || '').trim();
+  const rows = unifiedLedger.filter((tx) => {
+    if (typeFilter && typeFilter !== 'all' && tx.type !== typeFilter) return false;
+    if (!q) return true;
+    return (
+      (tx.userName || '').toLowerCase().includes(q) ||
+      (tx.userPhone || '').toLowerCase().includes(q) ||
+      (tx.referenceId || tx.reference || '').toLowerCase().includes(q) ||
+      (tx.description || tx.title || '').toLowerCase().includes(q) ||
+      (tx.type || '').toLowerCase().includes(q)
+    );
+  });
+  res.json({ success: true, transactions: rows.slice(0, 500), total: rows.length });
+});
+
+// REST: Server-validated atomic INSTANT P2P transfer with Daily & Weekly Limits
 app.post('/api/wallet/transfer', (req: Request, res: Response) => {
-  const { fromPhone, toPhone, amount, note } = req.body || {};
+  const { fromPhone, toPhone, recipientName, amount, note } = req.body || {};
   const numericAmt = Number(amount);
   if (!fromPhone || !toPhone || !Number.isFinite(numericAmt) || numericAmt <= 0) {
     return res.status(400).json({ success: false, message: 'Valid sender, recipient, and positive amount required.' });
   }
+  const minAmt = systemConfig.minTransferAmountNgn ?? 100;
+  if (numericAmt < minAmt) {
+    return res.status(400).json({ success: false, message: `Minimum transfer amount is ₦${minAmt.toLocaleString()}.` });
+  }
+
   const senderWallet = getOrCreateServerWallet(String(fromPhone));
   const recipientWallet = getOrCreateServerWallet(String(toPhone));
   if (senderWallet.phoneKey === recipientWallet.phoneKey) {
     return res.status(400).json({ success: false, message: 'Cannot transfer to your own wallet.' });
   }
+
+  // Enforce rolling 24h Daily & 7d Weekly transfer limits
+  const nowMs = Date.now();
+  const dayCutoff = nowMs - 24 * 60 * 60 * 1000;
+  const weekCutoff = nowMs - 7 * 24 * 60 * 60 * 1000;
+  const senderDigits = senderWallet.phoneKey.replace(/\D/g, '').slice(-9);
+  const outgoingTransfers = unifiedLedger.filter((tx) => {
+    const txDigits = (tx.userPhone || '').replace(/\D/g, '').slice(-9);
+    return (
+      txDigits === senderDigits &&
+      (tx.type === 'sent' || tx.type === 'transfer_out' || tx.type === 'transfer_delayed')
+    );
+  });
+  const dailyUsed = outgoingTransfers
+    .filter((tx) => new Date(tx.createdAt || 0).getTime() >= dayCutoff)
+    .reduce((acc, tx) => acc + (Number(tx.amount) || 0), 0);
+  const weeklyUsed = outgoingTransfers
+    .filter((tx) => new Date(tx.createdAt || 0).getTime() >= weekCutoff)
+    .reduce((acc, tx) => acc + (Number(tx.amount) || 0), 0);
+
+  const maxDaily = systemConfig.maxDailyTransferNgn ?? 500000;
+  const maxWeekly = (systemConfig as any).maxWeeklyTransferNgn ?? 2000000;
+  if (maxDaily > 0 && dailyUsed + numericAmt > maxDaily) {
+    const remainingDaily = Math.max(0, maxDaily - dailyUsed);
+    return res.status(400).json({
+      success: false,
+      message: `Daily transfer limit of ₦${maxDaily.toLocaleString()} exceeded. Remaining today: ₦${remainingDaily.toLocaleString()}.`,
+    });
+  }
+  if (maxWeekly > 0 && weeklyUsed + numericAmt > maxWeekly) {
+    const remainingWeekly = Math.max(0, maxWeekly - weeklyUsed);
+    return res.status(400).json({
+      success: false,
+      message: `Weekly transfer limit of ₦${maxWeekly.toLocaleString()} exceeded. Remaining this week: ₦${remainingWeekly.toLocaleString()}.`,
+    });
+  }
+
+  // Fallback sync check if client already funded locally
+  const senderMatch = findUserEntry(String(fromPhone));
+  const recipientMatch = findUserEntry(String(toPhone));
   if (numericAmt > senderWallet.availableBalance) {
     return res.status(400).json({
       success: false,
@@ -1741,56 +1982,79 @@ app.post('/api/wallet/transfer', (req: Request, res: Response) => {
 
   senderWallet.availableBalance -= numericAmt;
   senderWallet.updatedAt = nowIso;
-  senderWallet.transactions = [
-    {
-      id: `tx_${Date.now()}_out`,
-      type: 'transfer_out' as const,
-      title: String(note || `Transfer to ${toPhone}`),
-      amount: numericAmt,
-      currency: senderWallet.currency,
-      timestamp: nowStr,
-      status: 'completed' as const,
-      reference: ref,
-      channel: 'wallet' as const,
-    },
-    ...senderWallet.transactions,
-  ].slice(0, 100);
+  const senderTx: ServerWalletTx = {
+    id: `tx_${Date.now()}_out`,
+    userId: senderMatch?.user.id,
+    userPhone: senderMatch?.user.phoneNumber || String(fromPhone),
+    userName: senderMatch?.user.fullName || 'Sender',
+    type: 'sent',
+    title: `Instant Transfer to ${recipientName || recipientMatch?.user.fullName || toPhone}`,
+    description: `${note ? `${note} · ` : ''}Instant transfer to ${recipientName || toPhone}`,
+    amount: numericAmt,
+    fee: 0,
+    balanceAfter: senderWallet.availableBalance,
+    currency: senderWallet.currency,
+    timestamp: nowStr,
+    createdAt: nowIso,
+    status: 'completed',
+    reference: ref,
+    referenceId: ref,
+    channel: 'wallet',
+  };
+  senderWallet.transactions = [senderTx, ...senderWallet.transactions].slice(0, 100);
 
   recipientWallet.availableBalance += numericAmt;
   recipientWallet.updatedAt = nowIso;
-  recipientWallet.transactions = [
-    {
-      id: `tx_${Date.now()}_in`,
-      type: 'transfer_in' as const,
-      title: String(note || `Transfer from ${fromPhone}`),
-      amount: numericAmt,
-      currency: recipientWallet.currency,
-      timestamp: nowStr,
-      status: 'completed' as const,
-      reference: `${ref}_R`,
-      channel: 'wallet' as const,
-    },
-    ...recipientWallet.transactions,
-  ].slice(0, 100);
+  const receiverTx: ServerWalletTx = {
+    id: `tx_${Date.now()}_in`,
+    userId: recipientMatch?.user.id,
+    userPhone: recipientMatch?.user.phoneNumber || String(toPhone),
+    userName: recipientMatch?.user.fullName || String(recipientName || 'Recipient'),
+    type: 'received',
+    title: `Instant Transfer from ${senderMatch?.user.fullName || fromPhone}`,
+    description: `${note ? `${note} · ` : ''}Received from ${senderMatch?.user.fullName || fromPhone}`,
+    amount: numericAmt,
+    fee: 0,
+    balanceAfter: recipientWallet.availableBalance,
+    currency: recipientWallet.currency,
+    timestamp: nowStr,
+    createdAt: nowIso,
+    status: 'completed',
+    reference: `${ref}_R`,
+    referenceId: ref,
+    channel: 'wallet',
+  };
+  recipientWallet.transactions = [receiverTx, ...recipientWallet.transactions].slice(0, 100);
 
   serverWallets.set(senderWallet.phoneKey, senderWallet);
   serverWallets.set(recipientWallet.phoneKey, recipientWallet);
   saveWalletsFile();
+  appendUnifiedLedgerTx(senderTx);
+  appendUnifiedLedgerTx(receiverTx);
 
-  const recipientMatch = findUserEntry(String(toPhone));
+  if (senderMatch) {
+    senderMatch.user.walletBalanceNgn = senderWallet.availableBalance;
+    usersByPhone.set(senderMatch.key, senderMatch.user);
+    saveUsersFile();
+  }
   if (recipientMatch) {
+    recipientMatch.user.walletBalanceNgn = recipientWallet.availableBalance;
+    usersByPhone.set(recipientMatch.key, recipientMatch.user);
+    saveUsersFile();
     const cleanRec = (recipientMatch.user.cleanPhone || recipientMatch.key).replace(/\D/g, '');
     io.to(`phone:${cleanRec}`).emit('wallet_updated', {
       balance: recipientWallet.availableBalance,
       escrowLockedBalance: recipientWallet.escrowLockedBalance,
       transactions: recipientWallet.transactions,
-      note: `Received ₦${numericAmt.toLocaleString()}`,
+      note: `Received ₦${numericAmt.toLocaleString()} from ${senderMatch?.user.fullName || fromPhone}`,
     });
   }
 
   return res.json({
     success: true,
     reference: ref,
+    dailyUsed: dailyUsed + numericAmt,
+    weeklyUsed: weeklyUsed + numericAmt,
     wallet: {
       availableBalance: senderWallet.availableBalance,
       escrowLockedBalance: senderWallet.escrowLockedBalance,
@@ -2066,17 +2330,24 @@ async function fetchSupabaseStoresAndArtisans() {
     const ov = artisanOverridesMap.get(id) || {};
     return {
       id,
-      stationName: a.station_name || 'Artisan Hub',
-      category: a.category_label || a.category || 'General Trade',
-      location: a.location || 'Lagos, Nigeria',
-      workshopAddress: a.workshop_address || '',
+      stationName: ov.stationName || a.station_name || 'Artisan Hub',
+      category: ov.category || a.category_label || a.category || 'General Trade',
+      location: ov.location || a.location || 'Lagos, Nigeria',
+      workshopAddress: ov.workshopAddress || a.workshop_address || '',
       ownerName: ov.ownerName || a.owner_name || a.station_name || 'Master Artisan',
       ownerPhone: ov.ownerPhone || a.owner_phone || '',
       isApproved: ov.isApproved ?? Boolean(a.is_approved),
+      approvalStatus: ov.approvalStatus || (ov.isApproved ?? a.is_approved ? 'approved' : 'pending'),
       registrationFeePaid: Boolean(a.registration_fee_paid),
       createdAt: a.created_at || new Date().toISOString(),
     };
   });
+
+  for (const [id, ov] of artisanOverridesMap.entries()) {
+    if (!artisans.some((a) => a.id === id) && ov?.stationName) {
+      artisans.push({ id, ...ov });
+    }
+  }
 
   return { stores, artisans };
 }
@@ -2401,7 +2672,248 @@ app.post('/api/webhooks/paystack', (req: Request, res: Response) => {
   res.json({ success: true, webhookLog: wh });
 });
 
-// Store & Artisan Admin Mutations
+// Store & Artisan Registration + Admin Approval Mutations
+app.post('/api/stores/register', (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const id = String(body.id || `store_${Date.now()}`);
+    const entry = {
+      id,
+      storeName: body.storeName || 'Merchant Store',
+      description: body.description || '',
+      category: body.category || 'General Trade',
+      tier: body.tier || 'starter_30',
+      itemsLimit: body.itemsLimit ?? (body.tier === 'pro_100' ? 100 : 30),
+      itemsCount: body.itemsCount ?? 0,
+      ownerName: body.ownerName || 'Merchant Owner',
+      ownerPhone: body.ownerPhone || '',
+      status: 'pending',
+      verified: false,
+      paymentMethod: body.paymentMethod || 'wallet',
+      createdAt: new Date().toISOString(),
+    };
+    storeOverridesMap.set(id, entry);
+    saveAdminAuditFile();
+    pushAdminStoresToSupabase();
+    appendAuditEntry({
+      refId: `STORE_${id}`,
+      actor: entry.ownerName,
+      actorRole: 'Merchant',
+      action: 'Store Pending Approval',
+      target: entry.storeName,
+      details: `Tier: ${entry.tier} · Awaiting admin approval`,
+    });
+    io.emit('admin_store_updated', entry);
+    res.json({ success: true, store: entry });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to submit store' });
+  }
+});
+
+app.post('/api/artisans/register', (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const id = String(body.id || `art_${Date.now()}`);
+    const entry = {
+      id,
+      stationName: body.stationName || 'Artisan Hub',
+      category: body.category || 'General Trade',
+      location: body.location || 'Lagos, Nigeria',
+      workshopAddress: body.workshopAddress || '',
+      ownerName: body.ownerName || 'Master Artisan',
+      ownerPhone: body.ownerPhone || '',
+      isApproved: false,
+      approvalStatus: 'pending',
+      registrationFeePaid: Boolean(body.registrationFeePaid ?? true),
+      createdAt: new Date().toISOString(),
+    };
+    artisanOverridesMap.set(id, entry);
+    saveAdminAuditFile();
+    pushAdminStoresToSupabase();
+    appendAuditEntry({
+      refId: `ART_${id}`,
+      actor: entry.ownerName,
+      actorRole: 'Artisan',
+      action: 'Artisan Pending Approval',
+      target: entry.stationName,
+      details: `Category: ${entry.category} · Awaiting admin approval`,
+    });
+    io.emit('admin_artisan_updated', entry);
+    res.json({ success: true, artisan: entry });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to submit artisan' });
+  }
+});
+
+// Sponsored Ads Payment Submission & Admin Review (Approve / Reject + Refund)
+app.post('/api/ads/submit', (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const adFee = Number((systemConfig as any).sponsoredAdFeeNgn ?? 2500);
+    const phone = String(body.submittedByPhone || '').trim();
+    const refId = `AD_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+
+    if (phone) {
+      const w = getOrCreateServerWallet(phone);
+      if (w.availableBalance >= adFee) {
+        w.availableBalance -= adFee;
+        w.updatedAt = new Date().toISOString();
+        const match = findUserEntry(phone);
+        const tx: ServerWalletTx = {
+          id: `tx_${Date.now()}_ad`,
+          userId: match?.user.id,
+          userPhone: match?.user.phoneNumber || phone,
+          userName: body.submittedByName || match?.user.fullName || 'Advertiser',
+          type: 'ad_payment',
+          title: `Sponsored Ad Submission: ${body.brandName || 'Brand'}`,
+          description: `Sponsored status ad fee (${body.brandName || 'Brand'})`,
+          amount: adFee,
+          fee: 0,
+          balanceAfter: w.availableBalance,
+          currency: w.currency,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          createdAt: w.updatedAt,
+          status: 'completed',
+          reference: refId,
+          referenceId: refId,
+          channel: 'wallet',
+        };
+        w.transactions = [tx, ...w.transactions].slice(0, 100);
+        serverWallets.set(w.phoneKey, w);
+        saveWalletsFile();
+        appendUnifiedLedgerTx(tx);
+        if (match) {
+          match.user.walletBalanceNgn = w.availableBalance;
+          usersByPhone.set(match.key, match.user);
+          saveUsersFile();
+        }
+      }
+    }
+
+    const newAd = {
+      id: body.id || `ad_${Date.now()}`,
+      brandName: String(body.brandName || 'Sponsored Brand'),
+      avatarUrl: body.avatarUrl || body.mediaUrl || '',
+      mediaUrl: String(body.mediaUrl || '/src/assets/images/african_textiles_wax_1794210824926.jpg'),
+      caption: String(body.caption || 'Promoted vendor update'),
+      ctaLabel: String(body.ctaLabel || 'Visit Offer'),
+      targetUrl: String(body.targetUrl || '#market'),
+      active: false,
+      status: 'pending',
+      approvalStatus: 'pending',
+      submittedByPhone: phone,
+      submittedByName: String(body.submittedByName || 'Advertiser'),
+      paidAmount: Number(body.paidAmount ?? adFee),
+      paymentReference: refId,
+      clicksCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+
+    const existingList = Array.isArray((cmsData as any).sponsoredStatuses) ? (cmsData as any).sponsoredStatuses : [];
+    (cmsData as any).sponsoredStatuses = [newAd, ...existingList];
+    saveAdminCmsFile();
+    pushAdminCmsToSupabase();
+    appendAuditEntry({
+      refId,
+      actor: newAd.submittedByName,
+      actorRole: 'User',
+      action: 'Sponsored Ad Submitted',
+      target: newAd.brandName,
+      details: `Paid ₦${newAd.paidAmount.toLocaleString()} · Pending Admin Approval`,
+    });
+    io.emit('admin_cms_updated', cmsData);
+    res.json({ success: true, ad: newAd, cms: cmsData, reference: refId });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to submit sponsored ad' });
+  }
+});
+
+app.post('/api/admin/ads/review', (req: Request, res: Response) => {
+  try {
+    const { adId, decision, reason } = req.body || {};
+    if (!adId || !['approve', 'reject'].includes(decision)) {
+      return res.status(400).json({ error: 'adId and decision (approve | reject) required' });
+    }
+    const list: any[] = Array.isArray((cmsData as any).sponsoredStatuses) ? (cmsData as any).sponsoredStatuses : [];
+    const targetAd = list.find((a) => a.id === adId);
+    if (!targetAd) return res.status(404).json({ error: 'Sponsored ad not found' });
+
+    const isApprove = decision === 'approve';
+    const updatedList = list.map((a) =>
+      a.id === adId
+        ? {
+            ...a,
+            active: isApprove,
+            status: isApprove ? 'approved' : 'rejected',
+            approvalStatus: isApprove ? 'approved' : 'rejected',
+            rejectionReason: isApprove ? undefined : reason || 'Did not meet ad guidelines',
+          }
+        : a
+    );
+    (cmsData as any).sponsoredStatuses = updatedList;
+    saveAdminCmsFile();
+    pushAdminCmsToSupabase();
+
+    // Auto-refund paid ad fee on rejection
+    if (!isApprove && targetAd.submittedByPhone && Number(targetAd.paidAmount) > 0) {
+      const refundAmt = Number(targetAd.paidAmount);
+      const w = getOrCreateServerWallet(String(targetAd.submittedByPhone));
+      w.availableBalance += refundAmt;
+      w.updatedAt = new Date().toISOString();
+      const match = findUserEntry(String(targetAd.submittedByPhone));
+      const refId = `REFUND_${targetAd.paymentReference || targetAd.id}`;
+      const tx: ServerWalletTx = {
+        id: `tx_${Date.now()}_ref`,
+        userId: match?.user.id,
+        userPhone: match?.user.phoneNumber || targetAd.submittedByPhone,
+        userName: targetAd.submittedByName || match?.user.fullName || 'Advertiser',
+        type: 'refund',
+        title: `Ad Rejected Refund: ${targetAd.brandName}`,
+        description: `Automatic refund for rejected sponsored ad (${targetAd.brandName})`,
+        amount: refundAmt,
+        fee: 0,
+        balanceAfter: w.availableBalance,
+        currency: w.currency,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        createdAt: w.updatedAt,
+        status: 'completed',
+        reference: refId,
+        referenceId: targetAd.paymentReference || targetAd.id,
+        channel: 'wallet',
+      };
+      w.transactions = [tx, ...w.transactions].slice(0, 100);
+      serverWallets.set(w.phoneKey, w);
+      saveWalletsFile();
+      appendUnifiedLedgerTx(tx);
+      if (match) {
+        match.user.walletBalanceNgn = w.availableBalance;
+        usersByPhone.set(match.key, match.user);
+        saveUsersFile();
+        const cleanRec = (match.user.cleanPhone || match.key).replace(/\D/g, '');
+        io.to(`phone:${cleanRec}`).emit('wallet_updated', {
+          balance: w.availableBalance,
+          escrowLockedBalance: w.escrowLockedBalance,
+          transactions: w.transactions,
+          note: `Refunded ₦${refundAmt.toLocaleString()} for declined ad "${targetAd.brandName}"`,
+        });
+      }
+    }
+
+    appendAuditEntry({
+      refId: `AD_REV_${adId}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: isApprove ? 'Sponsored Ad Approved' : 'Sponsored Ad Rejected & Refunded',
+      target: targetAd.brandName,
+      details: isApprove ? 'Ad is now live in Updates feed' : reason || 'Declined & fee refunded',
+    });
+    io.emit('admin_cms_updated', cmsData);
+    res.json({ success: true, cms: cmsData });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to review ad' });
+  }
+});
+
 app.patch('/api/admin/stores/:id', async (req: Request, res: Response) => {
   try {
     const id = decodeURIComponent(req.params.id || '');
@@ -2456,13 +2968,15 @@ app.patch('/api/admin/stores/:id', async (req: Request, res: Response) => {
 app.patch('/api/admin/artisans/:id', async (req: Request, res: Response) => {
   try {
     const id = decodeURIComponent(req.params.id || '');
-    const { isApproved, stationName } = req.body || {};
+    const { isApproved, stationName, approvalStatus } = req.body || {};
     const existing = artisanOverridesMap.get(id) || {};
+    const resolvedStatus = approvalStatus ?? (isApproved !== undefined ? (isApproved ? 'approved' : 'suspended') : existing.approvalStatus);
     const updated = {
       ...existing,
       id,
       ...(stationName !== undefined ? { stationName } : {}),
       ...(isApproved !== undefined ? { isApproved } : {}),
+      ...(resolvedStatus !== undefined ? { approvalStatus: resolvedStatus } : {}),
       updatedAt: new Date().toISOString(),
     };
     artisanOverridesMap.set(id, updated);
@@ -3176,9 +3690,31 @@ io.on('connection', (socket: Socket) => {
       });
     }
 
-    // If it's a town community, broadcast to everyone
+    // Scoped to joined room chat:${chatId} and memberPhones (never global broadcast for town_comm_)
     if (chatId.startsWith('town_comm_')) {
-      socket.broadcast.emit('new_message', { chatId, message, chat });
+      socket.to(`chat:${chatId}`).emit('new_message', { chatId, message, chat });
+    }
+  });
+
+  // 2a. Live Message Emoji Reaction Relay
+  socket.on('message_reaction', (payload: { chatId: string; messageId: string; emoji: string; reactorName: string; memberPhones?: string[]; targetPhone?: string }) => {
+    const { chatId, messageId, emoji, reactorName, memberPhones, targetPhone } = payload || {};
+    if (!chatId || !messageId || !emoji) return;
+    socket.to(`chat:${chatId}`).emit('message_reaction', { chatId, messageId, emoji, reactorName });
+    if (targetPhone) {
+      getPhoneVariants(targetPhone).forEach((v) => {
+        socket.to(`phone:${v}`).emit('message_reaction', { chatId, messageId, emoji, reactorName });
+      });
+    }
+    if (Array.isArray(memberPhones)) {
+      const senderPhone = (socket as any)._agcPhone || '';
+      memberPhones.forEach((phone: string) => {
+        getPhoneVariants(phone).forEach((v) => {
+          if (v !== senderPhone) {
+            socket.to(`phone:${v}`).emit('message_reaction', { chatId, messageId, emoji, reactorName });
+          }
+        });
+      });
     }
   });
 

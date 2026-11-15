@@ -23,6 +23,7 @@ export interface Product {
   location: string;
   condition: 'Brand New' | 'Direct Import' | 'Refurbished' | 'Fairly Used';
   tags: string[];
+  isApproved?: boolean;
 }
 
 export interface EscrowOrder {
@@ -43,16 +44,45 @@ export interface EscrowOrder {
   paystackRef?: string;
 }
 
+export type WalletTransactionType =
+  | 'topup'
+  | 'deposit'
+  | 'escrow_lock'
+  | 'escrow_release'
+  | 'withdrawal'
+  | 'transfer_delayed'
+  | 'payroll_debit'
+  | 'transfer_in'
+  | 'transfer_out'
+  | 'sent'
+  | 'received'
+  | 'store_purchase'
+  | 'game_wager'
+  | 'game_win'
+  | 'ad_payment'
+  | 'store_subscription'
+  | 'artisan_reg'
+  | 'refund';
+
 export interface WalletTransaction {
   id: string;
-  type: 'topup' | 'escrow_lock' | 'escrow_release' | 'withdrawal' | 'transfer_delayed' | 'payroll_debit' | 'transfer_in' | 'transfer_out';
+  userId?: string;
+  userPhone?: string;
+  userName?: string;
+  type: WalletTransactionType;
   title: string;
+  description?: string;
   amount: number;
+  fee?: number;
+  balanceAfter?: number;
   currency: CurrencyCode;
   timestamp: string;
+  createdAt?: string;
   status: 'completed' | 'pending';
   reference?: string;
+  referenceId?: string;
   channel: 'paystack' | 'wallet' | 'bank_transfer';
+  metadata?: Record<string, any>;
 }
 
 export interface UserWallet {
@@ -456,6 +486,9 @@ export interface UserStatus {
   ctaLabel?: string;
   targetUrl?: string;
   adClicksCount?: number;
+  approvalStatus?: 'pending' | 'approved' | 'rejected';
+  paidAmount?: number;
+  rejectionReason?: string;
 }
 
 export interface UserProfile {
@@ -548,12 +581,18 @@ export interface JobPosting {
   postedAt: string;
 }
 
+export interface SecurityQuestionEntry {
+  question: string;
+  answer: string;
+}
+
 export interface SecuritySettings {
   hasPaymentPin: boolean;
   isPaymentPinSet?: boolean;
   paymentPin?: string;
   securityQuestion?: string;
   securityAnswer?: string;
+  securityQuestions?: SecurityQuestionEntry[];
   failedAttempts?: number;
   lockoutUntil?: number | null;
 }
@@ -606,6 +645,7 @@ export interface ServiceProvider {
   portfolioImages: string[];
   phone: string;
   isVerified: boolean;
+  approvalStatus?: 'pending' | 'approved' | 'rejected' | 'suspended';
   badge?: string;
 }
 
@@ -922,6 +962,7 @@ export interface ArtisanStation {
   about: string;
   avatar: string;
   isApproved: boolean;
+  approvalStatus?: 'pending' | 'approved' | 'rejected' | 'suspended';
   registrationFeePaid: boolean;
   registrationFeeAmount: number; // ₦5,000
   registrationPaymentMethod: 'wallet' | 'paystack';
@@ -977,6 +1018,7 @@ export interface StoreSubscription {
   category: string;
   active: boolean;
   isRegistered?: boolean;
+  approvalStatus?: 'pending' | 'approved' | 'rejected' | 'suspended';
   itemsUsed?: number;
   itemsLimit?: number;
   expiresAt: string;
@@ -1195,6 +1237,8 @@ export interface AdminSystemConfig {
   creatorCommissionPercent: number; // e.g. 5%
   minTransferAmountNgn: number;
   maxDailyTransferNgn: number;
+  maxWeeklyTransferNgn?: number;
+  sponsoredAdFeeNgn?: number;
   delayedSendHoldDurationMins: number;
   lowBandwidthDefault: boolean;
   supportContactPhone: string;
@@ -1273,6 +1317,13 @@ export interface SponsoredStatusAd {
   ctaLabel: string;
   targetUrl: string;
   active: boolean;
+  status?: 'pending' | 'approved' | 'rejected';
+  approvalStatus?: 'pending' | 'approved' | 'rejected';
+  submittedByPhone?: string;
+  submittedByName?: string;
+  paidAmount?: number;
+  paymentReference?: string;
+  rejectionReason?: string;
   clicksCount?: number;
   createdAt: string;
 }

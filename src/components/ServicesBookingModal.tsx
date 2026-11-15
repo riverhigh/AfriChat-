@@ -136,6 +136,12 @@ export const ServicesBookingModal: React.FC = () => {
   const [startTime, setStartTime] = useState(artisanStation?.operatingHours.startTime || '08:00 AM');
   const [endTime, setEndTime] = useState(artisanStation?.operatingHours.endTime || '07:00 PM');
   const [breakTime, setBreakTime] = useState(artisanStation?.operatingHours.breakTime || '01:00 PM - 02:00 PM');
+  const [stationNotice, setStationNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const showNotice = (type: 'success' | 'error', text: string) => {
+    setStationNotice({ type, text });
+    setTimeout(() => setStationNotice((curr) => (curr?.text === text ? null : curr)), 4500);
+  };
 
   if (!isServicesModalOpen && !isArtisanModalOpen) return null;
 
@@ -152,6 +158,9 @@ export const ServicesBookingModal: React.FC = () => {
   ];
 
   const filteredProviders = serviceProviders.filter((p) => {
+    if (p.isVerified === false || (p as any).approvalStatus === 'pending' || (p as any).approvalStatus === 'suspended') {
+      return false;
+    }
     const matchesCat = selectedCategory === 'all' || p.category === selectedCategory;
     const matchesSearch =
       p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -200,7 +209,7 @@ export const ServicesBookingModal: React.FC = () => {
   const handleRegisterStationSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!regStationName.trim()) {
-      alert('Please enter your Artisan Station name.');
+      showNotice('error', 'Please enter your Artisan Station name.');
       return;
     }
 
@@ -223,11 +232,11 @@ export const ServicesBookingModal: React.FC = () => {
     );
 
     if (!res.success) {
-      alert(res.message);
+      showNotice('error', res.message);
       return;
     }
 
-    alert(res.message);
+    showNotice('success', res.message);
     setActiveTab('station_hub');
   };
 
@@ -235,7 +244,7 @@ export const ServicesBookingModal: React.FC = () => {
   const handleAddListingSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newListingTitle.trim()) {
-      alert('Please enter a service offering title.');
+      showNotice('error', 'Please enter a service offering title.');
       return;
     }
 
@@ -253,11 +262,11 @@ export const ServicesBookingModal: React.FC = () => {
     );
 
     if (!res.success) {
-      alert(res.message);
+      showNotice('error', res.message);
       return;
     }
 
-    alert(res.message);
+    showNotice('success', res.message);
     setNewListingTitle('');
     setNewListingDesc('');
     setShowAddListing(false);
@@ -275,7 +284,7 @@ export const ServicesBookingModal: React.FC = () => {
       wage: staffWage.trim(),
     });
 
-    alert(`🎉 Successfully hired ${res.staffMember.name} as ${res.staffMember.role}!`);
+    showNotice('success', `Successfully hired ${res.staffMember.name} as ${res.staffMember.role}.`);
     setStaffName('');
     setShowHireStaff(false);
   };
@@ -302,7 +311,7 @@ export const ServicesBookingModal: React.FC = () => {
       clientName: taskClientName.trim() || undefined,
     });
 
-    alert(`✅ Task "${res.task.title}" assigned to ${res.task.assignedToStaffName}!`);
+    showNotice('success', `Task "${res.task.title}" assigned to ${res.task.assignedToStaffName}.`);
     setTaskTitle('');
     setTaskDesc('');
     setShowAssignTask(false);
@@ -317,7 +326,7 @@ export const ServicesBookingModal: React.FC = () => {
       breakTime,
     });
     setIsEditingHours(false);
-    alert('Operating hours and calendar slots updated successfully!');
+    showNotice('success', 'Operating hours and calendar slots updated.');
   };
 
   const toggleDay = (day: string) => {
@@ -421,6 +430,24 @@ export const ServicesBookingModal: React.FC = () => {
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto bg-[#0e0722]">
+          {stationNotice && (
+            <div
+              className={`mx-4 mt-3 p-3 rounded-2xl text-xs font-semibold flex items-center justify-between gap-2 border ${
+                stationNotice.type === 'success'
+                  ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-200'
+                  : 'bg-rose-500/15 border-rose-500/30 text-rose-200'
+              }`}
+            >
+              <span>{stationNotice.text}</span>
+              <button
+                type="button"
+                onClick={() => setStationNotice(null)}
+                className="opacity-70 hover:opacity-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
           {/* TAB 1: BROWSE SPECIALISTS */}
           {activeTab === 'browse' && !activeProvider && (
             <div className="p-4 space-y-4">
@@ -958,18 +985,30 @@ export const ServicesBookingModal: React.FC = () => {
                           <Store className="w-6 h-6" />
                         </div>
                         <div>
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <h3 className="font-bold text-sm text-white">
                               {artisanStation.stationName}
                             </h3>
-                            <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 font-bold flex items-center gap-0.5">
-                              <ShieldCheck className="w-3 h-3" />
-                              <span>Verified Station</span>
-                            </span>
+                            {artisanStation.isApproved ? (
+                              <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 font-bold flex items-center gap-0.5">
+                                <ShieldCheck className="w-3 h-3" />
+                                <span>Approved &amp; Live</span>
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-amber-500/20 text-amber-300 border border-amber-400/30 font-bold flex items-center gap-0.5">
+                                <Clock className="w-3 h-3" />
+                                <span>Pending Admin Approval</span>
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs text-purple-300 font-medium">
                             {artisanStation.categoryLabel}
                           </p>
+                          {!artisanStation.isApproved && (
+                            <p className="text-[11px] text-amber-300/90 mt-1">
+                              Your Artisan Station will appear in the public directory once approved by Admin.
+                            </p>
+                          )}
                         </div>
                       </div>
 
