@@ -317,7 +317,8 @@ export const ContactsModal: React.FC = () => {
       checkResult.phone,
       isSelf ? 'Message yourself · Notes and reminders' : 'AGC User',
       true,
-      checkResult.avatar
+      checkResult.avatar,
+      { sendRequest: !isSelf }
     );
     setInviteSentToast(`✅ Opening chat with ${name}...`);
     setTimeout(() => setInviteSentToast(null), 3000);
@@ -330,7 +331,7 @@ export const ContactsModal: React.FC = () => {
   const handleSendInviteToJoin = () => {
     if (!checkResult) return;
     const name = `Contact ${checkResult.phone}`;
-    const contact = addNewDeviceContact(name, checkResult.phone, 'AGC Friend', true);
+    const contact = addNewDeviceContact(name, checkResult.phone, 'AGC Friend', true, undefined, { sendRequest: true });
     
     // Attempt navigator.share or copy invite
     const inviteText = `Hey! Connect with me on AGC, the African Super-App for calls, chat and market. Join here: ${window.location.origin}`;

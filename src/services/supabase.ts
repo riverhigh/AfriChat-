@@ -384,6 +384,9 @@ export async function updateAudioSpaceInDb(id: string, updates: Record<string, u
  */
 export async function fetchScamReportByTarget(targetValue: string) {
   const cleaned = targetValue.replace(/\s+/g, '');
+  if (!cleaned || cleaned.startsWith('__agc_sys_')) {
+    return { data: null, error: null };
+  }
   // Try exact match first, then partial
   const { data, error } = await supabase
     .from('scam_reports')
@@ -397,6 +400,7 @@ export async function fetchScamReportByTarget(targetValue: string) {
       .from('scam_reports')
       .select('*')
       .ilike('target_value', `%${cleaned}%`)
+      .not('target_value', 'like', '__agc_sys_%')
       .maybeSingle();
     return { data: d2, error: e2 };
   }
@@ -408,6 +412,7 @@ export async function fetchAllScamReports(limit = 200) {
   return supabase
     .from('scam_reports')
     .select('*')
+    .not('target_value', 'like', '__agc_sys_%')
     .order('reports_count', { ascending: false })
     .limit(limit);
 }

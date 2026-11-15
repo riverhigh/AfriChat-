@@ -14,7 +14,49 @@ const __dirname = path.dirname(__filename);
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+function resolveServerPort(): number {
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('--port=')) {
+      const parsed = parseInt(arg.split('=')[1], 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    } else if ((arg === '--port' || arg === '-p') && args[i + 1]) {
+      const parsed = parseInt(args[i + 1], 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
+  const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : NaN;
+  const nginxPort = process.env.NGINX_PORT ? parseInt(process.env.NGINX_PORT, 10) : NaN;
+  const defaultAppPort = process.env.DEFAULT_APP_PORT ? parseInt(process.env.DEFAULT_APP_PORT, 10) : 3000;
+  if (Number.isFinite(envPort) && envPort > 0) {
+    // When running inside the container proxy (nginx on NGINX_PORT), avoid colliding with nginx
+    if (Number.isFinite(nginxPort) && envPort === nginxPort && process.env.NODE_ENV !== 'production') {
+      return Number.isFinite(defaultAppPort) && defaultAppPort > 0 ? defaultAppPort : 3000;
+    }
+    return envPort;
+  }
+  return Number.isFinite(defaultAppPort) && defaultAppPort > 0 ? defaultAppPort : 3000;
+}
+
+function resolveServerHost(): string {
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('--host=')) {
+      const h = arg.split('=')[1]?.trim();
+      if (h) return h;
+    } else if (arg === '--host' && args[i + 1]) {
+      const h = args[i + 1]?.trim();
+      if (h) return h;
+    }
+  }
+  return (process.env.HOST || '0.0.0.0').trim();
+}
+
+const PORT = resolveServerPort();
+const HOST = resolveServerHost();
 
 // Enable CORS for Express REST routes (allow any local or hosted origin)
 app.use(
@@ -476,12 +518,16 @@ let featureFlags = { ...DEFAULT_FEATURE_FLAGS };
 let cmsData = { ...DEFAULT_CMS_DATA };
 let activeBroadcast: { id: string; title: string; message: string; level: string; createdAt: string; active: boolean } | null = null;
 
+let adminConfigUpdatedAt = '';
+let adminCmsUpdatedAt = '';
+
 try {
   if (fs.existsSync(CONFIG_FILE)) {
     const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     if (raw.config) systemConfig = { ...DEFAULT_SYSTEM_CONFIG, ...raw.config };
     if (raw.featureFlags) featureFlags = { ...DEFAULT_FEATURE_FLAGS, ...raw.featureFlags };
     if (raw.activeBroadcast !== undefined) activeBroadcast = raw.activeBroadcast;
+    if (raw.updatedAt) adminConfigUpdatedAt = String(raw.updatedAt);
   }
 } catch (e) {
   console.warn('Notice loading admin config:', e);
@@ -497,6 +543,7 @@ try {
         marqueeBanner: { ...DEFAULT_CMS_DATA.marqueeBanner, ...(raw.marqueeBanner || {}) },
         sponsorSpotlight: { ...DEFAULT_CMS_DATA.sponsorSpotlight, ...(raw.sponsorSpotlight || {}) },
       };
+      if (raw.updatedAt) adminCmsUpdatedAt = String(raw.updatedAt);
     }
   }
 } catch (e) {
@@ -505,7 +552,11 @@ try {
 
 function saveAdminConfigFile() {
   try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify({ config: systemConfig, featureFlags, activeBroadcast }, null, 2));
+    adminConfigUpdatedAt = new Date().toISOString();
+    fs.writeFileSync(
+      CONFIG_FILE,
+      JSON.stringify({ config: systemConfig, featureFlags, activeBroadcast, updatedAt: adminConfigUpdatedAt }, null, 2)
+    );
   } catch (e) {
     console.error('Failed saving admin config file:', e);
   }
@@ -513,7 +564,8 @@ function saveAdminConfigFile() {
 
 function saveAdminCmsFile() {
   try {
-    fs.writeFileSync(CMS_FILE, JSON.stringify(cmsData, null, 2));
+    adminCmsUpdatedAt = new Date().toISOString();
+    fs.writeFileSync(CMS_FILE, JSON.stringify({ ...cmsData, updatedAt: adminCmsUpdatedAt }, null, 2));
   } catch (e) {
     console.error('Failed saving admin cms file:', e);
   }
@@ -533,6 +585,218 @@ const SUPABASE_ANON_KEY =
   envSupabaseKey && !envSupabaseKey.includes('your-anon-key')
     ? envSupabaseKey
     : DEFAULT_SUPABASE_ANON_KEY;
+
+const ADMIN_SYS_CONFIG_KEY = '__agc_sys_config__';
+const ADMIN_SYS_CMS_KEY = '__agc_sys_cms__';
+const ADMIN_SYS_USERS_KEY = '__agc_sys_users__';
+const ADMIN_SYS_STORES_KEY = '__agc_sys_stores__';
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function canonicalAdminPhoneKey(phoneOrId?: string): string {
+  if (!phoneOrId) return '';
+  const clean = String(phoneOrId).trim();
+  const digits = clean.replace(/\D/g, '');
+  if (digits.length >= 9) return digits.slice(-9);
+  if (digits.length >= 7) return digits;
+  return clean;
+}
+
+async function fetchSupabaseAdminSlice(targetValue: string): Promise<any | null> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/scam_reports?target_value=eq.${encodeURIComponent(targetValue)}&target_type=eq.phone&select=flags,updated_at`,
+      {
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        signal: AbortSignal.timeout(5000),
+      }
+    );
+    if (!res.ok) return null;
+    const rows = await res.json();
+    if (Array.isArray(rows) && rows[0]?.flags && typeof rows[0].flags === 'object') {
+      return { ...rows[0].flags, _rowUpdatedAt: rows[0].updated_at };
+    }
+  } catch (_) {}
+  return null;
+}
+
+async function upsertSupabaseAdminSlice(targetValue: string, accountName: string, flagsPayload: Record<string, any>): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/scam_reports?on_conflict=target_value,target_type`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify({
+        target_value: targetValue,
+        target_type: 'phone',
+        risk_level: 'verified_clean',
+        reports_count: 0,
+        account_name: accountName,
+        bank_name: 'AGC_SYSTEM',
+        flags: { ...flagsPayload, updatedAt: flagsPayload.updatedAt || new Date().toISOString() },
+        updated_at: new Date().toISOString(),
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (_) {}
+}
+
+function pushAdminConfigToSupabase() {
+  upsertSupabaseAdminSlice(ADMIN_SYS_CONFIG_KEY, 'AGC_ADMIN_CONFIG', {
+    config: systemConfig,
+    featureFlags,
+    activeBroadcast,
+    updatedAt: adminConfigUpdatedAt || new Date().toISOString(),
+  }).catch(() => {});
+}
+
+function pushAdminCmsToSupabase() {
+  upsertSupabaseAdminSlice(ADMIN_SYS_CMS_KEY, 'AGC_ADMIN_CMS', {
+    cms: cmsData,
+    updatedAt: adminCmsUpdatedAt || new Date().toISOString(),
+  }).catch(() => {});
+}
+
+async function pushAdminUserOverrideToSupabase(user: RegisteredUser) {
+  const userKey = canonicalAdminPhoneKey(user.phoneNumber || user.cleanPhone || user.id);
+  if (!userKey) return;
+  try {
+    const slice = (await fetchSupabaseAdminSlice(ADMIN_SYS_USERS_KEY)) || {};
+    const prevOverrides = slice.overrides && typeof slice.overrides === 'object' ? slice.overrides : {};
+    const nowIso = new Date().toISOString();
+    await upsertSupabaseAdminSlice(ADMIN_SYS_USERS_KEY, 'AGC_ADMIN_USERS', {
+      overrides: {
+        ...prevOverrides,
+        [userKey]: {
+          ...(prevOverrides[userKey] || {}),
+          id: user.id,
+          fullName: user.fullName,
+          phoneNumber: user.phoneNumber,
+          avatarUrl: user.avatarUrl,
+          role: user.role,
+          status: user.status,
+          verificationBadge: user.verificationBadge ?? null,
+          kycStatus: user.kycStatus,
+          kycType: user.kycType,
+          walletBalanceNgn: user.walletBalanceNgn,
+          adminWalletAdjustedAt: (user as any).adminWalletAdjustedAt,
+          bannedAt: user.bannedAt,
+          banReason: user.banReason,
+          updatedAt: nowIso,
+        },
+      },
+      updatedAt: nowIso,
+    });
+  } catch (_) {}
+}
+
+function pushAdminStoresToSupabase() {
+  upsertSupabaseAdminSlice(ADMIN_SYS_STORES_KEY, 'AGC_ADMIN_STORES', {
+    stores: Object.fromEntries(storeOverridesMap.entries()),
+    artisans: Object.fromEntries(artisanOverridesMap.entries()),
+    updatedAt: new Date().toISOString(),
+  }).catch(() => {});
+}
+
+async function syncAdminStateFromSupabase() {
+  try {
+    const [cfgSlice, cmsSlice, usersSlice, storesSlice] = await Promise.all([
+      fetchSupabaseAdminSlice(ADMIN_SYS_CONFIG_KEY),
+      fetchSupabaseAdminSlice(ADMIN_SYS_CMS_KEY),
+      fetchSupabaseAdminSlice(ADMIN_SYS_USERS_KEY),
+      fetchSupabaseAdminSlice(ADMIN_SYS_STORES_KEY),
+    ]);
+
+    if (cfgSlice) {
+      const remoteTs = new Date(cfgSlice.updatedAt || cfgSlice._rowUpdatedAt || 0).getTime();
+      const localTs = adminConfigUpdatedAt ? new Date(adminConfigUpdatedAt).getTime() : 0;
+      if (remoteTs > localTs) {
+        if (cfgSlice.config) systemConfig = { ...systemConfig, ...cfgSlice.config };
+        if (cfgSlice.featureFlags) featureFlags = { ...featureFlags, ...cfgSlice.featureFlags };
+        if (cfgSlice.activeBroadcast !== undefined) activeBroadcast = cfgSlice.activeBroadcast;
+        adminConfigUpdatedAt = cfgSlice.updatedAt || cfgSlice._rowUpdatedAt || new Date().toISOString();
+        saveAdminConfigFile();
+      }
+    }
+
+    if (cmsSlice && cmsSlice.cms) {
+      const remoteTs = new Date(cmsSlice.updatedAt || cmsSlice._rowUpdatedAt || 0).getTime();
+      const localTs = adminCmsUpdatedAt ? new Date(adminCmsUpdatedAt).getTime() : 0;
+      if (remoteTs > localTs) {
+        cmsData = {
+          ...DEFAULT_CMS_DATA,
+          ...cmsSlice.cms,
+          marqueeBanner: { ...DEFAULT_CMS_DATA.marqueeBanner, ...(cmsSlice.cms.marqueeBanner || {}) },
+          sponsorSpotlight: { ...DEFAULT_CMS_DATA.sponsorSpotlight, ...(cmsSlice.cms.sponsorSpotlight || {}) },
+        };
+        adminCmsUpdatedAt = cmsSlice.updatedAt || cmsSlice._rowUpdatedAt || new Date().toISOString();
+        saveAdminCmsFile();
+      }
+    }
+
+    if (usersSlice && usersSlice.overrides && typeof usersSlice.overrides === 'object') {
+      let usersChanged = false;
+      for (const [k, ov] of Object.entries<any>(usersSlice.overrides)) {
+        if (!ov) continue;
+        const match = findUserEntry(ov.phoneNumber || k) || findUserEntry(k);
+        if (match) {
+          const { key, user } = match;
+          const localUserTs = new Date((user as any).updatedAt || 0).getTime();
+          const remoteUserTs = new Date(ov.updatedAt || 0).getTime();
+          if (remoteUserTs > localUserTs) {
+            usersByPhone.set(key, {
+              ...user,
+              ...(ov.role !== undefined ? { role: ov.role } : {}),
+              ...(ov.status !== undefined ? { status: ov.status } : {}),
+              ...(ov.verificationBadge !== undefined ? { verificationBadge: ov.verificationBadge } : {}),
+              ...(ov.kycStatus !== undefined ? { kycStatus: ov.kycStatus } : {}),
+              ...(ov.kycType !== undefined ? { kycType: ov.kycType } : {}),
+              ...(ov.walletBalanceNgn !== undefined ? { walletBalanceNgn: ov.walletBalanceNgn } : {}),
+              ...(ov.adminWalletAdjustedAt !== undefined ? { adminWalletAdjustedAt: ov.adminWalletAdjustedAt } : {}),
+              ...(ov.bannedAt !== undefined ? { bannedAt: ov.bannedAt } : {}),
+              ...(ov.banReason !== undefined ? { banReason: ov.banReason } : {}),
+              updatedAt: ov.updatedAt,
+            } as any);
+            usersChanged = true;
+          }
+        }
+      }
+      if (usersChanged) saveUsersFile();
+    }
+
+    if (storesSlice) {
+      let auditChanged = false;
+      if (storesSlice.stores && typeof storesSlice.stores === 'object') {
+        for (const [id, ov] of Object.entries<any>(storesSlice.stores)) {
+          const cur = storeOverridesMap.get(id);
+          const remoteTs = new Date(ov?.updatedAt || 0).getTime();
+          const localTs = new Date(cur?.updatedAt || 0).getTime();
+          if (remoteTs > localTs) {
+            storeOverridesMap.set(id, ov);
+            auditChanged = true;
+          }
+        }
+      }
+      if (storesSlice.artisans && typeof storesSlice.artisans === 'object') {
+        for (const [id, ov] of Object.entries<any>(storesSlice.artisans)) {
+          const cur = artisanOverridesMap.get(id);
+          const remoteTs = new Date(ov?.updatedAt || 0).getTime();
+          const localTs = new Date(cur?.updatedAt || 0).getTime();
+          if (remoteTs > localTs) {
+            artisanOverridesMap.set(id, ov);
+            auditChanged = true;
+          }
+        }
+      }
+      if (auditChanged) saveAdminAuditFile();
+    }
+  } catch (_) {}
+}
 
 function findUserEntry(phoneOrId: string): { key: string; user: RegisteredUser } | null {
   const decoded = decodeURIComponent(phoneOrId || '').trim();
@@ -939,8 +1203,12 @@ app.get('/api/users/lookup', (req: Request, res: Response) => {
 
 // REST: List all registered users (synced live with Supabase registry)
 app.get('/api/users', async (_req: Request, res: Response) => {
-  await syncUsersFromSupabase();
-  res.json({ users: Array.from(usersByPhone.values()) });
+  try {
+    await syncUsersFromSupabase();
+    res.json({ users: Array.from(usersByPhone.values()) });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to load users', users: Array.from(usersByPhone.values()) });
+  }
 });
 
 // REST: Communities endpoints
@@ -1180,92 +1448,100 @@ async function fetchSupabaseStoresAndArtisans() {
 
 // ── REST: LIVE ADMIN TELEMETRY & COMMAND API ────────────────────────────────
 app.get('/api/admin/health', async (_req: Request, res: Response) => {
-  const probeUrl = async (url: string, headers: Record<string, string> = {}) => {
-    const start = Date.now();
-    try {
-      const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 3500);
-      const r = await fetch(url, { headers, signal: controller.signal });
-      clearTimeout(t);
-      const latencyMs = Date.now() - start;
-      return {
-        status: r.ok || r.status < 500 ? 'healthy' : 'degraded',
-        httpStatus: r.status,
-        latencyMs,
-      };
-    } catch (e: any) {
-      return { status: 'offline', httpStatus: 0, latencyMs: Date.now() - start, error: e?.message || 'unreachable' };
-    }
-  };
+  try {
+    const probeUrl = async (url: string, headers: Record<string, string> = {}) => {
+      const start = Date.now();
+      try {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 3500);
+        const r = await fetch(url, { headers, signal: controller.signal });
+        clearTimeout(t);
+        const latencyMs = Date.now() - start;
+        return {
+          status: r.ok || r.status < 500 ? 'healthy' : 'degraded',
+          httpStatus: r.status,
+          latencyMs,
+        };
+      } catch (e: any) {
+        return { status: 'offline', httpStatus: 0, latencyMs: Date.now() - start, error: e?.message || 'unreachable' };
+      }
+    };
 
-  const [supabaseProbe, paystackProbe] = await Promise.all([
-    probeUrl(`${SUPABASE_URL}/auth/v1/settings`, { apikey: SUPABASE_ANON_KEY }),
-    probeUrl('https://api.paystack.co/bank?perPage=1'),
-  ]);
+    const [supabaseProbe, paystackProbe] = await Promise.all([
+      probeUrl(`${SUPABASE_URL}/auth/v1/settings`, { apikey: SUPABASE_ANON_KEY }),
+      probeUrl('https://api.paystack.co/bank?perPage=1'),
+    ]);
 
-  res.json({
-    success: true,
-    checkedAt: new Date().toISOString(),
-    subsystems: {
-      supabase: supabaseProbe,
-      paystack: paystackProbe,
-      websocket: {
-        status: 'healthy',
-        connectedClients: io.engine.clientsCount || onlineUsers.size,
-        onlineUsersCount: onlineUsers.size,
+    res.json({
+      success: true,
+      checkedAt: new Date().toISOString(),
+      subsystems: {
+        supabase: supabaseProbe,
+        paystack: paystackProbe,
+        websocket: {
+          status: 'healthy',
+          connectedClients: io.engine.clientsCount || onlineUsers.size,
+          onlineUsersCount: onlineUsers.size,
+        },
       },
-    },
-  });
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Health check error' });
+  }
 });
 
 app.get('/api/admin/metrics', async (_req: Request, res: Response) => {
-  await syncUsersFromSupabase();
-  const { stores, artisans } = await fetchSupabaseStoresAndArtisans();
-  const allOrders = Array.from(dispatchOrdersMap.values());
-  const totalVolumeNgn = allOrders.reduce((acc, o: any) => acc + (Number(o.totalFee) || Number(o.estimatedFee) || 0), 0);
-  const totalCommissionNgn = allOrders.reduce((acc, o: any) => acc + (Number(o.platformFee) || Math.round((Number(o.estimatedFee) || 0) * 0.05)), 0);
-  const activeDeliveriesCount = allOrders.filter((o: any) => o.status !== 'delivered').length;
-  const completedDeliveriesCount = allOrders.filter((o: any) => o.status === 'delivered').length;
+  try {
+    await syncUsersFromSupabase();
+    const { stores, artisans } = await fetchSupabaseStoresAndArtisans();
+    const allOrders = Array.from(dispatchOrdersMap.values());
+    const totalVolumeNgn = allOrders.reduce((acc, o: any) => acc + (Number(o.totalFee) || Number(o.estimatedFee) || 0), 0);
+    const totalCommissionNgn = allOrders.reduce((acc, o: any) => acc + (Number(o.platformFee) || Math.round((Number(o.estimatedFee) || 0) * 0.05)), 0);
+    const activeDeliveriesCount = allOrders.filter((o: any) => o.status !== 'delivered').length;
+    const completedDeliveriesCount = allOrders.filter((o: any) => o.status === 'delivered').length;
 
-  const onlineList = Array.from(onlineUsers.values());
-  const registeredUsersList = Array.from(usersByPhone.values());
+    const onlineList = Array.from(onlineUsers.values());
+    const registeredUsersList = Array.from(usersByPhone.values());
 
-  const activeStatusesCount = Array.from(statusesMap.values()).filter(
-    (s: any) => !s.expiresAt || new Date(s.expiresAt).getTime() > Date.now()
-  ).length;
+    const activeStatusesCount = Array.from(statusesMap.values()).filter(
+      (s: any) => !s.expiresAt || new Date(s.expiresAt).getTime() > Date.now()
+    ).length;
 
-  res.json({
-    success: true,
-    timestamp: new Date().toISOString(),
-    uptimeSeconds: Math.floor(process.uptime()),
-    serverMemoryMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-    onlineUsersCount: onlineUsers.size,
-    onlineUsers: onlineList,
-    registeredUsersCount: usersByPhone.size,
-    registeredUsers: registeredUsersList,
-    communitiesCount: communitiesMap.size,
-    communities: Array.from(communitiesMap.values()),
-    activeStatusesCount,
-    dispatch: {
-      totalOrdersCount: allOrders.length,
-      activeDeliveriesCount,
-      completedDeliveriesCount,
-      totalVolumeNgn,
-      totalCommissionNgn,
-      orders: allOrders,
-    },
-    stores,
-    artisans,
-    securityEvents: securityEvents.slice(0, 60),
-    blockedIps,
-    auditTrail: auditTrail.slice(0, 80),
-    webhookLogs: webhookLogs.slice(0, 60),
-    systemStatus: 'healthy',
-    config: systemConfig,
-    featureFlags,
-    cms: cmsData,
-    activeBroadcast,
-  });
+    res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      serverMemoryMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+      onlineUsersCount: onlineUsers.size,
+      onlineUsers: onlineList,
+      registeredUsersCount: usersByPhone.size,
+      registeredUsers: registeredUsersList,
+      communitiesCount: communitiesMap.size,
+      communities: Array.from(communitiesMap.values()),
+      activeStatusesCount,
+      dispatch: {
+        totalOrdersCount: allOrders.length,
+        activeDeliveriesCount,
+        completedDeliveriesCount,
+        totalVolumeNgn,
+        totalCommissionNgn,
+        orders: allOrders,
+      },
+      stores,
+      artisans,
+      securityEvents: securityEvents.slice(0, 60),
+      blockedIps,
+      auditTrail: auditTrail.slice(0, 80),
+      webhookLogs: webhookLogs.slice(0, 60),
+      systemStatus: 'healthy',
+      config: systemConfig,
+      featureFlags,
+      cms: cmsData,
+      activeBroadcast,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to compute metrics' });
+  }
 });
 
 // Admin Security, Rate Limit & Audit Logs API
@@ -1441,95 +1717,149 @@ app.post('/api/webhooks/paystack', (req: Request, res: Response) => {
 });
 
 // Store & Artisan Admin Mutations
-app.patch('/api/admin/stores/:id', (req: Request, res: Response) => {
-  const id = decodeURIComponent(req.params.id || '');
-  const { tier, status, verified, storeName, itemsLimit, ownerName, ownerPhone } = req.body || {};
-  const existing = storeOverridesMap.get(id) || {};
-  const updated = {
-    ...existing,
-    id,
-    ...(storeName !== undefined ? { storeName } : {}),
-    ...(ownerName !== undefined ? { ownerName } : {}),
-    ...(ownerPhone !== undefined ? { ownerPhone } : {}),
-    ...(tier !== undefined ? { tier, itemsLimit: itemsLimit ?? (tier === 'pro_100' ? 100 : 30) } : {}),
-    ...(status !== undefined ? { status } : {}),
-    ...(verified !== undefined ? { verified } : {}),
-    updatedAt: new Date().toISOString(),
-  };
-  storeOverridesMap.set(id, updated);
-  const audit = appendAuditEntry({
-    refId: `STORE_${id}`,
-    actor: 'Super Admin',
-    actorRole: 'Super Admin',
-    action: 'Store Updated',
-    target: updated.storeName || id,
-    details: `Tier: ${updated.tier || 'unchanged'} · Status: ${updated.status || 'unchanged'} · Verified: ${String(updated.verified ?? '')}`,
-  });
-  io.emit('admin_store_updated', updated);
-  res.json({ success: true, store: updated, auditEntry: audit });
+app.patch('/api/admin/stores/:id', async (req: Request, res: Response) => {
+  try {
+    const id = decodeURIComponent(req.params.id || '');
+    const { tier, status, verified, storeName, itemsLimit, ownerName, ownerPhone } = req.body || {};
+    const existing = storeOverridesMap.get(id) || {};
+    const updated = {
+      ...existing,
+      id,
+      ...(storeName !== undefined ? { storeName } : {}),
+      ...(ownerName !== undefined ? { ownerName } : {}),
+      ...(ownerPhone !== undefined ? { ownerPhone } : {}),
+      ...(tier !== undefined ? { tier, itemsLimit: itemsLimit ?? (tier === 'pro_100' ? 100 : 30) } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...(verified !== undefined ? { verified } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    storeOverridesMap.set(id, updated);
+    saveAdminAuditFile();
+    pushAdminStoresToSupabase();
+
+    if (UUID_REGEX.test(id)) {
+      const dbPatch: Record<string, any> = {};
+      if (tier !== undefined) {
+        dbPatch.tier = tier;
+        dbPatch.items_limit = updated.itemsLimit;
+      }
+      if (status !== undefined) dbPatch.is_active = status === 'active';
+      if (Object.keys(dbPatch).length > 0) {
+        fetch(`${SUPABASE_URL}/rest/v1/store_subscriptions?id=eq.${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(dbPatch),
+        }).catch(() => {});
+      }
+    }
+
+    const audit = appendAuditEntry({
+      refId: `STORE_${id}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: 'Store Updated',
+      target: updated.storeName || id,
+      details: `Tier: ${updated.tier || 'unchanged'} · Status: ${updated.status || 'unchanged'} · Verified: ${String(updated.verified ?? '')}`,
+    });
+    io.emit('admin_store_updated', updated);
+    res.json({ success: true, store: updated, auditEntry: audit });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to update store' });
+  }
 });
 
-app.patch('/api/admin/artisans/:id', (req: Request, res: Response) => {
-  const id = decodeURIComponent(req.params.id || '');
-  const { isApproved, stationName } = req.body || {};
-  const existing = artisanOverridesMap.get(id) || {};
-  const updated = {
-    ...existing,
-    id,
-    ...(stationName !== undefined ? { stationName } : {}),
-    ...(isApproved !== undefined ? { isApproved } : {}),
-    updatedAt: new Date().toISOString(),
-  };
-  artisanOverridesMap.set(id, updated);
-  const audit = appendAuditEntry({
-    refId: `ART_${id}`,
-    actor: 'Super Admin',
-    actorRole: 'Super Admin',
-    action: isApproved ? 'Artisan Approved' : 'Artisan Suspended',
-    target: updated.stationName || id,
-    details: `Approval status changed to ${Boolean(isApproved)}`,
-  });
-  io.emit('admin_artisan_updated', updated);
-  res.json({ success: true, artisan: updated, auditEntry: audit });
+app.patch('/api/admin/artisans/:id', async (req: Request, res: Response) => {
+  try {
+    const id = decodeURIComponent(req.params.id || '');
+    const { isApproved, stationName } = req.body || {};
+    const existing = artisanOverridesMap.get(id) || {};
+    const updated = {
+      ...existing,
+      id,
+      ...(stationName !== undefined ? { stationName } : {}),
+      ...(isApproved !== undefined ? { isApproved } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    artisanOverridesMap.set(id, updated);
+    saveAdminAuditFile();
+    pushAdminStoresToSupabase();
+
+    if (UUID_REGEX.test(id) && isApproved !== undefined) {
+      fetch(`${SUPABASE_URL}/rest/v1/artisan_stations?id=eq.${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_approved: Boolean(isApproved) }),
+      }).catch(() => {});
+    }
+
+    const audit = appendAuditEntry({
+      refId: `ART_${id}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: isApproved ? 'Artisan Approved' : 'Artisan Suspended',
+      target: updated.stationName || id,
+      details: `Approval status changed to ${Boolean(isApproved)}`,
+    });
+    io.emit('admin_artisan_updated', updated);
+    res.json({ success: true, artisan: updated, auditEntry: audit });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to update artisan' });
+  }
 });
 
 app.patch('/api/admin/users/:phone/kyc', async (req: Request, res: Response) => {
-  const { phone } = req.params;
-  const { kycStatus, kycType, phoneNumber, fullName, avatarUrl } = req.body || {};
-  const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
-  if (!match) return res.status(404).json({ error: 'User not found' });
-  const { key, user } = match;
-  if (kycStatus !== undefined) user.kycStatus = kycStatus;
-  if (kycType !== undefined) user.kycType = kycType;
-  usersByPhone.set(key, user);
-  saveUsersFile();
-  const audit = appendAuditEntry({
-    refId: `KYC_${user.cleanPhone || key}`,
-    actor: 'Super Admin',
-    actorRole: 'Super Admin',
-    action: `KYC ${String(kycStatus || 'updated').toUpperCase()}`,
-    target: `${user.fullName} (${user.phoneNumber})`,
-    details: `${kycType || user.kycType || 'BVN/NIN'} verification marked ${kycStatus}`,
-  });
-  io.emit('user_updated', user);
-  res.json({ success: true, user, auditEntry: audit });
+  try {
+    const { phone } = req.params;
+    const { kycStatus, kycType, phoneNumber, fullName, avatarUrl } = req.body || {};
+    const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
+    if (!match) return res.status(404).json({ error: 'User not found' });
+    const { key, user } = match;
+    if (kycStatus !== undefined) user.kycStatus = kycStatus;
+    if (kycType !== undefined) user.kycType = kycType;
+    (user as any).updatedAt = new Date().toISOString();
+    usersByPhone.set(key, user);
+    saveUsersFile();
+    pushAdminUserOverrideToSupabase(user);
+    const audit = appendAuditEntry({
+      refId: `KYC_${user.cleanPhone || key}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: `KYC ${String(kycStatus || 'updated').toUpperCase()}`,
+      target: `${user.fullName} (${user.phoneNumber})`,
+      details: `${kycType || user.kycType || 'BVN/NIN'} verification marked ${kycStatus}`,
+    });
+    io.emit('user_updated', user);
+    res.json({ success: true, user, auditEntry: audit });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to update KYC' });
+  }
 });
 
 // Admin System Config: GET & POST
-app.get('/api/admin/config', (_req: Request, res: Response) => {
-  res.json({
-    success: true,
-    config: systemConfig,
-    featureFlags,
-    cms: cmsData,
-    activeBroadcast,
-  });
+app.get('/api/admin/config', async (_req: Request, res: Response) => {
+  try {
+    await syncAdminStateFromSupabase();
+    res.json({
+      success: true,
+      config: systemConfig,
+      featureFlags,
+      cms: cmsData,
+      activeBroadcast,
+      updatedAt: adminConfigUpdatedAt,
+      cmsUpdatedAt: adminCmsUpdatedAt,
+      stores: Object.fromEntries(storeOverridesMap.entries()),
+      artisans: Object.fromEntries(artisanOverridesMap.entries()),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to fetch admin config' });
+  }
 });
 
 app.post('/api/admin/config', (req: Request, res: Response) => {
   const updates = req.body && typeof req.body === 'object' ? req.body : {};
   systemConfig = { ...systemConfig, ...updates };
   saveAdminConfigFile();
+  pushAdminConfigToSupabase();
   appendAuditEntry({
     refId: 'SYS_CONFIG',
     actor: 'Super Admin',
@@ -1547,6 +1877,7 @@ app.post('/api/admin/features', (req: Request, res: Response) => {
   const updates = req.body && typeof req.body === 'object' ? req.body : {};
   featureFlags = { ...featureFlags, ...updates };
   saveAdminConfigFile();
+  pushAdminConfigToSupabase();
   appendAuditEntry({
     refId: 'SYS_FLAGS',
     actor: 'Super Admin',
@@ -1573,6 +1904,7 @@ app.post('/api/admin/cms', (req: Request, res: Response) => {
       : cmsData.sponsorSpotlight,
   };
   saveAdminCmsFile();
+  pushAdminCmsToSupabase();
   appendAuditEntry({
     refId: 'SYS_CMS',
     actor: 'Super Admin',
@@ -1586,185 +1918,217 @@ app.post('/api/admin/cms', (req: Request, res: Response) => {
 });
 
 app.patch('/api/admin/users/:phone/badge', async (req: Request, res: Response) => {
-  const { phone } = req.params;
-  const { verificationBadge, role, status, walletBalanceNgn, phoneNumber, fullName, avatarUrl } = req.body;
-  const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
-  if (match) {
-    const { key, user } = match;
-    if (verificationBadge !== undefined) user.verificationBadge = verificationBadge;
-    if (role !== undefined) user.role = role;
-    if (status !== undefined) user.status = status;
-    if (walletBalanceNgn !== undefined) user.walletBalanceNgn = walletBalanceNgn;
-    usersByPhone.set(key, user);
-    saveUsersFile();
-    appendAuditEntry({
-      refId: `USR_${user.cleanPhone || key}`,
-      actor: 'Super Admin',
-      actorRole: 'Super Admin',
-      action: verificationBadge !== undefined ? `Badge: ${verificationBadge || 'Removed'}` : 'User Updated',
-      target: `${user.fullName} (${user.phoneNumber})`,
-      details: `Role: ${user.role} · Badge: ${user.verificationBadge || 'none'}`,
-    });
-    io.emit('user_updated', user);
-    return res.json({ success: true, user });
+  try {
+    const { phone } = req.params;
+    const { verificationBadge, role, status, walletBalanceNgn, phoneNumber, fullName, avatarUrl } = req.body || {};
+    const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
+    if (match) {
+      const { key, user } = match;
+      if (verificationBadge !== undefined) user.verificationBadge = verificationBadge;
+      if (role !== undefined) user.role = role;
+      if (status !== undefined) user.status = status;
+      if (walletBalanceNgn !== undefined) user.walletBalanceNgn = walletBalanceNgn;
+      (user as any).updatedAt = new Date().toISOString();
+      usersByPhone.set(key, user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(user);
+      appendAuditEntry({
+        refId: `USR_${user.cleanPhone || key}`,
+        actor: 'Super Admin',
+        actorRole: 'Super Admin',
+        action: verificationBadge !== undefined ? `Badge: ${verificationBadge || 'Removed'}` : 'User Updated',
+        target: `${user.fullName} (${user.phoneNumber})`,
+        details: `Role: ${user.role} · Badge: ${user.verificationBadge || 'none'}`,
+      });
+      io.emit('user_updated', user);
+      return res.json({ success: true, user });
+    }
+    res.status(404).json({ error: 'User not found' });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to update user badge' });
   }
-  res.status(404).json({ error: 'User not found' });
 });
 
 app.patch('/api/admin/users/:phone/status', async (req: Request, res: Response) => {
-  const { phone } = req.params;
-  const { status, verificationBadge, role, walletBalanceNgn, reason, phoneNumber, fullName, avatarUrl } = req.body;
-  const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
-  if (match) {
-    const { key, user } = match;
-    const cleanKey = user.cleanPhone || key;
-    if (status !== undefined) {
-      user.status = status;
-      if (status === 'banned') {
-        user.bannedAt = new Date().toISOString();
-        user.banReason = reason || 'Account permanently banned by platform administrator.';
-        user.isOnline = false;
-        io.to(`phone:${cleanKey}`).emit('account_banned', {
-          banned: true,
-          reason: user.banReason,
-          bannedAt: user.bannedAt,
-        });
-        const sockId = phoneToSocketId.get(cleanKey);
-        if (sockId) {
-          const s = io.sockets.sockets.get(sockId);
-          if (s) {
-            s.emit('account_banned', { banned: true, reason: user.banReason, bannedAt: user.bannedAt });
-            s.disconnect(true);
+  try {
+    const { phone } = req.params;
+    const { status, verificationBadge, role, walletBalanceNgn, reason, phoneNumber, fullName, avatarUrl } = req.body || {};
+    const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
+    if (match) {
+      const { key, user } = match;
+      const cleanKey = user.cleanPhone || key;
+      if (status !== undefined) {
+        user.status = status;
+        if (status === 'banned') {
+          user.bannedAt = new Date().toISOString();
+          user.banReason = reason || 'Account permanently banned by platform administrator.';
+          user.isOnline = false;
+          io.to(`phone:${cleanKey}`).emit('account_banned', {
+            banned: true,
+            reason: user.banReason,
+            bannedAt: user.bannedAt,
+          });
+          const sockId = phoneToSocketId.get(cleanKey);
+          if (sockId) {
+            const s = io.sockets.sockets.get(sockId);
+            if (s) {
+              s.emit('account_banned', { banned: true, reason: user.banReason, bannedAt: user.bannedAt });
+              s.disconnect(true);
+            }
           }
+        } else if (status === 'active') {
+          delete user.bannedAt;
+          delete user.banReason;
         }
-      } else if (status === 'active') {
-        delete user.bannedAt;
-        delete user.banReason;
       }
+      if (verificationBadge !== undefined) user.verificationBadge = verificationBadge;
+      if (role !== undefined) user.role = role;
+      if (walletBalanceNgn !== undefined) user.walletBalanceNgn = walletBalanceNgn;
+      (user as any).updatedAt = new Date().toISOString();
+      usersByPhone.set(key, user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(user);
+      appendAuditEntry({
+        refId: `USR_${cleanKey}`,
+        actor: 'Super Admin',
+        actorRole: 'Super Admin',
+        action: `Account ${user.status || 'updated'}`,
+        target: `${user.fullName} (${user.phoneNumber})`,
+        details: `Role: ${user.role} · Status: ${user.status}`,
+      });
+      io.emit('user_updated', user);
+      return res.json({ success: true, user });
     }
-    if (verificationBadge !== undefined) user.verificationBadge = verificationBadge;
-    if (role !== undefined) user.role = role;
-    if (walletBalanceNgn !== undefined) user.walletBalanceNgn = walletBalanceNgn;
-    usersByPhone.set(key, user);
-    saveUsersFile();
-    appendAuditEntry({
-      refId: `USR_${cleanKey}`,
-      actor: 'Super Admin',
-      actorRole: 'Super Admin',
-      action: `Account ${user.status || 'updated'}`,
-      target: `${user.fullName} (${user.phoneNumber})`,
-      details: `Role: ${user.role} · Status: ${user.status}`,
-    });
-    io.emit('user_updated', user);
-    return res.json({ success: true, user });
+    res.status(404).json({ error: 'User not found' });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to update user status' });
   }
-  res.status(404).json({ error: 'User not found' });
 });
 
 // Admin Permanent Ban Endpoint
 app.post('/api/admin/users/:phone/ban', async (req: Request, res: Response) => {
-  const { phone } = req.params;
-  const { reason, phoneNumber, fullName, avatarUrl } = req.body;
-  const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
-  if (match) {
-    const { key, user } = match;
-    const cleanKey = user.cleanPhone || key;
-    user.status = 'banned';
-    user.bannedAt = new Date().toISOString();
-    user.banReason = reason || 'Permanently blocked by administrator for policy violation.';
-    user.isOnline = false;
-    usersByPhone.set(key, user);
-    saveUsersFile();
-    appendAuditEntry({
-      refId: `USR_${cleanKey}`,
-      actor: 'Super Admin',
-      actorRole: 'Super Admin',
-      action: 'Account Banned',
-      target: `${user.fullName} (${user.phoneNumber})`,
-      details: user.banReason || 'Account permanently banned',
-    });
+  try {
+    const { phone } = req.params;
+    const { reason, phoneNumber, fullName, avatarUrl } = req.body || {};
+    const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
+    if (match) {
+      const { key, user } = match;
+      const cleanKey = user.cleanPhone || key;
+      user.status = 'banned';
+      user.bannedAt = new Date().toISOString();
+      user.banReason = reason || 'Permanently blocked by administrator for policy violation.';
+      user.isOnline = false;
+      (user as any).updatedAt = new Date().toISOString();
+      usersByPhone.set(key, user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(user);
+      appendAuditEntry({
+        refId: `USR_${cleanKey}`,
+        actor: 'Super Admin',
+        actorRole: 'Super Admin',
+        action: 'Account Banned',
+        target: `${user.fullName} (${user.phoneNumber})`,
+        details: user.banReason || 'Account permanently banned',
+      });
 
-    // Kick and lock out socket
-    io.to(`phone:${cleanKey}`).emit('account_banned', {
-      banned: true,
-      reason: user.banReason,
-      bannedAt: user.bannedAt,
-    });
-    const sockId = phoneToSocketId.get(cleanKey);
-    if (sockId) {
-      const s = io.sockets.sockets.get(sockId);
-      if (s) {
-        s.emit('account_banned', { banned: true, reason: user.banReason, bannedAt: user.bannedAt });
-        s.disconnect(true);
+      // Kick and lock out socket
+      io.to(`phone:${cleanKey}`).emit('account_banned', {
+        banned: true,
+        reason: user.banReason,
+        bannedAt: user.bannedAt,
+      });
+      const sockId = phoneToSocketId.get(cleanKey);
+      if (sockId) {
+        const s = io.sockets.sockets.get(sockId);
+        if (s) {
+          s.emit('account_banned', { banned: true, reason: user.banReason, bannedAt: user.bannedAt });
+          s.disconnect(true);
+        }
       }
-    }
 
-    io.emit('user_updated', user);
-    console.log(`🚫 [USER BANNED PERMANENTLY]: ${user.fullName} (${user.phoneNumber})`);
-    return res.json({ success: true, user });
+      io.emit('user_updated', user);
+      console.log(`🚫 [USER BANNED PERMANENTLY]: ${user.fullName} (${user.phoneNumber})`);
+      return res.json({ success: true, user });
+    }
+    res.status(404).json({ error: 'User not found' });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to ban user' });
   }
-  res.status(404).json({ error: 'User not found' });
 });
 
 // Admin Unban / Restore Endpoint
 app.post('/api/admin/users/:phone/unban', async (req: Request, res: Response) => {
-  const { phone } = req.params;
-  const match = await ensureUserEntry(phone, req.body);
-  if (match) {
-    const { key, user } = match;
-    user.status = 'active';
-    delete user.bannedAt;
-    delete user.banReason;
-    usersByPhone.set(key, user);
-    saveUsersFile();
-    appendAuditEntry({
-      refId: `USR_${user.cleanPhone || key}`,
-      actor: 'Super Admin',
-      actorRole: 'Super Admin',
-      action: 'Account Unbanned',
-      target: `${user.fullName} (${user.phoneNumber})`,
-      details: 'Account access restored',
-    });
-    io.emit('user_updated', user);
-    console.log(`✅ [USER UNBANNED]: ${user.fullName} (${user.phoneNumber})`);
-    return res.json({ success: true, user });
+  try {
+    const { phone } = req.params;
+    const match = await ensureUserEntry(phone, req.body || {});
+    if (match) {
+      const { key, user } = match;
+      user.status = 'active';
+      delete user.bannedAt;
+      delete user.banReason;
+      (user as any).updatedAt = new Date().toISOString();
+      usersByPhone.set(key, user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(user);
+      appendAuditEntry({
+        refId: `USR_${user.cleanPhone || key}`,
+        actor: 'Super Admin',
+        actorRole: 'Super Admin',
+        action: 'Account Unbanned',
+        target: `${user.fullName} (${user.phoneNumber})`,
+        details: 'Account access restored',
+      });
+      io.emit('user_updated', user);
+      console.log(`✅ [USER UNBANNED]: ${user.fullName} (${user.phoneNumber})`);
+      return res.json({ success: true, user });
+    }
+    res.status(404).json({ error: 'User not found' });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to unban user' });
   }
-  res.status(404).json({ error: 'User not found' });
 });
 
 // Admin Wallet Direct Adjuster
 app.post('/api/admin/users/:phone/adjust-wallet', async (req: Request, res: Response) => {
-  const { phone } = req.params;
-  const { newBalance, deltaNgn, note, phoneNumber, fullName, avatarUrl } = req.body;
-  const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
-  if (match) {
-    const { key, user } = match;
-    const cleanKey = user.cleanPhone || key;
-    let balance = user.walletBalanceNgn || 0;
-    if (newBalance !== undefined) {
-      balance = Math.max(0, Number(newBalance));
-    } else if (deltaNgn !== undefined) {
-      balance = Math.max(0, balance + Number(deltaNgn));
+  try {
+    const { phone } = req.params;
+    const { newBalance, deltaNgn, note, phoneNumber, fullName, avatarUrl } = req.body || {};
+    const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
+    if (match) {
+      const { key, user } = match;
+      const cleanKey = user.cleanPhone || key;
+      let balance = user.walletBalanceNgn || 0;
+      if (newBalance !== undefined) {
+        balance = Math.max(0, Number(newBalance));
+      } else if (deltaNgn !== undefined) {
+        balance = Math.max(0, balance + Number(deltaNgn));
+      }
+      user.walletBalanceNgn = balance;
+      const nowIso = new Date().toISOString();
+      (user as any).adminWalletAdjustedAt = nowIso;
+      (user as any).updatedAt = nowIso;
+      usersByPhone.set(key, user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(user);
+      appendAuditEntry({
+        refId: `WAL_${cleanKey}_${Date.now()}`,
+        actor: 'Super Admin',
+        actorRole: 'Super Admin',
+        action: 'Wallet Adjusted',
+        target: `${user.fullName} (${user.phoneNumber})`,
+        details: `New balance: ₦${balance.toLocaleString()} (${note || 'Direct adjustment'})`,
+      });
+      io.emit('user_updated', user);
+      io.to(`phone:${cleanKey}`).emit('wallet_updated', {
+        balance,
+        note: note || 'Adjusted by administrator',
+      });
+      return res.json({ success: true, user, balance });
     }
-    user.walletBalanceNgn = balance;
-    usersByPhone.set(key, user);
-    saveUsersFile();
-    appendAuditEntry({
-      refId: `WAL_${cleanKey}_${Date.now()}`,
-      actor: 'Super Admin',
-      actorRole: 'Super Admin',
-      action: 'Wallet Adjusted',
-      target: `${user.fullName} (${user.phoneNumber})`,
-      details: `New balance: ₦${balance.toLocaleString()} (${note || 'Direct adjustment'})`,
-    });
-    io.emit('user_updated', user);
-    io.to(`phone:${cleanKey}`).emit('wallet_updated', {
-      balance,
-      note: note || 'Adjusted by administrator',
-    });
-    return res.json({ success: true, user, balance });
+    res.status(404).json({ error: 'User not found' });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to adjust wallet' });
   }
-  res.status(404).json({ error: 'User not found' });
 });
 
 // Admin Force Terminate / Kick Session
@@ -1804,6 +2168,7 @@ app.post('/api/admin/broadcast', (req: Request, res: Response) => {
   };
   activeBroadcast = broadcast;
   saveAdminConfigFile();
+  pushAdminConfigToSupabase();
   appendAuditEntry({
     refId: broadcast.id,
     actor: 'Super Admin',
@@ -1819,6 +2184,7 @@ app.post('/api/admin/broadcast', (req: Request, res: Response) => {
 app.delete('/api/admin/broadcast', (_req: Request, res: Response) => {
   activeBroadcast = null;
   saveAdminConfigFile();
+  pushAdminConfigToSupabase();
   appendAuditEntry({
     refId: 'SYS_BROADCAST_CLR',
     actor: 'Super Admin',
@@ -1977,17 +2343,46 @@ io.on('connection', (socket: Socket) => {
     socket.leave(`chat:${chatId}`);
   });
 
+  // Helper: emit once per unique target socket (avoids duplicates from multi-variant phone rooms) and never to sender
+  const emitToPhoneVariantsOnce = (phone: string, event: string, data: any) => {
+    const variants = getPhoneVariants(phone);
+    const sentSockets = new Set<string>();
+    for (const v of variants) {
+      const room = io.sockets.adapter.rooms.get(`phone:${v}`);
+      if (!room) continue;
+      for (const targetSocketId of room) {
+        if (targetSocketId === socket.id || sentSockets.has(targetSocketId)) continue;
+        sentSockets.add(targetSocketId);
+        io.to(targetSocketId).emit(event, data);
+      }
+    }
+  };
+
   // 1c. Live Group Creation Relay
   socket.on('create_group', (payload: { chat: any; memberPhones: string[] }) => {
     const { chat, memberPhones } = payload;
     if (chat && Array.isArray(memberPhones)) {
       memberPhones.forEach((phone: string) => {
-        const variants = getPhoneVariants(phone);
-        variants.forEach((v) => {
-          socket.to(`phone:${v}`).emit('group_created', { chat });
-        });
+        emitToPhoneVariantsOnce(phone, 'group_created', { chat });
       });
     }
+  });
+
+  // 1d. Friend Request Relay (one-way only, never echoed back to sender)
+  socket.on('friend_request', (payload: { request?: any; targetPhone?: string }) => {
+    const targetPhone = payload?.targetPhone || payload?.request?.recipientPhone;
+    const senderPhone = (socket as any)._agcPhone || payload?.request?.senderPhone || '';
+    if (!targetPhone || !payload?.request) return;
+    const senderVariants = new Set(getPhoneVariants(senderPhone));
+    const targetVariants = getPhoneVariants(targetPhone);
+    if (targetVariants.some((v) => senderVariants.has(v))) return;
+    emitToPhoneVariantsOnce(targetPhone, 'friend_request', { request: payload.request, targetPhone });
+  });
+
+  socket.on('friend_request_accepted', (payload: any) => {
+    const targetPhone = payload?.targetPhone;
+    if (!targetPhone) return;
+    emitToPhoneVariantsOnce(targetPhone, 'friend_request_accepted', payload);
   });
 
   // 2. Live Chat Message Broadcast
@@ -2169,17 +2564,48 @@ io.on('connection', (socket: Socket) => {
   });
 });
 
+// Express fallback error handler
+app.use((err: any, _req: Request, res: Response, _next: any) => {
+  console.error('Express middleware error:', err?.message || err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: err?.message || 'Internal server error' });
+  }
+});
+
+let viteServerRef: any = null;
+let syncIntervalRef: ReturnType<typeof setInterval> | null = null;
+
+process.on('unhandledRejection', (reason) => {
+  console.warn('Unhandled promise rejection caught by gateway:', reason);
+});
+
+process.on('uncaughtException', (err: any) => {
+  console.error('Uncaught exception in gateway:', err?.stack || err);
+  if (err?.code === 'EADDRINUSE' || err?.code === 'EACCES') {
+    process.exit(1);
+  }
+});
+
 // Start listening with Vite middleware in dev or static dist in production
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
+    if (process.env.DISABLE_HMR === undefined) {
+      process.env.DISABLE_HMR = 'true';
+    }
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: process.env.DISABLE_HMR !== 'true',
+        host: HOST,
+        port: PORT,
+        allowedHosts: true as const,
+        ws: false,
+        hmr: false,
+        watch: null,
       },
       appType: 'spa',
     });
+    viteServerRef = vite;
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(__dirname, 'dist');
@@ -2202,21 +2628,53 @@ async function startServer() {
       ) {
         return res.status(404).end();
       }
+      const indexHtmlPath = path.join(distPath, 'index.html');
+      if (!fs.existsSync(indexHtmlPath)) {
+        return res.status(503).send('Build output not found. Run npm run build first.');
+      }
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-      res.sendFile(path.join(distPath, 'index.html'));
+      res.sendFile(indexHtmlPath);
     });
   }
 
-  httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 AGC Live Gateway running on http://0.0.0.0:${PORT}`);
-    console.log(`📡 WebSocket & User Registry ready (${usersByPhone.size} users loaded)`);
-    // Sync Supabase registry asynchronously so port binding is never delayed
-    syncUsersFromSupabase(true).catch(() => {});
-    setInterval(() => {
-      syncUsersFromSupabase().catch(() => {});
-    }, 30000);
+  httpServer.on('error', (err: any) => {
+    console.error(`HTTP server error on ${HOST}:${PORT}:`, err?.message || err);
+    if (err?.code === 'EADDRINUSE' || err?.code === 'EACCES') {
+      process.exit(1);
+    }
+  });
+
+  await new Promise<void>((resolve) => {
+    httpServer.listen(PORT, HOST, () => {
+      console.log(`🚀 AGC Live Gateway running on http://${HOST}:${PORT}`);
+      console.log(`📡 WebSocket & User Registry ready (${usersByPhone.size} users loaded)`);
+      // Sync Supabase registry & global admin state asynchronously so port binding is never delayed
+      Promise.all([syncUsersFromSupabase(true), syncAdminStateFromSupabase()]).catch(() => {});
+      syncIntervalRef = setInterval(() => {
+        Promise.all([syncUsersFromSupabase(), syncAdminStateFromSupabase()]).catch(() => {});
+      }, 30000);
+      resolve();
+    });
   });
 }
+
+const shutdown = async (signal: string) => {
+  console.log(`Shutting down AGC Live Gateway (${signal})...`);
+  if (syncIntervalRef) clearInterval(syncIntervalRef);
+  try {
+    await viteServerRef?.close?.();
+  } catch (_) {}
+  try {
+    io.close();
+  } catch (_) {}
+  httpServer.close(() => {
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 2000).unref();
+};
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 startServer().catch((err) => {
   console.error('Failed to start server:', err);

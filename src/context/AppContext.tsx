@@ -87,6 +87,17 @@ import {
   upsertScamReportInDb,
 } from '../services/supabase';
 import {
+  ADMIN_SYS_CONFIG_KEY,
+  ADMIN_SYS_CMS_KEY,
+  ADMIN_SYS_USERS_KEY,
+  ADMIN_SYS_STORES_KEY,
+  canonicalAdminUserKey,
+  safeJsonFetch,
+  fetchSupabaseAdminSlice,
+  saveSupabaseAdminSlice,
+  upsertSupabaseAdminUserOverride,
+} from '../services/supabaseAdminSync';
+import {
   FeatureFlags,
   ErrandRunner,
   ErrandItem,
@@ -398,7 +409,14 @@ interface AppContextType {
   setIsContactsModalOpen: (val: boolean) => void;
   syncDeviceContacts: () => void;
   startChatWithContact: (contact: DeviceContact) => void;
-  addNewDeviceContact: (name: string, phone: string, about?: string, isRegistered?: boolean, avatar?: string) => DeviceContact;
+  addNewDeviceContact: (
+    name: string,
+    phone: string,
+    about?: string,
+    isRegistered?: boolean,
+    avatar?: string,
+    options?: { sendRequest?: boolean }
+  ) => DeviceContact;
   importDeviceContacts: (contacts: { name: string; phone: string }[]) => Promise<number>;
   friendRequests: import('../types').ContactRequest[];
   activeContactRequestPopup: import('../types').ContactRequest | null;
@@ -859,6 +877,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const cmsDataRef = useRef<AdminCmsData>(DEFAULT_CMS_DATA);
   const featureFlagsRef = useRef<FeatureFlags>(DEFAULT_FEATURE_FLAGS);
   const adminSupabaseChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const adminConfigUpdatedAtRef = useRef<number>(0);
+  const adminCmsUpdatedAtRef = useRef<number>(0);
+  const systemBroadcastRef = useRef<AdminSystemBroadcast | null>(null);
 
   useEffect(() => { systemConfigRef.current = systemConfig; }, [systemConfig]);
   useEffect(() => { cmsDataRef.current = cmsData; }, [cmsData]);
@@ -892,6 +913,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateSystemConfig = async (updates: Partial<AdminSystemConfig>): Promise<boolean> => {
+    const nowIso = new Date().toISOString();
+    adminConfigUpdatedAtRef.current = Date.now();
     const nextConfig: AdminSystemConfig = { ...systemConfigRef.current, ...updates };
     systemConfigRef.current = nextConfig;
     setSystemConfig(nextConfig);
@@ -910,28 +933,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
 
-    try {
-      const res = await callAdminApi('/api/admin/config', {
+    const [apiData, sbOk] = await Promise.all([
+      safeJsonFetch('/api/admin/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
-      });
-      if (res && res.ok) {
-        const data = await res.json();
-        if (data?.config) {
-          systemConfigRef.current = data.config;
-          setSystemConfig(data.config);
-        }
-        return true;
-      }
-      return false;
-    } catch (e) {
-      console.warn('Notice syncing admin config to server:', e);
-      return false;
+      }),
+      saveSupabaseAdminSlice(ADMIN_SYS_CONFIG_KEY, 'AGC_ADMIN_CONFIG', {
+        config: nextConfig,
+        featureFlags: featureFlagsRef.current,
+        updatedAt: nowIso,
+      }),
+    ]);
+
+    if (apiData?.config) {
+      systemConfigRef.current = apiData.config;
+      setSystemConfig(apiData.config);
     }
+    return Boolean(apiData?.success || sbOk);
   };
 
   const updateAdminFeatureFlag = async (key: keyof FeatureFlags, val?: boolean): Promise<boolean> => {
+    const nowIso = new Date().toISOString();
+    adminConfigUpdatedAtRef.current = Date.now();
     const currentFlags = featureFlagsRef.current;
     const nextVal = val !== undefined ? val : currentFlags[key] === false;
     const updates = { [key]: nextVal };
@@ -953,28 +977,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
 
-    try {
-      const res = await callAdminApi('/api/admin/features', {
+    const [apiData, sbOk] = await Promise.all([
+      safeJsonFetch('/api/admin/features', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
-      });
-      if (res && res.ok) {
-        const data = await res.json();
-        if (data?.featureFlags) {
-          featureFlagsRef.current = data.featureFlags;
-          setFeatureFlags(data.featureFlags);
-        }
-        return true;
-      }
-      return false;
-    } catch (e) {
-      console.warn('Notice syncing admin features to server:', e);
-      return false;
+      }),
+      saveSupabaseAdminSlice(ADMIN_SYS_CONFIG_KEY, 'AGC_ADMIN_CONFIG', {
+        config: systemConfigRef.current,
+        featureFlags: nextFlags,
+        updatedAt: nowIso,
+      }),
+    ]);
+
+    if (apiData?.featureFlags) {
+      featureFlagsRef.current = apiData.featureFlags;
+      setFeatureFlags(apiData.featureFlags);
     }
+    return Boolean(apiData?.success || sbOk);
   };
 
   const updateCmsData = async (updates: Partial<AdminCmsData>): Promise<boolean> => {
+    const nowIso = new Date().toISOString();
+    adminCmsUpdatedAtRef.current = Date.now();
     const cur = cmsDataRef.current;
     const nextCms: AdminCmsData = {
       ...cur,
@@ -1003,25 +1028,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
 
-    try {
-      const res = await callAdminApi('/api/admin/cms', {
+    const [apiData, sbOk] = await Promise.all([
+      safeJsonFetch('/api/admin/cms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
-      });
-      if (res && res.ok) {
-        const data = await res.json();
-        if (data?.cms) {
-          cmsDataRef.current = data.cms;
-          setCmsData(data.cms);
-        }
-        return true;
-      }
-      return false;
-    } catch (e) {
-      console.warn('Notice syncing admin cms to server:', e);
-      return false;
+      }),
+      saveSupabaseAdminSlice(ADMIN_SYS_CMS_KEY, 'AGC_ADMIN_CMS', {
+        cms: nextCms,
+        activeBroadcast: systemBroadcastRef.current,
+        updatedAt: nowIso,
+      }),
+    ]);
+
+    if (apiData?.cms) {
+      cmsDataRef.current = apiData.cms;
+      setCmsData(apiData.cms);
     }
+    return Boolean(apiData?.success || sbOk);
   };
 
   // ── Errands System ────────────────────────────────────────────────────────
@@ -2755,20 +2779,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [activeContactRequestPopup, setActiveContactRequestPopup] = useState<import('../types').ContactRequest | null>(null);
+  const friendRequestsRef = useRef<import('../types').ContactRequest[]>(friendRequests);
+  useEffect(() => { friendRequestsRef.current = friendRequests; }, [friendRequests]);
+
+  const handledFriendRequestIdsRef = useRef<Set<string>>(new Set());
+  const sentFriendRequestsCacheRef = useRef<Map<string, number>>(new Map());
+
+  const loadHandledFriendRequestIds = useCallback((phone?: string): Set<string> => {
+    try {
+      const key = getUserStorageKey('AGC_handled_friend_requests', phone);
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return new Set(parsed.map(String));
+      }
+    } catch (_) {}
+    return new Set();
+  }, []);
+
+  const markFriendRequestsHandled = useCallback((ids: string[], phone?: string) => {
+    if (!ids.length) return;
+    ids.forEach((id) => handledFriendRequestIdsRef.current.add(id));
+    try {
+      const key = getUserStorageKey('AGC_handled_friend_requests', phone || currentUser.phoneNumber);
+      const arr = Array.from(handledFriendRequestIdsRef.current).slice(-250);
+      localStorage.setItem(key, JSON.stringify(arr));
+    } catch (_) {}
+  }, [currentUser.phoneNumber]);
 
   const handleIncomingFriendRequest = useCallback((req: import('../types').ContactRequest) => {
-    if (!req || !req.id) return;
+    if (!req || !req.id || !req.senderPhone) return;
+    if (currentUser.phoneNumber && phonesMatch(req.senderPhone, currentUser.phoneNumber)) return;
+    if (req.recipientPhone && currentUser.phoneNumber && !phonesMatch(req.recipientPhone, currentUser.phoneNumber)) return;
+    if (handledFriendRequestIdsRef.current.has(req.id)) return;
+
+    const alreadyPending = friendRequestsRef.current.some(
+      (r) => r.id === req.id || (r.senderPhone && phonesMatch(r.senderPhone, req.senderPhone))
+    );
+    if (alreadyPending) return;
+
     setFriendRequests((prev) => {
-      if (prev.some((r) => r.id === req.id)) return prev;
+      if (prev.some((r) => r.id === req.id || (r.senderPhone && phonesMatch(r.senderPhone, req.senderPhone)))) {
+        return prev;
+      }
       return [req, ...prev];
     });
-    setActiveContactRequestPopup(req);
+    setActiveContactRequestPopup((curr) => curr || req);
     showLocalNotification(
       `👋 New Contact Request from ${req.senderName}`,
       req.message || `${req.senderName} (${req.senderPhone}) added you!`,
       req.senderAvatar || '/icon-192.png'
     );
-  }, []);
+  }, [currentUser.phoneNumber]);
 
   const [spaceEndedSummary, setSpaceEndedSummary] = useState<{
     spaceId: string;
@@ -2777,14 +2839,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     peakListeners: number;
   } | null>(null);
 
-  // Re-read user's friend requests when phone changes
+  // Re-read user's friend requests & handled IDs when phone changes
   useEffect(() => {
+    handledFriendRequestIdsRef.current = loadHandledFriendRequestIds(currentUser.phoneNumber);
     const userKey = getUserStorageKey('AGC_friend_requests', currentUser.phoneNumber);
     try {
       const saved = localStorage.getItem(userKey);
-      setFriendRequests(saved ? JSON.parse(saved) : []);
+      const parsed: import('../types').ContactRequest[] = saved ? JSON.parse(saved) : [];
+      const cleaned = parsed.filter(
+        (r) =>
+          r &&
+          r.id &&
+          !handledFriendRequestIdsRef.current.has(r.id) &&
+          (!currentUser.phoneNumber || !phonesMatch(r.senderPhone, currentUser.phoneNumber))
+      );
+      setFriendRequests(cleaned);
     } catch (_) {}
-  }, [currentUser.phoneNumber]);
+  }, [currentUser.phoneNumber, loadHandledFriendRequestIds]);
 
   // Sync incoming pending friend requests from Supabase contact_requests table
   useEffect(() => {
@@ -2804,7 +2875,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           try {
             dismissedPopups = JSON.parse(safeSessionStorage.getItem('AGC_dismissed_request_popups') || '[]');
           } catch (_) {}
-          const unhandled = data.find((d: any) => !dismissedPopups.includes(d.id));
+
+          const seenSenders = new Set<string>();
+          const validRows = data.filter((d: any) => {
+            if (!d || !d.id || !d.from_phone) return false;
+            if (handledFriendRequestIdsRef.current.has(d.id)) return false;
+            if (phonesMatch(d.from_phone, currentUser.phoneNumber)) return false;
+            const senderKey = canonicalAdminUserKey(d.from_phone) || d.from_phone;
+            if (seenSenders.has(senderKey)) return false;
+            seenSenders.add(senderKey);
+            return true;
+          });
+
+          const unhandled = validRows.find((d: any) => !dismissedPopups.includes(d.id));
           if (unhandled) {
             setActiveContactRequestPopup((current) => {
               if (current) return current;
@@ -2823,8 +2906,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           setFriendRequests((prev) => {
             const existingIds = new Set(prev.map((r) => r.id));
-            const newReqs = data
-              .filter((d: any) => !existingIds.has(d.id))
+            const existingSenders = prev.map((r) => r.senderPhone).filter(Boolean);
+            const newReqs = validRows
+              .filter(
+                (d: any) =>
+                  !existingIds.has(d.id) &&
+                  !existingSenders.some((sp) => phonesMatch(sp, d.from_phone))
+              )
               .map((d: any) => ({
                 id: d.id,
                 senderPhone: d.from_phone,
@@ -5624,8 +5712,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const sendFriendRequest = async (targetPhone: string, targetName?: string, message?: string): Promise<boolean> => {
     if (!targetPhone || !currentUser.phoneNumber) return false;
+    if (phonesMatch(targetPhone, currentUser.phoneNumber)) return false;
+
+    const canonicalTarget = canonicalAdminUserKey(targetPhone) || normalizePhoneDigits(targetPhone);
+    const now = Date.now();
+    const lastSentAt = sentFriendRequestsCacheRef.current.get(canonicalTarget) || 0;
+    if (now - lastSentAt < 10000) {
+      return false;
+    }
+    sentFriendRequestsCacheRef.current.set(canonicalTarget, now);
+
     const req: import('../types').ContactRequest = {
-      id: `freq_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `freq_${now}_${Math.random().toString(36).substring(2, 6)}`,
       senderPhone: currentUser.phoneNumber,
       senderName: currentUser.fullName || 'AGC User',
       senderAvatar: currentUser.avatarUrl,
@@ -5661,13 +5759,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .then(() => {}, () => {});
 
       const cleanTarget = targetPhone.replace(/\D/g, '');
-      const targets = [cleanTarget, normalizePhoneDigits(cleanTarget)].filter(Boolean);
+      const targets = Array.from(new Set([cleanTarget, normalizePhoneDigits(cleanTarget)].filter(Boolean)));
       targets.forEach((t) => {
         try {
           const ch = supabase.channel(`inbox_${t}`, { config: { broadcast: { self: false } } });
           ch.subscribe((st) => {
             if (st === 'SUBSCRIBED') {
-              ch.send({ type: 'broadcast', event: 'friend_request', payload: { request: req } });
+              ch.send({ type: 'broadcast', event: 'friend_request', payload: { request: req } })
+                .catch(() => {})
+                .finally(() => {
+                  setTimeout(() => {
+                    try { supabase.removeChannel(ch); } catch (_) {}
+                  }, 1500);
+                });
             }
           });
         } catch (_) {}
@@ -5682,10 +5786,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const req = friendRequests.find((r) => r.id === requestId);
     if (!req) return;
 
-    addNewDeviceContact(req.senderName, req.senderPhone, 'Connected via Contact Request', true, req.senderAvatar);
+    const matchingIds = friendRequests
+      .filter((r) => r.id === requestId || (r.senderPhone && phonesMatch(r.senderPhone, req.senderPhone)))
+      .map((r) => r.id);
+
+    markFriendRequestsHandled(matchingIds, currentUser.phoneNumber);
+
+    // Explicitly do NOT echo back a reverse friend request when accepting!
+    addNewDeviceContact(
+      req.senderName,
+      req.senderPhone,
+      'Connected via Contact Request',
+      true,
+      req.senderAvatar,
+      { sendRequest: false }
+    );
+
     setFriendRequests((prev) => {
-      const remaining = prev.filter((r) => r.id !== requestId);
-      setActiveContactRequestPopup((curr) => (curr?.id === requestId ? (remaining.length > 0 ? remaining[0] : null) : curr));
+      const remaining = prev.filter((r) => !matchingIds.includes(r.id));
+      setActiveContactRequestPopup((curr) => {
+        if (!curr || matchingIds.includes(curr.id) || (curr.senderPhone && phonesMatch(curr.senderPhone, req.senderPhone))) {
+          return remaining.length > 0 ? remaining[0] : null;
+        }
+        return curr;
+      });
       return remaining;
     });
 
@@ -5693,8 +5817,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supabase
         .from('contact_requests')
         .update({ status: 'accepted', updated_at: new Date().toISOString() })
-        .eq('id', requestId)
+        .in('id', matchingIds)
         .then(() => {}, () => {});
+
+      if (req.senderPhone && currentUser.phoneNumber) {
+        const sClean = req.senderPhone.replace(/\D/g, '');
+        const sNorm = normalizePhoneDigits(sClean);
+        const mClean = currentUser.phoneNumber.replace(/\D/g, '');
+        const mNorm = normalizePhoneDigits(mClean);
+        const senderVars = Array.from(new Set([req.senderPhone, sClean, sNorm].filter(Boolean)));
+        const myVars = Array.from(new Set([currentUser.phoneNumber, mClean, mNorm].filter(Boolean)));
+        supabase
+          .from('contact_requests')
+          .update({ status: 'accepted', updated_at: new Date().toISOString() })
+          .in('from_phone', senderVars)
+          .in('to_phone', myVars)
+          .eq('status', 'pending')
+          .then(() => {}, () => {});
+      }
     }
 
     const socket = getSocket();
@@ -5703,29 +5843,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         requestId,
         acceptorPhone: currentUser.phoneNumber,
         acceptorName: currentUser.fullName,
+        acceptorAvatar: currentUser.avatarUrl,
         targetPhone: req.senderPhone,
       });
     }
 
-    if (isSupabaseConfigured) {
+    if (isSupabaseConfigured && req.senderPhone) {
       const cleanSender = req.senderPhone.replace(/\D/g, '');
-      try {
-        const ch = supabase.channel(`inbox_${cleanSender}`, { config: { broadcast: { self: false } } });
-        ch.subscribe((st) => {
-          if (st === 'SUBSCRIBED') {
-            ch.send({
-              type: 'broadcast',
-              event: 'friend_request_accepted',
-              payload: {
-                requestId,
-                acceptorPhone: currentUser.phoneNumber,
-                acceptorName: currentUser.fullName,
-                acceptorAvatar: currentUser.avatarUrl,
-              },
-            });
-          }
-        });
-      } catch (_) {}
+      const senderTargets = Array.from(new Set([cleanSender, normalizePhoneDigits(cleanSender)].filter(Boolean)));
+      senderTargets.forEach((t) => {
+        try {
+          const ch = supabase.channel(`inbox_${t}`, { config: { broadcast: { self: false } } });
+          ch.subscribe((st) => {
+            if (st === 'SUBSCRIBED') {
+              ch.send({
+                type: 'broadcast',
+                event: 'friend_request_accepted',
+                payload: {
+                  requestId,
+                  acceptorPhone: currentUser.phoneNumber,
+                  acceptorName: currentUser.fullName,
+                  acceptorAvatar: currentUser.avatarUrl,
+                },
+              })
+                .catch(() => {})
+                .finally(() => {
+                  setTimeout(() => {
+                    try { supabase.removeChannel(ch); } catch (_) {}
+                  }, 1500);
+                });
+            }
+          });
+        } catch (_) {}
+      });
     }
 
     const contactObj: DeviceContact = {
@@ -5740,17 +5890,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const declineFriendRequest = (requestId: string) => {
+    const req = friendRequests.find((r) => r.id === requestId);
+    const matchingIds = req
+      ? friendRequests
+          .filter((r) => r.id === requestId || (r.senderPhone && phonesMatch(r.senderPhone, req.senderPhone)))
+          .map((r) => r.id)
+      : [requestId];
+
+    markFriendRequestsHandled(matchingIds, currentUser.phoneNumber);
+
     setFriendRequests((prev) => {
-      const remaining = prev.filter((r) => r.id !== requestId);
-      setActiveContactRequestPopup((curr) => (curr?.id === requestId ? (remaining.length > 0 ? remaining[0] : null) : curr));
+      const remaining = prev.filter((r) => !matchingIds.includes(r.id));
+      setActiveContactRequestPopup((curr) => {
+        if (!curr || matchingIds.includes(curr.id)) {
+          return remaining.length > 0 ? remaining[0] : null;
+        }
+        return curr;
+      });
       return remaining;
     });
     if (isSupabaseConfigured) {
       supabase
         .from('contact_requests')
         .update({ status: 'declined', updated_at: new Date().toISOString() })
-        .eq('id', requestId)
+        .in('id', matchingIds)
         .then(() => {}, () => {});
+
+      if (req?.senderPhone && currentUser.phoneNumber) {
+        const sClean = req.senderPhone.replace(/\D/g, '');
+        const sNorm = normalizePhoneDigits(sClean);
+        const mClean = currentUser.phoneNumber.replace(/\D/g, '');
+        const mNorm = normalizePhoneDigits(mClean);
+        const senderVars = Array.from(new Set([req.senderPhone, sClean, sNorm].filter(Boolean)));
+        const myVars = Array.from(new Set([currentUser.phoneNumber, mClean, mNorm].filter(Boolean)));
+        supabase
+          .from('contact_requests')
+          .update({ status: 'declined', updated_at: new Date().toISOString() })
+          .in('from_phone', senderVars)
+          .in('to_phone', myVars)
+          .eq('status', 'pending')
+          .then(() => {}, () => {});
+      }
     }
   };
 
@@ -5816,7 +5996,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const merged: Record<string, ScamEntity> = { ...prev };
         data.forEach((row: any) => {
           const key = (row.target_value || '').replace(/\s+/g, '');
-          if (!key) return;
+          if (!key || key.startsWith('__agc_sys_')) return;
           const flags: { date: string; reason: string; flaggedBy: string }[] = Array.isArray(row.flags)
             ? row.flags.map((f: any) => ({
                 date: f.date || new Date(row.created_at).toLocaleDateString(),
@@ -6582,9 +6762,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setDeviceContacts((prev) => [...prev]);
   };
 
-  const addNewDeviceContact = (name: string, phone: string, about?: string, isRegistered: boolean = true, customAvatar?: string) => {
+  const addNewDeviceContact = (
+    name: string,
+    phone: string,
+    about?: string,
+    isRegistered: boolean = true,
+    customAvatar?: string,
+    options?: { sendRequest?: boolean }
+  ) => {
     const cleaned = phone.replace(/[\s-]/g, '');
-    const normalized = cleaned.startsWith('0') ? `+234${cleaned.slice(1)}` : cleaned.startsWith('+') ? cleaned : `+234${cleaned}`;
+    const normalized = cleaned.startsWith('0')
+      ? `+234${cleaned.slice(1)}`
+      : cleaned.startsWith('+')
+      ? cleaned
+      : cleaned.startsWith('234') && cleaned.length >= 13
+      ? `+${cleaned}`
+      : `+234${cleaned}`;
     const avatar = customAvatar || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>";
     const newContact: DeviceContact = {
       id: `cnt_${Date.now()}`,
@@ -6606,8 +6799,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         : undefined,
     };
+
+    const existedAlready = deviceContacts.some(
+      (c) => phonesMatch(c.normalizedPhoneNumber, normalized) || phonesMatch(c.rawPhoneNumber, phone)
+    );
+
     setDeviceContacts((prev) => {
-      const updated = [newContact, ...prev.filter(c => c.normalizedPhoneNumber !== normalized)];
+      const updated = [
+        newContact,
+        ...prev.filter((c) => !phonesMatch(c.normalizedPhoneNumber, normalized) && c.normalizedPhoneNumber !== normalized),
+      ];
       try {
         const userKey = getUserStorageKey('AGC_device_contacts', currentUser.phoneNumber);
         localStorage.setItem(userKey, JSON.stringify(updated));
@@ -6630,8 +6831,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
 
-    // Automatically send contact request to the added peer so they get the Accept / Decline pop-up!
-    if (normalized && currentUser.phoneNumber && !phonesMatch(normalized, currentUser.phoneNumber)) {
+    // Only send a friend request when explicitly requested by user action and not already connected
+    if (
+      options?.sendRequest === true &&
+      !existedAlready &&
+      normalized &&
+      currentUser.phoneNumber &&
+      !phonesMatch(normalized, currentUser.phoneNumber)
+    ) {
       sendFriendRequest(normalized, name, `Hi, I am ${currentUser.fullName || 'AGC User'}. I added you on AfriChat!`);
     }
 
@@ -8608,6 +8815,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (request) handleIncomingFriendRequest(request);
     };
 
+    const handleFriendRequestAccepted = (payload: any) => {
+      if (!payload || !payload.acceptorPhone) return;
+      if (currentUser.phoneNumber && phonesMatch(payload.acceptorPhone, currentUser.phoneNumber)) return;
+      const acceptorName = payload.acceptorName || payload.acceptorPhone;
+      addNewDeviceContact(
+        acceptorName,
+        payload.acceptorPhone,
+        'Accepted your Contact Request',
+        true,
+        payload.acceptorAvatar,
+        { sendRequest: false }
+      );
+      showLocalNotification(
+        `✅ ${acceptorName} accepted your request`,
+        `You can now chat securely with ${acceptorName}.`,
+        payload.acceptorAvatar || '/icon-192.png'
+      );
+    };
+
     const handleDispatchOrderCreated = (order: DispatchDeliveryOrder) => {
       if (!order?.id) return;
       setDispatchOrders((prev) => {
@@ -8640,6 +8866,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket.on('account_banned', handleAccountBanned);
     socket.on('group_created', handleGroupCreated);
     socket.on('friend_request', handleFriendRequestSocket);
+    socket.on('friend_request_accepted', handleFriendRequestAccepted);
     socket.on('dispatch_order_created', handleDispatchOrderCreated);
     socket.on('dispatch_status_updated', handleDispatchStatusUpdated);
 
@@ -8651,7 +8878,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (e.data && e.data.type === 'friend_request' && e.data.request) {
           const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
           const target = (e.data.targetPhone || e.data.request.recipientPhone || '').replace(/\D/g, '');
-          if (!target || phonesMatch(target, myPhone)) {
+          const sender = (e.data.request.senderPhone || '').replace(/\D/g, '');
+          if (target && myPhone && phonesMatch(target, myPhone) && (!sender || !phonesMatch(sender, myPhone))) {
             handleIncomingFriendRequest(e.data.request);
           }
           return;
@@ -8703,6 +8931,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             handleIncomingFriendRequest(payload.request);
           }
         })
+        .on('broadcast', { event: 'friend_request_accepted' }, ({ payload }: any) => {
+          handleFriendRequestAccepted(payload);
+        })
         .subscribe();
 
       if (normPhone !== myCleanPhone) {
@@ -8724,6 +8955,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (payload && payload.request) {
               handleIncomingFriendRequest(payload.request);
             }
+          })
+          .on('broadcast', { event: 'friend_request_accepted' }, ({ payload }: any) => {
+            handleFriendRequestAccepted(payload);
           })
           .subscribe();
       }
@@ -8749,6 +8983,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('new_message', handleIncomingMessage);
       socket.off('group_created', handleGroupCreated);
       socket.off('friend_request', handleFriendRequestSocket);
+      socket.off('friend_request_accepted', handleFriendRequestAccepted);
       socket.off('dispatch_order_created', handleDispatchOrderCreated);
       socket.off('dispatch_status_updated', handleDispatchStatusUpdated);
       if (bc) bc.close();
@@ -8758,14 +8993,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser, activeChatId, handleIncomingMessage]);
 
-  // Global live sync for Admin Feature Flags, System Config, CMS, Broadcasts & Registered Users (NOT stored in localStorage)
+  const syncCurrentUserFromRecord = useCallback((me?: AdminUserRecord) => {
+    if (!me || !currentUser?.phoneNumber) return;
+    if (me.verificationBadge !== currentUser.verificationBadge || (me.role && me.role !== currentUser.role)) {
+      setCurrentUser((prev) => {
+        const updated: UserProfile = {
+          ...prev,
+          verificationBadge: me.verificationBadge !== undefined ? me.verificationBadge : prev.verificationBadge,
+          role: (me.role as UserProfile['role']) || prev.role,
+        };
+        try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
+        return updated;
+      });
+    }
+
+    if (me.status === 'banned') {
+      const nextBan = {
+        reason: me.banReason || 'Violation of AfriChat platform terms and conditions.',
+        bannedAt: me.bannedAt || new Date().toISOString(),
+      };
+      setIsBanned(true);
+      setBanInfo(nextBan);
+      try {
+        localStorage.setItem('AGC_banned_state', JSON.stringify({
+          isBanned: true,
+          reason: nextBan.reason,
+          bannedAt: nextBan.bannedAt,
+          phone: currentUser.phoneNumber,
+        }));
+      } catch (_) {}
+    } else if (me.status === 'active') {
+      setIsBanned((prev) => (prev ? false : prev));
+      setBanInfo((prev) => (prev ? null : prev));
+      try {
+        const savedBan = localStorage.getItem('AGC_banned_state');
+        if (savedBan) {
+          const parsed = JSON.parse(savedBan);
+          if (!parsed?.phone || phonesMatch(parsed.phone, currentUser.phoneNumber)) {
+            localStorage.removeItem('AGC_banned_state');
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (me.adminWalletAdjustedAt && me.walletBalanceNgn !== undefined) {
+      const adjTs = Date.parse(me.adminWalletAdjustedAt) || 0;
+      const walletTsKey = getUserStorageKey('AGC_last_admin_wallet_ts', currentUser.phoneNumber);
+      let lastSeenTs = 0;
+      try {
+        lastSeenTs = Number(localStorage.getItem(walletTsKey) || 0);
+      } catch (_) {}
+      if (adjTs > lastSeenTs) {
+        setWallet((w) => ({ ...w, availableBalance: me.walletBalanceNgn }));
+        try { localStorage.setItem(walletTsKey, String(adjTs)); } catch (_) {}
+      }
+    }
+  }, [currentUser.phoneNumber, currentUser.verificationBadge, currentUser.role]);
+
+  // Global live sync for Admin Feature Flags, System Config, CMS, Broadcasts & Registered Users
   const refreshAdminUsers = async (): Promise<void> => {
     try {
-      const [apiRes, sbRes] = await Promise.all([
-        callAdminApi('/api/users').then((r) => (r && r.ok ? r.json() : null)).catch(() => null),
+      const [apiRes, sbRes, sbOverrides] = await Promise.all([
+        safeJsonFetch('/api/users'),
         isSupabaseConfigured
           ? supabase.from('agc_phone_registry').select('*').then((r) => r, () => null)
           : Promise.resolve(null),
+        fetchSupabaseAdminSlice<{ overrides?: Record<string, any> }>(ADMIN_SYS_USERS_KEY),
       ]);
 
       let nextList = adminUsersRef.current;
@@ -8794,23 +9087,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         nextList = mergeAdminUsersList(nextList, mappedUsers, true);
       }
 
+      if (sbOverrides?.overrides && typeof sbOverrides.overrides === 'object') {
+        const overrideRecords: AdminUserRecord[] = Object.entries(sbOverrides.overrides).map(([key, ov]: [string, any]) => {
+          const phoneStr = ov.phoneNumber || (key.length >= 9 ? `+234${key}` : key);
+          return mapRawToAdminUser({
+            ...ov,
+            id: ov.id || `usr_${key}`,
+            phoneNumber: phoneStr,
+          });
+        });
+        nextList = mergeAdminUsersList(nextList, overrideRecords, true);
+      }
+
       adminUsersRef.current = nextList;
       setAdminUsers(nextList);
 
-      // Sync currentUser's live badge & role from authoritative directory
       const myPhoneClean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
       if (myPhoneClean) {
         const me = nextList.find((u) => phonesMatch(u.phoneNumber, currentUser.phoneNumber));
-        if (me && (me.verificationBadge !== currentUser.verificationBadge || me.role !== currentUser.role)) {
-          setCurrentUser((prev) => {
-            const updated: UserProfile = {
-              ...prev,
-              verificationBadge: me.verificationBadge !== undefined ? me.verificationBadge : prev.verificationBadge,
-              role: (me.role as UserProfile['role']) || prev.role,
-            };
-            try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
-            return updated;
-          });
+        if (me) {
+          syncCurrentUserFromRecord(me);
         }
       }
     } catch (_) {}
@@ -8825,37 +9121,136 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.removeItem('AGC_admin_users');
     } catch (_) {}
 
-    const syncAdminFromServer = () => {
-      callAdminApi('/api/admin/config')
-        .then((r) => (r && r.ok ? r.json() : null))
-        .then((data) => {
-          if (data?.success) {
-            if (data.config) {
-              const merged = { ...DEFAULT_SYSTEM_CONFIG, ...data.config };
-              systemConfigRef.current = merged;
-              setSystemConfig(merged);
-            }
-            if (data.featureFlags) {
-              const merged = { ...DEFAULT_FEATURE_FLAGS, ...data.featureFlags };
-              featureFlagsRef.current = merged;
-              setFeatureFlags(merged);
-            }
-            if (data.cms) {
-              const merged = {
-                ...DEFAULT_CMS_DATA,
-                ...data.cms,
-                marqueeBanner: { ...DEFAULT_CMS_DATA.marqueeBanner, ...(data.cms.marqueeBanner || {}) },
-                sponsorSpotlight: { ...DEFAULT_CMS_DATA.sponsorSpotlight, ...(data.cms.sponsorSpotlight || {}) },
-              };
-              cmsDataRef.current = merged;
-              setCmsData(merged);
-            }
-            if (data.activeBroadcast !== undefined) {
-              setSystemBroadcast(data.activeBroadcast || null);
-            }
+    const syncAdminFromServer = async () => {
+      try {
+        const [apiData, sbCfg, sbCms, sbStores] = await Promise.all([
+          safeJsonFetch('/api/admin/config'),
+          fetchSupabaseAdminSlice<{ config?: Partial<AdminSystemConfig>; featureFlags?: Partial<FeatureFlags>; updatedAt?: string }>(ADMIN_SYS_CONFIG_KEY),
+          fetchSupabaseAdminSlice<{ cms?: Partial<AdminCmsData>; activeBroadcast?: AdminSystemBroadcast | null; updatedAt?: string }>(ADMIN_SYS_CMS_KEY),
+          fetchSupabaseAdminSlice<{ stores?: Record<string, any>; artisans?: Record<string, any> }>(ADMIN_SYS_STORES_KEY),
+        ]);
+
+        // Reconcile System Config & Feature Flags using newest updatedAt timestamp
+        const apiCfgTs = apiData?.updatedAt ? (Date.parse(apiData.updatedAt) || 0) : 0;
+        const sbCfgTs = sbCfg?.updatedAt ? (Date.parse(sbCfg.updatedAt) || 0) : 0;
+        const cfgWinner =
+          sbCfg && sbCfgTs >= apiCfgTs && sbCfgTs >= adminConfigUpdatedAtRef.current
+            ? sbCfg
+            : apiData?.success && apiCfgTs >= adminConfigUpdatedAtRef.current
+            ? apiData
+            : sbCfg && !apiData?.success
+            ? sbCfg
+            : null;
+
+        if (cfgWinner) {
+          const winnerTs = Math.max(apiCfgTs, sbCfgTs);
+          if (winnerTs > adminConfigUpdatedAtRef.current) {
+            adminConfigUpdatedAtRef.current = winnerTs;
           }
-        })
-        .catch(() => {});
+          if (cfgWinner.config) {
+            const merged = { ...DEFAULT_SYSTEM_CONFIG, ...cfgWinner.config };
+            systemConfigRef.current = merged;
+            setSystemConfig(merged);
+          }
+          if (cfgWinner.featureFlags) {
+            const merged = { ...DEFAULT_FEATURE_FLAGS, ...cfgWinner.featureFlags };
+            featureFlagsRef.current = merged;
+            setFeatureFlags(merged);
+          }
+        }
+
+        // Reconcile CMS & Active Broadcast using newest updatedAt timestamp
+        const apiCmsTs = apiData?.cmsUpdatedAt
+          ? (Date.parse(apiData.cmsUpdatedAt) || 0)
+          : apiData?.updatedAt
+          ? (Date.parse(apiData.updatedAt) || 0)
+          : 0;
+        const sbCmsTs = sbCms?.updatedAt ? (Date.parse(sbCms.updatedAt) || 0) : 0;
+        const cmsWinner =
+          sbCms && sbCmsTs >= apiCmsTs && sbCmsTs >= adminCmsUpdatedAtRef.current
+            ? sbCms
+            : apiData?.success && apiCmsTs >= adminCmsUpdatedAtRef.current
+            ? apiData
+            : sbCms && !apiData?.success
+            ? sbCms
+            : null;
+
+        if (cmsWinner) {
+          const winnerTs = Math.max(apiCmsTs, sbCmsTs);
+          if (winnerTs > adminCmsUpdatedAtRef.current) {
+            adminCmsUpdatedAtRef.current = winnerTs;
+          }
+          if (cmsWinner.cms) {
+            const merged = {
+              ...DEFAULT_CMS_DATA,
+              ...cmsWinner.cms,
+              marqueeBanner: { ...DEFAULT_CMS_DATA.marqueeBanner, ...(cmsWinner.cms.marqueeBanner || {}) },
+              sponsorSpotlight: { ...DEFAULT_CMS_DATA.sponsorSpotlight, ...(cmsWinner.cms.sponsorSpotlight || {}) },
+            };
+            cmsDataRef.current = merged;
+            setCmsData(merged);
+          }
+          if (cmsWinner.activeBroadcast !== undefined) {
+            systemBroadcastRef.current = cmsWinner.activeBroadcast || null;
+            setSystemBroadcast(cmsWinner.activeBroadcast || null);
+          }
+        }
+
+        // Apply admin store & artisan overrides to client state
+        if (sbStores) {
+          if (sbStores.stores && typeof sbStores.stores === 'object') {
+            const overridesList = Object.values(sbStores.stores) as any[];
+            setStoreSubscription((prev) => {
+              if (!prev || (!prev.isRegistered && !prev.storeName)) return prev;
+              const match = overridesList.find(
+                (ov) =>
+                  (ov.ownerPhone && currentUser?.phoneNumber && phonesMatch(ov.ownerPhone, currentUser.phoneNumber)) ||
+                  (ov.storeName && prev.storeName && ov.storeName.toLowerCase() === prev.storeName.toLowerCase())
+              );
+              if (!match) return prev;
+              const nextTier = (match.tier as StoreTier) || prev.tier;
+              const nextLimit = match.itemsLimit ?? (nextTier === 'pro_100' ? 100 : 30);
+              const nextActive = match.status !== undefined ? match.status === 'active' : prev.active;
+              if (nextTier === prev.tier && nextLimit === prev.itemLimit && nextActive === prev.active) {
+                return prev;
+              }
+              const nextSub: StoreSubscription = {
+                ...prev,
+                tier: nextTier,
+                itemLimit: nextLimit,
+                itemsLimit: nextLimit,
+                active: nextActive,
+              };
+              try { localStorage.setItem('AGC_store_sub', JSON.stringify(nextSub)); } catch (_) {}
+              return nextSub;
+            });
+          }
+
+          if (sbStores.artisans && typeof sbStores.artisans === 'object') {
+            const artisanMap = sbStores.artisans as Record<string, any>;
+            setArtisanStation((prev) => {
+              if (!prev) return prev;
+              const match = artisanMap[prev.id];
+              if (!match || match.isApproved === undefined || match.isApproved === prev.isApproved) return prev;
+              const nextStation = { ...prev, isApproved: Boolean(match.isApproved) };
+              try { localStorage.setItem('AGC_artisan_station', JSON.stringify(nextStation)); } catch (_) {}
+              return nextStation;
+            });
+            setServiceProviders((prev) => {
+              let changed = false;
+              const next = prev.map((sp) => {
+                const match = artisanMap[sp.id];
+                if (match && match.isApproved !== undefined && Boolean(match.isApproved) !== sp.isVerified) {
+                  changed = true;
+                  return { ...sp, isVerified: Boolean(match.isApproved) };
+                }
+                return sp;
+              });
+              return changed ? next : prev;
+            });
+          }
+        }
+      } catch (_) {}
 
       refreshAdminUsers();
     };
@@ -8864,16 +9259,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const socket = initSocket();
     const onConfig = (cfg: AdminSystemConfig) => {
+      adminConfigUpdatedAtRef.current = Date.now();
       const merged = { ...DEFAULT_SYSTEM_CONFIG, ...cfg };
       systemConfigRef.current = merged;
       setSystemConfig(merged);
     };
     const onFeatures = (flags: FeatureFlags) => {
+      adminConfigUpdatedAtRef.current = Date.now();
       const merged = { ...DEFAULT_FEATURE_FLAGS, ...flags };
       featureFlagsRef.current = merged;
       setFeatureFlags(merged);
     };
     const onCms = (cms: AdminCmsData) => {
+      adminCmsUpdatedAtRef.current = Date.now();
       const merged = {
         ...DEFAULT_CMS_DATA,
         ...cms,
@@ -8884,9 +9282,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCmsData(merged);
     };
     const onBroadcast = (bc: AdminSystemBroadcast) => {
+      adminCmsUpdatedAtRef.current = Date.now();
+      systemBroadcastRef.current = bc;
       setSystemBroadcast(bc);
     };
     const onBroadcastCleared = () => {
+      adminCmsUpdatedAtRef.current = Date.now();
+      systemBroadcastRef.current = null;
       setSystemBroadcast(null);
     };
     const onUsersSnapshot = (rawList: any[]) => {
@@ -8915,25 +9317,86 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         adminUsersRef.current = merged;
         return merged;
       });
-      setCurrentUser((prev) => {
-        if (prev.id === u.id || (prev.phoneNumber && u.phoneNumber && phonesMatch(prev.phoneNumber, u.phoneNumber))) {
-          const updated: UserProfile = {
-            ...prev,
-            verificationBadge: u.verificationBadge !== undefined ? u.verificationBadge : prev.verificationBadge,
-            role: (u.role as UserProfile['role']) || prev.role,
-          };
-          try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
-          return updated;
-        }
-        return prev;
+      if (currentUser.id === u.id || (currentUser.phoneNumber && u.phoneNumber && phonesMatch(currentUser.phoneNumber, u.phoneNumber))) {
+        syncCurrentUserFromRecord(mapped);
+      }
+    };
+    const onBanEvent = (payload: any) => {
+      if (!payload) return;
+      const target = payload.phoneOrId || payload.phoneNumber || '';
+      const targetClean = String(target).replace(/\D/g, '');
+      setAdminUsers((prev) => {
+        const next = prev.map((u) =>
+          u.id === target || u.phoneNumber === target || (targetClean && phonesMatch(u.phoneNumber, target))
+            ? { ...u, status: 'banned' as const, bannedAt: payload.bannedAt, banReason: payload.reason, isOnline: false }
+            : u
+        );
+        adminUsersRef.current = next;
+        return next;
       });
-      if (u.walletBalanceNgn !== undefined) {
-        setCurrentUser((prev) => {
-          if (prev.phoneNumber && u.phoneNumber && phonesMatch(prev.phoneNumber, u.phoneNumber)) {
-            setWallet((w) => ({ ...w, availableBalance: u.walletBalanceNgn }));
-          }
-          return prev;
+      if (currentUser.id === target || (currentUser.phoneNumber && target && phonesMatch(currentUser.phoneNumber, target))) {
+        setIsBanned(true);
+        setBanInfo({
+          reason: payload.reason || 'Violation of AfriChat platform terms and conditions.',
+          bannedAt: payload.bannedAt || new Date().toISOString(),
         });
+        try {
+          localStorage.setItem('AGC_banned_state', JSON.stringify({
+            isBanned: true,
+            reason: payload.reason,
+            bannedAt: payload.bannedAt,
+            phone: currentUser.phoneNumber,
+          }));
+        } catch (_) {}
+      }
+    };
+    const onUnbanEvent = (payload: any) => {
+      if (!payload) return;
+      const target = payload.phoneOrId || payload.phoneNumber || '';
+      const targetClean = String(target).replace(/\D/g, '');
+      setAdminUsers((prev) => {
+        const next = prev.map((u) =>
+          u.id === target || u.phoneNumber === target || (targetClean && phonesMatch(u.phoneNumber, target))
+            ? { ...u, status: 'active' as const, bannedAt: undefined, banReason: undefined }
+            : u
+        );
+        adminUsersRef.current = next;
+        return next;
+      });
+      if (currentUser.id === target || (currentUser.phoneNumber && target && phonesMatch(currentUser.phoneNumber, target))) {
+        setIsBanned(false);
+        setBanInfo(null);
+        try { localStorage.removeItem('AGC_banned_state'); } catch (_) {}
+      }
+    };
+    const onWalletAdjustedEvent = (payload: any) => {
+      if (!payload) return;
+      const target = payload.phoneOrId || payload.phoneNumber || '';
+      const targetClean = String(target).replace(/\D/g, '');
+      if (payload.newBalance !== undefined) {
+        setAdminUsers((prev) => {
+          const next = prev.map((u) =>
+            u.id === target || u.phoneNumber === target || (targetClean && phonesMatch(u.phoneNumber, target))
+              ? { ...u, walletBalanceNgn: payload.newBalance }
+              : u
+          );
+          adminUsersRef.current = next;
+          return next;
+        });
+        if (currentUser.id === target || (currentUser.phoneNumber && target && phonesMatch(currentUser.phoneNumber, target))) {
+          setWallet((w) => ({ ...w, availableBalance: payload.newBalance }));
+          try {
+            const walletTsKey = getUserStorageKey('AGC_last_admin_wallet_ts', currentUser.phoneNumber);
+            localStorage.setItem(walletTsKey, String(Date.now()));
+          } catch (_) {}
+        }
+      }
+    };
+    const onKickEvent = (payload: any) => {
+      const target = payload?.phoneOrId || payload?.phoneNumber || '';
+      if (target && (currentUser.id === target || (currentUser.phoneNumber && phonesMatch(currentUser.phoneNumber, target)))) {
+        setIsKickedOut(true);
+        try { localStorage.removeItem('AGC_is_authenticated'); } catch (_) {}
       }
     };
 
@@ -8945,6 +9408,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket.on('admin_users_snapshot', onUsersSnapshot);
     socket.on('user_registered', onUserRegistered);
     socket.on('user_updated', onUserUpdated);
+    socket.on('force_logout', onKickEvent);
+    socket.on('admin_store_updated', syncAdminFromServer);
+    socket.on('admin_artisan_updated', syncAdminFromServer);
 
     let sbAdminChannel: ReturnType<typeof supabase.channel> | null = null;
     let sbPhoneRegChannel: ReturnType<typeof supabase.channel> | null = null;
@@ -8974,6 +9440,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           })
           .on('broadcast', { event: 'user_registered' }, ({ payload }: any) => {
             if (payload) onUserRegistered(payload);
+          })
+          .on('broadcast', { event: 'ban' }, ({ payload }: any) => {
+            onBanEvent(payload);
+          })
+          .on('broadcast', { event: 'unban' }, ({ payload }: any) => {
+            onUnbanEvent(payload);
+          })
+          .on('broadcast', { event: 'wallet_adjusted' }, ({ payload }: any) => {
+            onWalletAdjustedEvent(payload);
+          })
+          .on('broadcast', { event: 'kick' }, ({ payload }: any) => {
+            onKickEvent(payload);
+          })
+          .on('broadcast', { event: 'admin_store_updated' }, () => {
+            syncAdminFromServer();
+          })
+          .on('broadcast', { event: 'admin_artisan_updated' }, () => {
+            syncAdminFromServer();
           })
           .subscribe();
         adminSupabaseChannelRef.current = sbAdminChannel;
@@ -9020,7 +9504,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     window.addEventListener('focus', syncAdminFromServer);
     document.addEventListener('visibilitychange', handleVisibility);
-    const pollInterval = setInterval(syncAdminFromServer, 25000);
+    const pollInterval = setInterval(syncAdminFromServer, 12000);
 
     return () => {
       socket.off('admin_config_updated', onConfig);
@@ -9031,6 +9515,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('admin_users_snapshot', onUsersSnapshot);
       socket.off('user_registered', onUserRegistered);
       socket.off('user_updated', onUserUpdated);
+      socket.off('force_logout', onKickEvent);
+      socket.off('admin_store_updated', syncAdminFromServer);
+      socket.off('admin_artisan_updated', syncAdminFromServer);
       window.removeEventListener('focus', syncAdminFromServer);
       document.removeEventListener('visibilitychange', handleVisibility);
       clearInterval(pollInterval);
@@ -9196,7 +9683,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               phone,
               'Added via AGC QR',
               true,
-              avatar || undefined
+              avatar || undefined,
+              { sendRequest: false }
             );
             startChatWithContact(c);
             window.history.replaceState(null, '', window.location.pathname);
@@ -9210,7 +9698,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const match = hash.match(/call=([^&#]+)/);
           if (match) {
             const phone = decodeURIComponent(match[1]);
-            const c = addNewDeviceContact(`Contact ${phone.slice(-4)}`, phone, 'Added via AGC QR', true);
+            const c = addNewDeviceContact(`Contact ${phone.slice(-4)}`, phone, 'Added via AGC QR', true, undefined, { sendRequest: false });
             startChatWithContact(c);
             window.history.replaceState(null, '', window.location.pathname);
           }
@@ -9243,6 +9731,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     status: u.status || 'active',
     bannedAt: u.bannedAt,
     banReason: u.banReason,
+    kycStatus: u.kycStatus,
+    kycType: u.kycType,
+    adminWalletAdjustedAt: u.adminWalletAdjustedAt,
+    updatedAt: u.updatedAt,
     joinedDate: u.joinedDate || (u.registeredAt || u.createdAt ? new Date(u.registeredAt || u.createdAt).toLocaleDateString() : 'Recent'),
     walletBalanceNgn: u.walletBalanceNgn ?? 50000,
     ordersCount: u.ordersCount || 0,
@@ -9273,6 +9765,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             verificationBadge: inc.verificationBadge !== undefined ? inc.verificationBadge : cur.verificationBadge,
             role: inc.role || cur.role,
             status: inc.status || cur.status,
+            kycStatus: inc.kycStatus ?? cur.kycStatus,
+            kycType: inc.kycType ?? cur.kycType,
+            adminWalletAdjustedAt: inc.adminWalletAdjustedAt ?? cur.adminWalletAdjustedAt,
             walletBalanceNgn: inc.walletBalanceNgn ?? cur.walletBalanceNgn,
           };
         } else {
@@ -9304,8 +9799,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const [systemBroadcast, setSystemBroadcast] = useState<AdminSystemBroadcast | null>(null);
+  useEffect(() => { systemBroadcastRef.current = systemBroadcast; }, [systemBroadcast]);
 
-  // Real-Time Multi-Tab / Multi-Window Admin State Synchronization (no localStorage caching)
+  // Real-Time Multi-Tab / Multi-Window Admin State Synchronization
   useEffect(() => {
     let bc: BroadcastChannel | null = null;
     try {
@@ -9315,15 +9811,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const msg = e.data;
         if (!msg || !msg.type) return;
         if (msg.type === 'config' && msg.data) {
+          adminConfigUpdatedAtRef.current = Date.now();
           systemConfigRef.current = msg.data;
           setSystemConfig(msg.data);
         } else if (msg.type === 'features' && msg.data) {
+          adminConfigUpdatedAtRef.current = Date.now();
           featureFlagsRef.current = msg.data;
           setFeatureFlags(msg.data);
         } else if (msg.type === 'cms' && msg.data) {
+          adminCmsUpdatedAtRef.current = Date.now();
           cmsDataRef.current = msg.data;
           setCmsData(msg.data);
         } else if (msg.type === 'broadcast') {
+          adminCmsUpdatedAtRef.current = Date.now();
+          systemBroadcastRef.current = msg.data || null;
           setSystemBroadcast(msg.data || null);
         } else if (msg.type === 'user_updated' && msg.data) {
           const mapped = mapRawToAdminUser(msg.data);
@@ -9333,20 +9834,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return merged;
           });
           if (currentUser?.phoneNumber && mapped.phoneNumber && phonesMatch(currentUser.phoneNumber, mapped.phoneNumber)) {
-            setCurrentUser((prev) => {
-              const updated = {
-                ...prev,
-                verificationBadge: mapped.verificationBadge !== undefined ? mapped.verificationBadge : prev.verificationBadge,
-                role: (mapped.role as UserProfile['role']) || prev.role,
-              };
-              try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
-              return updated;
-            });
+            syncCurrentUserFromRecord(mapped);
           }
         } else if (msg.type === 'ban') {
           const myPhoneClean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
           const targetClean = (msg.phoneOrId || '').replace(/\D/g, '');
-          if (currentUser?.id === msg.phoneOrId || (myPhoneClean && targetClean && myPhoneClean === targetClean)) {
+          if (currentUser?.id === msg.phoneOrId || (myPhoneClean && targetClean && phonesMatch(myPhoneClean, msg.phoneOrId))) {
             setIsBanned(true);
             setBanInfo({
               reason: msg.reason || 'Violation of AfriChat platform terms and conditions.',
@@ -9363,7 +9856,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           setAdminUsers((prev) =>
             prev.map((u) =>
-              u.id === msg.phoneOrId || u.phoneNumber === msg.phoneOrId || (targetClean && u.phoneNumber.replace(/\D/g, '') === targetClean)
+              u.id === msg.phoneOrId || u.phoneNumber === msg.phoneOrId || (targetClean && phonesMatch(u.phoneNumber, msg.phoneOrId))
                 ? { ...u, status: 'banned', bannedAt: msg.bannedAt, banReason: msg.reason, isOnline: false }
                 : u
             )
@@ -9371,14 +9864,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else if (msg.type === 'unban') {
           const myPhoneClean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
           const targetClean = (msg.phoneOrId || '').replace(/\D/g, '');
-          if (currentUser?.id === msg.phoneOrId || (myPhoneClean && targetClean && myPhoneClean === targetClean)) {
+          if (currentUser?.id === msg.phoneOrId || (myPhoneClean && targetClean && phonesMatch(myPhoneClean, msg.phoneOrId))) {
             setIsBanned(false);
             setBanInfo(null);
             try { localStorage.removeItem('AGC_banned_state'); } catch (_) {}
           }
           setAdminUsers((prev) =>
             prev.map((u) =>
-              u.id === msg.phoneOrId || u.phoneNumber === msg.phoneOrId || (targetClean && u.phoneNumber.replace(/\D/g, '') === targetClean)
+              u.id === msg.phoneOrId || u.phoneNumber === msg.phoneOrId || (targetClean && phonesMatch(u.phoneNumber, msg.phoneOrId))
                 ? { ...u, status: 'active', bannedAt: undefined, banReason: undefined }
                 : u
             )
@@ -9386,26 +9879,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else if (msg.type === 'wallet_adjusted') {
           const myPhoneClean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
           const targetClean = (msg.phoneOrId || '').replace(/\D/g, '');
-          if (currentUser?.id === msg.phoneOrId || (myPhoneClean && targetClean && myPhoneClean === targetClean)) {
+          if (currentUser?.id === msg.phoneOrId || (myPhoneClean && targetClean && phonesMatch(myPhoneClean, msg.phoneOrId))) {
             if (msg.newBalance !== undefined) {
               setWallet((prev) => ({ ...prev, availableBalance: msg.newBalance }));
             }
           }
           setAdminUsers((prev) =>
             prev.map((u) => {
-              if (u.id === msg.phoneOrId || u.phoneNumber === msg.phoneOrId || (targetClean && u.phoneNumber.replace(/\D/g, '') === targetClean)) {
+              if (u.id === msg.phoneOrId || u.phoneNumber === msg.phoneOrId || (targetClean && phonesMatch(u.phoneNumber, msg.phoneOrId))) {
                 return { ...u, walletBalanceNgn: msg.newBalance ?? u.walletBalanceNgn };
               }
               return u;
             })
           );
+        } else if (msg.type === 'kick') {
+          const target = msg.phoneOrId || '';
+          if (target && (currentUser?.id === target || (currentUser?.phoneNumber && phonesMatch(currentUser.phoneNumber, target)))) {
+            setIsKickedOut(true);
+            try { localStorage.removeItem('AGC_is_authenticated'); } catch (_) {}
+          }
         }
       };
     } catch (_) {}
     return () => {
       if (bc) bc.close();
     };
-  }, [currentUser]);
+  }, [currentUser, syncCurrentUserFromRecord]);
 
   const findAdminUserTarget = (userIdOrPhone: string): AdminUserRecord | undefined => {
     const clean = userIdOrPhone.replace(/\D/g, '');
@@ -9478,8 +9977,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastUserUpdateEverywhere(optimisticUser);
 
     const identifier = resolveAdminUserKey(phoneNum || userId);
-    try {
-      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/badge`, {
+    const [apiData, sbOk] = await Promise.all([
+      safeJsonFetch(`/api/admin/users/${encodeURIComponent(identifier)}/badge`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -9488,24 +9987,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           fullName: hints?.fullName || target?.fullName,
           avatarUrl: hints?.avatarUrl || target?.avatarUrl,
         }),
+      }),
+      upsertSupabaseAdminUserOverride(phoneNum || identifier, {
+        verificationBadge: badge,
+        phoneNumber: phoneNum || target?.phoneNumber,
+        fullName: hints?.fullName || target?.fullName,
+        avatarUrl: hints?.avatarUrl || target?.avatarUrl,
+      }),
+    ]);
+
+    if (apiData?.user) {
+      const mapped = mapRawToAdminUser(apiData.user);
+      setAdminUsers((prev) => {
+        const merged = mergeAdminUsersList(prev, [mapped], true);
+        adminUsersRef.current = merged;
+        return merged;
       });
-      if (res && res.ok) {
-        const data = await res.json();
-        if (data?.user) {
-          const mapped = mapRawToAdminUser(data.user);
-          setAdminUsers((prev) => {
-            const merged = mergeAdminUsersList(prev, [mapped], true);
-            adminUsersRef.current = merged;
-            return merged;
-          });
-          broadcastUserUpdateEverywhere(data.user);
-        }
-        return true;
-      }
-      return false;
-    } catch (_) {
-      return false;
+      broadcastUserUpdateEverywhere(apiData.user);
     }
+    return Boolean(apiData?.success || sbOk);
   };
 
   const toggleUserSuspension = async (userId: string): Promise<boolean> => {
@@ -9514,8 +10014,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return setUserStatus(userId, nextStatus);
   };
 
-  const [isBanned, setIsBanned] = useState(false);
-  const [banInfo, setBanInfo] = useState<{ reason?: string; bannedAt?: string } | null>(null);
+  const [isBanned, setIsBanned] = useState(() => {
+    try {
+      const saved = localStorage.getItem('AGC_banned_state');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed?.isBanned) {
+          const profRaw = localStorage.getItem('AGC_user_profile_v2');
+          const prof = profRaw ? JSON.parse(profRaw) : null;
+          if (!parsed.phone || (prof?.phoneNumber && phonesMatch(parsed.phone, prof.phoneNumber))) {
+            return true;
+          }
+        }
+      }
+    } catch (_) {}
+    return false;
+  });
+  const [banInfo, setBanInfo] = useState<{ reason?: string; bannedAt?: string } | null>(() => {
+    try {
+      const saved = localStorage.getItem('AGC_banned_state');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed?.isBanned) {
+          const profRaw = localStorage.getItem('AGC_user_profile_v2');
+          const prof = profRaw ? JSON.parse(profRaw) : null;
+          if (!parsed.phone || (prof?.phoneNumber && phonesMatch(parsed.phone, prof.phoneNumber))) {
+            return { reason: parsed.reason, bannedAt: parsed.bannedAt };
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  });
 
   const setUserStatus = async (
     userIdOrPhone: string,
@@ -9523,6 +10053,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): Promise<boolean> => {
     const target = findAdminUserTarget(userIdOrPhone);
     const clean = userIdOrPhone.replace(/\D/g, '');
+    const optimisticUser = target ? { ...target, status } : { id: userIdOrPhone, phoneNumber: userIdOrPhone, status };
     setAdminUsers((prev) => {
       const next = prev.map((u) =>
         u.id === userIdOrPhone || u.phoneNumber === userIdOrPhone || (clean && phonesMatch(u.phoneNumber, userIdOrPhone))
@@ -9532,9 +10063,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       adminUsersRef.current = next;
       return next;
     });
+    broadcastUserUpdateEverywhere(optimisticUser);
+
     const identifier = resolveAdminUserKey(target?.phoneNumber || userIdOrPhone);
-    try {
-      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
+    const [apiData, sbOk] = await Promise.all([
+      safeJsonFetch(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -9543,24 +10076,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           fullName: target?.fullName,
           avatarUrl: target?.avatarUrl,
         }),
+      }),
+      upsertSupabaseAdminUserOverride(target?.phoneNumber || identifier, {
+        status,
+        phoneNumber: target?.phoneNumber,
+        fullName: target?.fullName,
+        avatarUrl: target?.avatarUrl,
+      }),
+    ]);
+
+    if (apiData?.user) {
+      const mapped = mapRawToAdminUser(apiData.user);
+      setAdminUsers((prev) => {
+        const merged = mergeAdminUsersList(prev, [mapped], true);
+        adminUsersRef.current = merged;
+        return merged;
       });
-      if (res && res.ok) {
-        const data = await res.json();
-        if (data?.user) {
-          const mapped = mapRawToAdminUser(data.user);
-          setAdminUsers((prev) => {
-            const merged = mergeAdminUsersList(prev, [mapped], true);
-            adminUsersRef.current = merged;
-            return merged;
-          });
-          broadcastUserUpdateEverywhere(data.user);
-        }
-        return true;
-      }
-      return false;
-    } catch (_) {
-      return false;
+      broadcastUserUpdateEverywhere(apiData.user);
     }
+    return Boolean(apiData?.success || sbOk);
   };
 
   const setUserRole = async (
@@ -9569,6 +10103,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): Promise<boolean> => {
     const target = findAdminUserTarget(userIdOrPhone);
     const clean = userIdOrPhone.replace(/\D/g, '');
+    const optimisticUser = target ? { ...target, role } : { id: userIdOrPhone, phoneNumber: userIdOrPhone, role };
     setAdminUsers((prev) => {
       const next = prev.map((u) =>
         u.id === userIdOrPhone || u.phoneNumber === userIdOrPhone || (clean && phonesMatch(u.phoneNumber, userIdOrPhone))
@@ -9585,9 +10120,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return updated;
       });
     }
+    broadcastUserUpdateEverywhere(optimisticUser);
+
     const identifier = resolveAdminUserKey(target?.phoneNumber || userIdOrPhone);
-    try {
-      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
+    const [apiData, sbOk] = await Promise.all([
+      safeJsonFetch(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -9596,24 +10133,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           fullName: target?.fullName,
           avatarUrl: target?.avatarUrl,
         }),
+      }),
+      upsertSupabaseAdminUserOverride(target?.phoneNumber || identifier, {
+        role,
+        phoneNumber: target?.phoneNumber,
+        fullName: target?.fullName,
+        avatarUrl: target?.avatarUrl,
+      }),
+    ]);
+
+    if (apiData?.user) {
+      const mapped = mapRawToAdminUser(apiData.user);
+      setAdminUsers((prev) => {
+        const merged = mergeAdminUsersList(prev, [mapped], true);
+        adminUsersRef.current = merged;
+        return merged;
       });
-      if (res && res.ok) {
-        const data = await res.json();
-        if (data?.user) {
-          const mapped = mapRawToAdminUser(data.user);
-          setAdminUsers((prev) => {
-            const merged = mergeAdminUsersList(prev, [mapped], true);
-            adminUsersRef.current = merged;
-            return merged;
-          });
-          broadcastUserUpdateEverywhere(data.user);
-        }
-        return true;
-      }
-      return false;
-    } catch (_) {
-      return false;
+      broadcastUserUpdateEverywhere(apiData.user);
     }
+    return Boolean(apiData?.success || sbOk);
   };
 
   const banUser = async (phoneOrId: string, reason?: string) => {
@@ -9621,6 +10159,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const clean = phoneOrId.replace(/\D/g, '');
     const banReason = reason || 'Violation of AfriChat platform terms and conditions.';
     const bannedAt = new Date().toISOString();
+    const optimisticUser = {
+      ...(target || { id: phoneOrId, phoneNumber: phoneOrId }),
+      status: 'banned' as const,
+      bannedAt,
+      banReason,
+      isOnline: false,
+    };
     setAdminUsers((prev) => {
       const next = prev.map((u) =>
         u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && phonesMatch(u.phoneNumber, phoneOrId))
@@ -9630,17 +10175,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       adminUsersRef.current = next;
       return next;
     });
-    try {
-      adminSyncChannelRef.current?.postMessage({
-        type: 'ban',
-        phoneOrId,
-        reason: banReason,
-        bannedAt,
-      });
-    } catch (_) {}
-    try {
-      const identifier = resolveAdminUserKey(target?.phoneNumber || phoneOrId);
-      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/ban`, {
+    const banPayload = { type: 'ban', phoneOrId: target?.phoneNumber || phoneOrId, reason: banReason, bannedAt };
+    try { adminSyncChannelRef.current?.postMessage(banPayload); } catch (_) {}
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({ type: 'broadcast', event: 'ban', payload: banPayload });
+      } catch (_) {}
+    }
+    broadcastUserUpdateEverywhere(optimisticUser);
+
+    const identifier = resolveAdminUserKey(target?.phoneNumber || phoneOrId);
+    const [apiData] = await Promise.all([
+      safeJsonFetch(`/api/admin/users/${encodeURIComponent(identifier)}/ban`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -9649,19 +10195,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           fullName: target?.fullName,
           avatarUrl: target?.avatarUrl,
         }),
-      });
-      if (res && res.ok) {
-        const data = await res.json();
-        if (data?.user) broadcastUserUpdateEverywhere(data.user);
-      }
-    } catch (e) {
-      console.warn('Failed to ban user on server:', e);
-    }
+      }),
+      upsertSupabaseAdminUserOverride(target?.phoneNumber || identifier, {
+        status: 'banned',
+        banReason,
+        bannedAt,
+        phoneNumber: target?.phoneNumber,
+        fullName: target?.fullName,
+        avatarUrl: target?.avatarUrl,
+      }),
+    ]);
+    if (apiData?.user) broadcastUserUpdateEverywhere(apiData.user);
   };
 
   const unbanUser = async (phoneOrId: string) => {
     const target = findAdminUserTarget(phoneOrId);
     const clean = phoneOrId.replace(/\D/g, '');
+    const optimisticUser = {
+      ...(target || { id: phoneOrId, phoneNumber: phoneOrId }),
+      status: 'active' as const,
+      bannedAt: undefined,
+      banReason: undefined,
+    };
     setAdminUsers((prev) => {
       const next = prev.map((u) =>
         u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && phonesMatch(u.phoneNumber, phoneOrId))
@@ -9671,12 +10226,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       adminUsersRef.current = next;
       return next;
     });
-    try {
-      adminSyncChannelRef.current?.postMessage({ type: 'unban', phoneOrId });
-    } catch (_) {}
-    try {
-      const identifier = resolveAdminUserKey(target?.phoneNumber || phoneOrId);
-      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/unban`, {
+    const unbanPayload = { type: 'unban', phoneOrId: target?.phoneNumber || phoneOrId };
+    try { adminSyncChannelRef.current?.postMessage(unbanPayload); } catch (_) {}
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({ type: 'broadcast', event: 'unban', payload: unbanPayload });
+      } catch (_) {}
+    }
+    broadcastUserUpdateEverywhere(optimisticUser);
+
+    const identifier = resolveAdminUserKey(target?.phoneNumber || phoneOrId);
+    const [apiData] = await Promise.all([
+      safeJsonFetch(`/api/admin/users/${encodeURIComponent(identifier)}/unban`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -9684,42 +10245,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           fullName: target?.fullName,
           avatarUrl: target?.avatarUrl,
         }),
-      });
-      if (res && res.ok) {
-        const data = await res.json();
-        if (data?.user) broadcastUserUpdateEverywhere(data.user);
-      }
-    } catch (e) {
-      console.warn('Failed to unban user on server:', e);
-    }
+      }),
+      upsertSupabaseAdminUserOverride(target?.phoneNumber || identifier, {
+        status: 'active',
+        banReason: null,
+        bannedAt: null,
+        phoneNumber: target?.phoneNumber,
+        fullName: target?.fullName,
+        avatarUrl: target?.avatarUrl,
+      }),
+    ]);
+    if (apiData?.user) broadcastUserUpdateEverywhere(apiData.user);
   };
 
   const adjustUserWallet = async (phoneOrId: string, deltaOrNew: number, isAbsolute: boolean = false) => {
     const target = findAdminUserTarget(phoneOrId);
     const clean = phoneOrId.replace(/\D/g, '');
-    let resolvedNewBal = deltaOrNew;
+    const adjustedAt = new Date().toISOString();
+    let resolvedNewBal = isAbsolute ? deltaOrNew : Math.max(0, (target?.walletBalanceNgn ?? 50000) + deltaOrNew);
     setAdminUsers((prev) => {
       const next = prev.map((u) => {
         if (u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && phonesMatch(u.phoneNumber, phoneOrId))) {
           const newBal = isAbsolute ? deltaOrNew : Math.max(0, (u.walletBalanceNgn || 0) + deltaOrNew);
           resolvedNewBal = newBal;
-          return { ...u, walletBalanceNgn: newBal };
+          return { ...u, walletBalanceNgn: newBal, adminWalletAdjustedAt: adjustedAt };
         }
         return u;
       });
       adminUsersRef.current = next;
       return next;
     });
-    try {
-      adminSyncChannelRef.current?.postMessage({
-        type: 'wallet_adjusted',
-        phoneOrId,
-        newBalance: resolvedNewBal,
-      });
-    } catch (_) {}
-    try {
-      const identifier = resolveAdminUserKey(target?.phoneNumber || phoneOrId);
-      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/adjust-wallet`, {
+    const walletPayload = {
+      type: 'wallet_adjusted',
+      phoneOrId: target?.phoneNumber || phoneOrId,
+      newBalance: resolvedNewBal,
+      adminWalletAdjustedAt: adjustedAt,
+    };
+    try { adminSyncChannelRef.current?.postMessage(walletPayload); } catch (_) {}
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({ type: 'broadcast', event: 'wallet_adjusted', payload: walletPayload });
+      } catch (_) {}
+    }
+
+    const identifier = resolveAdminUserKey(target?.phoneNumber || phoneOrId);
+    const [apiData] = await Promise.all([
+      safeJsonFetch(`/api/admin/users/${encodeURIComponent(identifier)}/adjust-wallet`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -9728,20 +10299,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           fullName: target?.fullName,
           avatarUrl: target?.avatarUrl,
         }),
-      });
-      if (res && res.ok) {
-        const data = await res.json();
-        if (data?.user) broadcastUserUpdateEverywhere(data.user);
-      }
-    } catch (e) {
-      console.warn('Failed to adjust wallet on server:', e);
-    }
+      }),
+      upsertSupabaseAdminUserOverride(target?.phoneNumber || identifier, {
+        walletBalanceNgn: resolvedNewBal,
+        adminWalletAdjustedAt: adjustedAt,
+        phoneNumber: target?.phoneNumber,
+        fullName: target?.fullName,
+        avatarUrl: target?.avatarUrl,
+      }),
+    ]);
+    if (apiData?.user) broadcastUserUpdateEverywhere(apiData.user);
   };
 
   const kickUserSession = async (phoneOrId: string) => {
-    try {
-      adminSyncChannelRef.current?.postMessage({ type: 'kick', phoneOrId });
-    } catch (_) {}
+    const target = findAdminUserTarget(phoneOrId);
+    const payload = { type: 'kick', phoneOrId: target?.phoneNumber || phoneOrId };
+    try { adminSyncChannelRef.current?.postMessage(payload); } catch (_) {}
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({ type: 'broadcast', event: 'kick', payload });
+      } catch (_) {}
+    }
     try {
       const identifier = resolveAdminUserKey(phoneOrId);
       await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/kick`, {
@@ -9797,6 +10375,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const createAdminBroadcast = (title: string, message: string, level: 'info' | 'warning' | 'alert' | 'urgent' = 'info') => {
+    const nowIso = new Date().toISOString();
+    adminCmsUpdatedAtRef.current = Date.now();
     const newBroadcast: AdminSystemBroadcast = {
       id: `bc_${Date.now()}`,
       title,
@@ -9805,6 +10385,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: 'Just now',
       active: true,
     };
+    systemBroadcastRef.current = newBroadcast;
     setSystemBroadcast(newBroadcast);
 
     try {
@@ -9821,10 +10402,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
 
-    callAdminApi('/api/admin/broadcast', {
+    safeJsonFetch('/api/admin/broadcast', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, message, level }),
+    });
+    saveSupabaseAdminSlice(ADMIN_SYS_CMS_KEY, 'AGC_ADMIN_CMS', {
+      cms: cmsDataRef.current,
+      activeBroadcast: newBroadcast,
+      updatedAt: nowIso,
     });
 
     // Push directly to users' Updates tab as an official status story
@@ -9859,6 +10445,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const clearAdminBroadcast = async (): Promise<boolean> => {
+    const nowIso = new Date().toISOString();
+    adminCmsUpdatedAtRef.current = Date.now();
+    systemBroadcastRef.current = null;
     setSystemBroadcast(null);
     try {
       adminSyncChannelRef.current?.postMessage({ type: 'broadcast', data: null });
@@ -9872,8 +10461,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       } catch (_) {}
     }
-    const res = await callAdminApi('/api/admin/broadcast', { method: 'DELETE' });
-    return Boolean(res && res.ok);
+    const [apiData, sbOk] = await Promise.all([
+      safeJsonFetch('/api/admin/broadcast', { method: 'DELETE' }),
+      saveSupabaseAdminSlice(ADMIN_SYS_CMS_KEY, 'AGC_ADMIN_CMS', {
+        cms: cmsDataRef.current,
+        activeBroadcast: null,
+        updatedAt: nowIso,
+      }),
+    ]);
+    return Boolean(apiData?.success || sbOk);
   };
 
   return (

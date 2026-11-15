@@ -48,6 +48,7 @@ import {
   UserX,
   BadgeCheck,
   Crown,
+  Eraser,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
@@ -121,6 +122,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [toastNotice, setToastNotice] = useState<string | null>(null);
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
+  const [showHeaderActionsMenu, setShowHeaderActionsMenu] = useState(false);
+  const [confirmChatAction, setConfirmChatAction] = useState<'clear' | 'delete' | null>(null);
 
   // Fullscreen image lightbox
   const [lightboxImg, setLightboxImg] = useState<{
@@ -718,44 +721,57 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => {
-              if (window.confirm(`Clear all message history in "${currentChat.name}"?\n\nMessages will be permanently removed from this device.`)) {
-                clearChat(currentChat.id);
-              }
-            }}
-            className="p-2 hover:bg-white/10 rounded-full transition-colors text-white/60 hover:text-rose-400"
-            title="Clear Chat History (Permanent)"
-            aria-label="Clear Chat"
-          >
-            <Trash2 className="w-5 h-5" />
-          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowHeaderActionsMenu((prev) => !prev)}
+              className="p-2 hover:bg-white/10 rounded-full transition-colors text-white/80 hover:text-white"
+              title="Chat Options"
+              aria-label="Chat Options"
+            >
+              <MoreVertical className="w-5 h-5" />
+            </button>
 
-          {(currentChat.isGroup || currentChat.isChannel) &&
-            (currentChat.creatorId === currentUser.id ||
-              currentChat.admins?.includes(currentUser.fullName) ||
-              currentChat.admins?.includes('You') ||
-              currentChat.id.startsWith('town_comm_')) && (
-              <button
-                type="button"
-                onClick={() => {
-                  const typeLabel = currentChat.isChannel ? 'channel' : 'group';
-                  if (
-                    window.confirm(
-                      `Permanently delete ${typeLabel} "${currentChat.name}" for everyone?\n\nThis will remove the ${typeLabel} and all its messages.`
-                    )
-                  ) {
-                    deleteChat(currentChat.id);
-                  }
-                }}
-                className="p-2 hover:bg-rose-500/25 text-rose-300 hover:text-rose-100 rounded-full transition-colors"
-                title={`Delete ${currentChat.isChannel ? 'Channel' : 'Group'} (Creator)`}
-                aria-label="Delete Group or Channel"
-              >
-                <Trash2 className="w-5 h-5 text-rose-400" />
-              </button>
+            {showHeaderActionsMenu && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setShowHeaderActionsMenu(false)}
+                />
+                <div className="absolute right-0 mt-2 w-52 bg-white dark:bg-[#1a1635] text-slate-800 dark:text-slate-100 rounded-2xl shadow-2xl border border-slate-200 dark:border-purple-900/40 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowHeaderActionsMenu(false);
+                      setConfirmChatAction('clear');
+                    }}
+                    className="w-full px-3.5 py-2.5 text-left text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/10 flex items-center gap-2.5 transition-colors"
+                  >
+                    <Eraser className="w-4 h-4 text-slate-500 dark:text-slate-300 shrink-0" />
+                    <span>Clear Chat History</span>
+                  </button>
+
+                  {(currentChat.isGroup || currentChat.isChannel) &&
+                    (currentChat.creatorId === currentUser.id ||
+                      currentChat.admins?.includes(currentUser.fullName) ||
+                      currentChat.admins?.includes('You') ||
+                      currentChat.id.startsWith('town_comm_')) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowHeaderActionsMenu(false);
+                          setConfirmChatAction('delete');
+                        }}
+                        className="w-full px-3.5 py-2.5 text-left text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/15 flex items-center gap-2.5 transition-colors border-t border-slate-100 dark:border-purple-900/30"
+                      >
+                        <Trash2 className="w-4 h-4 shrink-0" />
+                        <span>Delete {currentChat.isChannel ? 'Channel' : 'Group'}</span>
+                      </button>
+                    )}
+                </div>
+              </>
             )}
+          </div>
         </div>
       </div>
 
@@ -2045,6 +2061,58 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
               {lightboxImg.caption}
             </div>
           )}
+        </div>
+      )}
+
+      {/* In-App Confirmation Modal for Clear Chat / Delete Group */}
+      {confirmChatAction && (
+        <div
+          className="fixed inset-0 z-[180] bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setConfirmChatAction(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm bg-white dark:bg-[#17122c] border border-slate-200 dark:border-purple-900/40 rounded-3xl p-5 shadow-2xl space-y-4 text-slate-900 dark:text-white"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 text-rose-500 flex items-center justify-center shrink-0">
+                {confirmChatAction === 'delete' ? <Trash2 className="w-5 h-5" /> : <Eraser className="w-5 h-5" />}
+              </div>
+              <div>
+                <h4 className="font-bold text-sm">
+                  {confirmChatAction === 'delete'
+                    ? `Delete ${currentChat.isChannel ? 'Channel' : 'Group'}?`
+                    : 'Clear Chat History?'}
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {confirmChatAction === 'delete'
+                    ? `"${currentChat.name}" and its messages will be removed.`
+                    : `All messages in "${currentChat.name}" will be cleared from this device.`}
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setConfirmChatAction(null)}
+                className="py-2.5 rounded-xl bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/15 text-xs font-semibold transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const act = confirmChatAction;
+                  setConfirmChatAction(null);
+                  if (act === 'clear') clearChat(currentChat.id);
+                  else if (act === 'delete') deleteChat(currentChat.id);
+                }}
+                className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors"
+              >
+                {confirmChatAction === 'delete' ? 'Delete' : 'Clear History'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

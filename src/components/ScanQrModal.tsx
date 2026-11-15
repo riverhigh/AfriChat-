@@ -231,7 +231,8 @@ export const ScanQrModal: React.FC = () => {
           extractedPhone,
           'Scanned via AGC QR',
           true,
-          extractedAvatar
+          extractedAvatar,
+          { sendRequest: false }
         );
 
         setScanResult({

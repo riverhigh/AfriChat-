@@ -1065,6 +1065,10 @@ export interface AdminUserRecord {
   deviceInfo?: string;
   bannedAt?: string;
   banReason?: string;
+  kycStatus?: 'unverified' | 'pending' | 'verified' | 'rejected';
+  kycType?: 'BVN' | 'NIN';
+  adminWalletAdjustedAt?: string;
+  updatedAt?: string;
 }
 
 export interface AdminSystemBroadcast {

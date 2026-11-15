@@ -55,6 +55,14 @@ import { getSocket } from '../services/socket';
 import { AdminAuditDrawer, AdminAuditEntry, AdminWebhookLog } from './admin/AdminAuditDrawer';
 import { DualAdminApprovalModal } from './admin/DualAdminApprovalModal';
 import { EscrowDisputeModal } from './admin/EscrowDisputeModal';
+import {
+  ADMIN_SYS_STORES_KEY,
+  safeJsonFetch,
+  fetchSupabaseAdminSlice,
+  upsertSupabaseAdminUserOverride,
+  upsertSupabaseAdminStoreOverride,
+  upsertSupabaseAdminArtisanOverride,
+} from '../services/supabaseAdminSync';
 
 type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'comms' | 'security';
 type FinanceSubTab = 'escrows' | 'disputes' | 'dispatch' | 'webhooks' | 'payouts';
@@ -338,47 +346,160 @@ export const AdminDashboardModal: React.FC = () => {
     }
   };
 
+  const emitAdminGlobalBroadcast = (event: string, payload: any) => {
+    if (!isSupabaseConfigured) return;
+    try {
+      const existing = supabase
+        .getChannels()
+        .find((c) => c.topic === 'realtime:agc_global_admin_sync' || c.topic === 'agc_global_admin_sync');
+      if (existing) {
+        existing.send({ type: 'broadcast', event, payload }).catch(() => {});
+      } else {
+        const ch = supabase.channel('agc_global_admin_sync', { config: { broadcast: { self: false } } });
+        ch.subscribe((st) => {
+          if (st === 'SUBSCRIBED') {
+            ch.send({ type: 'broadcast', event, payload }).catch(() => {});
+          }
+        });
+      }
+    } catch (_) {}
+  };
+
   const fetchLiveMetrics = async () => {
     setIsRefreshing(true);
     fetchSupabaseUsers();
     refreshAdminUsers?.();
     try {
-      const res = await fetch('/api/admin/metrics').catch(() => null);
-      if (res && res.ok) {
-        const data = await res.json();
-        setLiveMetrics(data);
-        if (Array.isArray(data.securityEvents)) setSecurityEvents(data.securityEvents);
-        if (Array.isArray(data.blockedIps)) setBlockedIps(data.blockedIps);
-        if (Array.isArray(data.auditTrail)) setAuditTrail(data.auditTrail);
-        if (Array.isArray(data.webhookLogs)) setWebhookLogs(data.webhookLogs);
+      const [apiMetrics, sbOverrides] = await Promise.all([
+        safeJsonFetch('/api/admin/metrics'),
+        fetchSupabaseAdminSlice<{ stores?: Record<string, any>; artisans?: Record<string, any> }>(ADMIN_SYS_STORES_KEY),
+      ]);
+
+      const storeOvMap = sbOverrides?.stores || {};
+      const artisanOvMap = sbOverrides?.artisans || {};
+
+      if (apiMetrics) {
+        const mergedApiStores = Array.isArray(apiMetrics.stores)
+          ? apiMetrics.stores.map((s: any) => {
+              const ov = storeOvMap[String(s.id)];
+              return ov ? { ...s, ...ov } : s;
+            })
+          : [];
+        const mergedApiArtisans = Array.isArray(apiMetrics.artisans)
+          ? apiMetrics.artisans.map((a: any) => {
+              const ov = artisanOvMap[String(a.id)];
+              return ov ? { ...a, ...ov } : a;
+            })
+          : [];
+
+        setLiveMetrics({
+          ...apiMetrics,
+          stores: mergedApiStores,
+          artisans: mergedApiArtisans,
+        });
+        if (Array.isArray(apiMetrics.securityEvents)) setSecurityEvents(apiMetrics.securityEvents);
+        if (Array.isArray(apiMetrics.blockedIps)) setBlockedIps(apiMetrics.blockedIps);
+        if (Array.isArray(apiMetrics.auditTrail)) setAuditTrail(apiMetrics.auditTrail);
+        if (Array.isArray(apiMetrics.webhookLogs)) setWebhookLogs(apiMetrics.webhookLogs);
         setLastRefreshedAt(new Date());
       } else {
-        const uRes = await fetch('/api/users').catch(() => null);
-        if (uRes && uRes.ok) {
-          const uData = await uRes.json();
-          if (Array.isArray(uData.users)) {
-            setLiveMetrics((prev) => ({
-              uptimeSeconds: prev?.uptimeSeconds || 3600,
-              serverMemoryMb: prev?.serverMemoryMb || 48,
-              onlineUsersCount: uData.users.filter((u: any) => u.lastSeen === 'online').length,
-              onlineUsers: uData.users.filter((u: any) => u.lastSeen === 'online'),
-              registeredUsersCount: uData.users.length,
-              registeredUsers: uData.users,
-              communitiesCount: prev?.communitiesCount || 0,
-              activeStatusesCount: prev?.activeStatusesCount || 0,
-              dispatch: prev?.dispatch || {
-                totalOrdersCount: 0,
-                activeDeliveriesCount: 0,
-                completedDeliveriesCount: 0,
-                totalVolumeNgn: 0,
-                totalCommissionNgn: 0,
-                orders: [],
-              },
-              systemStatus: 'healthy',
-            }));
-            setLastRefreshedAt(new Date());
+        const [uData, sbStoresRes, sbArtisansRes, sbCommRes, sbStatRes] = await Promise.all([
+          safeJsonFetch('/api/users'),
+          isSupabaseConfigured
+            ? supabase.from('store_subscriptions').select('*').then((r) => r, () => null)
+            : Promise.resolve(null),
+          isSupabaseConfigured
+            ? supabase.from('artisan_stations').select('*').then((r) => r, () => null)
+            : Promise.resolve(null),
+          isSupabaseConfigured
+            ? supabase.from('town_communities').select('id').then((r) => r, () => null)
+            : Promise.resolve(null),
+          isSupabaseConfigured
+            ? supabase.from('user_statuses').select('id').then((r) => r, () => null)
+            : Promise.resolve(null),
+        ]);
+
+        const sbStores: any[] = Array.isArray(sbStoresRes?.data)
+          ? sbStoresRes.data.map((row: any) => {
+              const base = {
+                id: String(row.id),
+                storeName: row.store_name || 'Merchant Store',
+                description: row.description || '',
+                category: row.category || 'General',
+                tier: row.tier || 'starter_30',
+                itemsLimit: row.items_limit ?? (row.tier === 'pro_100' ? 100 : 30),
+                itemsCount: row.items_count ?? 0,
+                ownerName: row.owner_name || 'Merchant Owner',
+                ownerPhone: row.owner_phone || '',
+                status: row.is_active === false ? 'suspended' : 'active',
+                verified: row.is_active !== false,
+                createdAt: row.created_at || new Date().toISOString(),
+              };
+              const ov = storeOvMap[base.id];
+              return ov ? { ...base, ...ov } : base;
+            })
+          : [];
+        Object.values(storeOvMap).forEach((ov: any) => {
+          if (ov?.id && !sbStores.some((s) => String(s.id) === String(ov.id))) {
+            sbStores.push({
+              id: String(ov.id),
+              storeName: ov.storeName || 'Merchant Store',
+              description: ov.description || '',
+              category: ov.category || 'General',
+              tier: ov.tier || 'starter_30',
+              itemsLimit: ov.itemsLimit ?? (ov.tier === 'pro_100' ? 100 : 30),
+              itemsCount: ov.itemsCount ?? 0,
+              ownerName: ov.ownerName || 'Merchant Owner',
+              ownerPhone: ov.ownerPhone || '',
+              status: ov.status || 'active',
+              verified: ov.verified ?? ov.status === 'active',
+              createdAt: ov.updatedAt || new Date().toISOString(),
+            });
           }
-        }
+        });
+
+        const sbArtisans: any[] = Array.isArray(sbArtisansRes?.data)
+          ? sbArtisansRes.data.map((row: any) => {
+              const base = {
+                id: String(row.id),
+                stationName: row.station_name || 'Artisan Hub',
+                category: row.category_label || row.category || 'General Trade',
+                location: row.location || 'Nigeria',
+                workshopAddress: row.workshop_address || '',
+                ownerName: row.owner_name || 'Master Artisan',
+                ownerPhone: row.owner_phone || '',
+                isApproved: row.is_approved ?? true,
+                registrationFeePaid: row.registration_fee_paid ?? true,
+                createdAt: row.created_at || new Date().toISOString(),
+              };
+              const ov = artisanOvMap[base.id];
+              return ov ? { ...base, ...ov } : base;
+            })
+          : [];
+
+        const usersArr = Array.isArray(uData?.users) ? uData.users : [];
+        setLiveMetrics((prev) => ({
+          uptimeSeconds: prev?.uptimeSeconds || 3600,
+          serverMemoryMb: prev?.serverMemoryMb || 48,
+          onlineUsersCount: usersArr.filter((u: any) => u.lastSeen === 'online').length,
+          onlineUsers: usersArr.filter((u: any) => u.lastSeen === 'online'),
+          registeredUsersCount: usersArr.length,
+          registeredUsers: usersArr,
+          communitiesCount: Array.isArray(sbCommRes?.data) ? sbCommRes.data.length : (prev?.communitiesCount || 0),
+          activeStatusesCount: Array.isArray(sbStatRes?.data) ? sbStatRes.data.length : (prev?.activeStatusesCount || 0),
+          stores: sbStores,
+          artisans: sbArtisans,
+          dispatch: prev?.dispatch || {
+            totalOrdersCount: 0,
+            activeDeliveriesCount: 0,
+            completedDeliveriesCount: 0,
+            totalVolumeNgn: 0,
+            totalCommissionNgn: 0,
+            orders: [],
+          },
+          systemStatus: 'healthy',
+        }));
+        setLastRefreshedAt(new Date());
       }
     } catch (_) {
     } finally {
@@ -1094,20 +1215,29 @@ export const AdminDashboardModal: React.FC = () => {
   };
 
   const handleStoreMutation = async (store: LiveStoreRecord, patch: { tier?: string; status?: string; verified?: boolean }) => {
+    const itemsLimitPatch = patch.tier ? { itemsLimit: patch.tier === 'pro_100' ? 100 : 30 } : {};
+    const storePatch = {
+      storeName: store.storeName,
+      ownerName: store.ownerName,
+      ownerPhone: store.ownerPhone,
+      ...patch,
+      ...itemsLimitPatch,
+    };
     try {
-      const res = await fetch(`/api/admin/stores/${encodeURIComponent(store.id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          storeName: store.storeName,
-          ownerName: store.ownerName,
-          ownerPhone: store.ownerPhone,
-          ...patch,
+      const [apiData, sbOk] = await Promise.all([
+        safeJsonFetch(`/api/admin/stores/${encodeURIComponent(store.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(storePatch),
         }),
-      });
-      if (res.ok) {
+        upsertSupabaseAdminStoreOverride(store.id, storePatch),
+      ]);
+      if (apiData?.success || sbOk) {
+        emitAdminGlobalBroadcast('admin_store_updated', { id: store.id, ...storePatch });
         notify(`Updated store "${store.storeName}"`);
         fetchLiveMetrics();
+      } else {
+        notify('Failed to update store', 'err');
       }
     } catch (_) {
       notify('Failed to update store', 'err');
@@ -1136,21 +1266,29 @@ export const AdminDashboardModal: React.FC = () => {
 
   const handleKycUpdate = async (user: any, kycStatus: 'verified' | 'rejected' | 'pending', kycType: 'BVN' | 'NIN') => {
     const identifier = user.phoneNumber || user.id;
+    const payload = {
+      kycStatus,
+      kycType,
+      phoneNumber: user.phoneNumber,
+      fullName: user.fullName,
+      avatarUrl: user.avatarUrl,
+    };
     try {
-      const res = await fetch(`/api/admin/users/${encodeURIComponent(identifier)}/kyc`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kycStatus,
-          kycType,
-          phoneNumber: user.phoneNumber,
-          fullName: user.fullName,
-          avatarUrl: user.avatarUrl,
+      const [apiData, sbOk] = await Promise.all([
+        safeJsonFetch(`/api/admin/users/${encodeURIComponent(identifier)}/kyc`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
         }),
-      });
-      if (res.ok) {
+        upsertSupabaseAdminUserOverride(identifier, payload),
+      ]);
+      if (apiData?.success || sbOk) {
+        emitAdminGlobalBroadcast('user_updated', { ...user, ...payload });
         notify(`${user.fullName}: ${kycType} marked ${kycStatus.toUpperCase()}`);
+        refreshAdminUsers?.();
         fetchLiveMetrics();
+      } else {
+        notify('KYC update failed', 'err');
       }
     } catch (_) {
       notify('KYC update failed', 'err');
@@ -1158,15 +1296,26 @@ export const AdminDashboardModal: React.FC = () => {
   };
 
   const handleArtisanMutation = async (artisan: LiveArtisanRecord, isApproved: boolean) => {
+    const patch = {
+      isApproved,
+      stationName: artisan.stationName,
+      ownerPhone: artisan.ownerPhone,
+    };
     try {
-      const res = await fetch(`/api/admin/artisans/${encodeURIComponent(artisan.id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isApproved, stationName: artisan.stationName }),
-      });
-      if (res.ok) {
+      const [apiData, sbOk] = await Promise.all([
+        safeJsonFetch(`/api/admin/artisans/${encodeURIComponent(artisan.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        }),
+        upsertSupabaseAdminArtisanOverride(artisan.id, patch),
+      ]);
+      if (apiData?.success || sbOk) {
+        emitAdminGlobalBroadcast('admin_artisan_updated', { id: artisan.id, ...patch });
         notify(`${artisan.stationName} ${isApproved ? 'approved' : 'suspended'}`);
         fetchLiveMetrics();
+      } else {
+        notify('Artisan status update failed', 'err');
       }
     } catch (_) {
       notify('Artisan status update failed', 'err');
@@ -1257,7 +1406,7 @@ export const AdminDashboardModal: React.FC = () => {
       setConfigSaved(true);
       setTimeout(() => setConfigSaved(false), 3000);
     } else {
-      setConfigError('Failed to save configuration to live server.');
+      setConfigError('Failed to save configuration to live database.');
     }
   };
 
