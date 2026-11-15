@@ -4207,17 +4207,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [isDarkMode]);
 
-  // Active call timer (depends only on active room identity, never recreates every second)
-  const activeCallRoomKey = activeCall?.roomId || (activeCall ? activeCall.phone : '');
-  useEffect(() => {
-    if (!activeCallRoomKey) return;
-    const interval = setInterval(() => {
-      setActiveCall((prev) =>
-        prev ? { ...prev, durationSeconds: prev.durationSeconds + 1 } : null
-      );
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [activeCallRoomKey]);
+  // Call duration is tracked inside useWebRTC (ActiveCallSession) to avoid 1s full-app context re-renders
 
   const toggleDarkMode = () => {
     setIsDarkMode((prev) => !prev);
@@ -4647,6 +4637,94 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deviceContactsRef = useRef(deviceContacts);
   deviceContactsRef.current = deviceContacts;
 
+  // Helper: send a one-shot Supabase Realtime broadcast without tearing down live listener channels
+  const sendSupabaseBroadcastOnce = useCallback(
+    (topic: string, event: string, payload: any) => {
+      if (!isSupabaseConfigured || !topic) return;
+      try {
+        const existing = supabase
+          .getChannels()
+          .find(
+            (c: any) =>
+              c.subTopic === topic ||
+              c.topic === `realtime:${topic}` ||
+              c.topic === topic
+          );
+
+        if (existing) {
+          Promise.resolve(
+            existing.send({
+              type: 'broadcast',
+              event,
+              payload,
+            })
+          ).catch(() => {});
+          return;
+        }
+
+        const ch = supabase.channel(topic, {
+          config: { broadcast: { self: false } },
+        });
+        const cleanupTempChannel = () => {
+          try {
+            const bindings = (ch as any).bindings;
+            const hasListeners =
+              Boolean(bindings?.broadcast?.length) ||
+              Boolean(bindings?.postgres_changes?.length) ||
+              Boolean(bindings?.presence?.length);
+            if (!hasListeners) {
+              Promise.resolve(supabase.removeChannel(ch)).catch(() => {});
+            }
+          } catch (_) {}
+        };
+
+        const chAny = ch as unknown as {
+          httpSend?: (evt: string, data: any) => Promise<unknown>;
+        };
+        if (typeof chAny.httpSend === 'function') {
+          chAny
+            .httpSend(event, payload)
+            .then(cleanupTempChannel)
+            .catch(() => {
+              ch.subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                  Promise.resolve(
+                    ch.send({
+                      type: 'broadcast',
+                      event,
+                      payload,
+                    })
+                  )
+                    .catch(() => {})
+                    .finally(() => {
+                      setTimeout(cleanupTempChannel, 1500);
+                    });
+                }
+              });
+            });
+          return;
+        }
+
+        ch.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            Promise.resolve(
+              ch.send({
+                type: 'broadcast',
+                event,
+                payload,
+              })
+            )
+              .catch(() => {})
+              .finally(() => {
+                setTimeout(cleanupTempChannel, 1500);
+              });
+          }
+        });
+      } catch (_) {}
+    },
+    []
+  );
+
   // Helper: broadcast call control signals (incoming_call / call_declined / call_ended)
   // to every target participant phone across Socket.IO, BroadcastChannel, and Supabase Realtime
   const sendCallControlSignal = useCallback(
@@ -4700,35 +4778,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (isSupabaseConfigured) {
           variants.forEach((v) => {
             ['phone_call_', 'inbox_'].forEach((prefix) => {
-              try {
-                const ch = supabase.channel(`${prefix}${v}`, {
-                  config: { broadcast: { self: false } },
-                });
-                ch.subscribe((status) => {
-                  if (status === 'SUBSCRIBED') {
-                    ch.send({
-                      type: 'broadcast',
-                      event,
-                      payload,
-                    })
-                      .catch(() => {})
-                      .finally(() => {
-                        setTimeout(() => {
-                          try {
-                            ch.unsubscribe();
-                            supabase.removeChannel(ch);
-                          } catch (_) {}
-                        }, 1500);
-                      });
-                  }
-                });
-              } catch (_) {}
+              sendSupabaseBroadcastOnce(`${prefix}${v}`, event, payload);
             });
           });
         }
       });
     },
-    []
+    [sendSupabaseBroadcastOnce]
   );
 
   // Helper: broadcast webrtc_end directly into the call room across all transports
@@ -4755,31 +4811,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (_) {}
 
     if (isSupabaseConfigured) {
-      try {
-        const ch = supabase.channel(`call_room_${roomId}`, {
-          config: { broadcast: { self: false } },
-        });
-        ch.subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-            ch.send({
-              type: 'broadcast',
-              event: 'webrtc_end',
-              payload,
-            })
-              .catch(() => {})
-              .finally(() => {
-                setTimeout(() => {
-                  try {
-                    ch.unsubscribe();
-                    supabase.removeChannel(ch);
-                  } catch (_) {}
-                }, 1500);
-              });
-          }
-        });
-      } catch (_) {}
+      sendSupabaseBroadcastOnce(`call_room_${roomId}`, 'webrtc_end', payload);
     }
-  }, []);
+  }, [sendSupabaseBroadcastOnce]);
 
   // ── Multi-Transport Incoming Call & Call Termination Listener ────────────────
   // Depends ONLY on currentUser.phoneNumber so listeners never tear down mid-call
@@ -4848,7 +4882,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // 1. Socket.io Phone channel listener
-    const socket = getSocket();
+    const socket =
+      getSocket() ||
+      initSocket({
+        id: currentUserRef.current?.id || 'user',
+        name: currentUserRef.current?.fullName || 'AGC User',
+        avatar: currentUserRef.current?.avatarUrl,
+        phone: currentUserRef.current?.phoneNumber,
+      });
 
     const triggerForceLogout = () => {
       console.warn('⚠️ AGC force_logout executed: signed in on another device');
@@ -4942,8 +4983,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (bc) bc.close();
       sbChannels.forEach((ch) => {
         try {
-          ch.unsubscribe();
-          supabase.removeChannel(ch);
+          Promise.resolve(supabase.removeChannel(ch)).catch(() => {});
         } catch (_) {}
       });
       clearInterval(sessionHeartbeat);

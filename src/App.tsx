@@ -60,7 +60,7 @@ import { RootErrorBoundary } from './components/RootErrorBoundary';
 import { safeLocalStorage, safeSessionStorage } from './utils/safeStorage';
 
 const AppContent: React.FC = () => {
-  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled, isBanned, banInfo, systemConfig, currentUser, isAdminModalOpen, setIsAdminModalOpen } = useApp();
+  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, declineIncomingCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled, isBanned, banInfo, systemConfig, currentUser, isAdminModalOpen, setIsAdminModalOpen } = useApp();
   const [showSplash, setShowSplash] = useState(() => !safeSessionStorage.getItem('agc_splash_shown'));
   const maintenanceTapRef = React.useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
   const handleMaintenanceLogoTap = () => {
@@ -270,8 +270,12 @@ const AppContent: React.FC = () => {
 
         {/* Global Modals & Interactive Overlays */}
         <StatusViewerModal />
-        <CallErrorBoundary onReset={endCall}>{"\n"}<ActiveCallModal />{"\n"}</CallErrorBoundary>
-        <IncomingCallModal />
+        <CallErrorBoundary onReset={endCall}>
+          <ActiveCallModal />
+        </CallErrorBoundary>
+        <CallErrorBoundary onReset={declineIncomingCall}>
+          <IncomingCallModal />
+        </CallErrorBoundary>
         <IncomingContactRequestModal />
         <IncomingGroupInviteModal />
         <CheckoutDrawer />

@@ -15,8 +15,9 @@ export const IncomingCallModal: React.FC = () => {
   const ringtoneIntervalRef = useRef<number | null>(null);
 
   // ── Dual-tone incoming ringtone synthesizer ───────────────────────────────
+  const incomingRoomId = incomingCall?.roomId;
   useEffect(() => {
-    if (!incomingCall) return;
+    if (!incomingRoomId) return;
 
     let isCancelled = false;
 
@@ -24,12 +25,12 @@ export const IncomingCallModal: React.FC = () => {
       if (isCancelled) return;
       try {
         const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        if (!audioContextRef.current) {
+        if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
           audioContextRef.current = new AudioCtx();
         }
         const ctx = audioContextRef.current;
         if (ctx.state === 'suspended') {
-          ctx.resume();
+          ctx.resume().catch(() => {});
         }
 
         const now = ctx.currentTime;
@@ -74,7 +75,7 @@ export const IncomingCallModal: React.FC = () => {
         audioContextRef.current = null;
       }
     };
-  }, [incomingCall]);
+  }, [incomingRoomId]);
 
   if (!incomingCall) return null;
 

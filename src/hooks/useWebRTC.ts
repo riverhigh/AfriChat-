@@ -28,7 +28,7 @@ const ICE_SERVERS: RTCConfiguration = {
     // Cloudflare STUN fallback
     { urls: 'stun:stun.cloudflare.com:3478' },
   ],
-  iceCandidatePoolSize: 10,
+  iceCandidatePoolSize: 4,
 };
 
 export interface UseWebRTCOptions {
@@ -78,18 +78,48 @@ interface PeerEntry {
 // so WebRTC peer negotiation can still complete cleanly.
 function createFallbackStream(isVideo: boolean): MediaStream {
   const stream = new MediaStream();
+  let audioCtx: AudioContext | null = null;
+  let audioOsc: OscillatorNode | null = null;
+  let rafId: number | null = null;
+  let stopped = false;
+
+  const stopResources = () => {
+    stopped = true;
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    if (audioOsc) {
+      try { audioOsc.stop(); } catch (_) {}
+      try { audioOsc.disconnect(); } catch (_) {}
+      audioOsc = null;
+    }
+    if (audioCtx && audioCtx.state !== 'closed') {
+      audioCtx.close().catch(() => {});
+      audioCtx = null;
+    }
+  };
 
   try {
     const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     const ctx = new AudioCtx();
+    audioCtx = ctx;
     const dest = ctx.createMediaStreamDestination();
     const osc = ctx.createOscillator();
+    audioOsc = osc;
     const gain = ctx.createGain();
     gain.gain.value = 0.0001;
     osc.connect(gain);
     gain.connect(dest);
     osc.start();
-    dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
+    dest.stream.getAudioTracks().forEach((t) => {
+      const origStop = t.stop.bind(t);
+      t.stop = () => {
+        stopResources();
+        origStop();
+      };
+      stream.addTrack(t);
+    });
   } catch {
     // Web audio blocked
   }
@@ -102,7 +132,6 @@ function createFallbackStream(isVideo: boolean): MediaStream {
       const ctx = canvas.getContext('2d');
       if (ctx) {
         let frame = 0;
-        let stopped = false;
         const render = () => {
           if (stopped) return;
           frame++;
@@ -120,7 +149,7 @@ function createFallbackStream(isVideo: boolean): MediaStream {
           ctx.textAlign = 'center';
           ctx.fillText('AGC Video', 240, 185);
 
-          requestAnimationFrame(render);
+          rafId = requestAnimationFrame(render);
         };
         render();
 
@@ -128,7 +157,7 @@ function createFallbackStream(isVideo: boolean): MediaStream {
         canvasStream.getVideoTracks().forEach((t) => {
           const origStop = t.stop.bind(t);
           t.stop = () => {
-            stopped = true;
+            stopResources();
             origStop();
           };
           stream.addTrack(t);
@@ -204,6 +233,7 @@ export function useWebRTC({
   const endedFlagRef = useRef<boolean>(false);
   const signalSeqRef = useRef<number>(0);
   const socketListenerRef = useRef<((data: { roomId: string; event: string; data: any }) => void) | null>(null);
+  const signalChainRef = useRef<Promise<void>>(Promise.resolve());
 
   // ── Web Audio Ringback Tone Synthesizer ────────────────────────────────────
   const playTone = useCallback((freq1: number, freq2: number, durationMs: number) => {
@@ -267,22 +297,23 @@ export function useWebRTC({
     }, 1000);
   }, []);
 
-  // Sync React state with peer map
+  // Sync React state with peer map (reuses entry.stream to avoid flickering media elements)
   const syncRemotePeersState = useCallback(() => {
     const list: RemotePeerMedia[] = [];
     let primaryStream: MediaStream | null = null;
     peersRef.current.forEach((entry) => {
       const tracks = entry.stream.getTracks();
-      const snapshotStream = tracks.length > 0 ? new MediaStream(tracks) : null;
-      if (!primaryStream && snapshotStream) {
-        primaryStream = snapshotStream;
+      const hasTracks = tracks.length > 0;
+      const activeStream = hasTracks ? entry.stream : null;
+      if (!primaryStream && activeStream) {
+        primaryStream = activeStream;
       }
       list.push({
         peerId: entry.peerId,
         name: entry.name,
         phone: entry.phone,
         avatar: entry.avatar,
-        stream: snapshotStream,
+        stream: activeStream,
         connectionState: entry.pc.connectionState || entry.pc.iceConnectionState || 'connecting',
       });
     });
@@ -297,11 +328,13 @@ export function useWebRTC({
       const queued = signalQueueRef.current.shift();
       if (!queued) continue;
       try {
-        supabaseChannelRef.current.send({
-          type: 'broadcast',
-          event: queued.event,
-          payload: queued.payload,
-        });
+        Promise.resolve(
+          supabaseChannelRef.current.send({
+            type: 'broadcast',
+            event: queued.event,
+            payload: queued.payload,
+          })
+        ).catch(() => {});
       } catch (err) {
         console.warn('Supabase flush error:', err);
       }
@@ -345,10 +378,14 @@ export function useWebRTC({
     if (isSupabaseConfigured) {
       if (supabaseReadyRef.current && supabaseChannelRef.current) {
         try {
-          supabaseChannelRef.current.send({
-            type: 'broadcast',
-            event,
-            payload,
+          Promise.resolve(
+            supabaseChannelRef.current.send({
+              type: 'broadcast',
+              event,
+              payload,
+            })
+          ).catch(() => {
+            signalQueueRef.current.push({ event, payload });
           });
         } catch {
           signalQueueRef.current.push({ event, payload });
@@ -419,20 +456,29 @@ export function useWebRTC({
     supabaseChannelRef.current = null;
     supabaseReadyRef.current = false;
     if (sbCh) {
-      if (deferSupabaseUnsubMs > 0) {
-        setTimeout(() => {
-          try {
-            sbCh.unsubscribe();
-            supabase.removeChannel(sbCh);
-          } catch (_) {}
-        }, deferSupabaseUnsubMs);
-      } else {
+      const closeSb = () => {
         try {
-          sbCh.unsubscribe();
-          supabase.removeChannel(sbCh);
+          Promise.resolve(sbCh.unsubscribe())
+            .catch(() => {})
+            .finally(() => {
+              try {
+                supabase.removeChannel(sbCh);
+              } catch (_) {}
+            });
         } catch (_) {}
+      };
+      if (deferSupabaseUnsubMs > 0) {
+        setTimeout(closeSb, deferSupabaseUnsubMs);
+      } else {
+        closeSb();
       }
     }
+
+    // Close ringtone AudioContext
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(() => {});
+    }
+    audioContextRef.current = null;
 
     // Reset all signaling/media state refs
     isMediaReadyRef.current = false;
@@ -440,6 +486,9 @@ export function useWebRTC({
     pendingInboundSignalsRef.current = [];
     processedSignalsRef.current.clear();
   }, [stopRingtone]);
+
+  const isPcClosed = (pc: RTCPeerConnection): boolean =>
+    (pc.signalingState as string) === 'closed';
 
   // ── Get or Create PeerConnection for a Specific Remote Peer ────────────────
   const getOrCreatePeer = useCallback(
@@ -455,7 +504,16 @@ export function useWebRTC({
       const stream = localStreamRef.current;
       if (!stream) return null;
 
-      const pc = new RTCPeerConnection(ICE_SERVERS);
+      let pc: RTCPeerConnection;
+      try {
+        pc = new RTCPeerConnection(ICE_SERVERS);
+      } catch (err) {
+        console.error('RTCPeerConnection unavailable:', err);
+        setErrorMessage('WebRTC calling is not supported in this browser.');
+        setConnectionState('error');
+        return null;
+      }
+
       const entry: PeerEntry = {
         peerId: remotePeerId,
         name: meta?._fromName || 'Participant',
@@ -471,11 +529,14 @@ export function useWebRTC({
 
       // Attach local tracks
       stream.getTracks().forEach((track) => {
-        pc.addTrack(track, stream);
+        try {
+          pc.addTrack(track, stream);
+        } catch (_) {}
       });
 
       // Handle remote tracks (accumulates both audio & video tracks cleanly)
       pc.ontrack = (event) => {
+        if (endedFlagRef.current || pc.signalingState === 'closed') return;
         const incomingTracks =
           event.streams && event.streams[0]
             ? event.streams[0].getTracks()
@@ -505,6 +566,7 @@ export function useWebRTC({
 
       // Handle ICE candidates -> targeted to remotePeerId
       pc.onicecandidate = (event) => {
+        if (endedFlagRef.current || pc.signalingState === 'closed') return;
         if (event.candidate) {
           sendSignal('webrtc_ice', {
             _targetPeerId: remotePeerId,
@@ -514,6 +576,7 @@ export function useWebRTC({
       };
 
       const markConnected = () => {
+        if (endedFlagRef.current || pc.signalingState === 'closed') return;
         if (entry.disconnectTimer) {
           clearTimeout(entry.disconnectTimer);
           entry.disconnectTimer = null;
@@ -525,6 +588,7 @@ export function useWebRTC({
       };
 
       pc.oniceconnectionstatechange = () => {
+        if (endedFlagRef.current || pc.signalingState === 'closed') return;
         const iceState = pc.iceConnectionState;
         if (iceState === 'connected' || iceState === 'completed') {
           markConnected();
@@ -532,8 +596,9 @@ export function useWebRTC({
           if (!entry.disconnectTimer) {
             entry.disconnectTimer = window.setTimeout(() => {
               entry.disconnectTimer = null;
+              if (endedFlagRef.current || pc.signalingState === 'closed') return;
               if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-                // In group call, remove stale peer; in 1-on-1, only end if still dead
+                // In group call, remove stale peer; in 1-on-1, keep trying unless ended
                 if (isGroupCallRef.current && peersRef.current.size > 1) {
                   try { pc.close(); } catch (_) {}
                   peersRef.current.delete(remotePeerId);
@@ -548,11 +613,15 @@ export function useWebRTC({
             try {
               pc.restartIce();
               pc.createOffer({ iceRestart: true })
-                .then((offer) => pc.setLocalDescription(offer).then(() => offer))
                 .then((offer) => {
+                  if (endedFlagRef.current || isPcClosed(pc)) return null;
+                  return pc.setLocalDescription(offer).then(() => pc.localDescription || offer);
+                })
+                .then((sdp) => {
+                  if (!sdp || endedFlagRef.current) return;
                   sendSignal('webrtc_offer', {
                     _targetPeerId: remotePeerId,
-                    sdp: offer,
+                    sdp: { type: sdp.type, sdp: sdp.sdp },
                   });
                 })
                 .catch(() => {});
@@ -582,6 +651,7 @@ export function useWebRTC({
     async (entry: PeerEntry, forceResendIfPending = false) => {
       if (endedFlagRef.current) return;
       const pc = entry.pc;
+      if (pc.signalingState === 'closed') return;
 
       // If we already sent an offer and are still waiting for an answer with no ICE progress,
       // re-emit the existing localDescription safely without calling createOffer() again.
@@ -594,7 +664,7 @@ export function useWebRTC({
         ) {
           sendSignal('webrtc_offer', {
             _targetPeerId: entry.peerId,
-            sdp: pc.localDescription,
+            sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
           });
         }
         return;
@@ -607,10 +677,12 @@ export function useWebRTC({
           offerToReceiveAudio: true,
           offerToReceiveVideo: callTypeRef.current === 'video',
         });
+        if (endedFlagRef.current || isPcClosed(pc)) return;
         await pc.setLocalDescription(offer);
+        const sdp = pc.localDescription || offer;
         sendSignal('webrtc_offer', {
           _targetPeerId: entry.peerId,
-          sdp: pc.localDescription || offer,
+          sdp: { type: sdp.type, sdp: sdp.sdp },
         });
       } catch (err) {
         entry.hasSentOffer = false;
@@ -620,8 +692,8 @@ export function useWebRTC({
     [sendSignal]
   );
 
-  // ── Process Inbound Signal ─────────────────────────────────────────────────
-  const handleInboundSignal = useCallback(
+  // ── Process Inbound Signal (serialized to prevent SDP/ICE race conditions) ──
+  const processInboundSignal = useCallback(
     async (event: string, payload: any) => {
       if (!payload || endedFlagRef.current) return;
 
@@ -676,7 +748,7 @@ export function useWebRTC({
 
       if (event === 'peer_join' || event === 'receiver_ready') {
         const entry = getOrCreatePeer(senderPeerId, payload);
-        if (!entry) return;
+        if (!entry || entry.pc.signalingState === 'closed') return;
         stopRingtone();
         setConnectionState((prev) => (prev === 'connected' ? 'connected' : 'connecting'));
 
@@ -688,7 +760,7 @@ export function useWebRTC({
         }
       } else if (event === 'peer_ack') {
         const entry = getOrCreatePeer(senderPeerId, payload);
-        if (!entry) return;
+        if (!entry || entry.pc.signalingState === 'closed') return;
         stopRingtone();
         setConnectionState((prev) => (prev === 'connected' ? 'connected' : 'connecting'));
 
@@ -697,7 +769,7 @@ export function useWebRTC({
         }
       } else if (event === 'webrtc_offer') {
         const entry = getOrCreatePeer(senderPeerId, payload);
-        if (!entry || !payload.sdp) return;
+        if (!entry || !payload.sdp || entry.pc.signalingState === 'closed') return;
 
         try {
           stopRingtone();
@@ -712,27 +784,32 @@ export function useWebRTC({
             }
           }
 
+          if (endedFlagRef.current || isPcClosed(entry.pc)) return;
           await entry.pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
 
           while (entry.iceQueue.length > 0) {
+            if (endedFlagRef.current || isPcClosed(entry.pc)) break;
             const cand = entry.iceQueue.shift();
             if (cand) {
               await entry.pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
             }
           }
 
+          if (endedFlagRef.current || isPcClosed(entry.pc)) return;
           const answer = await entry.pc.createAnswer();
+          if (endedFlagRef.current || isPcClosed(entry.pc)) return;
           await entry.pc.setLocalDescription(answer);
+          const sdp = entry.pc.localDescription || answer;
           sendSignal('webrtc_answer', {
             _targetPeerId: senderPeerId,
-            sdp: entry.pc.localDescription || answer,
+            sdp: { type: sdp.type, sdp: sdp.sdp },
           });
         } catch (err) {
           console.error('Error handling WebRTC offer:', err);
         }
       } else if (event === 'webrtc_answer') {
         const entry = peersRef.current.get(senderPeerId);
-        if (!entry || !payload.sdp) return;
+        if (!entry || !payload.sdp || entry.pc.signalingState === 'closed') return;
 
         try {
           if (entry.pc.signalingState === 'have-local-offer') {
@@ -741,6 +818,7 @@ export function useWebRTC({
             await entry.pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
 
             while (entry.iceQueue.length > 0) {
+              if (endedFlagRef.current || isPcClosed(entry.pc)) break;
               const cand = entry.iceQueue.shift();
               if (cand) {
                 await entry.pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
@@ -753,7 +831,7 @@ export function useWebRTC({
       } else if (event === 'webrtc_ice') {
         if (!payload.candidate) return;
         const entry = getOrCreatePeer(senderPeerId, payload);
-        if (!entry) return;
+        if (!entry || entry.pc.signalingState === 'closed') return;
 
         if (entry.pc.remoteDescription) {
           try {
@@ -765,6 +843,16 @@ export function useWebRTC({
       }
     },
     [cleanup, getOrCreatePeer, playEndTone, sendOfferToPeer, sendSignal, stopRingtone, syncRemotePeersState]
+  );
+
+  const handleInboundSignal = useCallback(
+    (event: string, payload: any) => {
+      signalChainRef.current = signalChainRef.current
+        .then(() => processInboundSignal(event, payload))
+        .catch(() => {});
+      return signalChainRef.current;
+    },
+    [processInboundSignal]
   );
 
   // ── Initialize Local Media Stream ──────────────────────────────────────────
@@ -789,6 +877,9 @@ export function useWebRTC({
     };
 
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('MediaDevices API unavailable');
+      }
       const hardwarePromise = navigator.mediaDevices.getUserMedia(constraints);
       const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
       const stream = await Promise.race([hardwarePromise, timeoutPromise]);
@@ -799,6 +890,13 @@ export function useWebRTC({
         return stream;
       }
 
+      // Stop delayed hardware stream if it resolves after timeout
+      hardwarePromise.then((lateStream) => {
+        if (lateStream && localStreamRef.current !== lateStream) {
+          lateStream.getTracks().forEach((t) => { try { t.stop(); } catch (_) {} });
+        }
+      }).catch(() => {});
+
       console.warn('⚠️ [WebRTC]: Hardware media request timed out, trying fallback stream');
       const fallback = createFallbackStream(type === 'video');
       localStreamRef.current = fallback;
@@ -806,7 +904,7 @@ export function useWebRTC({
       return fallback;
     } catch (err) {
       console.warn('⚠️ [WebRTC]: Could not get requested media:', err);
-      if (type === 'video') {
+      if (type === 'video' && navigator.mediaDevices?.getUserMedia) {
         try {
           const audioOnly = await navigator.mediaDevices.getUserMedia({ audio: true });
           localStreamRef.current = audioOnly;

@@ -26,10 +26,18 @@ const RemoteStreamAudio: React.FC<RemoteStreamAudioProps> = ({ stream }) => {
 
   useEffect(() => {
     const el = audioRef.current;
-    if (el && stream) {
-      el.srcObject = stream;
+    if (!el) return;
+    if (stream) {
+      if (el.srcObject !== stream) {
+        el.srcObject = stream;
+      }
       el.play().catch(() => {});
+    } else {
+      el.srcObject = null;
     }
+    return () => {
+      if (el) el.srcObject = null;
+    };
   }, [stream]);
 
   return <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />;
@@ -46,11 +54,19 @@ const RemotePeerTile: React.FC<RemotePeerTileProps> = ({ peer, isVideoMode }) =>
 
   useEffect(() => {
     const el = videoRef.current;
-    if (el && peer.stream) {
-      el.srcObject = peer.stream;
+    if (!el) return;
+    if (peer.stream && isVideoMode && hasVideoTrack) {
+      if (el.srcObject !== peer.stream) {
+        el.srcObject = peer.stream;
+      }
       el.play().catch(() => {});
+    } else {
+      el.srcObject = null;
     }
-  }, [peer.stream]);
+    return () => {
+      if (el) el.srcObject = null;
+    };
+  }, [peer.stream, isVideoMode, hasVideoTrack]);
 
   return (
     <div className="relative rounded-2xl overflow-hidden bg-white/5 border border-white/10 aspect-[3/4] flex flex-col items-center justify-center">
@@ -98,6 +114,10 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
 
+  const resolvedRoomId =
+    activeCall.roomId || `call_${(activeCall.phone || '').replace(/\D/g, '') || 'room'}`;
+  const isVideoMode = activeCall.type === 'video';
+
   const {
     localStream,
     remoteStream,
@@ -113,7 +133,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
     flipCamera,
     endCall: endWebRTCCall,
   } = useWebRTC({
-    roomId: activeCall.roomId || `call_${activeCall.phone.replace(/\D/g, '') || 'room'}`,
+    roomId: resolvedRoomId,
     callType: activeCall.type || 'voice',
     isInitiator: activeCall.isInitiator ?? true,
     userPhone: currentUser?.phoneNumber,
@@ -124,23 +144,41 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
     enabled: true,
   });
 
+  const isMultiPeer = remotePeers.length > 1;
+
   // Attach local stream to local video preview
   useEffect(() => {
     const el = localVideoRef.current;
-    if (el && localStream) {
-      el.srcObject = localStream;
+    if (!el) return;
+    if (localStream && isVideoMode) {
+      if (el.srcObject !== localStream) {
+        el.srcObject = localStream;
+      }
       el.play().catch(() => {});
+    } else {
+      el.srcObject = null;
     }
-  }, [localStream]);
+    return () => {
+      if (el) el.srcObject = null;
+    };
+  }, [localStream, isVideoMode]);
 
   // Attach primary remote stream to full-screen <video> when 1-on-1
   useEffect(() => {
     const videoEl = remoteVideoRef.current;
-    if (videoEl && remoteStream) {
-      videoEl.srcObject = remoteStream;
+    if (!videoEl) return;
+    if (remoteStream && isVideoMode && !isMultiPeer) {
+      if (videoEl.srcObject !== remoteStream) {
+        videoEl.srcObject = remoteStream;
+      }
       videoEl.play().catch(() => {});
+    } else {
+      videoEl.srcObject = null;
     }
-  }, [remoteStream]);
+    return () => {
+      if (videoEl) videoEl.srcObject = null;
+    };
+  }, [remoteStream, isVideoMode, isMultiPeer]);
 
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -148,7 +186,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
     return `${mins}:${secs < 10 ? `0${secs}` : secs}`;
   };
 
-  const callLink = `${window.location.origin}/?call=${activeCall.roomId || ''}&type=${activeCall.type}`;
+  const callLink = `${window.location.origin}/?call=${resolvedRoomId}&type=${activeCall.type || 'voice'}`;
 
   const handleCopyLink = async () => {
     try {
@@ -172,8 +210,6 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
     }
   };
 
-  const isVideoMode = activeCall.type === 'video';
-  const isMultiPeer = remotePeers.length > 1;
   const connectedCount = remotePeers.filter((p) => p.connectionState === 'connected' || p.stream).length;
   const totalInvited = activeCall.participantPhones?.length || 0;
 
