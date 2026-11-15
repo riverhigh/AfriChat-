@@ -31,10 +31,12 @@ export const AjoLedgerModal: React.FC = () => {
     currentUser,
     upgradeVerificationBadge,
     createAjoGroup,
+    setIsWalletModalOpen,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'ledger' | 'host'>('ledger');
   const [notification, setNotification] = useState<string | null>(null);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
   // New Ajo Form state
@@ -46,11 +48,18 @@ export const AjoLedgerModal: React.FC = () => {
 
   if (!isAjoModalOpen) return null;
 
-  const myMember = activeAjoGroup?.members?.find((m) => m.id === 'm1' || m.id === 'm_host');
+  const myMember = activeAjoGroup?.members?.find(
+    (m) =>
+      m.id === 'm1' ||
+      m.id === 'm_host' ||
+      (currentUser.phoneNumber && m.phone === currentUser.phoneNumber) ||
+      (currentUser.fullName && m.name === currentUser.fullName)
+  );
   const hasPaidCurrent = myMember?.hasPaidCurrentCycle ?? false;
 
   const handlePayContribution = () => {
     if (!activeAjoGroup) return;
+    setErrorBanner(null);
     setIsProcessing(true);
     setTimeout(() => {
       setIsProcessing(false);
@@ -63,12 +72,13 @@ export const AjoLedgerModal: React.FC = () => {
         setNotification(res.message);
         setTimeout(() => setNotification(null), 3500);
       } else {
-        alert(res.message);
+        setErrorBanner(res.message);
       }
     }, 600);
   };
 
   const handleUpgradeVerification = (badge: 'blue' | 'gold' | 'creator_plus') => {
+    setErrorBanner(null);
     setIsProcessing(true);
     const res = upgradeVerificationBadge(badge);
     setIsProcessing(false);
@@ -76,14 +86,15 @@ export const AjoLedgerModal: React.FC = () => {
       setNotification(res.message);
       setTimeout(() => setNotification(null), 4000);
     } else {
-      alert(res.message);
+      setErrorBanner(res.message);
     }
   };
 
   const handleCreateAjo = (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorBanner(null);
     if (!newAjoName.trim()) {
-      alert('Please enter an Ajo Club Name');
+      setErrorBanner('Please enter an Ajo Club Name.');
       return;
     }
     const res = createAjoGroup({
@@ -99,7 +110,7 @@ export const AjoLedgerModal: React.FC = () => {
       setActiveTab('ledger');
       setTimeout(() => setNotification(null), 4000);
     } else {
-      alert(res.message);
+      setErrorBanner(res.message);
     }
   };
 
@@ -190,6 +201,27 @@ export const AjoLedgerModal: React.FC = () => {
             <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 text-emerald-800 dark:text-emerald-300 rounded-xl flex items-center gap-2 font-medium">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>{notification}</span>
+            </div>
+          )}
+
+          {errorBanner && (
+            <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 rounded-xl flex items-center justify-between gap-2 font-medium">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                <span>{errorBanner}</span>
+              </div>
+              {errorBanner.toLowerCase().includes('insufficient') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setErrorBanner(null);
+                    setIsWalletModalOpen(true);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold shrink-0"
+                >
+                  Top up Wallet
+                </button>
+              )}
             </div>
           )}
 
@@ -599,7 +631,15 @@ export const AjoLedgerModal: React.FC = () => {
             ) : (
               <div className="p-6 text-center text-slate-400 space-y-3">
                 <Coins className="w-10 h-10 mx-auto text-amber-500" />
-                <p>No active Ajo group found. Tap &ldquo;Host New Ajo&rdquo; above to launch a savings circle.</p>
+                <p>No active Ajo group found. Host a verified circle to get started.</p>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('host')}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-sm transition-colors inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Host New Ajo</span>
+                </button>
               </div>
             )
           )}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   FileText,
@@ -21,25 +21,38 @@ export const InvoiceGeneratorModal: React.FC = () => {
     activeChatId,
     chats,
     formatPrice,
+    storeSubscription,
+    currentUser,
+    myStoreProducts,
+    currency,
   } = useApp();
 
   const currentChat = chats.find((c) => c.id === activeChatId);
 
   const [businessName, setBusinessName] = useState(
-    currentChat?.verifiedStore ? currentChat.name : 'Chioma Adebayo Wholesale Store'
+    storeSubscription?.storeName || currentUser.fullName || 'AGC Official Store'
   );
-  const [buyerName, setBuyerName] = useState('Customer / Client');
+  const [buyerName, setBuyerName] = useState(currentChat?.name || 'Customer / Client');
   const [items, setItems] = useState<InvoiceItem[]>([
     {
       id: 'it_1',
-      description: 'Dutch Super-Wax Premium Cotton (6 Yards)',
+      description: 'Store Product / Service',
       quantity: 1,
-      unitPrice: 45000,
-      total: 45000,
+      unitPrice: 15000,
+      total: 15000,
     },
   ]);
-  const [deliveryFee, setDeliveryFee] = useState(3000);
+  const [deliveryFee, setDeliveryFee] = useState(2000);
   const [discount, setDiscount] = useState(0);
+
+  useEffect(() => {
+    if (isInvoiceGeneratorOpen) {
+      setBusinessName(
+        storeSubscription?.storeName || currentUser.fullName || 'AGC Official Store'
+      );
+      setBuyerName(currentChat?.name || 'Customer / Client');
+    }
+  }, [isInvoiceGeneratorOpen, storeSubscription?.storeName, currentUser.fullName, currentChat?.name]);
 
   if (!isInvoiceGeneratorOpen) return null;
 
@@ -52,6 +65,19 @@ export const InvoiceGeneratorModal: React.FC = () => {
         quantity: 1,
         unitPrice: 10000,
         total: 10000,
+      },
+    ]);
+  };
+
+  const handleAddStoreProduct = (title: string, price: number) => {
+    setItems((prev) => [
+      ...prev,
+      {
+        id: `it_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+        description: title,
+        quantity: 1,
+        unitPrice: price,
+        total: price,
       },
     ]);
   };
@@ -86,17 +112,17 @@ export const InvoiceGeneratorModal: React.FC = () => {
       date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
       dueDate: 'Due on delivery inspection',
       sellerBusinessName: businessName,
-      sellerPhone: '+234 803 123 4567',
-      sellerAddress: 'Balogun Trade Arcade, Lagos Island',
+      sellerPhone: currentUser.phoneNumber || '+234 800 000 0000',
+      sellerAddress: storeSubscription?.category ? `${storeSubscription.category} · AGC Verified Store` : 'AGC Verified Merchant',
       buyerName,
-      buyerPhone: '+234 803 000 1122',
-      buyerAddress: '14 Admiralty Way, Lekki Phase 1, Lagos',
+      buyerPhone: currentChat?.phoneNumber || currentChat?.phone || '',
+      buyerAddress: currentChat?.location || 'Delivery Address Confirmed in Chat',
       items,
       subtotal,
       deliveryFee,
       discount,
       totalAmount,
-      currency: 'NGN',
+      currency: currency || 'NGN',
       paymentStatus: 'paid_escrow',
       paystackRef: `PSK_${Math.floor(10000000 + Math.random() * 90000000)}`,
       escrowPin: `${Math.floor(1000 + Math.random() * 9000)}`,
@@ -171,6 +197,26 @@ export const InvoiceGeneratorModal: React.FC = () => {
               />
             </div>
           </div>
+
+          {myStoreProducts.length > 0 && (
+            <div>
+              <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                Quick-Fill from Store Catalog
+              </div>
+              <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
+                {myStoreProducts.slice(0, 8).map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => handleAddStoreProduct(p.title, p.price)}
+                    className="px-2.5 py-1 rounded-lg bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/50 text-purple-700 dark:text-purple-300 text-[11px] font-semibold shrink-0 hover:bg-purple-100 transition-colors"
+                  >
+                    + {p.title} ({formatPrice(p.price, p.currency)})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Line Items */}
           <div>

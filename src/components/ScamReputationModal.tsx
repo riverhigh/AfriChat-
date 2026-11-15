@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   ShieldAlert,
@@ -33,6 +33,12 @@ export const ScamReputationModal: React.FC = () => {
   const [reportReason, setReportReason] = useState('Sent fake bank debit SMS alert and disappeared');
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isScamCheckerModalOpen && scamLookupEntity?.targetValue) {
+      setSearchQuery(scamLookupEntity.targetValue);
+    }
+  }, [isScamCheckerModalOpen, scamLookupEntity?.targetValue]);
 
   if (!isScamCheckerModalOpen) return null;
 

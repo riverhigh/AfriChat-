@@ -297,9 +297,11 @@ interface AppContextType {
   setActiveEscrowModalOrder: (order: EscrowOrder | null) => void;
   isDarkMode: boolean;
   toggleDarkMode: () => void;
-  sendMessage: (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }) => void;
-  sendVoiceNote: (chatId: string, durationSeconds: number, transcript: string, audioDataUrl?: string) => void;
-  sendProductCard: (chatId: string, product: Product) => void;
+  sendMessage: (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }, oneTimeView?: boolean) => void;
+  sendVoiceNote: (chatId: string, durationSeconds: number, transcript: string, audioDataUrl?: string, oneTimeView?: boolean) => void;
+  sendProductCard: (chatId: string, product: Product, fromSelf?: boolean) => void;
+  isOneTimeViewEnabled: boolean;
+  setIsOneTimeViewEnabled: (val: boolean) => void;
   loadImage: (chatId: string, messageId: string) => void;
   createEscrowOrder: (
     chatId: string,
@@ -372,7 +374,7 @@ interface AppContextType {
     stakePerVote: number,
     optionTexts: string[]
   ) => void;
-  voteOnFinancialPoll: (chatId: string, pollId: string, optionId: string) => void;
+  voteOnFinancialPoll: (chatId: string, pollId: string, optionId: string) => { success: boolean; message?: string };
   // 7. Ajo / Esusu Group Savings
   activeAjoGroup: AjoGroup | null;
   setActiveAjoGroup: (group: AjoGroup | null) => void;
@@ -603,6 +605,9 @@ interface AppContextType {
   isStoreRegModalOpen: boolean;
   setIsStoreRegModalOpen: (val: boolean) => void;
   storeSubscription: StoreSubscription;
+  hasActiveStore: boolean;
+  myStoreProducts: Product[];
+  addStoreProduct: (prod: Omit<Product, 'id' | 'sellerId' | 'sellerName' | 'inStock' | 'stockCount'>) => { success: boolean; product?: Product; message: string };
   subscribeStoreTier: (
     tier: 'starter_30' | 'pro_100',
     storeName: string,
@@ -2465,8 +2470,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 6. Group Polls with Financial Stakes State
   const [isFinancialPollModalOpen, setIsFinancialPollModalOpen] = useState(false);
 
-  // 7. Ajo / Esusu Group Savings State
-  const [activeAjoGroup, setActiveAjoGroup] = useState<AjoGroup | null>(null);
+  // 7. Ajo / Esusu Group Savings State & 1-Time View Toggle
+  const [isOneTimeViewEnabled, setIsOneTimeViewEnabled] = useState(false);
+  const [activeAjoGroup, setActiveAjoGroupState] = useState<AjoGroup | null>(() => {
+    try {
+      const saved = localStorage.getItem('AGC_active_ajo_group_v1');
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return null;
+  });
+  const setActiveAjoGroup = useCallback((group: AjoGroup | null) => {
+    setActiveAjoGroupState(group);
+    try {
+      if (group) localStorage.setItem('AGC_active_ajo_group_v1', JSON.stringify(group));
+      else localStorage.removeItem('AGC_active_ajo_group_v1');
+    } catch (_) {}
+  }, []);
   const [isAjoModalOpen, setIsAjoModalOpen] = useState(false);
 
   // 8. Phone Number OTP Authentication & Identity State
@@ -2736,15 +2755,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (data && Array.isArray(data) && data.length > 0) {
         const myStore = data.find((row: any) => row.user_id === currentUser.id || row.user_phone === currentUser.phoneNumber);
         if (myStore) {
+          const limitVal = myStore.items_limit || (myStore.tier === 'pro_100' ? 100 : 30);
+          const usedVal = myStore.items_used || 0;
+          const isActiveVal = myStore.is_active ?? true;
           const loadedSub: StoreSubscription = {
             tier: myStore.tier || 'starter_30',
             monthlyFee: myStore.tier === 'pro_100' ? 7000 : 3000,
-            itemLimit: myStore.items_limit || (myStore.tier === 'pro_100' ? 100 : 30),
-            itemsCount: myStore.items_used || 0,
+            itemLimit: limitVal,
+            itemsLimit: limitVal,
+            itemsCount: usedVal,
+            itemsUsed: usedVal,
             storeName: myStore.store_name,
             description: myStore.description || '',
             category: myStore.category || 'General Trade',
-            active: myStore.is_active ?? true,
+            active: isActiveVal,
+            isRegistered: isActiveVal,
             expiresAt: 'In 30 days',
             paymentMethod: (myStore.payment_method as any) || 'wallet',
           };
@@ -5020,6 +5045,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
 
+    const useOneTime = Boolean(oneTimeView);
     const newMsg: ChatMessage = {
       id: 'msg_img_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
       chatId,
@@ -5030,10 +5056,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'image',
       imageUrl: finalImageUrl,
       text: caption || '',
-      oneTimeView: Boolean(oneTimeView),
+      oneTimeView: useOneTime,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'sent',
     };
+
+    const previewLabel = useOneTime ? '🔒 1-Time Photo' : (caption ? `📷 ${caption}` : '📷 Photo');
 
     setMessages((prev) => {
       const current = prev[chatId] || [];
@@ -5051,7 +5079,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           c.id === chatId
             ? {
                 ...c,
-                lastMessage: caption ? `📷 ${caption}` : '📷 Photo',
+                lastMessage: previewLabel,
                 lastMessageTime: newMsg.timestamp,
               }
             : c
@@ -5069,7 +5097,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         verifiedStore: false,
         location: 'Direct Chat',
         unreadCount: 0,
-        lastMessage: caption ? `📷 ${caption}` : '📷 Photo',
+        lastMessage: previewLabel,
         lastMessageTime: newMsg.timestamp,
         catalog: [],
         isOnline: true,
@@ -5077,6 +5105,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       return [newThread, ...prev];
     });
+
+    if (useOneTime) setIsOneTimeViewEnabled(false);
 
     // Broadcast live across all transports (Socket.io, BroadcastChannel, Supabase Realtime)
     broadcastLiveMessage(chatId, newMsg);
@@ -5137,11 +5167,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const sendMessage = (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }) => {
+  const sendMessage = (
+    chatId: string,
+    text: string,
+    replyTo?: { id?: string; sender: string; text: string },
+    oneTimeView?: boolean
+  ) => {
     if (!text.trim()) return;
 
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     const initialStatus: 'sent' | 'delivered' = isOnline ? 'delivered' : 'sent';
+    const useOneTime = Boolean(oneTimeView);
+    const previewLabel = useOneTime ? '🔒 1-Time Message' : text;
 
     const newMsg: ChatMessage = {
       id: `msg_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -5151,6 +5188,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderPhone: currentUser.phoneNumber,
       senderAvatar: currentUser.avatarUrl,
       text,
+      oneTimeView: useOneTime,
       replyTo,
       translatedText: {
         en: text,
@@ -5185,7 +5223,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           c.id === chatId
             ? {
                 ...c,
-                lastMessage: text,
+                lastMessage: previewLabel,
                 lastMessageTime: newMsg.timestamp,
               }
             : c
@@ -5203,7 +5241,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           verifiedStore: false,
           location: 'Direct Chat',
           unreadCount: 0,
-          lastMessage: text,
+          lastMessage: previewLabel,
           lastMessageTime: newMsg.timestamp,
           catalog: [],
           isOnline: true,
@@ -5214,12 +5252,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
+    if (useOneTime) setIsOneTimeViewEnabled(false);
+
     // 2. Broadcast live
     broadcastLiveMessage(chatId, newMsg);
   };
 
-  const sendVoiceNote = (chatId: string, durationSeconds: number, transcript: string, audioDataUrl?: string) => {
+  const sendVoiceNote = (
+    chatId: string,
+    durationSeconds: number,
+    transcript: string,
+    audioDataUrl?: string,
+    oneTimeView?: boolean
+  ) => {
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24h TTL
+    const useOneTime = Boolean(oneTimeView);
+    const previewLabel = useOneTime
+      ? `🔒 1-Time Voice Note (${durationSeconds}s)`
+      : `🎤 Voice message (${durationSeconds}s)`;
+
     const newMsg: ChatMessage = {
       id: `msg_vn_${Date.now()}`,
       chatId,
@@ -5228,6 +5279,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderPhone: currentUser.phoneNumber,
       senderAvatar: currentUser.avatarUrl,
       type: 'voice',
+      oneTimeView: useOneTime,
       voiceNote: {
         durationSeconds,
         waveform: Array.from({ length: 18 }, () => Math.floor(Math.random() * 70) + 20),
@@ -5240,7 +5292,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ha: transcript,
           fr: transcript,
         },
-        audioDataUrl, // kept for in-tab playback; stripped before cross-device broadcast
+        audioDataUrl, // kept for in-tab playback; base64 survives cross-device broadcast
         expiresAt,
         transcriptRevealed: false,
       },
@@ -5261,7 +5313,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           c.id === chatId
             ? {
                 ...c,
-                lastMessage: `🎤 Voice message (${durationSeconds}s)`,
+                lastMessage: previewLabel,
                 lastMessageTime: newMsg.timestamp,
               }
             : c
@@ -5279,7 +5331,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         verifiedStore: false,
         location: 'Direct Chat',
         unreadCount: 0,
-        lastMessage: `🎤 Voice message (${durationSeconds}s)`,
+        lastMessage: previewLabel,
         lastMessageTime: newMsg.timestamp,
         catalog: [],
         isOnline: true,
@@ -5288,19 +5340,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return [newThread, ...prev];
     });
 
-    // Strip blob: URL before cross-device broadcast (blob: URLs are tab-local only)
-    // audioDataUrl is now base64 (not a blob: URL), so it's safe to broadcast cross-device
+    if (useOneTime) setIsOneTimeViewEnabled(false);
+
     broadcastLiveMessage(chatId, newMsg);
   };
 
-  const sendProductCard = (chatId: string, product: Product) => {
+  const sendProductCard = (chatId: string, product: Product, fromSelf: boolean = true) => {
     const newMsg: ChatMessage = {
-      id: `msg_prod_${Date.now()}`,
+      id: `msg_prod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       chatId,
-      sender: 'other',
-      senderName: product.sellerName,
+      sender: fromSelf ? 'user' : 'other',
+      senderName: fromSelf ? (currentUser.fullName || product.sellerName) : product.sellerName,
+      senderPhone: fromSelf ? currentUser.phoneNumber : undefined,
+      senderAvatar: fromSelf ? currentUser.avatarUrl : undefined,
       type: 'product_card',
       product,
+      text: `🛍️ ${product.title} (${CURRENCY_SYMBOLS[product.currency] || '₦'}${product.price.toLocaleString()})`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'sent',
     };
@@ -5309,6 +5364,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...prev,
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
+
+    setChats((prev) =>
+      prev.map((c) =>
+        c.id === chatId
+          ? {
+              ...c,
+              lastMessage: `🛍️ ${product.title}`,
+              lastMessageTime: newMsg.timestamp,
+            }
+          : c
+      )
+    );
+
+    broadcastLiveMessage(chatId, newMsg);
   };
 
   // Escrow Order Creation (Paystack or Wallet)
@@ -5494,6 +5563,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `msg_meme_${Date.now()}`,
       chatId,
       sender: 'user',
+      senderName: currentUser.fullName || 'AGC User',
+      senderPhone: currentUser.phoneNumber,
+      senderAvatar: currentUser.avatarUrl,
       type: 'meme_sticker',
       memeSticker: meme,
       text: `${meme.topText || ''} ${meme.bottomText || ''}`.trim(),
@@ -6175,6 +6247,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `msg_inv_${Date.now()}`,
       chatId,
       sender: 'user',
+      senderName: currentUser.fullName || 'AGC User',
+      senderPhone: currentUser.phoneNumber,
+      senderAvatar: currentUser.avatarUrl,
       type: 'invoice_receipt',
       invoiceData: invoice,
       text: `Professional Invoice #${invoice.invoiceNumber} for ${CURRENCY_SYMBOLS[invoice.currency]}${invoice.totalAmount.toLocaleString()}`,
@@ -6198,6 +6273,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : c
       )
     );
+
+    broadcastLiveMessage(chatId, newMsg);
   };
 
   // 6. Group Polls with Financial Stakes Handlers
@@ -6207,17 +6284,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     stakePerVote: number,
     optionTexts: string[]
   ) => {
+    const activeCur: CurrencyCode = currency || 'NGN';
+    const cleanOptions = optionTexts.map((t) => t.trim()).filter(Boolean);
     const newPoll: FinancialPoll = {
       id: `poll_${Date.now()}`,
       title,
       creatorName: currentUser.fullName || 'AGC User',
       stakePerVote,
-      currency: 'NGN',
+      currency: activeCur,
       totalStakeLocked: 0,
       totalVoters: 0,
       status: 'active',
-      payoutRule: `Every voter locks ${CURRENCY_SYMBOLS.NGN}${stakePerVote.toLocaleString()} into Escrow upon casting vote.`,
-      options: optionTexts.map((txt, idx) => ({
+      payoutRule: `Every voter locks ${CURRENCY_SYMBOLS[activeCur]}${stakePerVote.toLocaleString()} into Escrow upon casting vote.`,
+      options: cleanOptions.map((txt, idx) => ({
         id: `opt_${Date.now()}_${idx}`,
         text: txt,
         votesCount: 0,
@@ -6229,9 +6308,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `msg_poll_${Date.now()}`,
       chatId,
       sender: 'user',
+      senderName: currentUser.fullName || 'AGC User',
+      senderPhone: currentUser.phoneNumber,
+      senderAvatar: currentUser.avatarUrl,
       type: 'financial_poll',
       financialPoll: newPoll,
-      text: `Financial Stake Poll: ${title} (Stake: ${CURRENCY_SYMBOLS.NGN}${stakePerVote.toLocaleString()})`,
+      text: `Financial Stake Poll: ${title} (Stake: ${CURRENCY_SYMBOLS[activeCur]}${stakePerVote.toLocaleString()})`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'sent',
     };
@@ -6240,20 +6322,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...prev,
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
+
+    setChats((prev) =>
+      prev.map((c) =>
+        c.id === chatId
+          ? {
+              ...c,
+              lastMessage: `📊 Stake Poll: ${title}`,
+              lastMessageTime: newMsg.timestamp,
+            }
+          : c
+      )
+    );
+
+    broadcastLiveMessage(chatId, newMsg);
   };
 
   const voteOnFinancialPoll = (chatId: string, pollId: string, optionId: string) => {
     const chatMsgs = messages[chatId] || [];
     const pollMsg = chatMsgs.find((m) => m.financialPoll?.id === pollId);
-    if (!pollMsg || !pollMsg.financialPoll) return;
+    if (!pollMsg || !pollMsg.financialPoll) {
+      return { success: false, message: 'Poll not found in this chat.' };
+    }
 
     const poll = pollMsg.financialPoll;
-    if (poll.userVotedOptionId === optionId) return;
+    if (poll.userVotedOptionId === optionId) {
+      return { success: true, message: 'Vote already recorded on this option.' };
+    }
 
     // Check if wallet has stake amount
     if (wallet.availableBalance < poll.stakePerVote && !poll.userVotedOptionId) {
-      alert(`Insufficient wallet funds to lock stake (${CURRENCY_SYMBOLS.NGN}${poll.stakePerVote.toLocaleString()}). Please top up wallet.`);
-      return;
+      return {
+        success: false,
+        message: `Insufficient wallet funds to lock stake (${CURRENCY_SYMBOLS[poll.currency || 'NGN']}${poll.stakePerVote.toLocaleString()}). Please top up wallet.`,
+      };
     }
 
     // Deduct stake if first time voting
@@ -6279,15 +6381,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
     }
 
+    const voterLabel = currentUser.fullName ? `${currentUser.fullName} (You)` : 'You';
     const updatedOptions = poll.options.map((opt) => {
       const isSelected = opt.id === optionId;
       const wasSelected = opt.id === poll.userVotedOptionId;
       let names = [...opt.voterNames];
       if (wasSelected) {
-        names = names.filter((n) => n !== currentUser.fullName ? `${currentUser.fullName} (You)` : 'You');
+        names = names.filter((n) => n !== voterLabel && n !== 'You' && n !== currentUser.fullName);
       }
-      if (isSelected && !names.includes(currentUser.fullName ? `${currentUser.fullName} (You)` : 'You')) {
-        names.push(currentUser.fullName ? `${currentUser.fullName} (You)` : 'You');
+      if (isSelected && !names.includes(voterLabel)) {
+        names.push(voterLabel);
       }
       return {
         ...opt,
@@ -6304,12 +6407,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       totalVoters: poll.userVotedOptionId ? poll.totalVoters : poll.totalVoters + 1,
     };
 
+    const updatedMsg: ChatMessage = { ...pollMsg, financialPoll: updatedPoll };
+
     setMessages((prev) => ({
       ...prev,
       [chatId]: (prev[chatId] || []).map((m) =>
-        m.financialPoll?.id === pollId ? { ...m, financialPoll: updatedPoll } : m
+        m.financialPoll?.id === pollId ? updatedMsg : m
       ),
     }));
+
+    broadcastLiveMessage(chatId, updatedMsg);
+    return { success: true, message: 'Vote & escrow stake locked!' };
   };
 
   // 7. Ajo / Esusu Group Savings Handlers
@@ -6318,6 +6426,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Insufficient wallet balance for this Ajo cycle.' };
     }
 
+    const roundNum = activeAjoGroup?.currentRound || 1;
+
     // Deduct contribution and log transaction
     setWallet((prev) => ({
       ...prev,
@@ -6325,8 +6435,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       transactions: [
         {
           id: `tx_${Date.now()}`,
-          type: 'topup',
-          title: `Ajo Contribution Round ${activeAjoGroup?.currentRound || 2}`,
+          type: 'transfer_out',
+          title: `Ajo Contribution Round ${roundNum}`,
           amount,
           currency: 'NGN',
           timestamp: 'Just now',
@@ -6340,7 +6450,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (activeAjoGroup) {
       const updatedMembers = activeAjoGroup.members.map((m) =>
-        m.id === 'm1' ? { ...m, hasPaidCurrentCycle: true } : m
+        m.id === 'm1' || m.id === 'm_host' || (currentUser.phoneNumber && phonesMatch(m.phone, currentUser.phoneNumber))
+          ? { ...m, hasPaidCurrentCycle: true }
+          : m
       );
       setActiveAjoGroup({
         ...activeAjoGroup,
@@ -6352,8 +6464,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `msg_ajo_contrib_${Date.now()}`,
       chatId,
       sender: 'user',
+      senderName: currentUser.fullName || 'AGC User',
+      senderPhone: currentUser.phoneNumber,
+      senderAvatar: currentUser.avatarUrl,
       type: 'text',
-      text: `✅ Paid ${CURRENCY_SYMBOLS.NGN}${amount.toLocaleString()} for Ajo Cycle Round 2 via AGC Wallet. Group Pot now 100% complete!`,
+      text: `✅ Paid ${CURRENCY_SYMBOLS.NGN}${amount.toLocaleString()} for Ajo Cycle Round ${roundNum} via AGC Wallet.`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'delivered',
     };
@@ -6363,7 +6478,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
 
-    return { success: true, message: `Successfully contributed ₦${amount.toLocaleString()} to Ajo pot!` };
+    setChats((prev) =>
+      prev.map((c) =>
+        c.id === chatId
+          ? {
+              ...c,
+              lastMessage: `🪙 Paid ₦${amount.toLocaleString()} to Ajo Round ${roundNum}`,
+              lastMessageTime: newMsg.timestamp,
+            }
+          : c
+      )
+    );
+
+    broadcastLiveMessage(chatId, newMsg);
+
+    return { success: true, message: `Successfully contributed ₦${amount.toLocaleString()} to Ajo pot (Round ${roundNum})!` };
   };
 
   const upgradeVerificationBadge = (badge: 'blue' | 'gold' | 'creator_plus') => {
@@ -6390,7 +6519,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const newTx: WalletTransaction = {
       id: `tx_${Date.now()}`,
-      type: 'topup',
+      type: 'transfer_out',
       title: badgeTitle,
       amount: cost,
       currency: 'NGN',
@@ -6406,7 +6535,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       transactions: [newTx, ...prev.transactions],
     }));
 
-    return { success: true, message: `Badge activated successfully!` };
+    const updatedUser: UserProfile = {
+      ...currentUser,
+      verificationBadge: badge,
+      platformFeeRate: feeRate,
+      verificationExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+    setCurrentUser(updatedUser);
+    try {
+      localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
+    } catch (_) {}
+
+    return { success: true, message: `${badgeTitle} activated! You can now host verified Ajo clubs.` };
   };
 
   const createAjoGroup = (ajoData: {
@@ -6428,7 +6568,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       frequency: ajoData.frequency,
       totalRounds: ajoData.totalRounds,
       currentRound: 1,
-      totalPoolPerRound: ajoData.cycleContributionAmount,
+      totalPoolPerRound: ajoData.cycleContributionAmount * ajoData.totalRounds,
       currentRecipientName: currentUser.fullName,
       members: [
         {
@@ -6442,11 +6582,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           isReceivedPayout: false,
         },
       ],
-      nextPayoutDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString(),
+      nextPayoutDate: new Date(Date.now() + (ajoData.frequency === 'weekly' ? 7 : 30) * 24 * 60 * 60 * 1000).toLocaleDateString(),
       rules: ajoData.rules || '',
     };
     setActiveAjoGroup(newGroup);
-    return { success: true, message: `Ajo group "${ajoData.name}" created successfully!` };
+
+    if (activeChatId) {
+      const ajoMsg: ChatMessage = {
+        id: `msg_ajo_new_${Date.now()}`,
+        chatId: activeChatId,
+        sender: 'user',
+        senderName: currentUser.fullName || 'AGC User',
+        senderPhone: currentUser.phoneNumber,
+        senderAvatar: currentUser.avatarUrl,
+        type: 'ajo_update',
+        ajoGroup: newGroup,
+        text: `🪙 Ajo Club Launched: ${newGroup.name} (₦${newGroup.totalPoolPerRound.toLocaleString()} Round Pot)`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        status: 'sent',
+      };
+      setMessages((prev) => ({
+        ...prev,
+        [activeChatId]: [...(prev[activeChatId] || []), ajoMsg],
+      }));
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === activeChatId
+            ? {
+                ...c,
+                lastMessage: `🪙 Ajo Club: ${newGroup.name}`,
+                lastMessageTime: ajoMsg.timestamp,
+              }
+            : c
+        )
+      );
+      broadcastLiveMessage(activeChatId, ajoMsg);
+    }
+
+    return { success: true, message: `Ajo group "${ajoData.name}" created & posted!` };
   };
 
   const loginWithPhone = (
@@ -7823,21 +7996,98 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [storeSubscription, setStoreSubscription] = useState<StoreSubscription>(() => {
     try {
       const saved = localStorage.getItem('AGC_store_sub');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const isActive = Boolean((parsed.active || parsed.isRegistered) && parsed.tier && parsed.tier !== 'none');
+        const limitVal = parsed.itemLimit ?? parsed.itemsLimit ?? 0;
+        const usedVal = parsed.itemsCount ?? parsed.itemsUsed ?? 0;
+        return {
+          tier: parsed.tier || 'none',
+          monthlyFee: parsed.monthlyFee || (parsed.tier === 'pro_100' ? 7000 : parsed.tier === 'starter_30' ? 3000 : 0),
+          itemLimit: limitVal,
+          itemsLimit: limitVal,
+          itemsCount: usedVal,
+          itemsUsed: usedVal,
+          storeName: parsed.storeName || '',
+          description: parsed.description || '',
+          category: parsed.category || '',
+          active: isActive,
+          isRegistered: isActive,
+          expiresAt: parsed.expiresAt || '',
+          paymentMethod: parsed.paymentMethod || 'wallet',
+        };
+      }
     } catch (e) {
       console.warn('Failed to parse store sub:', e);
     }
     return {
-      isRegistered: false,
-      tier: null,
-      storeName: '',
-      category: '',
-      description: '',
+      tier: 'none',
+      monthlyFee: 0,
+      itemLimit: 0,
       itemsLimit: 0,
+      itemsCount: 0,
       itemsUsed: 0,
+      storeName: '',
+      description: '',
+      category: '',
+      active: false,
+      isRegistered: false,
       expiresAt: '',
+      paymentMethod: 'wallet',
     };
   });
+
+  const hasActiveStore = Boolean(
+    storeSubscription &&
+    (storeSubscription.active || storeSubscription.isRegistered) &&
+    storeSubscription.tier &&
+    storeSubscription.tier !== 'none'
+  );
+
+  const [myStoreProducts, setMyStoreProducts] = useState<Product[]>(() => {
+    try {
+      const saved = localStorage.getItem('AGC_my_store_products_v1');
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return [];
+  });
+
+  const addStoreProduct = (
+    prod: Omit<Product, 'id' | 'sellerId' | 'sellerName' | 'inStock' | 'stockCount'>
+  ): { success: boolean; product?: Product; message: string } => {
+    if (!hasActiveStore) {
+      return { success: false, message: 'Please activate a Merchant Store tier before adding catalog products.' };
+    }
+    const limit = storeSubscription.itemLimit || storeSubscription.itemsLimit || 30;
+    if (myStoreProducts.length >= limit) {
+      return { success: false, message: `Store limit reached (${limit} items). Upgrade to Pro for 100 items.` };
+    }
+    const newProduct: Product = {
+      ...prod,
+      id: `prod_store_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      sellerId: currentUser.id || currentUser.phoneNumber || 'merchant',
+      sellerName: storeSubscription.storeName || currentUser.fullName || 'AGC Official Store',
+      inStock: true,
+      stockCount: 10,
+    };
+    const nextProducts = [newProduct, ...myStoreProducts];
+    setMyStoreProducts(nextProducts);
+    try {
+      localStorage.setItem('AGC_my_store_products_v1', JSON.stringify(nextProducts));
+    } catch (_) {}
+
+    const nextSub: StoreSubscription = {
+      ...storeSubscription,
+      itemsCount: nextProducts.length,
+      itemsUsed: nextProducts.length,
+    };
+    setStoreSubscription(nextSub);
+    try {
+      localStorage.setItem('AGC_store_sub', JSON.stringify(nextSub));
+    } catch (_) {}
+
+    return { success: true, product: newProduct, message: `"${newProduct.title}" added to your store catalog!` };
+  };
 
   const subscribeStoreTier = (
     tier: 'starter_30' | 'pro_100',
@@ -7874,15 +8124,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
     }
 
+    const currentCount = myStoreProducts.length || storeSubscription?.itemsCount || 0;
     const updatedSub: StoreSubscription = {
       tier,
       monthlyFee: fee,
       itemLimit,
-      itemsCount: storeSubscription ? storeSubscription.itemsCount : 0,
+      itemsLimit: itemLimit,
+      itemsCount: currentCount,
+      itemsUsed: currentCount,
       storeName: storeName || (currentUser.fullName ? `${currentUser.fullName}'s Official Store` : 'AGC Store'),
       description: description || 'Verified African merchant catalog.',
       category: category || 'General Trade',
       active: true,
+      isRegistered: true,
       expiresAt: 'In 30 days',
       paymentMethod,
     };
@@ -8651,10 +8905,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } catch (_) {}
       }
 
-      // 3. Filter duplicates strictly by message ID
+      // 3. Filter duplicates by message ID (allow updates to live polls / ajo cards)
       setMessages((prev) => {
         const list = prev[resolvedChatId] || prev[chatId] || [];
-        if (list.some((m) => m.id === message.id)) return prev;
+        const existingIdx = list.findIndex((m) => m.id === message.id);
+        if (existingIdx >= 0) {
+          if (message.type === 'financial_poll' || message.type === 'ajo_update') {
+            const updatedList = list.map((m, idx) =>
+              idx === existingIdx
+                ? {
+                    ...m,
+                    financialPoll: message.financialPoll ?? m.financialPoll,
+                    ajoGroup: message.ajoGroup ?? m.ajoGroup,
+                  }
+                : m
+            );
+            const updated = { ...prev, [resolvedChatId]: updatedList };
+            try {
+              const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+              localStorage.setItem(userKey, JSON.stringify(updated));
+            } catch (_) {}
+            return updated;
+          }
+          return prev;
+        }
 
         const receivedMsg: ChatMessage = {
           ...message,
@@ -8684,15 +8958,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             (!isGroupChat && otherCleanPhone && c.phone && phonesMatch(c.phone, otherCleanPhone))
         );
 
-        const msgText =
-          plainText ||
-          (message.type === 'image'
-            ? '📷 Photo'
-            : message.type === 'voice'
-            ? '🎤 Voice message'
-            : message.type === 'meme_sticker'
-            ? '🎭 Sticker'
-            : '📎 Attachment');
+        const msgText = message.oneTimeView
+          ? (message.type === 'image' ? '🔒 1-Time Photo' : message.type === 'voice' ? '🔒 1-Time Voice Note' : '🔒 1-Time Message')
+          : (plainText ||
+            (message.type === 'image'
+              ? '📷 Photo'
+              : message.type === 'voice'
+              ? '🎤 Voice message'
+              : message.type === 'meme_sticker'
+              ? '🎭 Sticker'
+              : '📎 Attachment'));
 
         if (index >= 0) {
           const updated = [...prev];
@@ -10550,6 +10825,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sendMessage,
         sendVoiceNote,
         sendProductCard,
+        isOneTimeViewEnabled,
+        setIsOneTimeViewEnabled,
         loadImage,
         createEscrowOrder,
         releaseEscrowFunds,
@@ -10776,6 +11053,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isStoreRegModalOpen,
         setIsStoreRegModalOpen,
         storeSubscription,
+        hasActiveStore,
+        myStoreProducts,
+        addStoreProduct,
         subscribeStoreTier,
         // 26. Creator Digital Files & VIP Sessions
         creatorFiles,

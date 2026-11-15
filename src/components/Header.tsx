@@ -36,6 +36,7 @@ import {
   ShieldCheck,
   Search,
   PawPrint,
+  ShoppingBag,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -79,6 +80,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
     setIsArtisanModalOpen,
     setIsAdminModalOpen,
     setIsPetShopModalOpen,
+    setIsErrandsModalOpen,
     systemBroadcast,
     setSystemBroadcast,
     cmsData,
@@ -199,6 +201,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                       { label: 'Wallet', sub: 'Paystack & Escrow', icon: Wallet, action: () => setIsWalletModalOpen(true), cat: 'finance', featureKey: 'wallet' },
                       { label: 'Delayed Send', sub: 'Anti-Fraud Send', icon: Clock, action: () => setIsTransferModalOpen(true), cat: 'finance', featureKey: 'delayedSend' },
                       { label: 'Artisan Hub', sub: '₦5k · Book Skill', icon: Wrench, action: () => setIsServicesModalOpen(true), cat: 'services', featureKey: 'artisan' },
+                      { label: 'Errands', sub: 'Runners & Market', icon: ShoppingBag, action: () => setIsErrandsModalOpen(true), cat: 'services', featureKey: 'errands' },
                       { label: 'AfriHealth', sub: 'Queues & Telehealth', icon: HeartPulse, action: () => setIsHealthModalOpen(true), cat: 'services', featureKey: 'healthcare' },
                       { label: 'AfriLaw', sub: 'Contracts & Law', icon: Scale, action: () => setIsLegalModalOpen(true), cat: 'services', featureKey: 'legal' },
                       { label: 'Dispatch', sub: 'PickkR / Gokada', icon: Truck, action: () => setIsDispatchModalOpen(true), cat: 'services', featureKey: 'dispatch' },

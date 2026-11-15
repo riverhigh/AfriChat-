@@ -20,6 +20,8 @@ export const FinancialPollModal: React.FC = () => {
     activeChatId,
     wallet,
     formatPrice,
+    currency,
+    CURRENCY_SYMBOLS,
   } = useApp();
 
   const [pollTitle, setPollTitle] = useState('Weekend Hangout & Dinner (Lock Stake to Confirm RSVP)');
@@ -29,6 +31,7 @@ export const FinancialPollModal: React.FC = () => {
     'Hard Rock Cafe, Victoria Island (Live Band)',
     'Amala Shitta, Surulere (Point & Kill Catfish)',
   ]);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   if (!isFinancialPollModalOpen) return null;
 
@@ -48,9 +51,26 @@ export const FinancialPollModal: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeChatId) return;
+    setErrorMsg(null);
+    if (!activeChatId) {
+      setErrorMsg('Please open a chat or group before launching a poll.');
+      return;
+    }
+    const cleanOptions = options.map((o) => o.trim()).filter(Boolean);
+    if (!pollTitle.trim()) {
+      setErrorMsg('Please enter a poll title or topic.');
+      return;
+    }
+    if (cleanOptions.length < 2) {
+      setErrorMsg('Please provide at least 2 poll options.');
+      return;
+    }
+    if (!stakeAmount || stakeAmount < 100) {
+      setErrorMsg(`Minimum stake amount is ${CURRENCY_SYMBOLS[currency] || '₦'}100.`);
+      return;
+    }
 
-    createFinancialPoll(activeChatId, pollTitle, stakeAmount, options);
+    createFinancialPoll(activeChatId, pollTitle.trim(), stakeAmount, cleanOptions);
     setIsFinancialPollModalOpen(false);
   };
 
@@ -92,6 +112,13 @@ export const FinancialPollModal: React.FC = () => {
 
         {/* Body */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+          {errorMsg && (
+            <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 rounded-xl text-rose-700 dark:text-rose-300 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
           {/* Explainer Note */}
           <div className="p-3 bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 rounded-2xl flex items-start gap-2.5 text-amber-900 dark:text-amber-200">
             <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />

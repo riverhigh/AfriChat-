@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   X,
   ShieldCheck,
@@ -162,9 +162,10 @@ export const EscrowModal: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  alert(
-                    `Dispute Flagged for Order #${order.id}. AGC Arbiter assigned. Funds will remain safely held in escrow.`
-                  );
+                  setFeedback({
+                    type: 'error',
+                    message: `Dispute Flagged for Order #${order.id}. AGC Arbiter assigned. Funds will remain safely held in escrow.`,
+                  });
                 }}
                 className="w-full py-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl text-xs font-medium transition-colors"
               >

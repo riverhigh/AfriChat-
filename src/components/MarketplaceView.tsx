@@ -9,6 +9,7 @@ import {
   Lock,
   Wrench,
   Sparkles,
+  ShoppingBag,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -22,8 +23,12 @@ export const MarketplaceView: React.FC = () => {
     setIsServicesModalOpen,
     setIsStoreRegModalOpen,
     setIsTutorModalOpen,
+    setIsErrandsModalOpen,
+    isFeatureEnabled,
     tutorProfile,
     storeSubscription,
+    hasActiveStore,
+    myStoreProducts,
   } = useApp();
   const [search, setSearch] = useState('');
   const [selectedCat, setSelectedCat] = useState<'all' | 'textiles' | 'electronics' | 'beauty' | 'fashion'>('all');
@@ -74,7 +79,12 @@ export const MarketplaceView: React.FC = () => {
     };
   }, []);
 
-  const filteredProducts = dbProducts.filter((prod) => {
+  const combinedProducts = [
+    ...myStoreProducts,
+    ...dbProducts.filter((dp) => !myStoreProducts.some((mp) => mp.id === dp.id)),
+  ];
+
+  const filteredProducts = combinedProducts.filter((prod) => {
     const matchesSearch =
       prod.title.toLowerCase().includes(search.toLowerCase()) ||
       prod.sellerName.toLowerCase().includes(search.toLowerCase()) ||
@@ -131,55 +141,75 @@ export const MarketplaceView: React.FC = () => {
           ))}
         </div>
       </div>
-      {/* Quick Action Cards - compact 3-col strip */}
+      {/* Quick Action Cards - 4-col strip with standalone Errands alongside Artisan Hub */}
       <div className="px-3 pt-3 pb-1">
-        <div className="grid grid-cols-3 gap-2">
+        <div className={`grid gap-2 ${isFeatureEnabled('errands') ? 'grid-cols-4' : 'grid-cols-3'}`}>
 
           {/* Artisan Stations */}
           <button
+            type="button"
             onClick={() => setIsServicesModalOpen(true)}
-            className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-400/50 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-all group active:scale-95 text-center"
+            className="flex flex-col items-center gap-1.5 p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-400/50 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-all group active:scale-95 text-center"
           >
-            <div className="w-10 h-10 rounded-xl bg-purple-500/10 dark:bg-purple-500/15 flex items-center justify-center group-hover:scale-110 transition-transform">
-              <Wrench className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+            <div className="w-9 h-9 rounded-xl bg-purple-500/10 dark:bg-purple-500/15 flex items-center justify-center group-hover:scale-110 transition-transform">
+              <Wrench className="w-4 h-4 text-purple-600 dark:text-purple-400" />
             </div>
             <div>
-              <div className="text-[11px] font-bold text-slate-800 dark:text-white leading-tight">Artisan Hub</div>
-              <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">₦5k Reg</div>
+              <div className="text-[11px] font-bold text-slate-800 dark:text-white leading-tight">Artisans</div>
+              <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">₦5k Reg</div>
             </div>
           </button>
 
+          {/* Standalone Errands System */}
+          {isFeatureEnabled('errands') && (
+            <button
+              type="button"
+              onClick={() => setIsErrandsModalOpen(true)}
+              className="flex flex-col items-center gap-1.5 p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-400/50 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-all group active:scale-95 text-center"
+            >
+              <div className="w-9 h-9 rounded-xl bg-purple-500/10 dark:bg-purple-500/15 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <ShoppingBag className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+              </div>
+              <div>
+                <div className="text-[11px] font-bold text-slate-800 dark:text-white leading-tight">Errands</div>
+                <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">Runners</div>
+              </div>
+            </button>
+          )}
+
           {/* AfriCourses */}
           <button
+            type="button"
             onClick={() => setIsTutorModalOpen(true)}
-            className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-400/50 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-all group active:scale-95 text-center"
+            className="flex flex-col items-center gap-1.5 p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-400/50 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-all group active:scale-95 text-center"
           >
-            <div className="w-10 h-10 rounded-xl bg-purple-500/10 dark:bg-purple-500/15 flex items-center justify-center group-hover:scale-110 transition-transform">
-              <GraduationCap className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+            <div className="w-9 h-9 rounded-xl bg-purple-500/10 dark:bg-purple-500/15 flex items-center justify-center group-hover:scale-110 transition-transform">
+              <GraduationCap className="w-4 h-4 text-purple-600 dark:text-purple-400" />
             </div>
             <div>
               <div className="text-[11px] font-bold text-slate-800 dark:text-white leading-tight">
-                {tutorProfile.isRegisteredTutor ? 'Tutor Studio' : 'Courses'}
+                {tutorProfile.isRegisteredTutor ? 'Tutor' : 'Courses'}
               </div>
-              <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">₦5k · 10/∞</div>
+              <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">₦5k · 10/∞</div>
             </div>
           </button>
 
           {/* Merchant Store */}
           <button
+            type="button"
             onClick={() => setIsStoreRegModalOpen(true)}
-            className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-400/50 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-all group active:scale-95 text-center"
+            className="flex flex-col items-center gap-1.5 p-2.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-400/50 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-all group active:scale-95 text-center"
           >
-            <div className="w-10 h-10 rounded-xl bg-purple-500/10 dark:bg-purple-500/15 flex items-center justify-center group-hover:scale-110 transition-transform">
-              <Store className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+            <div className="w-9 h-9 rounded-xl bg-purple-500/10 dark:bg-purple-500/15 flex items-center justify-center group-hover:scale-110 transition-transform">
+              <Store className="w-4 h-4 text-purple-600 dark:text-purple-400" />
             </div>
             <div>
               <div className="text-[11px] font-bold text-slate-800 dark:text-white leading-tight">
-                {storeSubscription.isRegistered ? 'My Store' : 'Open Store'}
+                {hasActiveStore ? 'My Store' : 'Open Store'}
               </div>
-              <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">
-                {storeSubscription.isRegistered
-                  ? storeSubscription.itemsUsed + '/' + storeSubscription.itemsLimit + ' items'
+              <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">
+                {hasActiveStore
+                  ? `${myStoreProducts.length || storeSubscription.itemsCount || storeSubscription.itemsUsed || 0}/${storeSubscription.itemLimit || storeSubscription.itemsLimit || 30}`
                   : '₦3k / ₦7k'}
               </div>
             </div>

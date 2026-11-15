@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React, { useState } from 'react';
 import {
   X,
   Printer,
@@ -12,6 +12,7 @@ import { useApp } from '../context/AppContext';
 
 export const InvoiceViewerModal: React.FC = () => {
   const { viewingInvoice, setViewingInvoice, formatPrice } = useApp();
+  const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
 
   if (!viewingInvoice) return null;
 
@@ -20,7 +21,18 @@ export const InvoiceViewerModal: React.FC = () => {
   };
 
   const handleDownload = () => {
-    alert(`Downloading ${viewingInvoice.invoiceNumber}.pdf... Ready to send to customer!`);
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${viewingInvoice.invoiceNumber}</title><style>body{font-family:system-ui,sans-serif;padding:32px;color:#0f172a;max-width:680px;margin:auto}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #e2e8f0;padding:8px 12px;text-align:left}th{background:#f8fafc}</style></head><body><h2>${viewingInvoice.sellerBusinessName}</h2><p>${viewingInvoice.sellerAddress} · Tel: ${viewingInvoice.sellerPhone}</p><hr/><h3>INVOICE ${viewingInvoice.invoiceNumber}</h3><p>Date: ${viewingInvoice.date} · Billed To: <strong>${viewingInvoice.buyerName}</strong></p><table><thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead><tbody>${viewingInvoice.items.map((it) => `<tr><td>${it.description}</td><td>${it.quantity}</td><td>${formatPrice(it.unitPrice, viewingInvoice.currency)}</td><td>${formatPrice(it.total, viewingInvoice.currency)}</td></tr>`).join('')}</tbody></table><p>Subtotal: ${formatPrice(viewingInvoice.subtotal, viewingInvoice.currency)}</p><p>Delivery: ${formatPrice(viewingInvoice.deliveryFee, viewingInvoice.currency)}</p><h3>Total Paid: ${formatPrice(viewingInvoice.totalAmount, viewingInvoice.currency)}</h3><p>Paystack Ref: ${viewingInvoice.paystackRef || 'AGC_ESCROW'} · Release PIN: ${viewingInvoice.escrowPin || 'N/A'}</p></body></html>`;
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${viewingInvoice.invoiceNumber}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setDownloadStatus(`Saved ${viewingInvoice.invoiceNumber} receipt!`);
+    setTimeout(() => setDownloadStatus(null), 3000);
   };
 
   return (
@@ -153,10 +165,10 @@ export const InvoiceViewerModal: React.FC = () => {
                       {it.quantity}
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono text-slate-600">
-                      ₦{it.unitPrice.toLocaleString()}
+                      {formatPrice(it.unitPrice, viewingInvoice.currency)}
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">
-                      ₦{it.total.toLocaleString()}
+                      {formatPrice(it.total, viewingInvoice.currency)}
                     </td>
                   </tr>
                 ))}
@@ -169,22 +181,22 @@ export const InvoiceViewerModal: React.FC = () => {
             <div className="w-64 space-y-2 text-xs">
               <div className="flex justify-between text-slate-600">
                 <span>Subtotal:</span>
-                <span className="font-mono font-medium">₦{viewingInvoice.subtotal.toLocaleString()}</span>
+                <span className="font-mono font-medium">{formatPrice(viewingInvoice.subtotal, viewingInvoice.currency)}</span>
               </div>
               <div className="flex justify-between text-slate-600">
                 <span>Delivery / Waybill:</span>
-                <span className="font-mono font-medium">+₦{viewingInvoice.deliveryFee.toLocaleString()}</span>
+                <span className="font-mono font-medium">+{formatPrice(viewingInvoice.deliveryFee, viewingInvoice.currency)}</span>
               </div>
               {viewingInvoice.discount > 0 && (
                 <div className="flex justify-between text-emerald-600 font-semibold">
                   <span>Discount:</span>
-                  <span className="font-mono">-₦{viewingInvoice.discount.toLocaleString()}</span>
+                  <span className="font-mono">-{formatPrice(viewingInvoice.discount, viewingInvoice.currency)}</span>
                 </div>
               )}
               <div className="pt-2 border-t border-slate-200 flex justify-between font-bold text-sm text-slate-900">
                 <span>Total Amount:</span>
                 <span className="font-mono text-base text-indigo-600">
-                  ₦{viewingInvoice.totalAmount.toLocaleString()}
+                  {formatPrice(viewingInvoice.totalAmount, viewingInvoice.currency)}
                 </span>
               </div>
             </div>
@@ -205,14 +217,20 @@ export const InvoiceViewerModal: React.FC = () => {
         </div>
 
         {/* Bottom Actions */}
-        <div className="p-4 border-t border-slate-200 bg-slate-50 flex gap-2">
+        <div className="p-4 border-t border-slate-200 bg-slate-50 space-y-2">
+          {downloadStatus && (
+            <div className="p-2 rounded-xl bg-emerald-100 text-emerald-800 text-xs font-semibold flex items-center justify-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <span>{downloadStatus}</span>
+            </div>
+          )}
           <button
             type="button"
             onClick={handleDownload}
-            className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all active:scale-95"
+            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all active:scale-95"
           >
             <Download className="w-4 h-4" />
-            <span>Download Official PDF Receipt</span>
+            <span>Download Official Receipt</span>
           </button>
         </div>
       </div>

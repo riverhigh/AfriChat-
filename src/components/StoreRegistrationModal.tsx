@@ -46,13 +46,13 @@ export const StoreRegistrationModal: React.FC = () => {
   if (!isStoreRegModalOpen) return null;
 
   const currentTier = storeSubscription?.tier || 'none';
-  const fee = selectedTier === 'starter_30' ? 2199 : 7000;
+  const fee = selectedTier === 'starter_30' ? 3000 : 7000;
   const itemLimit = selectedTier === 'starter_30' ? 30 : 100;
 
   const handleSubscribe = (e: React.FormEvent) => {
     e.preventDefault();
     if (!storeName.trim()) {
-      alert('Please enter your store name.');
+      setFeedback({ type: 'error', message: 'Please enter your store name.' });
       return;
     }
 
@@ -173,7 +173,7 @@ export const StoreRegistrationModal: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              {/* Tier 1: ₦2,199 / month - 30 items */}
+              {/* Tier 1: ₦3,000 / month - 30 items */}
               <div
                 onClick={() => setSelectedTier('starter_30')}
                 className={`p-4 rounded-3xl border-2 cursor-pointer transition-all relative overflow-hidden flex flex-col justify-between ${
@@ -193,7 +193,7 @@ export const StoreRegistrationModal: React.FC = () => {
                   </div>
 
                   <div className="text-2xl font-black font-mono text-white">
-                    ₦2,199 <span className="text-xs font-normal text-purple-300/70">/ month</span>
+                    ₦3,000 <span className="text-xs font-normal text-purple-300/70">/ month</span>
                   </div>
 
                   <div className="mt-2 text-xs font-bold text-purple-300 flex items-center gap-1.5">

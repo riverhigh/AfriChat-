@@ -216,12 +216,12 @@ export const MemeStickerStudioModal: React.FC = () => {
 
   const handleSend = () => {
     if (!currentMediaUrl) {
-      alert('Please upload a meme, GIF, or photo from your device first!');
+      showToast('Please upload a meme, GIF, or photo from your device first!');
       return;
     }
 
     if (!activeChatId) {
-      alert('Please open a chat to send this sticker!');
+      showToast('Please open a chat to send this sticker!');
       return;
     }
 

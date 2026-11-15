@@ -25,7 +25,13 @@ declare const webkitSpeechRecognition: new () => SpeechRecognitionInstance;
 declare const SpeechRecognition: new () => SpeechRecognitionInstance;
 
 export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, onClose }) => {
-  const { activeChatId, sendVoiceNote, language } = useApp();
+  const {
+    activeChatId,
+    sendVoiceNote,
+    language,
+    isOneTimeViewEnabled,
+    setIsOneTimeViewEnabled,
+  } = useApp();
   const [isRecording, setIsRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [liveTranscript, setLiveTranscript] = useState('');
@@ -184,7 +190,8 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
     }
 
     // transcript is whatever the Web Speech API captured (empty string if unsupported)
-    sendVoiceNote(activeChatId, dur, liveTranscript, audioDataUrl);
+    sendVoiceNote(activeChatId, dur, liveTranscript, audioDataUrl, isOneTimeViewEnabled);
+    setIsOneTimeViewEnabled(false);
     audioChunksRef.current = [];
     stopAllMediaTracks();
     onClose();
@@ -217,15 +224,31 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
             <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 font-display">
               Voice Note
             </h3>
-            <span className="text-[9px] font-semibold text-slate-400 dark:text-slate-500">· expires 24h</span>
+            <span className="text-[9px] font-semibold text-slate-400 dark:text-slate-500">
+              {isOneTimeViewEnabled ? '· 1-Time Play' : '· expires 24h'}
+            </span>
           </div>
-          <button
-            type="button"
-            onClick={handleClose}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-purple-200 p-1 rounded-full"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setIsOneTimeViewEnabled(!isOneTimeViewEnabled)}
+              title="Toggle 1-Time Listen Voice Note"
+              className={`w-7 h-7 rounded-full border-2 border-dashed flex items-center justify-center text-[11px] font-black transition-all ${
+                isOneTimeViewEnabled
+                  ? 'bg-purple-600 border-purple-400 text-white shadow-sm shadow-purple-600/40'
+                  : 'border-slate-300 dark:border-slate-600 text-slate-400 hover:text-purple-500 hover:border-purple-400'
+              }`}
+            >
+              1
+            </button>
+            <button
+              type="button"
+              onClick={handleClose}
+              className="text-slate-400 hover:text-slate-600 dark:hover:text-purple-200 p-1 rounded-full"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {permissionError && (
@@ -277,7 +300,11 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
         {!isRecording && seconds > 0 && (
           <div className="p-2.5 bg-slate-50 dark:bg-slate-900/40 rounded-xl border border-slate-200/60 dark:border-slate-700/40 text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
             <span>💬</span>
-            <span>Transcript hidden in bubble — recipient taps <strong>Transcribe</strong> to reveal.</span>
+            <span>
+              {isOneTimeViewEnabled
+                ? '1-Time Play enabled — disappears as soon as recipient finishes listening.'
+                : 'Transcript hidden in bubble — recipient taps Transcribe to reveal.'}
+            </span>
           </div>
         )}
 
@@ -310,7 +337,7 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
             className="flex-1 py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-colors"
           >
             <Send className="w-4 h-4" />
-            <span>Send</span>
+            <span>{isOneTimeViewEnabled ? 'Send (1-Time)' : 'Send'}</span>
           </button>
         </div>
       </div>

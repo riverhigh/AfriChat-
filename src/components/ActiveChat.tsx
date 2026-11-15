@@ -115,6 +115,13 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     declineFriendRequest,
     isFeatureEnabled,
     setIsAdminModalOpen,
+    isOneTimeViewEnabled,
+    setIsOneTimeViewEnabled,
+    hasActiveStore,
+    myStoreProducts,
+    addStoreProduct,
+    sendProductCard,
+    currency,
   } = useApp();
 
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
@@ -124,6 +131,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
   const [showHeaderActionsMenu, setShowHeaderActionsMenu] = useState(false);
   const [confirmChatAction, setConfirmChatAction] = useState<'clear' | 'delete' | null>(null);
+  const [showChatSearch, setShowChatSearch] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState('');
 
   // Fullscreen image lightbox
   const [lightboxImg, setLightboxImg] = useState<{
@@ -133,8 +142,25 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     msgId?: string;
   } | null>(null);
 
-  // Disappearing 1-Time View Photo mode toggle
-  const [isOneTimeViewEnabled, setIsOneTimeViewEnabled] = useState(false);
+  // One-time disappearing text viewer
+  const [lightboxOneTimeText, setLightboxOneTimeText] = useState<{
+    msgId: string;
+    text: string;
+    senderName: string;
+  } | null>(null);
+
+  // Custom Escrow Deal quick modal state
+  const [showEscrowDealModal, setShowEscrowDealModal] = useState(false);
+  const [escrowDealTitle, setEscrowDealTitle] = useState('');
+  const [escrowDealAmount, setEscrowDealAmount] = useState('15000');
+  const [escrowDealError, setEscrowDealError] = useState<string | null>(null);
+
+  // Store Owner Catalog quick-add form state
+  const [showAddCatalogForm, setShowAddCatalogForm] = useState(false);
+  const [newProdTitle, setNewProdTitle] = useState('');
+  const [newProdPrice, setNewProdPrice] = useState('');
+  const [newProdDesc, setNewProdDesc] = useState('');
+  const [catalogFeedback, setCatalogFeedback] = useState<string | null>(null);
 
   // Persistence for viewed one-time images
   const [openedOneTimeImages, setOpenedOneTimeImages] = useState<Record<string, boolean>>(() => {
@@ -306,8 +332,13 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     }
   }, [currentMessages, activeChatId]);
 
-  // Cleanup playing audio on unmount or chat switch
+  // Cleanup playing audio & transient UI on unmount or chat switch
   useEffect(() => {
+    setIsOneTimeViewEnabled(false);
+    setShowAttachMenu(false);
+    setShowCatalogDrawer(false);
+    setShowChatSearch(false);
+    setChatSearchQuery('');
     return () => {
       Object.values(audioRefs.current).forEach((a) => {
         try { a.pause(); a.currentTime = 0; } catch (_) {}
@@ -359,15 +390,21 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           text: replyingTo.text || (replyingTo.imageUrl ? '📷 Photo' : 'Voice note'),
         }
       : undefined;
-    sendMessage(activeChatId, inputText, replyMeta);
+    sendMessage(activeChatId, inputText, replyMeta, isOneTimeViewEnabled);
     setInputText('');
     setReplyingTo(null);
+    if (isOneTimeViewEnabled) setIsOneTimeViewEnabled(false);
   };
 
   // Real audio playback ref map (msgId -> HTMLAudioElement)
   const audioRefs = useRef<Record<string, HTMLAudioElement>>({});
 
-  const toggleVoicePlayback = (msgId: string, audioDataUrl?: string, transcriptText?: string) => {
+  const toggleVoicePlayback = (
+    msgId: string,
+    audioDataUrl?: string,
+    transcriptText?: string,
+    isOneTime?: boolean
+  ) => {
     // Pause any other playing audio
     Object.entries(audioRefs.current).forEach(([id, a]) => {
       if (id !== msgId && !a.paused) {
@@ -382,6 +419,15 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       existing.currentTime = 0;
       setPlayingVoiceId(null);
       setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
+      if (isOneTime) markOneTimeAsOpened(msgId);
+      return;
+    }
+
+    if (playingVoiceId === msgId && typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      setPlayingVoiceId(null);
+      setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
+      if (isOneTime) markOneTimeAsOpened(msgId);
       return;
     }
 
@@ -402,6 +448,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         audio.onended = () => {
           setPlayingVoiceId(null);
           setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
+          if (isOneTime) markOneTimeAsOpened(msgId);
         };
         audio.ontimeupdate = () => {
           if (audio.duration && audio.duration > 0) {
@@ -422,9 +469,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       } catch (e) {
         console.warn('Audio construction error:', e);
       }
-    } else if (transcriptText && typeof window !== 'undefined' && window.speechSynthesis) {
+    } else if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(transcriptText);
+      const utter = new SpeechSynthesisUtterance(transcriptText?.trim() || 'Voice message');
       utter.onstart = () => {
         setPlayingVoiceId(msgId);
         setVoiceProgress((prev) => ({ ...prev, [msgId]: 50 }));
@@ -432,11 +479,14 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       utter.onend = () => {
         setPlayingVoiceId(null);
         setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
+        if (isOneTime) markOneTimeAsOpened(msgId);
       };
       utter.onerror = () => {
         setPlayingVoiceId(null);
       };
       window.speechSynthesis.speak(utter);
+    } else if (isOneTime) {
+      markOneTimeAsOpened(msgId);
     }
   };
 
@@ -712,7 +762,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           {isFeatureEnabled('scamChecker') && (
             <button
               type="button"
-              onClick={() => setIsScamCheckerModalOpen(true)}
+              onClick={() => {
+                const target = currentChat.phoneNumber || currentChat.phone;
+                if (target) checkEntityReputation(target);
+                setIsScamCheckerModalOpen(true);
+              }}
               className="p-2 hover:bg-white/10 rounded-full transition-colors text-amber-400"
               title="Check Scam Reputation"
               aria-label="Scam Check"
@@ -775,58 +829,225 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         </div>
       </div>
 
-      {/* In-Chat Mini-Catalog Drawer */}
-      {showCatalogDrawer && currentChat.catalog && currentChat.catalog.length > 0 && (
-        <div className="bg-white dark:bg-[#151329] border-b border-slate-200 dark:border-slate-800 p-3 shadow-md animate-in slide-in-from-top duration-200 shrink-0 max-h-64 overflow-y-auto z-10">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-800 dark:text-slate-100">
-              {currentChat.name} · Catalog ({currentChat.catalog.length} items)
+      {/* In-Chat Search Bar */}
+      {showChatSearch && (
+        <div className="px-3 py-2 bg-slate-50 dark:bg-[#131026] border-b border-slate-200 dark:border-purple-900/40 flex items-center gap-2 shrink-0 z-10 animate-in slide-in-from-top-2">
+          <Search className="w-4 h-4 text-purple-500 shrink-0" />
+          <input
+            type="text"
+            value={chatSearchQuery}
+            onChange={(e) => setChatSearchQuery(e.target.value)}
+            placeholder="Search messages in this chat..."
+            autoFocus
+            className="flex-1 bg-transparent text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none"
+          />
+          {chatSearchQuery && (
+            <span className="text-[10px] font-mono text-purple-500 font-bold shrink-0">
+              {currentMessages.filter((m) => (m.text || '').toLowerCase().includes(chatSearchQuery.toLowerCase())).length} found
             </span>
-            <button
-              onClick={() => setShowCatalogDrawer(false)}
-              className="text-xs text-slate-400 hover:text-slate-600"
-            >
-              Done
-            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setShowChatSearch(false);
+              setChatSearchQuery('');
+            }}
+            className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white rounded-full"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* In-Chat Store Owner Catalog Drawer */}
+      {showCatalogDrawer && hasActiveStore && (
+        <div className="bg-white dark:bg-[#151329] border-b border-slate-200 dark:border-slate-800 p-3 shadow-md animate-in slide-in-from-top duration-200 shrink-0 max-h-80 overflow-y-auto z-10 space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+              <Store className="w-3.5 h-3.5 text-purple-500" />
+              <span>My Store Catalog ({myStoreProducts.length})</span>
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddCatalogForm((p) => !p);
+                  setCatalogFeedback(null);
+                }}
+                className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-bold transition-colors"
+              >
+                {showAddCatalogForm ? 'Cancel' : '+ Add Product'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCatalogDrawer(false)}
+                className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                Done
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {currentChat.catalog.map((product: Product) => (
-              <div
-                key={product.id}
-                className="flex items-center gap-2.5 p-2 rounded-xl bg-slate-50 dark:bg-[#1e1b38] border border-slate-200/80 dark:border-slate-800"
-              >
-                <img
-                  src={product.imageUrl}
-                  alt={product.title}
-                  referrerPolicy="no-referrer"
-                  className="w-14 h-14 rounded-lg object-cover shrink-0"
+          {catalogFeedback && (
+            <div className="p-2 rounded-xl bg-purple-500/15 border border-purple-500/30 text-purple-600 dark:text-purple-300 text-[11px] font-semibold">
+              {catalogFeedback}
+            </div>
+          )}
+
+          {showAddCatalogForm && (
+            <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-[#1e1b38] border border-purple-500/30 space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={newProdTitle}
+                  onChange={(e) => setNewProdTitle(e.target.value)}
+                  placeholder="Product name..."
+                  className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-black/40 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-white focus:outline-none"
                 />
-                <div className="flex-1 min-w-0">
-                  <h4 className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
-                    {product.title}
-                  </h4>
-                  <div className="text-xs font-bold font-mono text-indigo-600 dark:text-indigo-400">
-                    {formatPrice(product.price, product.currency)}
-                  </div>
-                  <div className="mt-1 flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setShowCatalogDrawer(false);
-                        openCheckout(product);
-                      }}
-                      className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[11px] font-semibold transition-colors"
-                    >
-                      Buy in Chat
-                    </button>
-                    <span className="text-[10px] text-slate-400">
-                      Escrow Vault
-                    </span>
+                <input
+                  type="number"
+                  min={100}
+                  value={newProdPrice}
+                  onChange={(e) => setNewProdPrice(e.target.value)}
+                  placeholder={`Price (${currency})`}
+                  className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-black/40 border border-slate-200 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white focus:outline-none"
+                />
+              </div>
+              <input
+                type="text"
+                value={newProdDesc}
+                onChange={(e) => setNewProdDesc(e.target.value)}
+                placeholder="Short description (optional)"
+                className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-black/40 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-white focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const priceNum = Number(newProdPrice);
+                  if (!newProdTitle.trim() || !priceNum || priceNum <= 0) {
+                    setCatalogFeedback('Enter a valid product name and price.');
+                    return;
+                  }
+                  const res = addStoreProduct({
+                    title: newProdTitle.trim(),
+                    description: newProdDesc.trim() || 'Escrow-protected store item',
+                    price: priceNum,
+                    currency,
+                    imageUrl: '/assets/aistudio/IMG_7069_4d0dd19c.jpeg',
+                    category: 'fashion',
+                    location: 'Lagos, Nigeria',
+                    condition: 'Brand New',
+                    tags: ['Store'],
+                  });
+                  setCatalogFeedback(res.message);
+                  if (res.success) {
+                    setNewProdTitle('');
+                    setNewProdPrice('');
+                    setNewProdDesc('');
+                    setShowAddCatalogForm(false);
+                  }
+                }}
+                className="w-full py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors"
+              >
+                Save Product to Store
+              </button>
+            </div>
+          )}
+
+          {myStoreProducts.length === 0 ? (
+            <div className="p-4 text-center rounded-xl bg-slate-50 dark:bg-[#1e1b38] border border-dashed border-slate-300 dark:border-slate-700 text-xs text-slate-500 dark:text-slate-400">
+              No products in your store yet. Tap <strong>+ Add Product</strong> to list an item and drop it into chat.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {myStoreProducts.map((product: Product) => (
+                <div
+                  key={product.id}
+                  className="flex items-center gap-2.5 p-2 rounded-xl bg-slate-50 dark:bg-[#1e1b38] border border-slate-200/80 dark:border-slate-800"
+                >
+                  <img
+                    src={product.imageUrl}
+                    alt={product.title}
+                    referrerPolicy="no-referrer"
+                    className="w-12 h-12 rounded-lg object-cover shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                      {product.title}
+                    </h4>
+                    <div className="text-xs font-bold font-mono text-indigo-600 dark:text-indigo-400">
+                      {formatPrice(product.price, product.currency)}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (activeChatId) sendProductCard(activeChatId, product, true);
+                          setShowCatalogDrawer(false);
+                          setToastNotice(`Sent "${product.title}" in chat`);
+                          setTimeout(() => setToastNotice(null), 2200);
+                        }}
+                        className="px-2 py-0.5 bg-purple-600 hover:bg-purple-700 text-white rounded text-[10px] font-bold transition-colors"
+                      >
+                        Send in Chat
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowCatalogDrawer(false);
+                          openCheckout(product);
+                        }}
+                        className="px-2 py-0.5 bg-indigo-600/15 hover:bg-indigo-600/25 text-indigo-600 dark:text-indigo-300 rounded text-[10px] font-semibold transition-colors"
+                      >
+                        Escrow
+                      </button>
+                    </div>
                   </div>
                 </div>
+              ))}
+            </div>
+          )}
+
+          {currentChat.catalog && currentChat.catalog.length > 0 && (
+            <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+              <div className="text-[11px] font-bold text-slate-500 mb-1.5">
+                {currentChat.name} · Catalog ({currentChat.catalog.length})
               </div>
-            ))}
-          </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {currentChat.catalog.map((product: Product) => (
+                  <div
+                    key={product.id}
+                    className="flex items-center gap-2.5 p-2 rounded-xl bg-slate-50 dark:bg-[#1e1b38] border border-slate-200/80 dark:border-slate-800"
+                  >
+                    <img
+                      src={product.imageUrl}
+                      alt={product.title}
+                      referrerPolicy="no-referrer"
+                      className="w-12 h-12 rounded-lg object-cover shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                        {product.title}
+                      </h4>
+                      <div className="text-xs font-bold font-mono text-indigo-600 dark:text-indigo-400">
+                        {formatPrice(product.price, product.currency)}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowCatalogDrawer(false);
+                          openCheckout(product);
+                        }}
+                        className="mt-1 px-2.5 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[10px] font-semibold transition-colors"
+                      >
+                        Buy in Chat
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -928,7 +1149,13 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           </span>
         </div>
 
-        {currentMessages.map((msg: ChatMessage) => {
+        {(chatSearchQuery.trim()
+          ? currentMessages.filter((m: ChatMessage) =>
+              (m.text || '').toLowerCase().includes(chatSearchQuery.trim().toLowerCase()) ||
+              (m.senderName || '').toLowerCase().includes(chatSearchQuery.trim().toLowerCase())
+            )
+          : currentMessages
+        ).map((msg: ChatMessage) => {
           const isUser = msg.sender === 'user';
           const isSystem = msg.sender === 'system';
 
@@ -1103,7 +1330,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       <button
                         type="button"
                         onClick={() => {
-                          window.open(`https://www.google.com/search?q=${encodeURIComponent(msg.text || '')}`, '_blank');
+                          setChatSearchQuery(msg.text || '');
+                          setShowChatSearch(true);
                           setActiveMenuMsgId(null);
                         }}
                         className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-white/10 transition-colors"
@@ -1177,32 +1405,73 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     </div>
                   )}
 
-                  {/* Text Message */}
+                  {/* Text Message (with Disappearing 1-Time View support) */}
                   {msg.type === 'text' && (
-                    <div>
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap break-words break-all [overflow-wrap:anywhere] min-w-0 select-text">
-                        {msg.text}
-                      </p>
-
-                      {/* WeChat-style Translated Sub-Card (Only appears when user highlights/taps Translate) */}
-                      {translatedMessages[msg.id] && (
-                        <div className={`mt-2 pt-2 border-t select-text text-left animate-in fade-in duration-150 ${
-                          isUser
-                            ? 'border-white/20 text-purple-100'
-                            : 'border-slate-200 dark:border-white/10 text-slate-700 dark:text-slate-200'
-                        }`}>
-                          <p className="text-sm font-medium leading-relaxed">
-                            {getTranslatedContent(msg)}
-                          </p>
-                          <div className={`flex items-center gap-1.5 mt-1 text-[10px] font-mono ${
-                            isUser ? 'text-purple-200' : 'text-slate-400 dark:text-slate-500'
-                          }`}>
-                            <CheckCircle2 className="w-3.5 h-3.5 text-purple-400 fill-purple-400/20" />
-                            <span>Translated by AfriChat</span>
+                    msg.oneTimeView ? (
+                      openedOneTimeImages[msg.id] ? (
+                        <div className="flex items-center gap-2.5 p-2 rounded-xl bg-black/15 dark:bg-white/5 border border-dashed border-white/25 select-none opacity-80">
+                          <div className="w-7 h-7 rounded-full border border-current flex items-center justify-center font-bold text-xs">
+                            1
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold">1-Time Message</div>
+                            <div className="text-[10px] font-mono italic opacity-75">Opened · Disappeared</div>
                           </div>
                         </div>
-                      )}
-                    </div>
+                      ) : (
+                        <div
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLightboxOneTimeText({
+                              msgId: msg.id,
+                              text: msg.text || '',
+                              senderName: isUser ? 'You' : (msg.senderName || currentChat.name),
+                            });
+                            markOneTimeAsOpened(msg.id);
+                          }}
+                          className="flex items-center gap-3 p-2.5 rounded-xl bg-black/15 dark:bg-purple-600/15 hover:bg-black/25 border border-purple-300/40 cursor-pointer transition-all group"
+                          title="Tap to read 1-time message"
+                        >
+                          <div className="w-8 h-8 rounded-full border-2 border-dashed border-current flex items-center justify-center font-black text-xs shrink-0 group-hover:scale-105 transition-transform">
+                            1
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-bold flex items-center gap-1.5">
+                              <span>1-Time Text Message</span>
+                              <Eye className="w-3.5 h-3.5" />
+                            </div>
+                            <div className="text-[10px] font-mono opacity-80">
+                              Tap to read once · Disappears
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    ) : (
+                      <div>
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap break-words break-all [overflow-wrap:anywhere] min-w-0 select-text">
+                          {msg.text}
+                        </p>
+
+                        {/* WeChat-style Translated Sub-Card (Only appears when user highlights/taps Translate) */}
+                        {translatedMessages[msg.id] && (
+                          <div className={`mt-2 pt-2 border-t select-text text-left animate-in fade-in duration-150 ${
+                            isUser
+                              ? 'border-white/20 text-purple-100'
+                              : 'border-slate-200 dark:border-white/10 text-slate-700 dark:text-slate-200'
+                          }`}>
+                            <p className="text-sm font-medium leading-relaxed">
+                              {getTranslatedContent(msg)}
+                            </p>
+                            <div className={`flex items-center gap-1.5 mt-1 text-[10px] font-mono ${
+                              isUser ? 'text-purple-200' : 'text-slate-400 dark:text-slate-500'
+                            }`}>
+                              <CheckCircle2 className="w-3.5 h-3.5 text-purple-400 fill-purple-400/20" />
+                              <span>Translated by AfriChat</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
                   )}
 
                 {/* Image Message (with Click-to-Enlarge Lightbox & Disappearing One-Time View) */}
@@ -1277,13 +1546,26 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   )
                 )}
 
-                {/* Voice Note Message */}
+                {/* Voice Note Message (with 1-Time Disappearing playback) */}
                 {msg.type === 'voice' && msg.voiceNote && (() => {
+                  if (msg.oneTimeView && openedOneTimeImages[msg.id]) {
+                    return (
+                      <div className="flex items-center gap-2.5 p-2.5 rounded-xl bg-black/15 dark:bg-white/5 border border-dashed border-white/25 select-none opacity-80 min-w-[200px]">
+                        <div className="w-7 h-7 rounded-full border border-current flex items-center justify-center font-bold text-xs">
+                          1
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold">1-Time Voice Note</div>
+                          <div className="text-[10px] font-mono italic opacity-75">Played · Disappeared</div>
+                        </div>
+                      </div>
+                    );
+                  }
+
                   const vn = msg.voiceNote;
                   const isExpired = Boolean(vn.expiresAt && Date.now() > new Date(vn.expiresAt).getTime());
                   const isRevealed = revealedTranscripts[msg.id];
                   const hasTranscript = vn.transcript && vn.transcript.trim().length > 0;
-                  // Expiry label: show "Xh left" or "Expired"
                   let expiryLabel = '';
                   if (vn.expiresAt) {
                     const msLeft = new Date(vn.expiresAt).getTime() - Date.now();
@@ -1295,10 +1577,28 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   }
                   return (
                     <div className="space-y-2 min-w-[220px]">
+                      {msg.oneTimeView && (
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-amber-200 dark:text-purple-300">
+                          <span className="w-4 h-4 rounded-full border border-dashed border-current flex items-center justify-center text-[9px] font-black">1</span>
+                          <span>1-Time Voice · Disappears after playing</span>
+                        </div>
+                      )}
                       <div className="flex items-center gap-3">
                         <button
-                          onClick={() => !isExpired && toggleVoicePlayback(msg.id, vn.audioDataUrl)}
-                          className={`w-10 h-10 rounded-full text-white flex items-center justify-center shrink-0 transition-colors shadow-xs ${isExpired ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isExpired) {
+                              toggleVoicePlayback(msg.id, vn.audioDataUrl, vn.transcript, msg.oneTimeView);
+                            }
+                          }}
+                          className={`w-10 h-10 rounded-full text-white flex items-center justify-center shrink-0 transition-colors shadow-xs ${
+                            isExpired
+                              ? 'bg-slate-400 cursor-not-allowed'
+                              : msg.oneTimeView
+                              ? 'bg-purple-800 hover:bg-purple-900 ring-2 ring-purple-300/60'
+                              : 'bg-indigo-600 hover:bg-indigo-700'
+                          }`}
                           aria-label="Play voice note"
                           disabled={isExpired}
                         >
@@ -1327,8 +1627,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         </div>
                       </div>
 
-                      {/* Transcript — hidden by default, revealed on tap */}
-                      {!isExpired && (
+                      {/* Transcript — hidden on 1-Time voice notes */}
+                      {!isExpired && !msg.oneTimeView && (
                         <div className="pt-1 border-t border-black/5 dark:border-white/5">
                           {isRevealed && hasTranscript ? (
                             <div className="text-xs text-slate-600 dark:text-slate-300 italic leading-relaxed">
@@ -1337,7 +1637,10 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                           ) : (
                             <button
                               type="button"
-                              onClick={() => setRevealedTranscripts(prev => ({ ...prev, [msg.id]: true }))}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setRevealedTranscripts(prev => ({ ...prev, [msg.id]: true }));
+                              }}
                               className="text-[10px] font-semibold text-indigo-500 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center gap-1 transition-colors"
                             >
                               💬 Transcribe
@@ -1492,7 +1795,14 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         return (
                           <div
                             key={opt.id}
-                            onClick={() => voteOnFinancialPoll(activeChatId!, msg.financialPoll!.id, opt.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const res = voteOnFinancialPoll(activeChatId!, msg.financialPoll!.id, opt.id);
+                              if (res?.message) {
+                                setToastNotice(res.message);
+                                setTimeout(() => setToastNotice(null), 2800);
+                              }
+                            }}
                             className={`p-2 rounded-xl border cursor-pointer relative overflow-hidden transition-all ${
                               isVoted
                                 ? 'border-indigo-600 bg-indigo-50/70 dark:bg-indigo-950/50'
@@ -1650,10 +1960,10 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         })}
       </div>
 
-      {/* Attachment popover with all 8 African Super-App Features */}
+      {/* Attachment popover (Cleaned & Role-Gated) */}
       {showAttachMenu && (
         <div className="mx-3 mb-2 p-3 bg-white dark:bg-[#1a172e] rounded-2xl shadow-xl grid grid-cols-4 gap-2 text-center text-xs animate-in slide-in-from-bottom-2 shrink-0 z-20 border border-slate-200 dark:border-slate-800">
-          {/* 0. Photo & Media Gallery */}
+          {/* Photos */}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
@@ -1665,46 +1975,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             <span className="text-[10px] leading-tight font-bold text-emerald-600 dark:text-emerald-400">Photos</span>
           </button>
 
-          {/* 0.5. Disappearing One-Time View Toggle */}
-          <button
-            type="button"
-            onClick={() => {
-              setIsOneTimeViewEnabled(!isOneTimeViewEnabled);
-              setToastNotice(!isOneTimeViewEnabled ? '1-Time View enabled for next photo' : '1-Time View disabled');
-              setTimeout(() => setToastNotice(null), 2500);
-            }}
-            className={`flex flex-col items-center p-2 rounded-xl transition-all ${
-              isOneTimeViewEnabled
-                ? 'bg-purple-600 text-white ring-2 ring-purple-400 shadow-md shadow-purple-600/30'
-                : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
-            }`}
-            title="Toggle Disappearing 1-Time View"
-          >
-            <div className="w-9 h-9 rounded-full border-2 border-dashed border-current flex items-center justify-center font-black text-xs mb-1">
-              1
-            </div>
-            <span className="text-[10px] leading-tight font-bold">
-              {isOneTimeViewEnabled ? '1-Time: ON' : '1-Time View'}
-            </span>
-          </button>
-
-          {/* Errand & Market Shopping */}
-          {isFeatureEnabled('errands') && (
-            <button
-              type="button"
-              onClick={() => {
-                setShowAttachMenu(false);
-                setIsErrandsModalOpen(true);
-              }}
-              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-            >
-              <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-1">
-                <ShoppingBag className="w-4 h-4" />
-              </div>
-              <span className="text-[10px] leading-tight font-bold text-purple-500 dark:text-purple-300">Errands</span>
-            </button>
-          )}
-          {/* 1. Meme & Sticker Studio */}
+          {/* Meme & Sticker Studio */}
           {isFeatureEnabled('memeStudio') && (
             <button
               type="button"
@@ -1721,8 +1992,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </button>
           )}
 
-          {/* 2. Automated Invoice & Receipt */}
-          {isFeatureEnabled('wallet') && (
+          {/* Invoice PDF (Only for Active Store Owners) */}
+          {isFeatureEnabled('wallet') && hasActiveStore && (
             <button
               type="button"
               onClick={() => {
@@ -1738,7 +2009,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </button>
           )}
 
-          {/* 3. Financial Stake Poll */}
+          {/* Financial Stake Poll */}
           {isFeatureEnabled('wallet') && (
             <button
               type="button"
@@ -1755,7 +2026,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </button>
           )}
 
-          {/* 4. Ajo / Esusu Savings */}
+          {/* Ajo / Esusu Savings */}
           {isFeatureEnabled('ajo') && (
             <button
               type="button"
@@ -1772,30 +2043,14 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </button>
           )}
 
-          {/* 5. Street Radio Space */}
-          {isFeatureEnabled('audioSpaces') && (
-            <button
-              type="button"
-              onClick={() => {
-                setShowAttachMenu(false);
-                joinAudioSpace(audioSpaces[0]);
-              }}
-              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-            >
-              <div className="w-9 h-9 rounded-full bg-rose-100 dark:bg-rose-900/60 text-rose-600 flex items-center justify-center mb-1">
-                <Radio className="w-4 h-4" />
-              </div>
-              <span className="text-[10px] leading-tight">Street Radio</span>
-            </button>
-          )}
-
-          {/* 6. Scam Checker */}
+          {/* Scam Checker */}
           {isFeatureEnabled('scamChecker') && (
             <button
               type="button"
               onClick={() => {
                 setShowAttachMenu(false);
-                if (currentChat.phone) checkEntityReputation(currentChat.phone);
+                const target = currentChat.phoneNumber || currentChat.phone;
+                if (target) checkEntityReputation(target);
                 setIsScamCheckerModalOpen(true);
               }}
               className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
@@ -1807,8 +2062,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </button>
           )}
 
-          {/* 7. Catalog / Escrow */}
-          {isFeatureEnabled('market') && (
+          {/* Catalog (Only for Active Store Owners) */}
+          {isFeatureEnabled('market') && hasActiveStore && (
             <button
               type="button"
               onClick={() => {
@@ -1824,7 +2079,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </button>
           )}
 
-          {/* 8. Escrow Direct Deal */}
+          {/* Escrow Direct Deal */}
           {isFeatureEnabled('escrow') && (
             <button
               type="button"
@@ -1833,7 +2088,10 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 if (currentChat.catalog && currentChat.catalog[0]) {
                   openCheckout(currentChat.catalog[0]);
                 } else {
-                  alert('No catalog product in this chat yet. Use catalog button to attach goods.');
+                  setEscrowDealTitle('');
+                  setEscrowDealAmount('15000');
+                  setEscrowDealError(null);
+                  setShowEscrowDealModal(true);
                 }
               }}
               className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
@@ -1844,21 +2102,6 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
               <span className="text-[10px] leading-tight">Escrow Deal</span>
             </button>
           )}
-
-          {/* 9. Wallpaper & Text Scale */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowAttachMenu(false);
-              setIsDisplayModalOpen(true);
-            }}
-            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-          >
-            <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-1">
-              <Image className="w-4 h-4" />
-            </div>
-            <span className="text-[10px] leading-tight">Wallpaper</span>
-          </button>
         </div>
       )}
 
@@ -1912,7 +2155,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         </div>
       ) : (
       <div className="px-2 py-2 bg-transparent shrink-0 flex items-center gap-1.5 z-20">
-        <div className="flex-1 flex items-center bg-slate-100 dark:bg-neutral-900 rounded-full px-3 py-1.5 shadow-2xs border border-slate-200/60 dark:border-neutral-800">
+        <div className={`flex-1 flex items-center bg-slate-100 dark:bg-neutral-900 rounded-full px-3 py-1.5 shadow-2xs border transition-colors ${
+          isOneTimeViewEnabled
+            ? 'border-purple-500 ring-2 ring-purple-500/30'
+            : 'border-slate-200/60 dark:border-neutral-800'
+        }`}>
           <button
             type="button"
             onClick={() => setIsEmojiMemeDrawerOpen(!isEmojiMemeDrawerOpen)}
@@ -1926,24 +2173,39 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             <Smile className="w-5 h-5" />
           </button>
 
-          {isOneTimeViewEnabled && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-600 text-white text-[10px] font-bold shrink-0 animate-pulse">
-              <span>(1) 1-Time View</span>
-              <button type="button" onClick={() => setIsOneTimeViewEnabled(false)}><X className="w-3 h-3" /></button>
-            </span>
-          )}
           <input
             type="text"
             value={inputText}
             onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Message"
+            placeholder={isOneTimeViewEnabled ? '1-Time message · disappears' : 'Message'}
             className="flex-1 min-w-0 px-2 py-1 bg-transparent text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none"
           />
 
           <button
+            type="button"
+            onClick={() => {
+              const next = !isOneTimeViewEnabled;
+              setIsOneTimeViewEnabled(next);
+              setToastNotice(next ? '1-Time ON: next text, photo, or voice disappears after view' : '1-Time mode off');
+              setTimeout(() => setToastNotice(null), 2400);
+            }}
+            title={isOneTimeViewEnabled ? '1-Time Disappearing Mode ON (tap to turn off)' : 'Tap for 1-Time Disappearing text, photo, or voice'}
+            aria-label="Toggle 1-Time Disappearing Message"
+            className={`w-7 h-7 rounded-full border-2 border-dashed flex items-center justify-center font-black text-[11px] shrink-0 mr-1 transition-all cursor-pointer ${
+              isOneTimeViewEnabled
+                ? 'bg-purple-600 border-white text-white shadow-md shadow-purple-600/40 scale-105'
+                : 'border-slate-400 dark:border-slate-500 text-slate-400 hover:text-purple-500 hover:border-purple-400'
+            }`}
+          >
+            1
+          </button>
+
+          <button
+            type="button"
             onClick={() => setShowAttachMenu(!showAttachMenu)}
             className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
+            aria-label="Attachments"
           >
             <Paperclip className="w-5 h-5" />
           </button>
@@ -2110,6 +2372,184 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors"
               >
                 {confirmChatAction === 'delete' ? 'Delete' : 'Clear History'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* One-Time Disappearing Text Message Viewer Modal */}
+      {lightboxOneTimeText && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/95 backdrop-blur-md flex flex-col justify-between p-5 animate-in fade-in select-none text-white"
+          onClick={() => setLightboxOneTimeText(null)}
+        >
+          <div
+            className="flex items-center justify-between"
+            style={{ paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 8px), 14px)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-600 text-white text-xs font-bold shadow-lg shadow-purple-600/40">
+              <span className="w-4 h-4 rounded-full border border-dashed border-white flex items-center justify-center text-[10px] font-bold">1</span>
+              <span>1-Time Message · Disappears after closing</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setLightboxOneTimeText(null)}
+              className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div
+            className="flex-1 flex items-center justify-center p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-full max-w-sm p-6 rounded-3xl bg-[#181330] border border-purple-500/40 shadow-2xl space-y-3 text-center">
+              <div className="text-[11px] font-mono uppercase tracking-wider text-purple-300">
+                From {lightboxOneTimeText.senderName}
+              </div>
+              <p className="text-base font-medium leading-relaxed text-white whitespace-pre-wrap break-words">
+                {lightboxOneTimeText.text}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setLightboxOneTimeText(null)}
+            className="w-full max-w-sm mx-auto py-3 rounded-2xl bg-purple-600 hover:bg-purple-700 text-xs font-bold"
+          >
+            Close &amp; Disappear
+          </button>
+        </div>
+      )}
+
+      {/* Custom In-Chat Escrow Deal Modal */}
+      {showEscrowDealModal && (
+        <div
+          className="fixed inset-0 z-[180] bg-black/75 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in"
+          onClick={() => setShowEscrowDealModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm bg-white dark:bg-[#17122c] border border-slate-200 dark:border-purple-900/40 rounded-t-3xl sm:rounded-3xl p-5 shadow-2xl space-y-4 text-slate-900 dark:text-white"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/15 text-emerald-500 flex items-center justify-center">
+                  <Lock className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm">Create Escrow Deal</h4>
+                  <p className="text-[10px] text-slate-400">Protected buyer/seller transaction with PIN release</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEscrowDealModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {escrowDealError && (
+              <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-500 text-xs font-medium">
+                {escrowDealError}
+              </div>
+            )}
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                  Item or Service Description
+                </label>
+                <input
+                  type="text"
+                  value={escrowDealTitle}
+                  onChange={(e) => setEscrowDealTitle(e.target.value)}
+                  placeholder="e.g. iPhone 14 Pro / 6 Yards Ankara / Design Milestone"
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                  Agreed Amount ({currency})
+                </label>
+                <input
+                  type="number"
+                  min={100}
+                  value={escrowDealAmount}
+                  onChange={(e) => setEscrowDealAmount(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const amt = Number(escrowDealAmount);
+                  if (!escrowDealTitle.trim() || !amt || amt <= 0) {
+                    setEscrowDealError('Enter item description and valid amount.');
+                    return;
+                  }
+                  const dealProd: Product = {
+                    id: `deal_${Date.now()}`,
+                    sellerId: currentChat.id,
+                    sellerName: currentUser.fullName || 'AGC User',
+                    title: escrowDealTitle.trim(),
+                    description: `Escrow-protected deal with ${currentChat.name}`,
+                    price: amt,
+                    currency,
+                    imageUrl: '/assets/aistudio/IMG_7069_4d0dd19c.jpeg',
+                    category: 'fashion',
+                    inStock: true,
+                    stockCount: 1,
+                    location: 'AGC Direct Escrow',
+                    condition: 'Brand New',
+                    tags: ['Escrow'],
+                  };
+                  if (activeChatId) sendProductCard(activeChatId, dealProd, true);
+                  setShowEscrowDealModal(false);
+                }}
+                className="py-2.5 px-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition-colors"
+              >
+                Send Deal Card
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const amt = Number(escrowDealAmount);
+                  if (!escrowDealTitle.trim() || !amt || amt <= 0) {
+                    setEscrowDealError('Enter item description and valid amount.');
+                    return;
+                  }
+                  const dealProd: Product = {
+                    id: `deal_${Date.now()}`,
+                    sellerId: currentChat.id,
+                    sellerName: currentChat.name,
+                    title: escrowDealTitle.trim(),
+                    description: `Direct Escrow payment to ${currentChat.name}`,
+                    price: amt,
+                    currency,
+                    imageUrl: '/assets/aistudio/IMG_7069_4d0dd19c.jpeg',
+                    category: 'fashion',
+                    inStock: true,
+                    stockCount: 1,
+                    location: 'AGC Direct Escrow',
+                    condition: 'Brand New',
+                    tags: ['Escrow'],
+                  };
+                  setShowEscrowDealModal(false);
+                  openCheckout(dealProd);
+                }}
+                className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors"
+              >
+                Pay Now (Escrow)
               </button>
             </div>
           </div>
