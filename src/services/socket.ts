@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client';
-import { ChatMessage } from '../types';
+import { ChatMessage, TicTacToeGameState } from '../types';
 
 let socket: Socket | null = null;
 
@@ -137,3 +137,58 @@ export const emitLikeStatus = (statusId: string, liked: boolean, likerId: string
   const s = getSocket();
   s?.emit('like_status', { statusId, liked, likerId, likerName });
 };
+
+// 6. Real-Time Multiplayer X/O (Tic-Tac-Toe) via Socket.IO
+export const emitXoCreate = (
+  payload: { game: TicTacToeGameState; message?: ChatMessage; targetPhone?: string; memberPhones?: string[]; chat?: any },
+  ack?: (res: { ok: boolean; game?: TicTacToeGameState; error?: string }) => void
+) => {
+  const s = getSocket();
+  if (!s) {
+    ack?.({ ok: false, error: 'Socket not connected' });
+    return;
+  }
+  s.emit('xo:create', payload, ack);
+};
+
+export const emitXoAccept = (
+  payload: { gameId: string; chatId: string; playerPhone: string; playerName: string; playerAvatar?: string; fallbackGame?: TicTacToeGameState },
+  ack?: (res: { ok: boolean; game?: TicTacToeGameState; error?: string }) => void
+) => {
+  const s = getSocket();
+  if (!s) {
+    ack?.({ ok: false, error: 'Socket not connected' });
+    return;
+  }
+  s.emit('xo:accept', payload, ack);
+};
+
+export const emitXoDecline = (
+  payload: { gameId: string; chatId: string; playerPhone: string; reason?: string; fallbackGame?: TicTacToeGameState },
+  ack?: (res: { ok: boolean; game?: TicTacToeGameState; error?: string }) => void
+) => {
+  const s = getSocket();
+  if (!s) {
+    ack?.({ ok: false, error: 'Socket not connected' });
+    return;
+  }
+  s.emit('xo:decline', payload, ack);
+};
+
+export const emitXoMove = (
+  payload: { gameId: string; chatId: string; cellIndex: number; playerPhone: string },
+  ack?: (res: { ok: boolean; game?: TicTacToeGameState; error?: string }) => void
+) => {
+  const s = getSocket();
+  if (!s) {
+    ack?.({ ok: false, error: 'Socket not connected' });
+    return;
+  }
+  s.emit('xo:move', payload, ack);
+};
+
+export const emitXoSync = (chatId: string) => {
+  const s = getSocket();
+  s?.emit('xo:sync', { chatId });
+};
+

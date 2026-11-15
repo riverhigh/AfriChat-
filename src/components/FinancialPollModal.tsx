@@ -5,10 +5,9 @@ import {
   Lock,
   Plus,
   Trash2,
-  DollarSign,
   Send,
   AlertCircle,
-  Coins,
+  Users,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -18,14 +17,13 @@ export const FinancialPollModal: React.FC = () => {
     setIsFinancialPollModalOpen,
     createFinancialPoll,
     activeChatId,
-    wallet,
-    formatPrice,
+    chats,
     currency,
     CURRENCY_SYMBOLS,
   } = useApp();
 
   const [pollTitle, setPollTitle] = useState('Weekend Hangout & Dinner (Lock Stake to Confirm RSVP)');
-  const [stakeAmount, setStakeAmount] = useState<number>(10000);
+  const [stakeInput, setStakeInput] = useState<string>('5000');
   const [options, setOptions] = useState<string[]>([
     'Danfo Bistro & Bar, Ikoyi (Cocktails & Asun)',
     'Hard Rock Cafe, Victoria Island (Live Band)',
@@ -34,6 +32,15 @@ export const FinancialPollModal: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   if (!isFinancialPollModalOpen) return null;
+
+  const currentChat = chats.find(
+    (c) =>
+      c.id === activeChatId ||
+      (activeChatId?.startsWith('dm_') && c.phone && activeChatId.includes(c.phone.replace(/\D/g, '')))
+  );
+  const isGroupChat = Boolean(currentChat?.isGroup);
+  const curSymbol = CURRENCY_SYMBOLS[currency] || '₦';
+  const parsedStake = Math.round(Number(stakeInput) || 0);
 
   const handleAddOption = () => {
     if (options.length >= 5) return;
@@ -52,8 +59,8 @@ export const FinancialPollModal: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    if (!activeChatId) {
-      setErrorMsg('Please open a chat or group before launching a poll.');
+    if (!currentChat || !isGroupChat) {
+      setErrorMsg('Financial Stake Polls are only available in group chats.');
       return;
     }
     const cleanOptions = options.map((o) => o.trim()).filter(Boolean);
@@ -65,12 +72,16 @@ export const FinancialPollModal: React.FC = () => {
       setErrorMsg('Please provide at least 2 poll options.');
       return;
     }
-    if (!stakeAmount || stakeAmount < 100) {
-      setErrorMsg(`Minimum stake amount is ${CURRENCY_SYMBOLS[currency] || '₦'}100.`);
+    if (!parsedStake || parsedStake < 100) {
+      setErrorMsg(`Minimum stake amount is ${curSymbol}100.`);
       return;
     }
 
-    createFinancialPoll(activeChatId, pollTitle.trim(), stakeAmount, cleanOptions);
+    const res = createFinancialPoll(currentChat.id, pollTitle.trim(), parsedStake, cleanOptions);
+    if (!res?.success) {
+      setErrorMsg(res?.message || 'Unable to create financial stake poll.');
+      return;
+    }
     setIsFinancialPollModalOpen(false);
   };
 
@@ -94,9 +105,9 @@ export const FinancialPollModal: React.FC = () => {
             </div>
             <div>
               <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100 font-display">
-                Poll with Financial Stakes
+                Group Stake Poll
               </h3>
-              <p className="text-[10px] text-slate-400">
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
                 Lock commitment funds in escrow upon voting
               </p>
             </div>
@@ -105,6 +116,7 @@ export const FinancialPollModal: React.FC = () => {
             type="button"
             onClick={() => setIsFinancialPollModalOpen(false)}
             className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
+            aria-label="Close"
           >
             <X className="w-5 h-5" />
           </button>
@@ -112,6 +124,13 @@ export const FinancialPollModal: React.FC = () => {
 
         {/* Body */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+          {!isGroupChat && (
+            <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 rounded-xl text-rose-700 dark:text-rose-300 flex items-start gap-2">
+              <Users className="w-4 h-4 shrink-0 text-rose-500 mt-0.5" />
+              <span>Stake Polls can only be launched inside a group chat. Open a group conversation to use this feature.</span>
+            </div>
+          )}
+
           {errorMsg && (
             <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 rounded-xl text-rose-700 dark:text-rose-300 flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
@@ -123,7 +142,7 @@ export const FinancialPollModal: React.FC = () => {
           <div className="p-3 bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 rounded-2xl flex items-start gap-2.5 text-amber-900 dark:text-amber-200">
             <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
             <div className="text-[11px] leading-relaxed">
-              <strong>Zero Flake Guarantee:</strong> When group members vote on this poll, their stake is automatically locked in the group escrow vault to ensure commitment!
+              <strong>Zero Flake Guarantee:</strong> Each group member who votes automatically locks the required stake into group escrow until settlement.
             </div>
           </div>
 
@@ -142,30 +161,32 @@ export const FinancialPollModal: React.FC = () => {
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Financial Stake Required Per Vote (NGN)
+              Financial Stake Required Per Vote ({currency})
             </label>
-            <div className="grid grid-cols-4 gap-2 mb-2 font-mono">
-              {[5000, 10000, 20000, 50000].map((amt) => (
+            <div className="grid grid-cols-4 gap-2 mb-2 font-mono tabular-nums">
+              {[500, 1000, 5000, 10000].map((amt) => (
                 <button
                   key={amt}
                   type="button"
-                  onClick={() => setStakeAmount(amt)}
+                  onClick={() => setStakeInput(String(amt))}
                   className={`py-2 rounded-xl text-xs font-bold border transition-colors ${
-                    stakeAmount === amt
+                    parsedStake === amt
                       ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400'
                       : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
                   }`}
                 >
-                  ₦{(amt / 1000).toFixed(0)}k
+                  {curSymbol}{amt.toLocaleString()}
                 </button>
               ))}
             </div>
             <input
               type="number"
-              value={stakeAmount}
-              onChange={(e) => setStakeAmount(Math.max(1000, Number(e.target.value)))}
-              min={1000}
-              className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none"
+              min={100}
+              step={50}
+              value={stakeInput}
+              onChange={(e) => setStakeInput(e.target.value)}
+              placeholder={`Enter stake (min ${curSymbol}100)`}
+              className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </div>
 
@@ -204,6 +225,7 @@ export const FinancialPollModal: React.FC = () => {
                       type="button"
                       onClick={() => handleRemoveOption(idx)}
                       className="text-slate-400 hover:text-rose-500 p-1"
+                      aria-label="Remove option"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -224,10 +246,11 @@ export const FinancialPollModal: React.FC = () => {
             </button>
             <button
               type="submit"
-              className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 shadow-md active:scale-95 transition-transform"
+              disabled={!isGroupChat}
+              className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 shadow-md active:scale-95 transition-transform"
             >
               <Send className="w-4 h-4" />
-              <span>Launch Financial Poll in Group</span>
+              <span>Launch Stake Poll</span>
             </button>
           </div>
         </form>

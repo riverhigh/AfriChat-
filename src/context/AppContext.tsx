@@ -12,6 +12,11 @@ import {
   emitPostStatus,
   emitViewStatus,
   emitLikeStatus,
+  emitXoCreate,
+  emitXoAccept,
+  emitXoDecline,
+  emitXoMove,
+  emitXoSync,
 } from '../services/socket';
 import { encryptChatMessage, decryptChatMessage, getConversationSecret } from '../utils/cryptoUtils';
 
@@ -119,6 +124,7 @@ import {
   InvoiceData,
   FinancialPoll,
   AjoGroup,
+  TicTacToeGameState,
   UserProfile,
   DeviceContact,
   UserUploadedMeme,
@@ -373,8 +379,30 @@ interface AppContextType {
     title: string,
     stakePerVote: number,
     optionTexts: string[]
-  ) => void;
-  voteOnFinancialPoll: (chatId: string, pollId: string, optionId: string) => { success: boolean; message?: string };
+  ) => { success: boolean; message?: string };
+  voteOnFinancialPoll: (
+    chatId: string,
+    pollId: string,
+    optionId: string
+  ) => { success: boolean; insufficientFunds?: boolean; message?: string };
+  // 6b. Live Socket.IO Multiplayer X/O (Tic-Tac-Toe)
+  isGameXoModalOpen: boolean;
+  setIsGameXoModalOpen: (val: boolean) => void;
+  sendXoChallenge: (
+    chatId: string,
+    mode: 'friendly' | 'bet',
+    betAmount: number
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: TicTacToeGameState }>;
+  acceptXoChallenge: (
+    game: TicTacToeGameState
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }>;
+  declineXoChallenge: (
+    game: TicTacToeGameState
+  ) => Promise<{ success: boolean; message?: string }>;
+  makeXoMove: (
+    game: TicTacToeGameState,
+    cellIndex: number
+  ) => Promise<{ success: boolean; message?: string }>;
   // 7. Ajo / Esusu Group Savings
   activeAjoGroup: AjoGroup | null;
   setActiveAjoGroup: (group: AjoGroup | null) => void;
@@ -4651,7 +4679,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isOnline: true,
       isGroup: true,
       membersCount: memberNamesOrPhones.length + 1,
+      creatorId: currentUser.id,
       admins: [myName],
+      adminIds: [currentUser.id],
       members: [myName, ...memberNamesOrPhones],
       memberPhones: allMemberPhones,
       inviteCode: shortInvite,
@@ -6277,27 +6307,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastLiveMessage(chatId, newMsg);
   };
 
-  // 6. Group Polls with Financial Stakes Handlers
+  // Helper: Recompute poll option tallies & totals from per-user votesByUser map
+  const recomputePollFromVotes = (
+    poll: FinancialPoll,
+    votesByUser: Record<string, { optionId: string; voterName: string; voterKey: string }>
+  ): FinancialPoll => {
+    const entries = Object.values(votesByUser || {});
+    const updatedOptions = poll.options.map((opt) => {
+      const votersForOpt = entries.filter((v) => v.optionId === opt.id);
+      return {
+        ...opt,
+        votesCount: votersForOpt.length,
+        voterNames: votersForOpt.map((v) => v.voterName),
+      };
+    });
+    const totalVoters = entries.length;
+    return {
+      ...poll,
+      options: updatedOptions,
+      votesByUser,
+      totalVoters,
+      totalStakeLocked: totalVoters * poll.stakePerVote,
+    };
+  };
+
+  // 6. Group Polls with Financial Stakes Handlers (Strictly Group Chats Only)
   const createFinancialPoll = (
     chatId: string,
     title: string,
     stakePerVote: number,
     optionTexts: string[]
-  ) => {
+  ): { success: boolean; message?: string } => {
+    const targetChat = chats.find((c) => c.id === chatId);
+    if (!targetChat?.isGroup) {
+      return {
+        success: false,
+        message: 'Financial Stake Polls are only available in group chats.',
+      };
+    }
+
     const activeCur: CurrencyCode = currency || 'NGN';
     const cleanOptions = optionTexts.map((t) => t.trim()).filter(Boolean);
+    if (cleanOptions.length < 2) {
+      return { success: false, message: 'Provide at least 2 poll options.' };
+    }
+
+    const nowTs = Date.now();
     const newPoll: FinancialPoll = {
-      id: `poll_${Date.now()}`,
+      id: `poll_${nowTs}`,
       title,
       creatorName: currentUser.fullName || 'AGC User',
       stakePerVote,
       currency: activeCur,
       totalStakeLocked: 0,
       totalVoters: 0,
+      votesByUser: {},
       status: 'active',
       payoutRule: `Every voter locks ${CURRENCY_SYMBOLS[activeCur]}${stakePerVote.toLocaleString()} into Escrow upon casting vote.`,
       options: cleanOptions.map((txt, idx) => ({
-        id: `opt_${Date.now()}_${idx}`,
+        id: `opt_${nowTs}_${idx}`,
         text: txt,
         votesCount: 0,
         voterNames: [],
@@ -6305,7 +6373,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const newMsg: ChatMessage = {
-      id: `msg_poll_${Date.now()}`,
+      id: `msg_poll_${nowTs}`,
       chatId,
       sender: 'user',
       senderName: currentUser.fullName || 'AGC User',
@@ -6318,13 +6386,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'sent',
     };
 
-    setMessages((prev) => ({
-      ...prev,
-      [chatId]: [...(prev[chatId] || []), newMsg],
-    }));
+    setMessages((prev) => {
+      const updated = {
+        ...prev,
+        [chatId]: [...(prev[chatId] || []), newMsg],
+      };
+      try {
+        const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
 
-    setChats((prev) =>
-      prev.map((c) =>
+    setChats((prev) => {
+      const updated = prev.map((c) =>
         c.id === chatId
           ? {
               ...c,
@@ -6332,34 +6407,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               lastMessageTime: newMsg.timestamp,
             }
           : c
-      )
-    );
+      );
+      try {
+        const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
 
     broadcastLiveMessage(chatId, newMsg);
+    return { success: true, message: 'Stake Poll launched in group!' };
   };
 
-  const voteOnFinancialPoll = (chatId: string, pollId: string, optionId: string) => {
-    const chatMsgs = messages[chatId] || [];
-    const pollMsg = chatMsgs.find((m) => m.financialPoll?.id === pollId);
+  const voteOnFinancialPoll = (
+    chatId: string,
+    pollId: string,
+    optionId: string
+  ): { success: boolean; insufficientFunds?: boolean; message?: string } => {
+    let resolvedId = chatId;
+    let chatMsgs = messages[resolvedId] || [];
+    let pollMsg = chatMsgs.find((m) => m.financialPoll?.id === pollId);
+    if (!pollMsg) {
+      for (const [cid, list] of Object.entries(messages)) {
+        const found = list.find((m) => m.financialPoll?.id === pollId);
+        if (found) {
+          resolvedId = cid;
+          chatMsgs = list;
+          pollMsg = found;
+          break;
+        }
+      }
+    }
+
     if (!pollMsg || !pollMsg.financialPoll) {
-      return { success: false, message: 'Poll not found in this chat.' };
+      return { success: false, message: 'Poll not found in this group.' };
+    }
+
+    const targetChat = chats.find((c) => c.id === resolvedId);
+    if (targetChat && !targetChat.isGroup) {
+      return { success: false, message: 'Stake Polls are restricted to group chats.' };
     }
 
     const poll = pollMsg.financialPoll;
-    if (poll.userVotedOptionId === optionId) {
-      return { success: true, message: 'Vote already recorded on this option.' };
+    const myVoterKey = normalizePhoneDigits(currentUser.phoneNumber) || currentUser.id || 'local_user';
+    const existingVotesMap: Record<string, { optionId: string; voterName: string; voterKey: string }> = {
+      ...(poll.votesByUser || {}),
+    };
+    const myExistingVote = existingVotesMap[myVoterKey];
+
+    if (myExistingVote?.optionId === optionId) {
+      return { success: true, message: 'Your vote is already locked on this option.' };
     }
 
-    // Check if wallet has stake amount
-    if (wallet.availableBalance < poll.stakePerVote && !poll.userVotedOptionId) {
+    const hasAlreadyStaked = Boolean(myExistingVote);
+    if (!hasAlreadyStaked && wallet.availableBalance < poll.stakePerVote) {
+      const sym = CURRENCY_SYMBOLS[poll.currency || 'NGN'] || '₦';
       return {
         success: false,
-        message: `Insufficient wallet funds to lock stake (${CURRENCY_SYMBOLS[poll.currency || 'NGN']}${poll.stakePerVote.toLocaleString()}). Please top up wallet.`,
+        insufficientFunds: true,
+        message: `Insufficient balance: need ${sym}${poll.stakePerVote.toLocaleString()} to lock your vote stake.`,
       };
     }
 
-    // Deduct stake if first time voting
-    if (!poll.userVotedOptionId) {
+    if (!hasAlreadyStaked) {
       setWallet((prev) => ({
         ...prev,
         availableBalance: prev.availableBalance - poll.stakePerVote,
@@ -6381,43 +6491,470 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
     }
 
-    const voterLabel = currentUser.fullName ? `${currentUser.fullName} (You)` : 'You';
-    const updatedOptions = poll.options.map((opt) => {
-      const isSelected = opt.id === optionId;
-      const wasSelected = opt.id === poll.userVotedOptionId;
-      let names = [...opt.voterNames];
-      if (wasSelected) {
-        names = names.filter((n) => n !== voterLabel && n !== 'You' && n !== currentUser.fullName);
-      }
-      if (isSelected && !names.includes(voterLabel)) {
-        names.push(voterLabel);
-      }
-      return {
-        ...opt,
-        votesCount: names.length,
-        voterNames: names,
-      };
-    });
-
-    const updatedPoll: FinancialPoll = {
-      ...poll,
-      options: updatedOptions,
-      userVotedOptionId: optionId,
-      totalStakeLocked: poll.userVotedOptionId ? poll.totalStakeLocked : poll.totalStakeLocked + poll.stakePerVote,
-      totalVoters: poll.userVotedOptionId ? poll.totalVoters : poll.totalVoters + 1,
+    const voterDisplay = currentUser.fullName || currentUser.phoneNumber || 'AGC Member';
+    const nextVotesByUser = {
+      ...existingVotesMap,
+      [myVoterKey]: {
+        optionId,
+        voterName: voterDisplay,
+        voterKey: myVoterKey,
+      },
     };
+
+    const updatedPoll = recomputePollFromVotes(poll, nextVotesByUser);
+    delete updatedPoll.userVotedOptionId;
 
     const updatedMsg: ChatMessage = { ...pollMsg, financialPoll: updatedPoll };
 
-    setMessages((prev) => ({
-      ...prev,
-      [chatId]: (prev[chatId] || []).map((m) =>
-        m.financialPoll?.id === pollId ? updatedMsg : m
-      ),
-    }));
+    setMessages((prev) => {
+      const updated = {
+        ...prev,
+        [resolvedId]: (prev[resolvedId] || []).map((m) =>
+          m.financialPoll?.id === pollId ? updatedMsg : m
+        ),
+      };
+      try {
+        const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
 
-    broadcastLiveMessage(chatId, updatedMsg);
-    return { success: true, message: 'Vote & escrow stake locked!' };
+    broadcastLiveMessage(resolvedId, updatedMsg);
+    return {
+      success: true,
+      message: hasAlreadyStaked
+        ? 'Vote updated (stake already locked in escrow).'
+        : 'Vote cast & escrow stake locked!',
+    };
+  };
+
+  // 6b. Real-Time Socket.IO Multiplayer X/O (Tic-Tac-Toe) Handlers & Wallet Escrow (1% Winner Pot Fee)
+  const [isGameXoModalOpen, setIsGameXoModalOpen] = useState(false);
+
+  const getXoLockedStorageKey = (phone?: string) =>
+    getUserStorageKey('AGC_xo_locked_ids', phone || currentUser.phoneNumber);
+  const getXoSettledStorageKey = (phone?: string) =>
+    getUserStorageKey('AGC_xo_settled_ids', phone || currentUser.phoneNumber);
+
+  const hasXoFlag = (storageKey: string, gameId: string): boolean => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const arr: string[] = raw ? JSON.parse(raw) : [];
+      return arr.includes(gameId);
+    } catch {
+      return false;
+    }
+  };
+
+  const setXoFlag = (storageKey: string, gameId: string) => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const arr: string[] = raw ? JSON.parse(raw) : [];
+      if (!arr.includes(gameId)) {
+        localStorage.setItem(storageKey, JSON.stringify([...arr.slice(-150), gameId]));
+      }
+    } catch (_) {}
+  };
+
+  const applyXoGameUpdate = useCallback(
+    (incomingGame: TicTacToeGameState) => {
+      if (!incomingGame?.id || !incomingGame?.chatId) return;
+
+      const myPhone = currentUser.phoneNumber || '';
+      const isParticipant =
+        phonesMatch(myPhone, incomingGame.challengerPhone) ||
+        phonesMatch(myPhone, incomingGame.opponentPhone) ||
+        phonesMatch(myPhone, incomingGame.xPlayerPhone) ||
+        phonesMatch(myPhone, incomingGame.oPlayerPhone);
+
+      // Update chat message holding this X/O game (or insert it if missing)
+      setMessages((prev) => {
+        let targetCid = incomingGame.chatId;
+        if (targetCid.startsWith('dm_') && myPhone) {
+          const parts = targetCid.replace('dm_', '').split('_');
+          const other = phonesMatch(parts[0], myPhone) ? parts[1] : parts[0];
+          if (other) {
+            const sym = getDirectChatId(myPhone, other);
+            if (sym) targetCid = sym;
+          }
+        }
+        const list = prev[targetCid] || prev[incomingGame.chatId] || [];
+        const resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
+        const existingIdx = list.findIndex((m) => m.xoGame?.id === incomingGame.id);
+
+        let nextList: ChatMessage[];
+        if (existingIdx >= 0) {
+          nextList = list.map((m, i) =>
+            i === existingIdx ? { ...m, xoGame: incomingGame } : m
+          );
+        } else {
+          const newCard: ChatMessage = {
+            id: `msg_xo_${incomingGame.id}`,
+            chatId: resolvedCid,
+            sender: phonesMatch(myPhone, incomingGame.challengerPhone) ? 'user' : 'other',
+            senderName: incomingGame.challengerName,
+            senderPhone: incomingGame.challengerPhone,
+            senderAvatar: incomingGame.challengerAvatar,
+            type: 'game_xo',
+            xoGame: incomingGame,
+            text:
+              incomingGame.mode === 'bet'
+                ? `🎮 X/O Challenge (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
+                : '🎮 Friendly X/O Challenge',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            status: 'delivered',
+          };
+          nextList = [...list, newCard];
+        }
+
+        const updated = { ...prev, [resolvedCid]: nextList };
+        try {
+          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
+      });
+
+      // Idempotent Wallet Settlement on Terminal States (won / draw / declined / cancelled)
+      if (
+        isParticipant &&
+        incomingGame.mode === 'bet' &&
+        incomingGame.betAmount > 0 &&
+        (incomingGame.status === 'won' ||
+          incomingGame.status === 'draw' ||
+          incomingGame.status === 'declined' ||
+          incomingGame.status === 'cancelled')
+      ) {
+        const lockKey = getXoLockedStorageKey(myPhone);
+        const settleKey = getXoSettledStorageKey(myPhone);
+        const wasLockedByMe = hasXoFlag(lockKey, incomingGame.id);
+        const alreadySettled = hasXoFlag(settleKey, incomingGame.id);
+
+        if (!alreadySettled && wasLockedByMe) {
+          setXoFlag(settleKey, incomingGame.id);
+          const stake = Number(incomingGame.betAmount || 0);
+          const payout = Number(incomingGame.winnerPayout || 0);
+          const fee = Number(incomingGame.platformFee || 0);
+
+          if (incomingGame.status === 'won') {
+            const iWon = phonesMatch(myPhone, incomingGame.winnerPhone);
+            setWallet((prev) => ({
+              ...prev,
+              availableBalance: iWon ? prev.availableBalance + payout : prev.availableBalance,
+              escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - stake),
+              transactions: [
+                ...(iWon
+                  ? [
+                      {
+                        id: `tx_xo_win_${incomingGame.id}`,
+                        type: 'escrow_release' as const,
+                        title: `X/O Win Payout (1% fee: ${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${fee.toLocaleString()})`,
+                        amount: payout,
+                        currency: incomingGame.currency || 'NGN',
+                        timestamp: 'Just now',
+                        status: 'completed' as const,
+                        reference: `XO_${incomingGame.id}`,
+                        channel: 'wallet' as const,
+                      },
+                    ]
+                  : [
+                      {
+                        id: `tx_xo_loss_${incomingGame.id}`,
+                        type: 'escrow_release' as const,
+                        title: `X/O Match Settled (${incomingGame.winnerName || 'Opponent'} won)`,
+                        amount: stake,
+                        currency: incomingGame.currency || 'NGN',
+                        timestamp: 'Just now',
+                        status: 'completed' as const,
+                        reference: `XO_${incomingGame.id}`,
+                        channel: 'wallet' as const,
+                      },
+                    ]),
+                ...prev.transactions,
+              ],
+            }));
+          } else {
+            // Draw, Declined, or Cancelled -> full stake refund from escrow
+            setWallet((prev) => ({
+              ...prev,
+              availableBalance: prev.availableBalance + stake,
+              escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - stake),
+              transactions: [
+                {
+                  id: `tx_xo_ref_${incomingGame.id}`,
+                  type: 'escrow_release' as const,
+                  title:
+                    incomingGame.status === 'draw'
+                      ? 'X/O Match Draw (Stake Refunded)'
+                      : 'X/O Challenge Cancelled (Stake Refunded)',
+                  amount: stake,
+                  currency: incomingGame.currency || 'NGN',
+                  timestamp: 'Just now',
+                  status: 'completed' as const,
+                  reference: `XO_${incomingGame.id}`,
+                  channel: 'wallet' as const,
+                },
+                ...prev.transactions,
+              ],
+            }));
+          }
+        }
+      }
+    },
+    [currentUser.phoneNumber, CURRENCY_SYMBOLS]
+  );
+
+  const sendXoChallenge = async (
+    chatId: string,
+    mode: 'friendly' | 'bet',
+    betAmount: number
+  ): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: TicTacToeGameState }> => {
+    const cleanBet = mode === 'bet' ? Math.round(Number(betAmount) || 0) : 0;
+    if (mode === 'bet' && cleanBet < 50) {
+      return { success: false, message: `Minimum bet amount is ${CURRENCY_SYMBOLS[currency || 'NGN']}50.` };
+    }
+    if (mode === 'bet' && wallet.availableBalance < cleanBet) {
+      return {
+        success: false,
+        insufficientFunds: true,
+        message: `Insufficient wallet balance for ${CURRENCY_SYMBOLS[currency || 'NGN']}${cleanBet.toLocaleString()} bet.`,
+      };
+    }
+
+    const targetChat = chats.find((c) => c.id === chatId);
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    let opponentPhone = (!targetChat?.isGroup && !targetChat?.isChannel)
+      ? (targetChat?.phoneNumber || targetChat?.phone || '')
+      : '';
+    if (!opponentPhone && chatId.startsWith('dm_')) {
+      const parts = chatId.replace('dm_', '').split('_');
+      opponentPhone = parts.find((p) => !phonesMatch(p, myPhone)) || '';
+    }
+
+    const nowIso = new Date().toISOString();
+    const gameId = `xo_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const totalPot = mode === 'bet' ? cleanBet * 2 : 0;
+    const platformFee = mode === 'bet' ? Math.round(totalPot * 0.01) : 0;
+    const winnerPayout = totalPot - platformFee;
+
+    const newGame: TicTacToeGameState = {
+      id: gameId,
+      chatId,
+      gameType: 'xo',
+      challengerId: currentUser.id,
+      challengerPhone: myPhone,
+      challengerName: currentUser.fullName || 'AGC Player',
+      challengerAvatar: currentUser.avatarUrl,
+      opponentPhone: opponentPhone || undefined,
+      opponentName: !targetChat?.isGroup ? targetChat?.name : undefined,
+      opponentAvatar: !targetChat?.isGroup ? targetChat?.avatar : undefined,
+      mode,
+      betAmount: cleanBet,
+      currency: currency || 'NGN',
+      board: Array(9).fill(null),
+      xPlayerPhone: myPhone,
+      xPlayerName: currentUser.fullName || 'AGC Player',
+      currentTurn: 'X',
+      status: 'pending',
+      totalPot,
+      platformFeeRate: 0.01,
+      platformFee,
+      winnerPayout,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const sym = CURRENCY_SYMBOLS[newGame.currency] || '₦';
+    const cardMsg: ChatMessage = {
+      id: `msg_xo_${gameId}`,
+      chatId,
+      sender: 'user',
+      senderName: currentUser.fullName || 'AGC Player',
+      senderPhone: myPhone,
+      senderAvatar: currentUser.avatarUrl,
+      type: 'game_xo',
+      xoGame: newGame,
+      text:
+        mode === 'bet'
+          ? `🎮 X/O Challenge: ${sym}${cleanBet.toLocaleString()} bet (Winner pot: ${sym}${winnerPayout.toLocaleString()} after 1% fee)`
+          : '🎮 X/O Friendly Challenge (Tic-Tac-Toe)',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'sent',
+    };
+
+    if (mode === 'bet' && cleanBet > 0) {
+      setXoFlag(getXoLockedStorageKey(myPhone), gameId);
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - cleanBet,
+        escrowLockedBalance: prev.escrowLockedBalance + cleanBet,
+        transactions: [
+          {
+            id: `tx_xo_lock_${gameId}`,
+            type: 'escrow_lock',
+            title: `X/O Bet Escrow Lock (${targetChat?.name || 'Match'})`,
+            amount: cleanBet,
+            currency: newGame.currency,
+            timestamp: 'Just now',
+            status: 'completed',
+            reference: `XO_${gameId}`,
+            channel: 'wallet',
+          },
+          ...prev.transactions,
+        ],
+      }));
+    }
+
+    setMessages((prev) => {
+      const updated = { ...prev, [chatId]: [...(prev[chatId] || []), cardMsg] };
+      try {
+        const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    setChats((prev) => {
+      const updated = prev.map((c) =>
+        c.id === chatId
+          ? {
+              ...c,
+              lastMessage: mode === 'bet' ? `🎮 X/O Challenge (${sym}${cleanBet.toLocaleString()})` : '🎮 X/O Friendly Challenge',
+              lastMessageTime: cardMsg.timestamp,
+            }
+          : c
+      );
+      try {
+        const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    const targetClean = opponentPhone ? opponentPhone.replace(/\D/g, '') : undefined;
+    const memberPhones = targetChat?.memberPhones || [];
+    emitXoCreate({
+      game: newGame,
+      message: cardMsg,
+      targetPhone: targetClean,
+      memberPhones,
+      chat: targetChat,
+    });
+    broadcastLiveMessage(chatId, cardMsg);
+
+    return { success: true, game: newGame, message: 'X/O Challenge sent!' };
+  };
+
+  const acceptXoChallenge = (
+    game: TicTacToeGameState
+  ): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }> => {
+    return new Promise((resolve) => {
+      const myPhone = currentUser.phoneNumber || currentUser.id;
+      if (phonesMatch(myPhone, game.challengerPhone)) {
+        resolve({ success: false, message: 'Waiting for your opponent to accept.' });
+        return;
+      }
+      if (game.mode === 'bet' && game.betAmount > 0 && wallet.availableBalance < game.betAmount) {
+        const sym = CURRENCY_SYMBOLS[game.currency || 'NGN'] || '₦';
+        resolve({
+          success: false,
+          insufficientFunds: true,
+          message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.`,
+        });
+        return;
+      }
+
+      emitXoAccept(
+        {
+          gameId: game.id,
+          chatId: game.chatId,
+          playerPhone: myPhone,
+          playerName: currentUser.fullName || 'Player O',
+          playerAvatar: currentUser.avatarUrl,
+          fallbackGame: game,
+        },
+        (res) => {
+          if (!res?.ok) {
+            resolve({ success: false, message: res?.error || 'Could not accept challenge.' });
+            return;
+          }
+          if (game.mode === 'bet' && game.betAmount > 0 && !hasXoFlag(getXoLockedStorageKey(myPhone), game.id)) {
+            setXoFlag(getXoLockedStorageKey(myPhone), game.id);
+            setWallet((prev) => ({
+              ...prev,
+              availableBalance: prev.availableBalance - game.betAmount,
+              escrowLockedBalance: prev.escrowLockedBalance + game.betAmount,
+              transactions: [
+                {
+                  id: `tx_xo_acc_${game.id}`,
+                  type: 'escrow_lock',
+                  title: `X/O Match Bet Stake (${game.challengerName})`,
+                  amount: game.betAmount,
+                  currency: game.currency || 'NGN',
+                  timestamp: 'Just now',
+                  status: 'completed',
+                  reference: `XO_${game.id}`,
+                  channel: 'wallet',
+                },
+                ...prev.transactions,
+              ],
+            }));
+          }
+          if (res.game) applyXoGameUpdate(res.game);
+          resolve({ success: true, message: 'Challenge accepted! Match started.' });
+        }
+      );
+    });
+  };
+
+  const declineXoChallenge = (
+    game: TicTacToeGameState
+  ): Promise<{ success: boolean; message?: string }> => {
+    return new Promise((resolve) => {
+      const myPhone = currentUser.phoneNumber || currentUser.id;
+      emitXoDecline(
+        {
+          gameId: game.id,
+          chatId: game.chatId,
+          playerPhone: myPhone,
+          fallbackGame: game,
+        },
+        (res) => {
+          if (!res?.ok) {
+            resolve({ success: false, message: res?.error || 'Could not cancel challenge.' });
+            return;
+          }
+          if (res.game) applyXoGameUpdate(res.game);
+          resolve({ success: true, message: 'Challenge closed.' });
+        }
+      );
+    });
+  };
+
+  const makeXoMove = (
+    game: TicTacToeGameState,
+    cellIndex: number
+  ): Promise<{ success: boolean; message?: string }> => {
+    return new Promise((resolve) => {
+      const myPhone = currentUser.phoneNumber || currentUser.id;
+      emitXoMove(
+        {
+          gameId: game.id,
+          chatId: game.chatId,
+          cellIndex,
+          playerPhone: myPhone,
+        },
+        (res) => {
+          if (!res?.ok) {
+            resolve({ success: false, message: res?.error || 'Move rejected by server.' });
+            return;
+          }
+          if (res.game) applyXoGameUpdate(res.game);
+          resolve({ success: true });
+        }
+      );
+    });
   };
 
   // 7. Ajo / Esusu Group Savings Handlers
@@ -6558,6 +7095,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }): { success: boolean; requiresVerification?: boolean; message: string } => {
     if (!currentUser.isPhoneVerified) {
       return { success: false, requiresVerification: true, message: 'Phone verification required to create an Ajo group.' };
+    }
+    const targetChat = chats.find((c) => c.id === activeChatId);
+    const isAdminInTargetGroup = Boolean(
+      targetChat?.isGroup &&
+      (
+        targetChat.creatorId === currentUser.id ||
+        targetChat.adminIds?.includes(currentUser.id) ||
+        targetChat.admins?.includes(currentUser.fullName) ||
+        (currentUser.phoneNumber && targetChat.admins?.includes(currentUser.phoneNumber)) ||
+        targetChat.admins?.includes('You')
+      )
+    );
+    if (!isAdminInTargetGroup) {
+      return {
+        success: false,
+        message: 'Ajo / Esusu clubs can only be hosted inside group chats by group admins.',
+      };
     }
     const newGroup: AjoGroup = {
       id: `ajo_${Date.now()}`,
@@ -8905,21 +9459,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } catch (_) {}
       }
 
-      // 3. Filter duplicates by message ID (allow updates to live polls / ajo cards)
+      // 3. Filter duplicates by message ID (merge live polls / ajo cards / X/O game states)
       setMessages((prev) => {
         const list = prev[resolvedChatId] || prev[chatId] || [];
         const existingIdx = list.findIndex((m) => m.id === message.id);
         if (existingIdx >= 0) {
-          if (message.type === 'financial_poll' || message.type === 'ajo_update') {
-            const updatedList = list.map((m, idx) =>
-              idx === existingIdx
-                ? {
-                    ...m,
-                    financialPoll: message.financialPoll ?? m.financialPoll,
-                    ajoGroup: message.ajoGroup ?? m.ajoGroup,
-                  }
-                : m
-            );
+          if (message.type === 'financial_poll' || message.type === 'ajo_update' || message.type === 'game_xo') {
+            const updatedList = list.map((m, idx) => {
+              if (idx !== existingIdx) return m;
+              let nextPoll = m.financialPoll;
+              if (message.financialPoll && m.financialPoll) {
+                const mergedVotes = {
+                  ...(m.financialPoll.votesByUser || {}),
+                  ...(message.financialPoll.votesByUser || {}),
+                };
+                nextPoll = recomputePollFromVotes(message.financialPoll, mergedVotes);
+                delete nextPoll.userVotedOptionId;
+              } else if (message.financialPoll) {
+                nextPoll = message.financialPoll;
+              }
+
+              let nextXo = m.xoGame;
+              if (message.xoGame && m.xoGame) {
+                const existingMoves = m.xoGame.board.filter(Boolean).length;
+                const incomingMoves = message.xoGame.board.filter(Boolean).length;
+                const existingTerminal = m.xoGame.status === 'won' || m.xoGame.status === 'draw' || m.xoGame.status === 'declined' || m.xoGame.status === 'cancelled';
+                const incomingTerminal = message.xoGame.status === 'won' || message.xoGame.status === 'draw' || message.xoGame.status === 'declined' || message.xoGame.status === 'cancelled';
+                if (incomingTerminal || (!existingTerminal && incomingMoves >= existingMoves)) {
+                  nextXo = message.xoGame;
+                }
+              } else if (message.xoGame) {
+                nextXo = message.xoGame;
+              }
+
+              return {
+                ...m,
+                financialPoll: nextPoll,
+                ajoGroup: message.ajoGroup ?? m.ajoGroup,
+                xoGame: nextXo,
+              };
+            });
             const updated = { ...prev, [resolvedChatId]: updatedList };
             try {
               const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
@@ -9138,12 +9717,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBanInfo(payload);
     };
 
+    const handleXoUpdatedSocket = (payload: { game?: TicTacToeGameState }) => {
+      if (payload?.game) {
+        applyXoGameUpdate(payload.game);
+      }
+    };
+
+    const handleXoSyncSocket = (payload: { chatId?: string; games?: TicTacToeGameState[] }) => {
+      if (Array.isArray(payload?.games)) {
+        payload.games.forEach((g) => applyXoGameUpdate(g));
+      }
+    };
+
     socket.on('account_banned', handleAccountBanned);
     socket.on('group_created', handleGroupCreated);
     socket.on('friend_request', handleFriendRequestSocket);
     socket.on('friend_request_accepted', handleFriendRequestAccepted);
     socket.on('dispatch_order_created', handleDispatchOrderCreated);
     socket.on('dispatch_status_updated', handleDispatchStatusUpdated);
+    socket.on('xo:updated', handleXoUpdatedSocket);
+    socket.on('xo:sync_state', handleXoSyncSocket);
 
     // 2. BroadcastChannel listener (instant multi-tab / window sync)
     let bc: BroadcastChannel | null = null;
@@ -9261,12 +9854,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('friend_request_accepted', handleFriendRequestAccepted);
       socket.off('dispatch_order_created', handleDispatchOrderCreated);
       socket.off('dispatch_status_updated', handleDispatchStatusUpdated);
+      socket.off('xo:updated', handleXoUpdatedSocket);
+      socket.off('xo:sync_state', handleXoSyncSocket);
       if (bc) bc.close();
       if (sbInboxChannel) sbInboxChannel.unsubscribe();
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
       if (sbTownFeed) sbTownFeed.unsubscribe();
     };
-  }, [currentUser, activeChatId, handleIncomingMessage]);
+  }, [currentUser, activeChatId, handleIncomingMessage, applyXoGameUpdate]);
 
   const syncCurrentUserFromRecord = useCallback((me?: AdminUserRecord) => {
     if (!me || !currentUser?.phoneNumber) return;
@@ -9856,6 +10451,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!activeChatId) return;
 
     joinChatRoom(activeChatId);
+    emitXoSync(activeChatId);
 
     const sbChannel = supabase.channel(`chat_${activeChatId}`, {
       config: { broadcast: { self: false } },
@@ -10878,6 +11474,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsFinancialPollModalOpen,
         createFinancialPoll,
         voteOnFinancialPoll,
+        // 6b. Live Socket.IO Multiplayer X/O (Tic-Tac-Toe)
+        isGameXoModalOpen,
+        setIsGameXoModalOpen,
+        sendXoChallenge,
+        acceptXoChallenge,
+        declineXoChallenge,
+        makeXoMove,
         // 7. Ajo / Esusu Group Savings
         activeAjoGroup,
         setActiveAjoGroup,

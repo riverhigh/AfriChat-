@@ -49,6 +49,8 @@ import {
   BadgeCheck,
   Crown,
   Eraser,
+  Gamepad2,
+  Trophy,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
@@ -91,6 +93,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     setViewingInvoice,
     setIsFinancialPollModalOpen,
     voteOnFinancialPoll,
+    setIsGameXoModalOpen,
+    acceptXoChallenge,
+    declineXoChallenge,
+    makeXoMove,
+    setIsWalletModalOpen,
     setIsAjoModalOpen,
     setActiveAjoGroup,
     joinAudioSpace,
@@ -133,6 +140,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [confirmChatAction, setConfirmChatAction] = useState<'clear' | 'delete' | null>(null);
   const [showChatSearch, setShowChatSearch] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
+  const [pollCardErrors, setPollCardErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
+  const [xoBusyId, setXoBusyId] = useState<string | null>(null);
+  const [xoErrors, setXoErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
 
   // Fullscreen image lightbox
   const [lightboxImg, setLightboxImg] = useState<{
@@ -316,11 +326,40 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     (activeChatId?.startsWith('dm_')
       ? chats.find((c) => c.phone && activeChatId.includes(c.phone.replace(/\D/g, '')))
       : undefined);
-  const isGroupAdmin = currentUser && currentChat?.isGroup &&
-    (currentChat as any).adminIds?.includes(currentUser.id);
-  const isChannelAdmin = currentUser && currentChat?.isChannel &&
-    (currentChat as any).adminIds?.includes(currentUser.id);
+  const isGroupChat = Boolean(currentChat?.isGroup);
+  const isGroupAdmin = Boolean(
+    currentUser &&
+      currentChat?.isGroup &&
+      (currentChat.creatorId === currentUser.id ||
+        currentChat.adminIds?.includes(currentUser.id) ||
+        currentChat.admins?.includes(currentUser.fullName) ||
+        (currentUser.phoneNumber && currentChat.admins?.includes(currentUser.phoneNumber)) ||
+        currentChat.admins?.includes('You'))
+  );
+  const isChannelAdmin = Boolean(
+    currentUser &&
+      currentChat?.isChannel &&
+      (currentChat.creatorId === currentUser.id ||
+        currentChat.adminIds?.includes(currentUser.id) ||
+        currentChat.admins?.includes(currentUser.fullName) ||
+        currentChat.admins?.includes('You'))
+  );
   const isChannelMember = currentChat?.isChannel && !isChannelAdmin;
+
+  const normPhone = (p?: string) => {
+    const d = (p || '').replace(/\D/g, '');
+    if (d.length === 11 && d.startsWith('0')) return '234' + d.slice(1);
+    return d;
+  };
+  const samePhone = (a?: string, b?: string) => {
+    const na = normPhone(a);
+    const nb = normPhone(b);
+    if (!na || !nb) return false;
+    if (na === nb) return true;
+    return na.length >= 9 && nb.length >= 9 && na.slice(-9) === nb.slice(-9);
+  };
+  const myPhoneRaw = currentUser.phoneNumber || '';
+  const myVoterKey = normPhone(myPhoneRaw) || currentUser.id || 'local_user';
   const currentMessages =
     (activeChatId && messages[activeChatId]) ||
     (currentChat?.id && messages[currentChat.id]) ||
@@ -1761,84 +1800,419 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 )}
 
                 {/* Financial Stake Poll Message */}
-                {msg.type === 'financial_poll' && msg.financialPoll && (
-                  <div className="space-y-2.5 min-w-[260px] p-1">
-                    <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10 pb-1.5">
-                      <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-bold text-xs">
-                        <Vote className="w-4 h-4" />
-                        <span>Financial Stake Poll</span>
+                {msg.type === 'financial_poll' && msg.financialPoll && (() => {
+                  const poll = msg.financialPoll!;
+                  const pollCur = poll.currency || 'NGN';
+                  const myVoteEntry = poll.votesByUser
+                    ? poll.votesByUser[myVoterKey] ||
+                      Object.values(poll.votesByUser).find(
+                        (v) => samePhone(v.voterKey, myPhoneRaw) || v.voterKey === currentUser.id
+                      )
+                    : undefined;
+                  const myVotedOptionId = myVoteEntry?.optionId ?? (poll.votesByUser ? undefined : poll.userVotedOptionId);
+                  const pollErr = pollCardErrors[poll.id];
+
+                  return (
+                    <div
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseUp={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                      className="space-y-2.5 min-w-[260px] p-1 select-none"
+                    >
+                      <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10 pb-1.5 gap-2">
+                        <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-bold text-xs">
+                          <Vote className="w-4 h-4 shrink-0" />
+                          <span>Group Stake Poll</span>
+                        </div>
+                        <span className="font-mono tabular-nums text-[11px] text-amber-700 dark:text-amber-300 font-bold">
+                          {formatPrice(poll.stakePerVote, pollCur)} / vote
+                        </span>
                       </div>
-                      <span className="font-mono text-[10px] bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-bold px-2 py-0.5 rounded-full">
-                        ₦{(msg.financialPoll.stakePerVote / 1000).toFixed(0)}k Stake/Vote
-                      </span>
-                    </div>
 
-                    <div>
-                      <h4 className="font-bold text-xs text-slate-900 dark:text-slate-100 leading-snug">
-                        {msg.financialPoll.title}
-                      </h4>
-                      <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-2">
-                        <span>Total Pot: <strong className="font-mono text-emerald-600">₦{msg.financialPoll.totalStakeLocked.toLocaleString()}</strong></span>
-                        <span>·</span>
-                        <span>{msg.financialPoll.totalVoters} Voters Committed</span>
+                      <div>
+                        <h4 className="font-bold text-xs text-slate-900 dark:text-slate-100 leading-snug">
+                          {poll.title}
+                        </h4>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-1.5 tabular-nums">
+                          <span>
+                            Pot:{' '}
+                            <strong className="font-mono text-emerald-600 dark:text-emerald-400">
+                              {formatPrice(poll.totalStakeLocked, pollCur)}
+                            </strong>
+                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span>{poll.totalVoters} committed</span>
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Options voting list */}
-                    <div className="space-y-1.5">
-                      {msg.financialPoll.options.map((opt) => {
-                        const isVoted = msg.financialPoll?.userVotedOptionId === opt.id;
-                        const percentage = msg.financialPoll?.totalVoters
-                          ? Math.round((opt.votesCount / msg.financialPoll.totalVoters) * 100)
-                          : 0;
+                      {/* Options voting list */}
+                      <div className="space-y-1.5">
+                        {poll.options.map((opt) => {
+                          const isVoted = myVotedOptionId === opt.id;
+                          const percentage = poll.totalVoters
+                            ? Math.round((opt.votesCount / poll.totalVoters) * 100)
+                            : 0;
 
-                        return (
-                          <div
-                            key={opt.id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const res = voteOnFinancialPoll(activeChatId!, msg.financialPoll!.id, opt.id);
-                              if (res?.message) {
-                                setToastNotice(res.message);
-                                setTimeout(() => setToastNotice(null), 2800);
-                              }
-                            }}
-                            className={`p-2 rounded-xl border cursor-pointer relative overflow-hidden transition-all ${
-                              isVoted
-                                ? 'border-indigo-600 bg-indigo-50/70 dark:bg-indigo-950/50'
-                                : 'border-slate-200 dark:border-slate-700 hover:bg-black/5 dark:hover:bg-white/5'
-                            }`}
-                          >
-                            {/* Vote % fill bar */}
-                            <div
-                              style={{ width: `${percentage}%` }}
-                              className={`absolute inset-y-0 left-0 opacity-15 ${
-                                isVoted ? 'bg-indigo-600' : 'bg-slate-400'
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const res = voteOnFinancialPoll(currentChat.id, poll.id, opt.id);
+                                if (!res?.success) {
+                                  setPollCardErrors((prev) => ({
+                                    ...prev,
+                                    [poll.id]: {
+                                      msg: res?.message || 'Unable to cast vote.',
+                                      insufficient: res?.insufficientFunds,
+                                    },
+                                  }));
+                                  return;
+                                }
+                                setPollCardErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next[poll.id];
+                                  return next;
+                                });
+                                if (res.message) {
+                                  setToastNotice(res.message);
+                                  setTimeout(() => setToastNotice(null), 2600);
+                                }
+                              }}
+                              className={`w-full text-left min-h-[42px] p-2.5 rounded-xl border cursor-pointer relative overflow-hidden transition-all ${
+                                isVoted
+                                  ? 'border-indigo-600 bg-indigo-50/80 dark:bg-indigo-950/60 text-slate-900 dark:text-white'
+                                  : 'border-slate-200 dark:border-slate-700 hover:bg-black/5 dark:hover:bg-white/5 text-slate-800 dark:text-slate-100'
                               }`}
-                            />
-                            <div className="relative flex items-center justify-between text-xs z-10">
-                              <span className="font-medium truncate pr-2">
-                                {isVoted && '✓ '} {opt.text}
-                              </span>
-                              <span className="font-mono font-bold shrink-0">
-                                {opt.votesCount} ({percentage}%)
+                            >
+                              <div
+                                style={{ width: `${percentage}%` }}
+                                className={`absolute inset-y-0 left-0 opacity-15 transition-all duration-200 ${
+                                  isVoted ? 'bg-indigo-600' : 'bg-slate-400'
+                                }`}
+                              />
+                              <div className="relative flex items-center justify-between text-xs z-10 gap-2">
+                                <span className="font-medium truncate">
+                                  {isVoted ? '✓ ' : ''}{opt.text}
+                                </span>
+                                <span className="font-mono tabular-nums font-bold shrink-0">
+                                  {opt.votesCount} ({percentage}%)
+                                </span>
+                              </div>
+                              {opt.voterNames.length > 0 && (
+                                <div className="relative text-[10px] text-slate-500 dark:text-slate-400 mt-1 truncate z-10 font-mono">
+                                  {opt.voterNames.join(', ')}
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {pollErr && (
+                        <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-[11px] flex items-center justify-between gap-2">
+                          <span>{pollErr.msg}</span>
+                          {pollErr.insufficient && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setIsWalletModalOpen(true);
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold shrink-0 whitespace-nowrap"
+                            >
+                              Top Up
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 text-center font-mono tabular-nums">
+                        Voting locks {formatPrice(poll.stakePerVote, pollCur)} in group escrow
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Live Socket.IO Multiplayer X/O (Tic-Tac-Toe) Card */}
+                {msg.type === 'game_xo' && msg.xoGame && (() => {
+                  const game = msg.xoGame!;
+                  const gCur = game.currency || 'NGN';
+                  const isChallenger =
+                    samePhone(myPhoneRaw, game.challengerPhone) ||
+                    (Boolean(currentUser.id) && game.challengerId === currentUser.id);
+                  const mySymbol: 'X' | 'O' | null = samePhone(myPhoneRaw, game.xPlayerPhone)
+                    ? 'X'
+                    : samePhone(myPhoneRaw, game.oPlayerPhone)
+                    ? 'O'
+                    : null;
+                  const isMyTurn = game.status === 'active' && Boolean(mySymbol && game.currentTurn === mySymbol);
+                  const turnName = game.currentTurn === 'X' ? game.xPlayerName : (game.oPlayerName || 'Player O');
+                  const winSet = new Set(game.winningLine || []);
+                  const xoErr = xoErrors[game.id];
+                  const isBusy = xoBusyId === game.id;
+                  const iWon =
+                    game.status === 'won' &&
+                    (samePhone(myPhoneRaw, game.winnerPhone) || (mySymbol !== null && game.winnerSymbol === mySymbol));
+
+                  return (
+                    <div
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseUp={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                      className="space-y-3 min-w-[260px] max-w-[300px] p-1 select-none"
+                    >
+                      {/* Match Title & Mode */}
+                      <div className="flex items-center justify-between gap-2 pb-2 border-b border-black/10 dark:border-white/10">
+                        <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
+                          <Gamepad2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
+                          <span>X/O Challenge</span>
+                        </div>
+                        <span className="font-mono tabular-nums text-[11px] font-bold text-emerald-700 dark:text-emerald-300 whitespace-nowrap">
+                          {game.mode === 'bet' ? `${formatPrice(game.betAmount, gCur)} Bet` : 'Friendly'}
+                        </span>
+                      </div>
+
+                      {/* Players & Bet Breakdown */}
+                      <div className="space-y-1 text-[11px]">
+                        <div className="flex items-center justify-between text-slate-700 dark:text-slate-200 gap-2">
+                          <span className="truncate font-semibold">
+                            <span className="font-mono font-black text-indigo-600 dark:text-indigo-400">X</span> {game.xPlayerName}
+                          </span>
+                          <span className="text-slate-400" aria-hidden="true">vs</span>
+                          <span className="truncate font-semibold text-right">
+                            {game.oPlayerName || game.opponentName || 'Waiting'}{' '}
+                            <span className="font-mono font-black text-amber-600 dark:text-amber-400">O</span>
+                          </span>
+                        </div>
+                        {game.mode === 'bet' && (
+                          <div className="flex items-center justify-between text-[10px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                            <span>Pot: {formatPrice(game.totalPot, gCur)} · 1% fee: {formatPrice(game.platformFee, gCur)}</span>
+                            <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                              Win: {formatPrice(game.winnerPayout, gCur)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Interactive 3x3 Board */}
+                      <div className="grid grid-cols-3 gap-2 p-2 rounded-2xl bg-slate-100 dark:bg-[#17142b] border border-slate-200 dark:border-white/10">
+                        {game.board.map((cell, idx) => {
+                          const isWinCell = winSet.has(idx);
+                          const canPlayCell =
+                            game.status === 'active' &&
+                            isMyTurn &&
+                            cell === null &&
+                            !isBusy;
+
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              disabled={!canPlayCell}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (!canPlayCell) return;
+                                setXoBusyId(game.id);
+                                setXoErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next[game.id];
+                                  return next;
+                                });
+                                try {
+                                  const res = await makeXoMove(game, idx);
+                                  if (!res.success && res.message) {
+                                    setXoErrors((prev) => ({
+                                      ...prev,
+                                      [game.id]: { msg: res.message! },
+                                    }));
+                                  }
+                                } finally {
+                                  setXoBusyId(null);
+                                }
+                              }}
+                              aria-label={`Square ${idx + 1}${cell ? ` ${cell}` : ''}`}
+                              className={`min-h-[52px] aspect-square rounded-xl flex items-center justify-center font-display font-black text-2xl transition-all duration-150 ${
+                                isWinCell
+                                  ? 'bg-emerald-500/20 border-2 border-emerald-500 text-emerald-600 dark:text-emerald-300 scale-[1.02]'
+                                  : cell !== null
+                                  ? 'bg-white dark:bg-[#231f3d] border border-slate-200 dark:border-white/10'
+                                  : canPlayCell
+                                  ? 'bg-white dark:bg-[#231f3d] border border-slate-200 dark:border-white/15 hover:border-purple-500 active:scale-95 cursor-pointer'
+                                  : 'bg-white/60 dark:bg-[#1e1a33] border border-slate-200/70 dark:border-white/5 cursor-default'
+                              }`}
+                            >
+                              {cell === 'X' ? (
+                                <span className={isWinCell ? 'text-emerald-600 dark:text-emerald-300' : 'text-indigo-600 dark:text-indigo-400'}>
+                                  X
+                                </span>
+                              ) : cell === 'O' ? (
+                                <span className={isWinCell ? 'text-emerald-600 dark:text-emerald-300' : 'text-amber-600 dark:text-amber-400'}>
+                                  O
+                                </span>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Turn / Pending / Result Controls */}
+                      {game.status === 'pending' && (
+                        isChallenger ? (
+                          <div className="flex items-center justify-between gap-2 pt-0.5">
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                              Waiting for opponent to accept...
+                            </span>
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                setXoBusyId(game.id);
+                                try {
+                                  await declineXoChallenge(game);
+                                } finally {
+                                  setXoBusyId(null);
+                                }
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-600 dark:text-rose-300 text-[11px] font-semibold whitespace-nowrap"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-2 pt-0.5">
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                setXoBusyId(game.id);
+                                try {
+                                  await declineXoChallenge(game);
+                                } finally {
+                                  setXoBusyId(null);
+                                }
+                              }}
+                              className="py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 text-xs font-semibold whitespace-nowrap"
+                            >
+                              Decline
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                setXoBusyId(game.id);
+                                setXoErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next[game.id];
+                                  return next;
+                                });
+                                try {
+                                  const res = await acceptXoChallenge(game);
+                                  if (!res.success) {
+                                    setXoErrors((prev) => ({
+                                      ...prev,
+                                      [game.id]: {
+                                        msg: res.message || 'Could not join game.',
+                                        insufficient: res.insufficientFunds,
+                                      },
+                                    }));
+                                  }
+                                } finally {
+                                  setXoBusyId(null);
+                                }
+                              }}
+                              className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold whitespace-nowrap"
+                            >
+                              {isBusy
+                                ? 'Joining...'
+                                : game.mode === 'bet'
+                                ? `Accept (${formatPrice(game.betAmount, gCur)})`
+                                : 'Accept & Play'}
+                            </button>
+                          </div>
+                        )
+                      )}
+
+                      {game.status === 'active' && (
+                        <div className={`px-3 py-2 rounded-xl text-[11px] font-semibold flex items-center justify-between gap-2 ${
+                          isMyTurn
+                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                            : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-300'
+                        }`}>
+                          <span>
+                            {isMyTurn
+                              ? `Your turn (${mySymbol}) · Tap any open square`
+                              : `${turnName}'s turn (${game.currentTurn})`}
+                          </span>
+                        </div>
+                      )}
+
+                      {(game.status === 'won' || game.status === 'draw' || game.status === 'declined' || game.status === 'cancelled') && (
+                        <div className="space-y-2">
+                          <div className={`p-2.5 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 ${
+                            game.status === 'won'
+                              ? iWon
+                                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                                : 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30'
+                              : 'bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-slate-200'
+                          }`}>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <Trophy className="w-4 h-4 shrink-0 text-amber-500" />
+                              <span className="truncate">
+                                {game.status === 'won'
+                                  ? `${game.winnerName || 'Winner'} won (${game.winnerSymbol})`
+                                  : game.status === 'draw'
+                                  ? 'Match Draw'
+                                  : game.status === 'declined'
+                                  ? 'Challenge Declined'
+                                  : 'Challenge Cancelled'}
                               </span>
                             </div>
-                            {opt.voterNames.length > 0 && (
-                              <div className="relative text-[9px] text-slate-400 mt-1 truncate z-10 font-mono">
-                                Voters: {opt.voterNames.join(', ')}
-                              </div>
+                            {game.mode === 'bet' && (
+                              <span className="font-mono tabular-nums text-[10px] shrink-0">
+                                {game.status === 'won'
+                                  ? `${formatPrice(game.winnerPayout, gCur)} paid`
+                                  : 'Refunded'}
+                              </span>
                             )}
                           </div>
-                        );
-                      })}
-                    </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsGameXoModalOpen(true);
+                            }}
+                            className="w-full py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition-colors"
+                          >
+                            Play Again
+                          </button>
+                        </div>
+                      )}
 
-                    <div className="text-[10px] text-slate-400 text-center font-mono">
-                      🔒 Voting automatically locks {formatPrice(msg.financialPoll.stakePerVote, 'NGN')} in escrow.
+                      {xoErr && (
+                        <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-[11px] flex items-center justify-between gap-2">
+                          <span>{xoErr.msg}</span>
+                          {xoErr.insufficient && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setIsWalletModalOpen(true);
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold shrink-0 whitespace-nowrap"
+                            >
+                              Top Up
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* Ajo / Esusu Update Message */}
                 {msg.type === 'ajo_update' && msg.ajoGroup && (
@@ -1858,7 +2232,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         {msg.ajoGroup.name}
                       </div>
                       <div className="text-[11px] text-slate-500 mt-0.5">
-                        Pot Pot: <strong className="font-mono text-emerald-600 text-xs">₦{msg.ajoGroup.totalPoolPerRound.toLocaleString()}</strong> · Next Payout: {msg.ajoGroup.nextPayoutDate}
+                        Pot: <strong className="font-mono text-emerald-600 text-xs">₦{msg.ajoGroup.totalPoolPerRound.toLocaleString()}</strong> · Next Payout: {msg.ajoGroup.nextPayoutDate}
                       </div>
                     </div>
 
@@ -2009,8 +2383,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </button>
           )}
 
-          {/* Financial Stake Poll */}
-          {isFeatureEnabled('wallet') && (
+          {/* Financial Stake Poll (Strictly Group Chats Only) */}
+          {isFeatureEnabled('wallet') && isGroupChat && (
             <button
               type="button"
               onClick={() => {
@@ -2026,8 +2400,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </button>
           )}
 
-          {/* Ajo / Esusu Savings */}
-          {isFeatureEnabled('ajo') && (
+          {/* Ajo / Esusu Savings (Strictly Group Admins in Group Chats Only) */}
+          {isFeatureEnabled('ajo') && isGroupAdmin && (
             <button
               type="button"
               onClick={() => {
@@ -2100,6 +2474,23 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 <Lock className="w-4 h-4" />
               </div>
               <span className="text-[10px] leading-tight">Escrow Deal</span>
+            </button>
+          )}
+
+          {/* Send Game: Live Socket.IO X/O (Right after Escrow Deal) */}
+          {!currentChat.isChannel && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                setIsGameXoModalOpen(true);
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300 flex items-center justify-center mb-1">
+                <Gamepad2 className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight">Send Game</span>
             </button>
           )}
         </div>

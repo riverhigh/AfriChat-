@@ -26,6 +26,7 @@ export const AjoLedgerModal: React.FC = () => {
     activeAjoGroup,
     contributeToAjo,
     activeChatId,
+    chats,
     wallet,
     formatPrice,
     currentUser,
@@ -47,6 +48,24 @@ export const AjoLedgerModal: React.FC = () => {
   const [newAjoRules, setNewAjoRules] = useState('All members must pay by 6:00 PM on cycle due date. Smart escrow holds funds until host disbursement.');
 
   if (!isAjoModalOpen) return null;
+
+  const currentChat = chats.find(
+    (c) =>
+      c.id === activeChatId ||
+      (activeChatId?.startsWith('dm_') && c.phone && activeChatId.includes(c.phone.replace(/\D/g, '')))
+  );
+  const isGroupChat = Boolean(currentChat?.isGroup);
+  const isGroupAdmin = Boolean(
+    currentUser &&
+      currentChat?.isGroup &&
+      (currentChat.creatorId === currentUser.id ||
+        currentChat.adminIds?.includes(currentUser.id) ||
+        currentChat.admins?.includes(currentUser.fullName) ||
+        (currentUser.phoneNumber && currentChat.admins?.includes(currentUser.phoneNumber)) ||
+        currentChat.admins?.includes('You'))
+  );
+  const canHostAjo = isGroupChat && isGroupAdmin;
+  const effectiveTab: 'ledger' | 'host' = canHostAjo ? activeTab : 'ledger';
 
   const myMember = activeAjoGroup?.members?.find(
     (m) =>
@@ -93,6 +112,10 @@ export const AjoLedgerModal: React.FC = () => {
   const handleCreateAjo = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorBanner(null);
+    if (!canHostAjo) {
+      setErrorBanner('Ajo / Esusu clubs can only be hosted by a group admin inside a group chat.');
+      return;
+    }
     if (!newAjoName.trim()) {
       setErrorBanner('Please enter an Ajo Club Name.');
       return;
@@ -166,34 +189,36 @@ export const AjoLedgerModal: React.FC = () => {
           </button>
         </div>
 
-        {/* Sub-Tab Navigation: Active Ledger vs Host New Ajo */}
-        <div className="grid grid-cols-2 p-1 mx-4 mt-3 bg-slate-100 dark:bg-neutral-900 rounded-xl text-xs font-semibold shrink-0">
-          <button
-            type="button"
-            onClick={() => setActiveTab('ledger')}
-            className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
-              activeTab === 'ledger'
-                ? 'bg-white dark:bg-neutral-800 text-amber-600 dark:text-amber-400 shadow-xs'
-                : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Coins className="w-3.5 h-3.5" />
-            <span>Active Club Ledger</span>
-          </button>
+        {/* Sub-Tab Navigation: Active Ledger vs Host New Ajo (Group Admins Only) */}
+        {canHostAjo && (
+          <div className="grid grid-cols-2 p-1 mx-4 mt-3 bg-slate-100 dark:bg-neutral-900 rounded-xl text-xs font-semibold shrink-0">
+            <button
+              type="button"
+              onClick={() => setActiveTab('ledger')}
+              className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+                effectiveTab === 'ledger'
+                  ? 'bg-white dark:bg-neutral-800 text-amber-600 dark:text-amber-400 shadow-xs'
+                  : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Coins className="w-3.5 h-3.5" />
+              <span>Active Club Ledger</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('host')}
-            className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
-              activeTab === 'host'
-                ? 'bg-white dark:bg-neutral-800 text-purple-600 dark:text-purple-400 shadow-xs'
-                : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Host New Ajo</span>
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('host')}
+              className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+                effectiveTab === 'host'
+                  ? 'bg-white dark:bg-neutral-800 text-purple-600 dark:text-purple-400 shadow-xs'
+                  : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Host New Ajo</span>
+            </button>
+          </div>
+        )}
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
@@ -225,7 +250,7 @@ export const AjoLedgerModal: React.FC = () => {
             </div>
           )}
 
-          {activeTab === 'host' ? (
+          {effectiveTab === 'host' && canHostAjo ? (
             /* Host New Ajo / Verification Checkmark Gateway */
             <div className="space-y-4">
               {!isVerifiedHost ? (
@@ -631,15 +656,25 @@ export const AjoLedgerModal: React.FC = () => {
             ) : (
               <div className="p-6 text-center text-slate-400 space-y-3">
                 <Coins className="w-10 h-10 mx-auto text-amber-500" />
-                <p>No active Ajo group found. Host a verified circle to get started.</p>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('host')}
-                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-sm transition-colors inline-flex items-center gap-1.5"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Host New Ajo</span>
-                </button>
+                {canHostAjo ? (
+                  <>
+                    <p>No active Ajo group found. Host a verified circle to get started.</p>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('host')}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-sm transition-colors inline-flex items-center gap-1.5"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Host New Ajo</span>
+                    </button>
+                  </>
+                ) : (
+                  <p>
+                    {isGroupChat
+                      ? 'No active Ajo group in this chat yet. Only group admins can host an Ajo / Esusu savings circle.'
+                      : 'Ajo / Esusu savings clubs are only available in group chats and can only be hosted by group admins.'}
+                  </p>
+                )}
               </div>
             )
           )}

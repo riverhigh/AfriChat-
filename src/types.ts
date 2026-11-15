@@ -175,8 +175,45 @@ export interface FinancialPoll {
   totalStakeLocked: number;
   totalVoters: number;
   userVotedOptionId?: string;
+  votesByUser?: Record<string, { optionId: string; voterName: string; voterKey: string }>;
   status: 'active' | 'closed';
   payoutRule: string;
+}
+
+export type TicTacToeCell = 'X' | 'O' | null;
+
+export interface TicTacToeGameState {
+  id: string;
+  chatId: string;
+  gameType: 'xo';
+  challengerId: string;
+  challengerPhone: string;
+  challengerName: string;
+  challengerAvatar?: string;
+  opponentPhone?: string;
+  opponentName?: string;
+  opponentAvatar?: string;
+  mode: 'friendly' | 'bet';
+  betAmount: number;
+  currency: CurrencyCode;
+  board: TicTacToeCell[];
+  xPlayerPhone: string;
+  xPlayerName: string;
+  oPlayerPhone?: string;
+  oPlayerName?: string;
+  currentTurn: 'X' | 'O';
+  status: 'pending' | 'active' | 'won' | 'draw' | 'declined' | 'cancelled';
+  winnerSymbol?: 'X' | 'O';
+  winnerPhone?: string;
+  winnerName?: string;
+  winningLine?: number[];
+  totalPot: number;
+  platformFeeRate: number;
+  platformFee: number;
+  winnerPayout: number;
+  settledAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AjoMember {
@@ -235,7 +272,8 @@ export interface ChatMessage {
     | 'invoice_receipt'
     | 'financial_poll'
     | 'ajo_update'
-    | 'scam_warning';
+    | 'scam_warning'
+    | 'game_xo';
   imageUrl?: string;
   imageLoaded?: boolean;
   mediaSizeKB?: number;
@@ -250,6 +288,7 @@ export interface ChatMessage {
   financialPoll?: FinancialPoll;
   ajoGroup?: AjoGroup;
   scamEntity?: ScamEntity;
+  xoGame?: TicTacToeGameState;
   timestamp: string;
   status: 'sent' | 'delivered' | 'read';
   replyTo?: {
@@ -292,6 +331,7 @@ export interface ChatThread {
   isFavourite?: boolean;
   disappearingTimer?: string;
   admins?: string[];
+  adminIds?: string[];
   description?: string;
   creatorId?: string;
   members?: string[];
