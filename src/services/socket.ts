@@ -1,7 +1,8 @@
 import { io, Socket } from 'socket.io-client';
-import { ChatMessage, TicTacToeGameState } from '../types';
+import { ChatMessage } from '../types';
 
 let socket: Socket | null = null;
+let latestSocketUser: { id: string; name: string; avatar?: string; phone?: string } | undefined;
 
 // Determine backend URL (same-origin on port 3000, or explicit VITE_SOCKET_URL override)
 export const getSocketUrl = (): string => {
@@ -13,6 +14,9 @@ export const getSocketUrl = (): string => {
 };
 
 export const initSocket = (user?: { id: string; name: string; avatar?: string; phone?: string }): Socket => {
+  if (user && (user.id || user.phone)) {
+    latestSocketUser = user;
+  }
   if (!socket) {
     const url = getSocketUrl();
     socket = io(url, {
@@ -26,10 +30,15 @@ export const initSocket = (user?: { id: string; name: string; avatar?: string; p
 
     socket.on('connect', () => {
       console.log('🟢 [AGC Live]: Connected to Socket.io Gateway (ID:', socket?.id, ')');
-      if (user) {
-        socket?.emit('user_online', { userId: user.id, userName: user.name, avatar: user.avatar, phoneNumber: user.phone });
-        if (user.phone) {
-          const cleanPhone = user.phone.replace(/\D/g, '');
+      if (latestSocketUser) {
+        socket?.emit('user_online', {
+          userId: latestSocketUser.id,
+          userName: latestSocketUser.name,
+          avatar: latestSocketUser.avatar,
+          phoneNumber: latestSocketUser.phone,
+        });
+        if (latestSocketUser.phone) {
+          const cleanPhone = latestSocketUser.phone.replace(/\D/g, '');
           socket?.emit('register_phone', cleanPhone);
         }
       }
@@ -137,58 +146,3 @@ export const emitLikeStatus = (statusId: string, liked: boolean, likerId: string
   const s = getSocket();
   s?.emit('like_status', { statusId, liked, likerId, likerName });
 };
-
-// 6. Real-Time Multiplayer X/O (Tic-Tac-Toe) via Socket.IO
-export const emitXoCreate = (
-  payload: { game: TicTacToeGameState; message?: ChatMessage; targetPhone?: string; memberPhones?: string[]; chat?: any },
-  ack?: (res: { ok: boolean; game?: TicTacToeGameState; error?: string }) => void
-) => {
-  const s = getSocket();
-  if (!s) {
-    ack?.({ ok: false, error: 'Socket not connected' });
-    return;
-  }
-  s.emit('xo:create', payload, ack);
-};
-
-export const emitXoAccept = (
-  payload: { gameId: string; chatId: string; playerPhone: string; playerName: string; playerAvatar?: string; fallbackGame?: TicTacToeGameState },
-  ack?: (res: { ok: boolean; game?: TicTacToeGameState; error?: string }) => void
-) => {
-  const s = getSocket();
-  if (!s) {
-    ack?.({ ok: false, error: 'Socket not connected' });
-    return;
-  }
-  s.emit('xo:accept', payload, ack);
-};
-
-export const emitXoDecline = (
-  payload: { gameId: string; chatId: string; playerPhone: string; reason?: string; fallbackGame?: TicTacToeGameState },
-  ack?: (res: { ok: boolean; game?: TicTacToeGameState; error?: string }) => void
-) => {
-  const s = getSocket();
-  if (!s) {
-    ack?.({ ok: false, error: 'Socket not connected' });
-    return;
-  }
-  s.emit('xo:decline', payload, ack);
-};
-
-export const emitXoMove = (
-  payload: { gameId: string; chatId: string; cellIndex: number; playerPhone: string },
-  ack?: (res: { ok: boolean; game?: TicTacToeGameState; error?: string }) => void
-) => {
-  const s = getSocket();
-  if (!s) {
-    ack?.({ ok: false, error: 'Socket not connected' });
-    return;
-  }
-  s.emit('xo:move', payload, ack);
-};
-
-export const emitXoSync = (chatId: string) => {
-  const s = getSocket();
-  s?.emit('xo:sync', { chatId });
-};
-

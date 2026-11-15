@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import type { UserProfile } from '../types';
+import type { TicTacToeGameState, UserProfile } from '../types';
 import { safeLocalStorage } from '../utils/safeStorage';
 
 const supabaseUrl: string =
@@ -523,4 +523,206 @@ export async function createStoreSubscriptionInDb(sub: {
 }) {
   return supabase.from('store_subscriptions').insert(sub).select().maybeSingle();
 }
+
+// ─── Multiplayer X/O Game Matches (Supabase Postgres + Realtime) ──────────────
+
+const XO_FALLBACK_PREFIX = '__agc_sys_xo_';
+let gameMatchesTableStatus: 'unknown' | 'available' | 'missing' = 'unknown';
+
+function isMissingGameMatchesError(err: any): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    code === 'PGRST205' ||
+    code === '42P01' ||
+    msg.includes('game_matches') && (msg.includes('schema cache') || msg.includes('does not exist'))
+  );
+}
+
+function rowToXoGame(row: any): TicTacToeGameState | null {
+  if (!row) return null;
+  if (row.state && typeof row.state === 'object' && row.state.id) {
+    return row.state as TicTacToeGameState;
+  }
+  if (row.flags?.game && typeof row.flags.game === 'object' && row.flags.game.id) {
+    return row.flags.game as TicTacToeGameState;
+  }
+  return null;
+}
+
+export async function upsertXoGameInSupabase(
+  game: TicTacToeGameState
+): Promise<{ ok: boolean; game: TicTacToeGameState; error?: string }> {
+  if (!isSupabaseConfigured) {
+    return { ok: false, game, error: 'Supabase is not configured' };
+  }
+
+  if (gameMatchesTableStatus !== 'missing') {
+    const row = {
+      id: game.id,
+      chat_id: game.chatId,
+      game_type: game.gameType || 'xo',
+      challenger_id: game.challengerId || null,
+      challenger_phone: game.challengerPhone,
+      challenger_name: game.challengerName,
+      opponent_phone: game.opponentPhone || null,
+      opponent_name: game.opponentName || null,
+      mode: game.mode,
+      bet_amount: Number(game.betAmount || 0),
+      currency: game.currency || 'NGN',
+      status: game.status,
+      current_turn: game.currentTurn,
+      board: game.board,
+      state: game,
+      created_at: game.createdAt || new Date().toISOString(),
+      updated_at: game.updatedAt || new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('game_matches')
+      .upsert(row, { onConflict: 'id' })
+      .select('state')
+      .maybeSingle();
+
+    if (!error) {
+      gameMatchesTableStatus = 'available';
+      return { ok: true, game: rowToXoGame(data) || game };
+    }
+    if (!isMissingGameMatchesError(error)) {
+      return { ok: false, game, error: error.message };
+    }
+    gameMatchesTableStatus = 'missing';
+  }
+
+  // Automatic fallback to existing scam_reports Realtime table if game_matches migration hasn't been run yet
+  const { data: fbData, error: fbError } = await supabase
+    .from('scam_reports')
+    .upsert(
+      {
+        target_value: `${XO_FALLBACK_PREFIX}${game.id}`,
+        target_type: 'phone',
+        risk_level: 'verified_clean',
+        reports_count: 0,
+        account_name: game.chatId,
+        bank_name: 'AGC_GAME_MATCH',
+        flags: { game, updatedAt: game.updatedAt || new Date().toISOString() },
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'target_value,target_type' }
+    )
+    .select('flags')
+    .maybeSingle();
+
+  if (fbError) {
+    return { ok: false, game, error: fbError.message };
+  }
+  return { ok: true, game: rowToXoGame(fbData) || game };
+}
+
+export async function fetchXoGameByIdFromSupabase(
+  gameId: string
+): Promise<TicTacToeGameState | null> {
+  if (!isSupabaseConfigured || !gameId) return null;
+
+  if (gameMatchesTableStatus !== 'missing') {
+    const { data, error } = await supabase
+      .from('game_matches')
+      .select('state')
+      .eq('id', gameId)
+      .maybeSingle();
+
+    if (!error) {
+      gameMatchesTableStatus = 'available';
+      return rowToXoGame(data);
+    }
+    if (!isMissingGameMatchesError(error)) {
+      return null;
+    }
+    gameMatchesTableStatus = 'missing';
+  }
+
+  const { data: fbData } = await supabase
+    .from('scam_reports')
+    .select('flags')
+    .eq('target_value', `${XO_FALLBACK_PREFIX}${gameId}`)
+    .eq('target_type', 'phone')
+    .maybeSingle();
+
+  return rowToXoGame(fbData);
+}
+
+export async function fetchXoGamesForChatFromSupabase(
+  chatId: string
+): Promise<TicTacToeGameState[]> {
+  if (!isSupabaseConfigured || !chatId) return [];
+
+  if (gameMatchesTableStatus !== 'missing') {
+    const { data, error } = await supabase
+      .from('game_matches')
+      .select('state')
+      .eq('chat_id', chatId)
+      .order('updated_at', { ascending: true })
+      .limit(40);
+
+    if (!error) {
+      gameMatchesTableStatus = 'available';
+      return (data || []).map(rowToXoGame).filter((g): g is TicTacToeGameState => Boolean(g));
+    }
+    if (!isMissingGameMatchesError(error)) {
+      return [];
+    }
+    gameMatchesTableStatus = 'missing';
+  }
+
+  const { data: fbRows } = await supabase
+    .from('scam_reports')
+    .select('flags')
+    .eq('account_name', chatId)
+    .eq('bank_name', 'AGC_GAME_MATCH')
+    .like('target_value', `${XO_FALLBACK_PREFIX}%`)
+    .order('updated_at', { ascending: true })
+    .limit(40);
+
+  return (fbRows || []).map(rowToXoGame).filter((g): g is TicTacToeGameState => Boolean(g));
+}
+
+export function subscribeToXoGamesInChat(
+  chatId: string,
+  onGame: (game: TicTacToeGameState) => void
+) {
+  const channel = supabase.channel(`xo_match_${chatId}`, {
+    config: { broadcast: { self: false } },
+  });
+
+  if (gameMatchesTableStatus !== 'missing') {
+    channel.on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'game_matches', filter: `chat_id=eq.${chatId}` },
+      (payload) => {
+        const game = rowToXoGame(payload.new);
+        if (game) onGame(game);
+      }
+    );
+  }
+
+  channel
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'scam_reports', filter: `account_name=eq.${chatId}` },
+      (payload) => {
+        const row = payload.new as any;
+        if (row?.target_value?.startsWith(XO_FALLBACK_PREFIX)) {
+          const game = rowToXoGame(row);
+          if (game) onGame(game);
+        }
+      }
+    )
+    .on('broadcast', { event: 'xo_game_update' }, ({ payload }: any) => {
+      if (payload?.game) onGame(payload.game as TicTacToeGameState);
+    })
+    .subscribe();
+
+  return channel;
+}
+
 

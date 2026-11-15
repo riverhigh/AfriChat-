@@ -352,13 +352,15 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     return d;
   };
   const samePhone = (a?: string, b?: string) => {
+    if (!a || !b) return false;
+    if (a.trim() === b.trim()) return true;
     const na = normPhone(a);
     const nb = normPhone(b);
     if (!na || !nb) return false;
     if (na === nb) return true;
     return na.length >= 9 && nb.length >= 9 && na.slice(-9) === nb.slice(-9);
   };
-  const myPhoneRaw = currentUser.phoneNumber || '';
+  const myPhoneRaw = currentUser.phoneNumber || currentUser.id || '';
   const myVoterKey = normPhone(myPhoneRaw) || currentUser.id || 'local_user';
   const currentMessages =
     (activeChatId && messages[activeChatId]) ||
@@ -1935,7 +1937,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   );
                 })()}
 
-                {/* Live Socket.IO Multiplayer X/O (Tic-Tac-Toe) Card */}
+                {/* Live Supabase Realtime Multiplayer X/O (Tic-Tac-Toe) Card */}
                 {msg.type === 'game_xo' && msg.xoGame && (() => {
                   const game = msg.xoGame!;
                   const gCur = game.currency || 'NGN';

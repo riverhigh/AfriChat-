@@ -12,11 +12,6 @@ import {
   emitPostStatus,
   emitViewStatus,
   emitLikeStatus,
-  emitXoCreate,
-  emitXoAccept,
-  emitXoDecline,
-  emitXoMove,
-  emitXoSync,
 } from '../services/socket';
 import { encryptChatMessage, decryptChatMessage, getConversationSecret } from '../utils/cryptoUtils';
 
@@ -90,6 +85,10 @@ import {
   fetchAllScamReports,
   broadcastScamReport,
   upsertScamReportInDb,
+  upsertXoGameInSupabase,
+  fetchXoGameByIdFromSupabase,
+  fetchXoGamesForChatFromSupabase,
+  subscribeToXoGamesInChat,
 } from '../services/supabase';
 import {
   ADMIN_SYS_CONFIG_KEY,
@@ -6557,6 +6556,93 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (_) {}
   };
 
+  const XO_WIN_LINES_CLIENT: number[][] = [
+    [0, 1, 2],
+    [3, 4, 5],
+    [6, 7, 8],
+    [0, 3, 6],
+    [1, 4, 7],
+    [2, 5, 8],
+    [0, 4, 8],
+    [2, 4, 6],
+  ];
+
+  const getXoStatusRank = (status?: TicTacToeGameState['status']): number => {
+    if (status === 'won' || status === 'draw' || status === 'declined' || status === 'cancelled') return 3;
+    if (status === 'active') return 2;
+    return 1;
+  };
+
+  const shouldReplaceXoGame = (existing: TicTacToeGameState, incoming: TicTacToeGameState): boolean => {
+    const existingRank = getXoStatusRank(existing.status);
+    const incomingRank = getXoStatusRank(incoming.status);
+    if (incomingRank > existingRank) return true;
+    if (incomingRank < existingRank) return false;
+    if (existingRank === 3) return false;
+    const existingMoves = existing.board.filter(Boolean).length;
+    const incomingMoves = incoming.board.filter(Boolean).length;
+    if (incomingMoves > existingMoves) return true;
+    if (incomingMoves < existingMoves) return false;
+    return (incoming.updatedAt || '') >= (existing.updatedAt || '');
+  };
+
+  const broadcastXoGameState = useCallback(
+    (game: TicTacToeGameState, extraPhones: string[] = []) => {
+      if (!game?.id || !game?.chatId) return;
+      try {
+        const bc = new BroadcastChannel('AGC_chats_sync');
+        bc.postMessage({ type: 'xo_game_update', game, senderId: currentUser.id });
+        bc.close();
+      } catch (_) {}
+
+      if (isSupabaseConfigured) {
+        try {
+          const getOrSubscribeCh = (name: string): ReturnType<typeof supabase.channel> => {
+            const existing = inboxChannelRefsRef.current.get(name);
+            if (existing) return existing;
+            const ch = supabase.channel(name, { config: { broadcast: { self: false } } });
+            ch.subscribe();
+            inboxChannelRefsRef.current.set(name, ch);
+            return ch;
+          };
+
+          const chatCh = getOrSubscribeCh(`chat_${game.chatId}`);
+          chatCh.send({
+            type: 'broadcast',
+            event: 'xo_game_update',
+            payload: { game, senderId: currentUser.id },
+          }).catch(() => {});
+
+          const phoneSet = new Set<string>();
+          [
+            game.challengerPhone,
+            game.opponentPhone,
+            game.xPlayerPhone,
+            game.oPlayerPhone,
+            ...extraPhones,
+          ]
+            .filter(Boolean)
+            .forEach((p) => {
+              const rawDigits = String(p).replace(/\D/g, '');
+              const norm = normalizePhoneDigits(String(p));
+              if (rawDigits) phoneSet.add(rawDigits);
+              if (norm) phoneSet.add(norm);
+            });
+
+          phoneSet.forEach((p) => {
+            const ch = getOrSubscribeCh(`inbox_${p}`);
+            ch.send({
+              type: 'broadcast',
+              event: 'xo_game_update',
+              payload: { game, senderId: currentUser.id },
+            }).catch(() => {});
+          });
+        } catch (_) {}
+      }
+    },
+    [currentUser.id]
+  );
+
   const applyXoGameUpdate = useCallback(
     (incomingGame: TicTacToeGameState) => {
       if (!incomingGame?.id || !incomingGame?.chatId) return;
@@ -6579,14 +6665,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (sym) targetCid = sym;
           }
         }
-        const list = prev[targetCid] || prev[incomingGame.chatId] || [];
-        const resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
-        const existingIdx = list.findIndex((m) => m.xoGame?.id === incomingGame.id);
+
+        let resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
+        let list = prev[resolvedCid] || [];
+        let existingIdx = list.findIndex((m) => m.xoGame?.id === incomingGame.id);
+
+        if (existingIdx < 0) {
+          for (const [cid, msgs] of Object.entries(prev)) {
+            const idx = msgs.findIndex((m) => m.xoGame?.id === incomingGame.id);
+            if (idx >= 0) {
+              resolvedCid = cid;
+              list = msgs;
+              existingIdx = idx;
+              break;
+            }
+          }
+        }
 
         let nextList: ChatMessage[];
         if (existingIdx >= 0) {
+          const currentXo = list[existingIdx]?.xoGame;
+          const nextXo = currentXo && !shouldReplaceXoGame(currentXo, incomingGame) ? currentXo : incomingGame;
+          if (nextXo === currentXo) return prev;
           nextList = list.map((m, i) =>
-            i === existingIdx ? { ...m, xoGame: incomingGame } : m
+            i === existingIdx ? { ...m, xoGame: nextXo } : m
           );
         } else {
           const newCard: ChatMessage = {
@@ -6832,129 +6934,204 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    const targetClean = opponentPhone ? opponentPhone.replace(/\D/g, '') : undefined;
     const memberPhones = targetChat?.memberPhones || [];
-    emitXoCreate({
-      game: newGame,
-      message: cardMsg,
-      targetPhone: targetClean,
-      memberPhones,
-      chat: targetChat,
-    });
+    await upsertXoGameInSupabase(newGame);
     broadcastLiveMessage(chatId, cardMsg);
+    broadcastXoGameState(newGame, memberPhones);
 
     return { success: true, game: newGame, message: 'X/O Challenge sent!' };
   };
 
-  const acceptXoChallenge = (
+  const acceptXoChallenge = async (
     game: TicTacToeGameState
   ): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }> => {
-    return new Promise((resolve) => {
-      const myPhone = currentUser.phoneNumber || currentUser.id;
-      if (phonesMatch(myPhone, game.challengerPhone)) {
-        resolve({ success: false, message: 'Waiting for your opponent to accept.' });
-        return;
-      }
-      if (game.mode === 'bet' && game.betAmount > 0 && wallet.availableBalance < game.betAmount) {
-        const sym = CURRENCY_SYMBOLS[game.currency || 'NGN'] || '₦';
-        resolve({
-          success: false,
-          insufficientFunds: true,
-          message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.`,
-        });
-        return;
-      }
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (phonesMatch(myPhone, game.challengerPhone) || (currentUser.id && game.challengerId === currentUser.id)) {
+      return { success: false, message: 'Waiting for your opponent to accept.' };
+    }
+    if (game.mode === 'bet' && game.betAmount > 0 && wallet.availableBalance < game.betAmount) {
+      const sym = CURRENCY_SYMBOLS[game.currency || 'NGN'] || '₦';
+      return {
+        success: false,
+        insufficientFunds: true,
+        message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.`,
+      };
+    }
 
-      emitXoAccept(
-        {
-          gameId: game.id,
-          chatId: game.chatId,
-          playerPhone: myPhone,
-          playerName: currentUser.fullName || 'Player O',
-          playerAvatar: currentUser.avatarUrl,
-          fallbackGame: game,
-        },
-        (res) => {
-          if (!res?.ok) {
-            resolve({ success: false, message: res?.error || 'Could not accept challenge.' });
-            return;
-          }
-          if (game.mode === 'bet' && game.betAmount > 0 && !hasXoFlag(getXoLockedStorageKey(myPhone), game.id)) {
-            setXoFlag(getXoLockedStorageKey(myPhone), game.id);
-            setWallet((prev) => ({
-              ...prev,
-              availableBalance: prev.availableBalance - game.betAmount,
-              escrowLockedBalance: prev.escrowLockedBalance + game.betAmount,
-              transactions: [
-                {
-                  id: `tx_xo_acc_${game.id}`,
-                  type: 'escrow_lock',
-                  title: `X/O Match Bet Stake (${game.challengerName})`,
-                  amount: game.betAmount,
-                  currency: game.currency || 'NGN',
-                  timestamp: 'Just now',
-                  status: 'completed',
-                  reference: `XO_${game.id}`,
-                  channel: 'wallet',
-                },
-                ...prev.transactions,
-              ],
-            }));
-          }
-          if (res.game) applyXoGameUpdate(res.game);
-          resolve({ success: true, message: 'Challenge accepted! Match started.' });
-        }
-      );
-    });
+    // Fetch latest persisted state from Supabase to avoid accepting a cancelled/already-accepted game
+    const latestFromDb = await fetchXoGameByIdFromSupabase(game.id);
+    const baseGame = latestFromDb && shouldReplaceXoGame(game, latestFromDb) ? latestFromDb : (latestFromDb || game);
+
+    if (baseGame.status !== 'pending') {
+      applyXoGameUpdate(baseGame);
+      if (baseGame.status === 'active' && phonesMatch(myPhone, baseGame.oPlayerPhone)) {
+        return { success: true, message: 'Rejoined active match!' };
+      }
+      return { success: false, message: `Challenge is already ${baseGame.status}.` };
+    }
+
+    if (baseGame.opponentPhone && !phonesMatch(myPhone, baseGame.opponentPhone)) {
+      return { success: false, message: 'This challenge was sent to another player.' };
+    }
+
+    const acceptedGame: TicTacToeGameState = {
+      ...baseGame,
+      opponentPhone: myPhone,
+      opponentName: currentUser.fullName || baseGame.opponentName || 'Player O',
+      opponentAvatar: currentUser.avatarUrl || baseGame.opponentAvatar,
+      oPlayerPhone: myPhone,
+      oPlayerName: currentUser.fullName || baseGame.opponentName || 'Player O',
+      status: 'active',
+      currentTurn: 'X',
+      updatedAt: new Date().toISOString(),
+    };
+
+    const persisted = await upsertXoGameInSupabase(acceptedGame);
+    const finalGame = persisted.game || acceptedGame;
+
+    if (finalGame.mode === 'bet' && finalGame.betAmount > 0 && !hasXoFlag(getXoLockedStorageKey(myPhone), finalGame.id)) {
+      setXoFlag(getXoLockedStorageKey(myPhone), finalGame.id);
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - finalGame.betAmount,
+        escrowLockedBalance: prev.escrowLockedBalance + finalGame.betAmount,
+        transactions: [
+          {
+            id: `tx_xo_acc_${finalGame.id}`,
+            type: 'escrow_lock',
+            title: `X/O Match Bet Stake (${finalGame.challengerName})`,
+            amount: finalGame.betAmount,
+            currency: finalGame.currency || 'NGN',
+            timestamp: 'Just now',
+            status: 'completed',
+            reference: `XO_${finalGame.id}`,
+            channel: 'wallet',
+          },
+          ...prev.transactions,
+        ],
+      }));
+    }
+
+    applyXoGameUpdate(finalGame);
+    const chatObj = chats.find((c) => c.id === finalGame.chatId);
+    broadcastXoGameState(finalGame, chatObj?.memberPhones || []);
+    return { success: true, message: 'Challenge accepted! Match started.' };
   };
 
-  const declineXoChallenge = (
+  const declineXoChallenge = async (
     game: TicTacToeGameState
   ): Promise<{ success: boolean; message?: string }> => {
-    return new Promise((resolve) => {
-      const myPhone = currentUser.phoneNumber || currentUser.id;
-      emitXoDecline(
-        {
-          gameId: game.id,
-          chatId: game.chatId,
-          playerPhone: myPhone,
-          fallbackGame: game,
-        },
-        (res) => {
-          if (!res?.ok) {
-            resolve({ success: false, message: res?.error || 'Could not cancel challenge.' });
-            return;
-          }
-          if (res.game) applyXoGameUpdate(res.game);
-          resolve({ success: true, message: 'Challenge closed.' });
-        }
-      );
-    });
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    const latestFromDb = await fetchXoGameByIdFromSupabase(game.id);
+    const baseGame = latestFromDb || game;
+
+    if (baseGame.status !== 'pending') {
+      applyXoGameUpdate(baseGame);
+      return { success: false, message: `Cannot decline a ${baseGame.status} game.` };
+    }
+
+    const isChallenger = phonesMatch(myPhone, baseGame.challengerPhone);
+    const declinedGame: TicTacToeGameState = {
+      ...baseGame,
+      status: isChallenger ? 'cancelled' : 'declined',
+      settledAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const persisted = await upsertXoGameInSupabase(declinedGame);
+    const finalGame = persisted.game || declinedGame;
+
+    applyXoGameUpdate(finalGame);
+    const chatObj = chats.find((c) => c.id === finalGame.chatId);
+    broadcastXoGameState(finalGame, chatObj?.memberPhones || []);
+    return { success: true, message: 'Challenge closed.' };
   };
 
-  const makeXoMove = (
+  const makeXoMove = async (
     game: TicTacToeGameState,
     cellIndex: number
   ): Promise<{ success: boolean; message?: string }> => {
-    return new Promise((resolve) => {
-      const myPhone = currentUser.phoneNumber || currentUser.id;
-      emitXoMove(
-        {
-          gameId: game.id,
-          chatId: game.chatId,
-          cellIndex,
-          playerPhone: myPhone,
-        },
-        (res) => {
-          if (!res?.ok) {
-            resolve({ success: false, message: res?.error || 'Move rejected by server.' });
-            return;
-          }
-          if (res.game) applyXoGameUpdate(res.game);
-          resolve({ success: true });
-        }
-      );
-    });
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    const latestFromDb = await fetchXoGameByIdFromSupabase(game.id);
+    const baseGame = latestFromDb && shouldReplaceXoGame(game, latestFromDb) ? latestFromDb : game;
+
+    if (baseGame.status !== 'active') {
+      applyXoGameUpdate(baseGame);
+      return { success: false, message: `Game is ${baseGame.status}.` };
+    }
+    if (cellIndex < 0 || cellIndex > 8 || baseGame.board[cellIndex] !== null) {
+      applyXoGameUpdate(baseGame);
+      return { success: false, message: 'That square is already taken.' };
+    }
+
+    const expectedPhone = baseGame.currentTurn === 'X' ? baseGame.xPlayerPhone : baseGame.oPlayerPhone;
+    if (!expectedPhone || !phonesMatch(myPhone, expectedPhone)) {
+      applyXoGameUpdate(baseGame);
+      return {
+        success: false,
+        message: `It is ${baseGame.currentTurn}'s turn (${baseGame.currentTurn === 'X' ? baseGame.xPlayerName : baseGame.oPlayerName}).`,
+      };
+    }
+
+    const nextBoard = [...baseGame.board];
+    nextBoard[cellIndex] = baseGame.currentTurn;
+    const nowIso = new Date().toISOString();
+
+    let winningLine: number[] | undefined;
+    for (const line of XO_WIN_LINES_CLIENT) {
+      const [a, b, c] = line;
+      if (nextBoard[a] && nextBoard[a] === nextBoard[b] && nextBoard[a] === nextBoard[c]) {
+        winningLine = line;
+        break;
+      }
+    }
+
+    let nextGame: TicTacToeGameState;
+    if (winningLine) {
+      const winSymbol = baseGame.currentTurn;
+      const winPhone = winSymbol === 'X' ? baseGame.xPlayerPhone : baseGame.oPlayerPhone;
+      const winName = winSymbol === 'X' ? baseGame.xPlayerName : baseGame.oPlayerName;
+      const totalPot = baseGame.mode === 'bet' ? Number(baseGame.betAmount || 0) * 2 : 0;
+      const platformFee = baseGame.mode === 'bet' ? Math.round(totalPot * 0.01) : 0;
+      nextGame = {
+        ...baseGame,
+        board: nextBoard,
+        status: 'won',
+        winnerSymbol: winSymbol,
+        winnerPhone: winPhone,
+        winnerName: winName,
+        winningLine,
+        totalPot,
+        platformFeeRate: 0.01,
+        platformFee,
+        winnerPayout: totalPot - platformFee,
+        settledAt: nowIso,
+        updatedAt: nowIso,
+      };
+    } else if (!nextBoard.includes(null)) {
+      nextGame = {
+        ...baseGame,
+        board: nextBoard,
+        status: 'draw',
+        settledAt: nowIso,
+        updatedAt: nowIso,
+      };
+    } else {
+      nextGame = {
+        ...baseGame,
+        board: nextBoard,
+        currentTurn: baseGame.currentTurn === 'X' ? 'O' : 'X',
+        updatedAt: nowIso,
+      };
+    }
+
+    // Optimistic local update + broadcast + Supabase DB persistence
+    applyXoGameUpdate(nextGame);
+    const chatObj = chats.find((c) => c.id === nextGame.chatId);
+    broadcastXoGameState(nextGame, chatObj?.memberPhones || []);
+    await upsertXoGameInSupabase(nextGame);
+
+    return { success: true };
   };
 
   // 7. Ajo / Esusu Group Savings Handlers
@@ -9481,11 +9658,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
               let nextXo = m.xoGame;
               if (message.xoGame && m.xoGame) {
-                const existingMoves = m.xoGame.board.filter(Boolean).length;
-                const incomingMoves = message.xoGame.board.filter(Boolean).length;
-                const existingTerminal = m.xoGame.status === 'won' || m.xoGame.status === 'draw' || m.xoGame.status === 'declined' || m.xoGame.status === 'cancelled';
-                const incomingTerminal = message.xoGame.status === 'won' || message.xoGame.status === 'draw' || message.xoGame.status === 'declined' || message.xoGame.status === 'cancelled';
-                if (incomingTerminal || (!existingTerminal && incomingMoves >= existingMoves)) {
+                if (shouldReplaceXoGame(m.xoGame, message.xoGame)) {
                   nextXo = message.xoGame;
                 }
               } else if (message.xoGame) {
@@ -9630,18 +9803,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       phone: currentUser.phoneNumber,
     });
 
-    if (socket && myCleanPhone) {
-      socket.emit('register_phone', myCleanPhone);
-      if (normPhone !== myCleanPhone) {
-        socket.emit('register_phone', normPhone);
+    const registerRoomsOnConnect = () => {
+      if (myCleanPhone) {
+        socket.emit('register_phone', myCleanPhone);
+        if (normPhone !== myCleanPhone) {
+          socket.emit('register_phone', normPhone);
+        }
+        socket.emit('user_online', {
+          userId: currentUser.id,
+          userName: currentUser.fullName,
+          avatar: currentUser.avatarUrl,
+          phoneNumber: currentUser.phoneNumber,
+        });
       }
-      socket.emit('user_online', {
-        userId: currentUser.id,
-        userName: currentUser.fullName,
-        avatar: currentUser.avatarUrl,
-        phoneNumber: currentUser.phoneNumber,
-      });
+      if (activeChatId) {
+        joinChatRoom(activeChatId);
+      }
+    };
+
+    if (socket.connected) {
+      registerRoomsOnConnect();
     }
+    socket.on('connect', registerRoomsOnConnect);
 
     // 1. Socket.io listeners
     socket.on('new_message', handleIncomingMessage);
@@ -9717,32 +9900,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBanInfo(payload);
     };
 
-    const handleXoUpdatedSocket = (payload: { game?: TicTacToeGameState }) => {
-      if (payload?.game) {
-        applyXoGameUpdate(payload.game);
-      }
-    };
-
-    const handleXoSyncSocket = (payload: { chatId?: string; games?: TicTacToeGameState[] }) => {
-      if (Array.isArray(payload?.games)) {
-        payload.games.forEach((g) => applyXoGameUpdate(g));
-      }
-    };
-
     socket.on('account_banned', handleAccountBanned);
     socket.on('group_created', handleGroupCreated);
     socket.on('friend_request', handleFriendRequestSocket);
     socket.on('friend_request_accepted', handleFriendRequestAccepted);
     socket.on('dispatch_order_created', handleDispatchOrderCreated);
     socket.on('dispatch_status_updated', handleDispatchStatusUpdated);
-    socket.on('xo:updated', handleXoUpdatedSocket);
-    socket.on('xo:sync_state', handleXoSyncSocket);
 
     // 2. BroadcastChannel listener (instant multi-tab / window sync)
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel('AGC_chats_sync');
       bc.onmessage = (e) => {
+        if (e.data && e.data.type === 'xo_game_update' && e.data.game) {
+          applyXoGameUpdate(e.data.game);
+          return;
+        }
         if (e.data && e.data.type === 'friend_request' && e.data.request) {
           const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
           const target = (e.data.targetPhone || e.data.request.recipientPhone || '').replace(/\D/g, '');
@@ -9789,6 +9962,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             handleIncomingMessage(payload);
           }
         })
+        .on('broadcast', { event: 'xo_game_update' }, ({ payload }: any) => {
+          if (payload?.game) {
+            applyXoGameUpdate(payload.game);
+          }
+        })
         .on('broadcast', { event: 'group_created' }, ({ payload }: any) => {
           if (payload && payload.chat) {
             handleGroupCreated(payload);
@@ -9812,6 +9990,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .on('broadcast', { event: 'new_message' }, ({ payload }: any) => {
             if (payload && payload.message) {
               handleIncomingMessage(payload);
+            }
+          })
+          .on('broadcast', { event: 'xo_game_update' }, ({ payload }: any) => {
+            if (payload?.game) {
+              applyXoGameUpdate(payload.game);
             }
           })
           .on('broadcast', { event: 'group_created' }, ({ payload }: any) => {
@@ -9847,6 +10030,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return () => {
+      socket.off('connect', registerRoomsOnConnect);
       socket.off('account_banned', handleAccountBanned);
       socket.off('new_message', handleIncomingMessage);
       socket.off('group_created', handleGroupCreated);
@@ -9854,8 +10038,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('friend_request_accepted', handleFriendRequestAccepted);
       socket.off('dispatch_order_created', handleDispatchOrderCreated);
       socket.off('dispatch_status_updated', handleDispatchStatusUpdated);
-      socket.off('xo:updated', handleXoUpdatedSocket);
-      socket.off('xo:sync_state', handleXoSyncSocket);
       if (bc) bc.close();
       if (sbInboxChannel) sbInboxChannel.unsubscribe();
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
@@ -10446,12 +10628,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => window.removeEventListener('online', handleOnline);
   }, []);
 
-  // Join active chat room when switching chats (Socket.io + Supabase Realtime)
+  // Join active chat & subscribe to Supabase Realtime (messages + persisted game_matches Postgres Changes)
   useEffect(() => {
     if (!activeChatId) return;
 
     joinChatRoom(activeChatId);
-    emitXoSync(activeChatId);
+
+    // Hydrate persisted X/O game boards from Supabase so refreshes/reconnects restore live state
+    fetchXoGamesForChatFromSupabase(activeChatId)
+      .then((games) => {
+        games.forEach((g) => applyXoGameUpdate(g));
+      })
+      .catch(() => {});
+
+    const sbXoChannel = isSupabaseConfigured
+      ? subscribeToXoGamesInChat(activeChatId, applyXoGameUpdate)
+      : null;
 
     const sbChannel = supabase.channel(`chat_${activeChatId}`, {
       config: { broadcast: { self: false } },
@@ -10463,13 +10655,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           handleIncomingMessage(payload);
         }
       })
+      .on('broadcast', { event: 'xo_game_update' }, ({ payload }) => {
+        if (payload?.game) {
+          applyXoGameUpdate(payload.game);
+        }
+      })
       .subscribe();
 
     return () => {
       leaveChatRoom(activeChatId);
       sbChannel.unsubscribe();
+      if (sbXoChannel) sbXoChannel.unsubscribe();
     };
-  }, [activeChatId, currentUser.id, handleIncomingMessage]);
+  }, [activeChatId, currentUser.id, handleIncomingMessage, applyXoGameUpdate]);
 
   const checkIsAdminUrl = () => {
     if (typeof window === 'undefined') return false;
