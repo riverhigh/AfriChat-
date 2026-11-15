@@ -640,8 +640,10 @@ interface AppContextType {
   isAdminModalOpen: boolean;
   setIsAdminModalOpen: (val: boolean) => void;
   adminUsers: AdminUserRecord[];
-  toggleUserVerification: (userId: string, badge: 'blue' | 'gold' | 'creator_plus' | null) => void;
-  toggleUserSuspension: (userId: string) => void;
+  refreshAdminUsers: () => Promise<void>;
+  getBadgeForPhone: (phoneOrId?: string) => 'blue' | 'gold' | 'creator_plus' | null;
+  toggleUserVerification: (userId: string, badge: 'blue' | 'gold' | 'creator_plus' | null, hints?: { phoneNumber?: string; fullName?: string; avatarUrl?: string }) => Promise<boolean>;
+  toggleUserSuspension: (userId: string) => Promise<boolean>;
   adminResolveEscrow: (orderId: string, action: 'release_to_seller' | 'refund_to_buyer', note: string) => { success: boolean; message: string };
   systemBroadcast: AdminSystemBroadcast | null;
   setSystemBroadcast: (broadcast: AdminSystemBroadcast | null) => void;
@@ -652,8 +654,8 @@ interface AppContextType {
   updateAdminFeatureFlag: (key: keyof FeatureFlags, val?: boolean) => Promise<boolean>;
   cmsData: AdminCmsData;
   updateCmsData: (updates: Partial<AdminCmsData>) => Promise<boolean>;
-  setUserStatus: (userIdOrPhone: string, status: 'active' | 'suspended' | 'banned' | 'flagged') => void;
-  setUserRole: (userIdOrPhone: string, role: 'user' | 'creator' | 'merchant' | 'admin') => Promise<void>;
+  setUserStatus: (userIdOrPhone: string, status: 'active' | 'suspended' | 'banned' | 'flagged') => Promise<boolean>;
+  setUserRole: (userIdOrPhone: string, role: 'user' | 'creator' | 'merchant' | 'admin') => Promise<boolean>;
   banUser: (phoneOrId: string, reason?: string) => Promise<void>;
   unbanUser: (phoneOrId: string) => Promise<void>;
   adjustUserWallet: (phoneOrId: string, deltaOrNew: number, isAbsolute?: boolean) => Promise<void>;
@@ -6359,46 +6361,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('Socket user register notice:', e);
     }
 
-    // Update adminUsers state immediately so Customer Directory has this user
+    // Update adminUsers state immediately via canonical merge
     setAdminUsers((prev) => {
-      const exists = prev.some(
-        (u) => u.phoneNumber === updatedUser.phoneNumber || u.id === updatedUser.id
-      );
-      if (exists) {
-        return prev.map((u) =>
-          u.phoneNumber === updatedUser.phoneNumber || u.id === updatedUser.id ? { ...u, ...updatedUser } : u
-        );
-      }
-      return [
-        ...prev,
-        {
-          id: updatedUser.id || `usr_${Date.now()}`,
-          fullName: updatedUser.fullName || 'User',
-          phoneNumber: updatedUser.phoneNumber,
-          avatarUrl: updatedUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-          role: updatedUser.role || 'user',
-          verificationBadge: updatedUser.verificationBadge || null,
-          isPhoneVerified: Boolean(updatedUser.isPhoneVerified),
-          status: 'active',
-          joinedDate: 'Just now',
-          walletBalanceNgn: 50000,
-          ordersCount: 0,
-          isOnline: true,
-          lastSeen: 'online',
-        },
-      ];
+      const merged = mergeAdminUsersList(prev, [{
+        id: updatedUser.id || `usr_${cleanPhone}`,
+        fullName: updatedUser.fullName || 'User',
+        phoneNumber: updatedUser.phoneNumber,
+        avatarUrl: updatedUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+        role: updatedUser.role || 'user',
+        verificationBadge: updatedUser.verificationBadge ?? null,
+        isPhoneVerified: Boolean(updatedUser.isPhoneVerified),
+        status: 'active',
+        joinedDate: 'Just now',
+        walletBalanceNgn: 50000,
+        ordersCount: 0,
+        isOnline: true,
+        lastSeen: 'online',
+      }], false);
+      adminUsersRef.current = merged;
+      return merged;
     });
 
-    // 3. Register with local server REST API
+    // 3. Register with local server REST API and hydrate server-side badge/role/wallet
     try {
       const registerPayload = JSON.stringify({ ...updatedUser, sessionToken });
       fetch('/api/users/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: registerPayload,
-      }).catch(() => {});
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.user) {
+            setCurrentUser((prev) => {
+              const hydrated: UserProfile = {
+                ...prev,
+                verificationBadge: data.user.verificationBadge !== undefined ? data.user.verificationBadge : prev.verificationBadge,
+                role: (data.user.role as UserProfile['role']) || prev.role,
+              };
+              try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(hydrated)); } catch (_) {}
+              return hydrated;
+            });
+            setAdminUsers((prev) => {
+              const merged = mergeAdminUsersList(prev, [mapRawToAdminUser(data.user)], true);
+              adminUsersRef.current = merged;
+              return merged;
+            });
+          }
+        })
+        .catch(() => {});
     } catch (e) {
       console.warn('REST user register notice:', e);
+    }
+
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({
+          type: 'broadcast',
+          event: 'user_registered',
+          payload: updatedUser,
+        });
+      } catch (_) {}
     }
 
     // 4. Save to Supabase profiles and broadcast global sync
@@ -8723,13 +8746,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser, activeChatId, handleIncomingMessage]);
 
-  // Global live sync for Admin Feature Flags, System Config, CMS, Broadcasts & User updates (NOT stored in localStorage)
+  // Global live sync for Admin Feature Flags, System Config, CMS, Broadcasts & Registered Users (NOT stored in localStorage)
+  const refreshAdminUsers = async (): Promise<void> => {
+    try {
+      const [apiRes, sbRes] = await Promise.all([
+        callAdminApi('/api/users').then((r) => (r && r.ok ? r.json() : null)).catch(() => null),
+        isSupabaseConfigured
+          ? supabase.from('agc_phone_registry').select('*').then((r) => r, () => null)
+          : Promise.resolve(null),
+      ]);
+
+      let nextList = adminUsersRef.current;
+
+      if (sbRes && !sbRes.error && Array.isArray(sbRes.data)) {
+        const sbMapped: AdminUserRecord[] = sbRes.data.map((row: any) => ({
+          id: `usr_${row.phone_digits || (row.full_phone || '').replace(/\D/g, '')}`,
+          fullName: row.username || 'Registered User',
+          phoneNumber: row.full_phone || (row.phone_digits ? `+234${String(row.phone_digits).replace(/^0+/, '')}` : ''),
+          avatarUrl: row.avatar_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || 'user')}`,
+          role: 'user',
+          verificationBadge: null,
+          isPhoneVerified: true,
+          status: 'active',
+          joinedDate: row.registered_at ? new Date(row.registered_at).toLocaleDateString() : 'Recent',
+          walletBalanceNgn: 50000,
+          ordersCount: 0,
+          isOnline: false,
+          lastSeen: row.updated_at ? new Date(row.updated_at).toLocaleDateString() : undefined,
+        }));
+        nextList = mergeAdminUsersList(nextList, sbMapped, false);
+      }
+
+      if (apiRes?.users && Array.isArray(apiRes.users)) {
+        const mappedUsers = apiRes.users.map(mapRawToAdminUser);
+        nextList = mergeAdminUsersList(nextList, mappedUsers, true);
+      }
+
+      adminUsersRef.current = nextList;
+      setAdminUsers(nextList);
+
+      // Sync currentUser's live badge & role from authoritative directory
+      const myPhoneClean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
+      if (myPhoneClean) {
+        const me = nextList.find((u) => phonesMatch(u.phoneNumber, currentUser.phoneNumber));
+        if (me && (me.verificationBadge !== currentUser.verificationBadge || me.role !== currentUser.role)) {
+          setCurrentUser((prev) => {
+            const updated: UserProfile = {
+              ...prev,
+              verificationBadge: me.verificationBadge !== undefined ? me.verificationBadge : prev.verificationBadge,
+              role: (me.role as UserProfile['role']) || prev.role,
+            };
+            try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
+            return updated;
+          });
+        }
+      }
+    } catch (_) {}
+  };
+
   useEffect(() => {
     try {
       localStorage.removeItem('AGC_system_config_v1');
       localStorage.removeItem('AGC_feature_flags_v1');
       localStorage.removeItem('AGC_cms_data_v1');
       localStorage.removeItem('AGC_system_broadcast');
+      localStorage.removeItem('AGC_admin_users');
     } catch (_) {}
 
     const syncAdminFromServer = () => {
@@ -8763,6 +8844,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         })
         .catch(() => {});
+
+      refreshAdminUsers();
     };
 
     syncAdminFromServer();
@@ -8794,33 +8877,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const onBroadcastCleared = () => {
       setSystemBroadcast(null);
     };
+    const onUsersSnapshot = (rawList: any[]) => {
+      if (!Array.isArray(rawList)) return;
+      const mapped = rawList.map(mapRawToAdminUser);
+      setAdminUsers((prev) => {
+        const merged = mergeAdminUsersList(prev, mapped, true);
+        adminUsersRef.current = merged;
+        return merged;
+      });
+    };
+    const onUserRegistered = (u: any) => {
+      if (!u) return;
+      const mapped = mapRawToAdminUser(u);
+      setAdminUsers((prev) => {
+        const merged = mergeAdminUsersList(prev, [mapped], true);
+        adminUsersRef.current = merged;
+        return merged;
+      });
+    };
     const onUserUpdated = (u: any) => {
       if (!u) return;
-      const uClean = (u.phoneNumber || '').replace(/\D/g, '');
+      const mapped = mapRawToAdminUser(u);
       setAdminUsers((prev) => {
-        const idx = prev.findIndex(
-          (item) => item.id === u.id || (uClean && item.phoneNumber.replace(/\D/g, '') === uClean)
-        );
-        if (idx >= 0) {
-          const copy = [...prev];
-          copy[idx] = { ...copy[idx], ...u };
-          return copy;
-        }
-        return prev;
+        const merged = mergeAdminUsersList(prev, [mapped], true);
+        adminUsersRef.current = merged;
+        return merged;
       });
       setCurrentUser((prev) => {
-        const myClean = (prev.phoneNumber || '').replace(/\D/g, '');
-        if (prev.id === u.id || (myClean && uClean && myClean === uClean)) {
-          const updated = {
+        if (prev.id === u.id || (prev.phoneNumber && u.phoneNumber && phonesMatch(prev.phoneNumber, u.phoneNumber))) {
+          const updated: UserProfile = {
             ...prev,
             verificationBadge: u.verificationBadge !== undefined ? u.verificationBadge : prev.verificationBadge,
-            role: u.role !== undefined ? u.role : prev.role,
+            role: (u.role as UserProfile['role']) || prev.role,
           };
           try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
           return updated;
         }
         return prev;
       });
+      if (u.walletBalanceNgn !== undefined) {
+        setCurrentUser((prev) => {
+          if (prev.phoneNumber && u.phoneNumber && phonesMatch(prev.phoneNumber, u.phoneNumber)) {
+            setWallet((w) => ({ ...w, availableBalance: u.walletBalanceNgn }));
+          }
+          return prev;
+        });
+      }
     };
 
     socket.on('admin_config_updated', onConfig);
@@ -8828,9 +8930,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket.on('admin_cms_updated', onCms);
     socket.on('system_broadcast', onBroadcast);
     socket.on('system_broadcast_cleared', onBroadcastCleared);
+    socket.on('admin_users_snapshot', onUsersSnapshot);
+    socket.on('user_registered', onUserRegistered);
     socket.on('user_updated', onUserUpdated);
 
     let sbAdminChannel: ReturnType<typeof supabase.channel> | null = null;
+    let sbPhoneRegChannel: ReturnType<typeof supabase.channel> | null = null;
     if (isSupabaseConfigured) {
       try {
         sbAdminChannel = supabase.channel('agc_global_admin_sync', {
@@ -8852,8 +8957,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .on('broadcast', { event: 'system_broadcast_cleared' }, () => {
             onBroadcastCleared();
           })
+          .on('broadcast', { event: 'user_updated' }, ({ payload }: any) => {
+            if (payload) onUserUpdated(payload);
+          })
+          .on('broadcast', { event: 'user_registered' }, ({ payload }: any) => {
+            if (payload) onUserRegistered(payload);
+          })
           .subscribe();
         adminSupabaseChannelRef.current = sbAdminChannel;
+
+        sbPhoneRegChannel = supabase
+          .channel('agc_phone_registry_live_global')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'agc_phone_registry' },
+            (payload: any) => {
+              const row = payload?.new;
+              if (row && (row.full_phone || row.phone_digits)) {
+                const sbUser: AdminUserRecord = {
+                  id: `usr_${row.phone_digits || (row.full_phone || '').replace(/\D/g, '')}`,
+                  fullName: row.username || 'Registered User',
+                  phoneNumber: row.full_phone || `+234${String(row.phone_digits).replace(/^0+/, '')}`,
+                  avatarUrl: row.avatar_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || 'user')}`,
+                  role: 'user',
+                  verificationBadge: null,
+                  isPhoneVerified: true,
+                  status: 'active',
+                  joinedDate: row.registered_at ? new Date(row.registered_at).toLocaleDateString() : 'Recent',
+                  walletBalanceNgn: 50000,
+                  ordersCount: 0,
+                  isOnline: false,
+                  lastSeen: row.updated_at ? new Date(row.updated_at).toLocaleDateString() : undefined,
+                };
+                setAdminUsers((prev) => {
+                  const merged = mergeAdminUsersList(prev, [sbUser], false);
+                  adminUsersRef.current = merged;
+                  return merged;
+                });
+              }
+            }
+          )
+          .subscribe();
       } catch (_) {}
     }
 
@@ -8872,6 +9016,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('admin_cms_updated', onCms);
       socket.off('system_broadcast', onBroadcast);
       socket.off('system_broadcast_cleared', onBroadcastCleared);
+      socket.off('admin_users_snapshot', onUsersSnapshot);
+      socket.off('user_registered', onUserRegistered);
       socket.off('user_updated', onUserUpdated);
       window.removeEventListener('focus', syncAdminFromServer);
       document.removeEventListener('visibilitychange', handleVisibility);
@@ -8880,10 +9026,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sbAdminChannel.unsubscribe();
         adminSupabaseChannelRef.current = null;
       }
+      if (sbPhoneRegChannel) {
+        sbPhoneRegChannel.unsubscribe();
+      }
     };
   }, []);
 
-  // Initial fetch for live dispatch orders & users directory from backend API
+  // Initial fetch for live dispatch orders from backend API
   useEffect(() => {
     try {
       fetch('/api/dispatch/orders')
@@ -8895,84 +9044,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         })
         .catch(() => {});
-
-      // Fetch all registered platform users so Admin Dashboard has full customer directory
-      callAdminApi('/api/users')
-        .then((r) => (r && r.ok ? r.json() : null))
-        .then((data) => {
-          if (data?.users && Array.isArray(data.users)) {
-            const mappedUsers: AdminUserRecord[] = data.users.map((u: any) => ({
-              id: u.id || `usr_${(u.phoneNumber || '').replace(/\D/g, '') || Date.now()}`,
-              fullName: u.fullName || u.name || 'Registered User',
-              phoneNumber: u.phoneNumber || u.phone || '',
-              avatarUrl: u.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-              role: u.role || 'user',
-              verificationBadge: u.verificationBadge || null,
-              isPhoneVerified: Boolean(u.isPhoneVerified),
-              status: u.status || 'active',
-              bannedAt: u.bannedAt,
-              banReason: u.banReason,
-              joinedDate: u.createdAt ? new Date(u.createdAt).toLocaleDateString() : 'Recent',
-              walletBalanceNgn: u.walletBalanceNgn ?? 50000,
-              ordersCount: u.ordersCount || 0,
-              isOnline: u.lastSeen === 'online',
-              lastSeen: u.lastSeen || null,
-            }));
-            setAdminUsers((prev) => {
-              const merged = [...prev];
-              mappedUsers.forEach((mu) => {
-                const idx = merged.findIndex((u) => u.phoneNumber === mu.phoneNumber || u.id === mu.id);
-                if (idx >= 0) {
-                  merged[idx] = { ...merged[idx], ...mu };
-                } else {
-                  merged.push(mu);
-                }
-              });
-              try { localStorage.setItem('AGC_admin_users', JSON.stringify(merged)); } catch (_) {}
-              return merged;
-            });
-          }
-        })
-        .catch(() => {});
-
-      // Live Supabase SQL Table: fetch all registered phones across all devices
-      if (isSupabaseConfigured) {
-        supabase
-          .from('agc_phone_registry')
-          .select('*')
-          .then(({ data, error }) => {
-            if (!error && Array.isArray(data)) {
-              const sbUsers: AdminUserRecord[] = data.map((row: any) => ({
-                id: `usr_${row.phone_digits || (row.full_phone || '').replace(/\D/g, '')}`,
-                fullName: row.username || 'User',
-                phoneNumber: row.full_phone || (row.phone_digits ? `+${row.phone_digits}` : ''),
-                avatarUrl: row.avatar_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || 'user')}`,
-                role: 'user',
-                verificationBadge: null,
-                isPhoneVerified: true,
-                status: 'active',
-                joinedDate: row.registered_at ? new Date(row.registered_at).toLocaleDateString() : 'Recent',
-                walletBalanceNgn: 50000,
-                ordersCount: 0,
-                isOnline: false,
-                lastSeen: row.updated_at ? new Date(row.updated_at).toLocaleDateString() : undefined,
-              }));
-              setAdminUsers((prev) => {
-                const merged = [...prev];
-                sbUsers.forEach((mu) => {
-                  const idx = merged.findIndex((u) => u.phoneNumber === mu.phoneNumber || u.id === mu.id);
-                  if (idx >= 0) {
-                    merged[idx] = { ...merged[idx], ...mu };
-                  } else {
-                    merged.push(mu);
-                  }
-                });
-                try { localStorage.setItem('AGC_admin_users', JSON.stringify(merged)); } catch (_) {}
-                return merged;
-              });
-            }
-          }, () => {});
-      }
     } catch (_) {}
   }, []);
 
@@ -9145,25 +9216,84 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       window.removeEventListener('focus', handleUrlChange);
     };
   }, []);
-  const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>(() => {
-    try {
-      const saved = localStorage.getItem('AGC_admin_users');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      console.warn(e);
-    }
-    return [];
+  const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>([]);
+  const adminUsersRef = useRef<AdminUserRecord[]>([]);
+  useEffect(() => { adminUsersRef.current = adminUsers; }, [adminUsers]);
+
+  const mapRawToAdminUser = (u: any): AdminUserRecord => ({
+    id: u.id || `usr_${(u.phoneNumber || '').replace(/\D/g, '') || Date.now()}`,
+    fullName: u.fullName || u.name || 'Registered User',
+    phoneNumber: u.phoneNumber || u.phone || '',
+    avatarUrl: u.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+    role: u.role || 'user',
+    verificationBadge: u.verificationBadge ?? null,
+    isPhoneVerified: u.isPhoneVerified !== undefined ? Boolean(u.isPhoneVerified) : true,
+    status: u.status || 'active',
+    bannedAt: u.bannedAt,
+    banReason: u.banReason,
+    joinedDate: u.joinedDate || (u.registeredAt || u.createdAt ? new Date(u.registeredAt || u.createdAt).toLocaleDateString() : 'Recent'),
+    walletBalanceNgn: u.walletBalanceNgn ?? 50000,
+    ordersCount: u.ordersCount || 0,
+    isOnline: Boolean(u.isOnline || u.lastSeen === 'online'),
+    lastSeen: u.lastSeen || undefined,
   });
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('AGC_admin_users', JSON.stringify(adminUsers));
-    } catch (e) {}
-  }, [adminUsers]);
+  const mergeAdminUsersList = (
+    prev: AdminUserRecord[],
+    incoming: AdminUserRecord[],
+    authoritative: boolean
+  ): AdminUserRecord[] => {
+    const next = [...prev];
+    incoming.forEach((inc) => {
+      const idx = next.findIndex(
+        (u) =>
+          (inc.id && u.id === inc.id) ||
+          (inc.phoneNumber && u.phoneNumber && phonesMatch(u.phoneNumber, inc.phoneNumber))
+      );
+      if (idx >= 0) {
+        const cur = next[idx];
+        if (authoritative) {
+          next[idx] = {
+            ...cur,
+            ...inc,
+            fullName: inc.fullName && inc.fullName !== 'Registered User' ? inc.fullName : cur.fullName,
+            avatarUrl: inc.avatarUrl || cur.avatarUrl,
+            verificationBadge: inc.verificationBadge !== undefined ? inc.verificationBadge : cur.verificationBadge,
+            role: inc.role || cur.role,
+            status: inc.status || cur.status,
+            walletBalanceNgn: inc.walletBalanceNgn ?? cur.walletBalanceNgn,
+          };
+        } else {
+          // Non-authoritative (e.g. agc_phone_registry): NEVER wipe admin-set badge, role, status, ban, or wallet
+          next[idx] = {
+            ...cur,
+            fullName: inc.fullName && inc.fullName !== 'Registered User' && (!cur.fullName || cur.fullName === 'User' || cur.fullName === 'AGC User') ? inc.fullName : cur.fullName,
+            avatarUrl: cur.avatarUrl || inc.avatarUrl,
+            phoneNumber: cur.phoneNumber || inc.phoneNumber,
+            joinedDate: cur.joinedDate && cur.joinedDate !== 'Recent' ? cur.joinedDate : inc.joinedDate,
+          };
+        }
+      } else {
+        next.push(inc);
+      }
+    });
+    return next;
+  };
+
+  const getBadgeForPhone = (phoneOrId?: string): 'blue' | 'gold' | 'creator_plus' | null => {
+    if (!phoneOrId) return null;
+    if (currentUser?.phoneNumber && phonesMatch(currentUser.phoneNumber, phoneOrId)) {
+      if (currentUser.verificationBadge) return currentUser.verificationBadge;
+    }
+    const found = adminUsersRef.current.find(
+      (u) => u.id === phoneOrId || (u.phoneNumber && phonesMatch(u.phoneNumber, phoneOrId))
+    );
+    return found?.verificationBadge || null;
+  };
 
   const [systemBroadcast, setSystemBroadcast] = useState<AdminSystemBroadcast | null>(null);
 
-  // Real-Time Multi-Tab / Multi-Window Admin State Synchronization (no localStorage caching of flags/config)
+  // Real-Time Multi-Tab / Multi-Window Admin State Synchronization (no localStorage caching)
   useEffect(() => {
     let bc: BroadcastChannel | null = null;
     try {
@@ -9183,6 +9313,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setCmsData(msg.data);
         } else if (msg.type === 'broadcast') {
           setSystemBroadcast(msg.data || null);
+        } else if (msg.type === 'user_updated' && msg.data) {
+          const mapped = mapRawToAdminUser(msg.data);
+          setAdminUsers((prev) => {
+            const merged = mergeAdminUsersList(prev, [mapped], true);
+            adminUsersRef.current = merged;
+            return merged;
+          });
+          if (currentUser?.phoneNumber && mapped.phoneNumber && phonesMatch(currentUser.phoneNumber, mapped.phoneNumber)) {
+            setCurrentUser((prev) => {
+              const updated = {
+                ...prev,
+                verificationBadge: mapped.verificationBadge !== undefined ? mapped.verificationBadge : prev.verificationBadge,
+                role: (mapped.role as UserProfile['role']) || prev.role,
+              };
+              try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
+              return updated;
+            });
+          }
         } else if (msg.type === 'ban') {
           const myPhoneClean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
           const targetClean = (msg.phoneOrId || '').replace(/\D/g, '');
@@ -9247,112 +9395,229 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser]);
 
-  const resolveAdminUserKey = (userIdOrPhone: string): string => {
+  const findAdminUserTarget = (userIdOrPhone: string): AdminUserRecord | undefined => {
     const clean = userIdOrPhone.replace(/\D/g, '');
-    const target = adminUsers.find(
+    return adminUsersRef.current.find(
       (u) =>
         u.id === userIdOrPhone ||
         u.phoneNumber === userIdOrPhone ||
-        (clean && u.phoneNumber.replace(/\D/g, '') === clean)
+        (clean && u.phoneNumber && phonesMatch(u.phoneNumber, userIdOrPhone))
     );
-    const phoneDigits = target?.phoneNumber?.replace(/\D/g, '');
-    return phoneDigits || target?.id || clean || userIdOrPhone;
   };
 
-  const toggleUserVerification = async (userId: string, badge: 'blue' | 'gold' | 'creator_plus' | null) => {
-    const clean = userId.replace(/\D/g, '');
-    setAdminUsers((prev) =>
-      prev.map((u) =>
-        u.id === userId || u.phoneNumber === userId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
-          ? { ...u, verificationBadge: badge }
-          : u
-      )
-    );
-    if (currentUser.id === userId || (clean && currentUser.phoneNumber.replace(/\D/g, '') === clean)) {
-      setCurrentUser((prev) => ({ ...prev, verificationBadge: badge }));
-    }
-    const identifier = resolveAdminUserKey(userId);
+  const resolveAdminUserKey = (userIdOrPhone: string): string => {
+    const target = findAdminUserTarget(userIdOrPhone);
+    const phoneDigits = target?.phoneNumber?.replace(/\D/g, '');
+    return phoneDigits || target?.id || userIdOrPhone.replace(/\D/g, '') || userIdOrPhone;
+  };
+
+  const broadcastUserUpdateEverywhere = (userObj: any) => {
     try {
-      await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/badge`, {
+      adminSyncChannelRef.current?.postMessage({ type: 'user_updated', data: userObj });
+    } catch (_) {}
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({
+          type: 'broadcast',
+          event: 'user_updated',
+          payload: userObj,
+        });
+      } catch (_) {}
+    }
+  };
+
+  const toggleUserVerification = async (
+    userId: string,
+    badge: 'blue' | 'gold' | 'creator_plus' | null,
+    hints?: { phoneNumber?: string; fullName?: string; avatarUrl?: string }
+  ): Promise<boolean> => {
+    const target = findAdminUserTarget(userId);
+    const phoneNum = hints?.phoneNumber || target?.phoneNumber || (userId.startsWith('+') ? userId : '');
+    const clean = (phoneNum || userId).replace(/\D/g, '');
+    const optimisticUser: AdminUserRecord = {
+      ...(target || {
+        id: userId,
+        fullName: hints?.fullName || 'Registered User',
+        phoneNumber: phoneNum,
+        avatarUrl: hints?.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+        role: 'user',
+        isPhoneVerified: true,
+        status: 'active',
+        joinedDate: 'Recent',
+        walletBalanceNgn: 50000,
+        ordersCount: 0,
+        isOnline: false,
+      }),
+      verificationBadge: badge,
+    };
+
+    setAdminUsers((prev) => {
+      const merged = mergeAdminUsersList(prev, [optimisticUser], true);
+      adminUsersRef.current = merged;
+      return merged;
+    });
+    if (currentUser.id === userId || (clean && currentUser.phoneNumber && phonesMatch(currentUser.phoneNumber, phoneNum || userId))) {
+      setCurrentUser((prev) => {
+        const updated = { ...prev, verificationBadge: badge };
+        try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
+        return updated;
+      });
+    }
+    broadcastUserUpdateEverywhere(optimisticUser);
+
+    const identifier = resolveAdminUserKey(phoneNum || userId);
+    try {
+      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/badge`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ verificationBadge: badge }),
+        body: JSON.stringify({
+          verificationBadge: badge,
+          phoneNumber: phoneNum || undefined,
+          fullName: hints?.fullName || target?.fullName,
+          avatarUrl: hints?.avatarUrl || target?.avatarUrl,
+        }),
       });
-    } catch (_) {}
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data?.user) {
+          const mapped = mapRawToAdminUser(data.user);
+          setAdminUsers((prev) => {
+            const merged = mergeAdminUsersList(prev, [mapped], true);
+            adminUsersRef.current = merged;
+            return merged;
+          });
+          broadcastUserUpdateEverywhere(data.user);
+        }
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
   };
 
-  const toggleUserSuspension = (userId: string) => {
-    const clean = userId.replace(/\D/g, '');
-    const existing = adminUsers.find(
-      (u) => u.id === userId || u.phoneNumber === userId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
-    );
+  const toggleUserSuspension = async (userId: string): Promise<boolean> => {
+    const existing = findAdminUserTarget(userId);
     const nextStatus = existing?.status === 'suspended' ? 'active' : 'suspended';
-    setAdminUsers((prev) =>
-      prev.map((u) =>
-        u.id === userId || u.phoneNumber === userId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
-          ? { ...u, status: nextStatus }
-          : u
-      )
-    );
-    const identifier = resolveAdminUserKey(userId);
-    callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextStatus }),
-    });
+    return setUserStatus(userId, nextStatus);
   };
 
   const [isBanned, setIsBanned] = useState(false);
   const [banInfo, setBanInfo] = useState<{ reason?: string; bannedAt?: string } | null>(null);
 
-  const setUserStatus = (userIdOrPhone: string, status: 'active' | 'suspended' | 'banned' | 'flagged') => {
+  const setUserStatus = async (
+    userIdOrPhone: string,
+    status: 'active' | 'suspended' | 'banned' | 'flagged'
+  ): Promise<boolean> => {
+    const target = findAdminUserTarget(userIdOrPhone);
     const clean = userIdOrPhone.replace(/\D/g, '');
-    setAdminUsers((prev) =>
-      prev.map((u) =>
-        u.id === userIdOrPhone || u.phoneNumber === userIdOrPhone || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
+    setAdminUsers((prev) => {
+      const next = prev.map((u) =>
+        u.id === userIdOrPhone || u.phoneNumber === userIdOrPhone || (clean && phonesMatch(u.phoneNumber, userIdOrPhone))
           ? { ...u, status }
           : u
-      )
-    );
-    const identifier = resolveAdminUserKey(userIdOrPhone);
-    callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
+      );
+      adminUsersRef.current = next;
+      return next;
     });
+    const identifier = resolveAdminUserKey(target?.phoneNumber || userIdOrPhone);
+    try {
+      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status,
+          phoneNumber: target?.phoneNumber,
+          fullName: target?.fullName,
+          avatarUrl: target?.avatarUrl,
+        }),
+      });
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data?.user) {
+          const mapped = mapRawToAdminUser(data.user);
+          setAdminUsers((prev) => {
+            const merged = mergeAdminUsersList(prev, [mapped], true);
+            adminUsersRef.current = merged;
+            return merged;
+          });
+          broadcastUserUpdateEverywhere(data.user);
+        }
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
   };
 
-  const setUserRole = async (userIdOrPhone: string, role: 'user' | 'creator' | 'merchant' | 'admin') => {
+  const setUserRole = async (
+    userIdOrPhone: string,
+    role: 'user' | 'creator' | 'merchant' | 'admin'
+  ): Promise<boolean> => {
+    const target = findAdminUserTarget(userIdOrPhone);
     const clean = userIdOrPhone.replace(/\D/g, '');
-    setAdminUsers((prev) =>
-      prev.map((u) =>
-        u.id === userIdOrPhone || u.phoneNumber === userIdOrPhone || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
+    setAdminUsers((prev) => {
+      const next = prev.map((u) =>
+        u.id === userIdOrPhone || u.phoneNumber === userIdOrPhone || (clean && phonesMatch(u.phoneNumber, userIdOrPhone))
           ? { ...u, role }
           : u
-      )
-    );
-    if (currentUser.id === userIdOrPhone || (clean && currentUser.phoneNumber.replace(/\D/g, '') === clean)) {
-      setCurrentUser((prev) => ({ ...prev, role }));
-    }
-    const identifier = resolveAdminUserKey(userIdOrPhone);
-    await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role }),
+      );
+      adminUsersRef.current = next;
+      return next;
     });
+    if (currentUser.id === userIdOrPhone || (clean && currentUser.phoneNumber && phonesMatch(currentUser.phoneNumber, userIdOrPhone))) {
+      setCurrentUser((prev) => {
+        const updated = { ...prev, role };
+        try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
+        return updated;
+      });
+    }
+    const identifier = resolveAdminUserKey(target?.phoneNumber || userIdOrPhone);
+    try {
+      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          role,
+          phoneNumber: target?.phoneNumber,
+          fullName: target?.fullName,
+          avatarUrl: target?.avatarUrl,
+        }),
+      });
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data?.user) {
+          const mapped = mapRawToAdminUser(data.user);
+          setAdminUsers((prev) => {
+            const merged = mergeAdminUsersList(prev, [mapped], true);
+            adminUsersRef.current = merged;
+            return merged;
+          });
+          broadcastUserUpdateEverywhere(data.user);
+        }
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
   };
 
   const banUser = async (phoneOrId: string, reason?: string) => {
+    const target = findAdminUserTarget(phoneOrId);
     const clean = phoneOrId.replace(/\D/g, '');
     const banReason = reason || 'Violation of AfriChat platform terms and conditions.';
     const bannedAt = new Date().toISOString();
-    setAdminUsers((prev) =>
-      prev.map((u) =>
-        u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
-          ? { ...u, status: 'banned', bannedAt, banReason, isOnline: false }
+    setAdminUsers((prev) => {
+      const next = prev.map((u) =>
+        u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && phonesMatch(u.phoneNumber, phoneOrId))
+          ? { ...u, status: 'banned' as const, bannedAt, banReason, isOnline: false }
           : u
-      )
-    );
+      );
+      adminUsersRef.current = next;
+      return next;
+    });
     try {
       adminSyncChannelRef.current?.postMessage({
         type: 'ban',
@@ -9362,53 +9627,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     } catch (_) {}
     try {
-      const identifier = resolveAdminUserKey(phoneOrId);
-      await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/ban`, {
+      const identifier = resolveAdminUserKey(target?.phoneNumber || phoneOrId);
+      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/ban`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: banReason }),
+        body: JSON.stringify({
+          reason: banReason,
+          phoneNumber: target?.phoneNumber,
+          fullName: target?.fullName,
+          avatarUrl: target?.avatarUrl,
+        }),
       });
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data?.user) broadcastUserUpdateEverywhere(data.user);
+      }
     } catch (e) {
       console.warn('Failed to ban user on server:', e);
     }
   };
 
   const unbanUser = async (phoneOrId: string) => {
+    const target = findAdminUserTarget(phoneOrId);
     const clean = phoneOrId.replace(/\D/g, '');
-    setAdminUsers((prev) =>
-      prev.map((u) =>
-        u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
-          ? { ...u, status: 'active', bannedAt: undefined, banReason: undefined }
+    setAdminUsers((prev) => {
+      const next = prev.map((u) =>
+        u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && phonesMatch(u.phoneNumber, phoneOrId))
+          ? { ...u, status: 'active' as const, bannedAt: undefined, banReason: undefined }
           : u
-      )
-    );
+      );
+      adminUsersRef.current = next;
+      return next;
+    });
     try {
       adminSyncChannelRef.current?.postMessage({ type: 'unban', phoneOrId });
     } catch (_) {}
     try {
-      const identifier = resolveAdminUserKey(phoneOrId);
-      await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/unban`, {
+      const identifier = resolveAdminUserKey(target?.phoneNumber || phoneOrId);
+      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/unban`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: target?.phoneNumber,
+          fullName: target?.fullName,
+          avatarUrl: target?.avatarUrl,
+        }),
       });
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data?.user) broadcastUserUpdateEverywhere(data.user);
+      }
     } catch (e) {
       console.warn('Failed to unban user on server:', e);
     }
   };
 
   const adjustUserWallet = async (phoneOrId: string, deltaOrNew: number, isAbsolute: boolean = false) => {
+    const target = findAdminUserTarget(phoneOrId);
     const clean = phoneOrId.replace(/\D/g, '');
     let resolvedNewBal = deltaOrNew;
-    setAdminUsers((prev) =>
-      prev.map((u) => {
-        if (u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)) {
+    setAdminUsers((prev) => {
+      const next = prev.map((u) => {
+        if (u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && phonesMatch(u.phoneNumber, phoneOrId))) {
           const newBal = isAbsolute ? deltaOrNew : Math.max(0, (u.walletBalanceNgn || 0) + deltaOrNew);
           resolvedNewBal = newBal;
           return { ...u, walletBalanceNgn: newBal };
         }
         return u;
-      })
-    );
+      });
+      adminUsersRef.current = next;
+      return next;
+    });
     try {
       adminSyncChannelRef.current?.postMessage({
         type: 'wallet_adjusted',
@@ -9417,12 +9706,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     } catch (_) {}
     try {
-      const identifier = resolveAdminUserKey(phoneOrId);
-      await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/adjust-wallet`, {
+      const identifier = resolveAdminUserKey(target?.phoneNumber || phoneOrId);
+      const res = await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/adjust-wallet`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isAbsolute ? { newBalance: deltaOrNew } : { deltaNgn: deltaOrNew }),
+        body: JSON.stringify({
+          ...(isAbsolute ? { newBalance: deltaOrNew } : { deltaNgn: deltaOrNew }),
+          phoneNumber: target?.phoneNumber,
+          fullName: target?.fullName,
+          avatarUrl: target?.avatarUrl,
+        }),
       });
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data?.user) broadcastUserUpdateEverywhere(data.user);
+      }
     } catch (e) {
       console.warn('Failed to adjust wallet on server:', e);
     }
@@ -9914,6 +10212,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isAdminModalOpen,
         setIsAdminModalOpen,
         adminUsers,
+        refreshAdminUsers,
+        getBadgeForPhone,
         toggleUserVerification,
         toggleUserSuspension,
         adminResolveEscrow,

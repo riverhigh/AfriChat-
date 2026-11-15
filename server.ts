@@ -348,6 +348,21 @@ function saveAdminCmsFile() {
   }
 }
 
+const DEFAULT_SUPABASE_URL = 'https://sejiretcywvqbzbqalbg.supabase.co';
+const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_Ja5dvS5_c3JjrpsTI_hq_w_L7birCR1';
+
+const envSupabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
+const SUPABASE_URL =
+  envSupabaseUrl && envSupabaseUrl.includes('supabase.co') && !envSupabaseUrl.includes('your-project-id')
+    ? envSupabaseUrl
+    : DEFAULT_SUPABASE_URL;
+
+const envSupabaseKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '').trim();
+const SUPABASE_ANON_KEY =
+  envSupabaseKey && !envSupabaseKey.includes('your-anon-key')
+    ? envSupabaseKey
+    : DEFAULT_SUPABASE_ANON_KEY;
+
 function findUserEntry(phoneOrId: string): { key: string; user: RegisteredUser } | null {
   const decoded = decodeURIComponent(phoneOrId || '').trim();
   if (!decoded) return null;
@@ -365,6 +380,141 @@ function findUserEntry(phoneOrId: string): { key: string; user: RegisteredUser }
     }
   }
   return null;
+}
+
+let lastSupabaseUsersSyncAt = 0;
+let supabaseUsersSyncPromise: Promise<void> | null = null;
+
+async function syncUsersFromSupabase(force = false): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+  const now = Date.now();
+  if (!force && now - lastSupabaseUsersSyncAt < 5000) return;
+  if (supabaseUsersSyncPromise) return supabaseUsersSyncPromise;
+
+  supabaseUsersSyncPromise = (async () => {
+    try {
+      const fetchRegistry = (url: string, key: string) =>
+        fetch(`${url}/rest/v1/agc_phone_registry?select=*`, {
+          headers: {
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+          },
+        });
+
+      let res = await fetchRegistry(SUPABASE_URL, SUPABASE_ANON_KEY);
+      if (!res.ok && (SUPABASE_URL !== DEFAULT_SUPABASE_URL || SUPABASE_ANON_KEY !== DEFAULT_SUPABASE_ANON_KEY)) {
+        res = await fetchRegistry(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_ANON_KEY);
+      }
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        console.warn(`Notice: Supabase user sync returned HTTP ${res.status}: ${errText}`);
+        return;
+      }
+      const rows = await res.json();
+      if (!Array.isArray(rows)) {
+        console.warn('Notice: Supabase user sync returned non-array payload');
+        return;
+      }
+
+      let changed = false;
+      for (const row of rows) {
+        const rawPhone = (row.full_phone || '').trim() || (row.phone_digits ? `+234${String(row.phone_digits).replace(/^0+/, '')}` : '');
+        const clean = rawPhone.replace(/\D/g, '') || String(row.phone_digits || '').replace(/\D/g, '');
+        if (!clean) continue;
+
+        const match = findUserEntry(rawPhone) || (row.phone_digits ? findUserEntry(String(row.phone_digits)) : null);
+        if (match) {
+          const { key, user } = match;
+          let rowChanged = false;
+          if ((!user.fullName || user.fullName === 'AGC User' || user.fullName === 'User') && row.username) {
+            user.fullName = row.username;
+            rowChanged = true;
+          }
+          if (!user.avatarUrl && row.avatar_url) {
+            user.avatarUrl = row.avatar_url;
+            rowChanged = true;
+          }
+          if (!user.registeredAt && row.registered_at) {
+            user.registeredAt = row.registered_at;
+            rowChanged = true;
+          }
+          if (rowChanged) {
+            usersByPhone.set(key, user);
+            changed = true;
+          }
+        } else {
+          const newUser: RegisteredUser = {
+            id: `usr_${row.phone_digits || clean}`,
+            fullName: row.username || 'Registered User',
+            phoneNumber: rawPhone.startsWith('+') ? rawPhone : `+${clean}`,
+            cleanPhone: clean,
+            avatarUrl:
+              row.avatar_url ||
+              `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || clean)}`,
+            about: 'Available · Using AGC',
+            registeredAt: row.registered_at || new Date().toISOString(),
+            role: 'user',
+            status: 'active',
+            verificationBadge: null,
+            walletBalanceNgn: 50000,
+            isOnline: false,
+            lastSeen: row.updated_at || row.registered_at || undefined,
+          };
+          usersByPhone.set(clean, newUser);
+          changed = true;
+        }
+      }
+      lastSupabaseUsersSyncAt = Date.now();
+      if (changed) {
+        saveUsersFile();
+      }
+    } catch (e) {
+      console.warn('Notice syncing users from Supabase:', e);
+    } finally {
+      supabaseUsersSyncPromise = null;
+    }
+  })();
+
+  return supabaseUsersSyncPromise;
+}
+
+async function ensureUserEntry(
+  phoneOrId: string,
+  hints?: { phoneNumber?: string; fullName?: string; avatarUrl?: string }
+): Promise<{ key: string; user: RegisteredUser } | null> {
+  let match = findUserEntry(phoneOrId);
+  if (!match && hints?.phoneNumber) {
+    match = findUserEntry(hints.phoneNumber);
+  }
+  if (!match) {
+    await syncUsersFromSupabase(true);
+    match = findUserEntry(phoneOrId) || (hints?.phoneNumber ? findUserEntry(hints.phoneNumber) : null);
+  }
+  if (!match) {
+    const candidatePhone = hints?.phoneNumber || decodeURIComponent(phoneOrId || '').trim();
+    const clean = candidatePhone.replace(/\D/g, '');
+    if (clean.length >= 7) {
+      const formattedPhone = candidatePhone.startsWith('+') ? candidatePhone : `+${clean}`;
+      const created: RegisteredUser = {
+        id: phoneOrId.startsWith('usr_') ? phoneOrId : `usr_${clean}`,
+        fullName: hints?.fullName || 'Registered User',
+        phoneNumber: formattedPhone,
+        cleanPhone: clean,
+        avatarUrl: hints?.avatarUrl || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(clean)}`,
+        about: 'Available · Using AGC',
+        registeredAt: new Date().toISOString(),
+        role: 'user',
+        status: 'active',
+        verificationBadge: null,
+        walletBalanceNgn: 50000,
+        isOnline: false,
+      };
+      usersByPhone.set(clean, created);
+      saveUsersFile();
+      return { key: clean, user: created };
+    }
+  }
+  return match;
 }
 const communitiesMap = new Map<string, any>();
 const statusesMap = new Map<string, any>();
@@ -446,7 +596,24 @@ try {
     const raw = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
     if (Array.isArray(raw)) {
       for (const u of raw) {
-        if (u.cleanPhone) usersByPhone.set(u.cleanPhone, u);
+        const derivedClean = (u.cleanPhone || u.phoneNumber || '').replace(/\D/g, '');
+        if (!derivedClean) continue;
+        const normalized: RegisteredUser = {
+          ...u,
+          cleanPhone: derivedClean,
+          phoneNumber: u.phoneNumber || `+${derivedClean}`,
+          status: u.status || 'active',
+          role: u.role || 'user',
+          verificationBadge: u.verificationBadge ?? null,
+          walletBalanceNgn: u.walletBalanceNgn ?? 50000,
+          registeredAt: u.registeredAt || u.createdAt || new Date().toISOString(),
+        };
+        const existing = findUserEntry(normalized.phoneNumber) || findUserEntry(derivedClean);
+        if (existing) {
+          usersByPhone.set(existing.key, { ...existing.user, ...normalized });
+        } else {
+          usersByPhone.set(derivedClean, normalized);
+        }
       }
     }
   }
@@ -471,6 +638,8 @@ app.post('/api/users/register', (req: Request, res: Response) => {
   const cleanPhone = phoneNumber.replace(/\D/g, '');
   const existingEntry = findUserEntry(phoneNumber);
   const existingCheck = existingEntry?.user || usersByPhone.get(cleanPhone);
+  const storeKey = existingEntry?.key || cleanPhone;
+
   if (existingCheck && existingCheck.status === 'banned') {
     return res.status(403).json({
       error: 'This phone number has been permanently banned from registration.',
@@ -485,16 +654,22 @@ app.post('/api/users/register', (req: Request, res: Response) => {
     });
   }
   const user: RegisteredUser = {
-    id: id || `usr_${Date.now()}`,
-    fullName: fullName || 'AGC User',
-    phoneNumber,
-    cleanPhone,
-    avatarUrl,
-    about: about || 'Available · Using AGC',
-    registeredAt: new Date().toISOString(),
-    role: role || 'user',
+    ...(existingCheck || {}),
+    id: existingCheck?.id || id || `usr_${Date.now()}`,
+    fullName: fullName || existingCheck?.fullName || 'AGC User',
+    phoneNumber: existingCheck?.phoneNumber || phoneNumber,
+    cleanPhone: existingCheck?.cleanPhone || cleanPhone,
+    avatarUrl: avatarUrl || existingCheck?.avatarUrl,
+    about: about || existingCheck?.about || 'Available · Using AGC',
+    registeredAt: existingCheck?.registeredAt || new Date().toISOString(),
+    role: existingCheck?.role || role || 'user',
+    status: existingCheck?.status || 'active',
+    verificationBadge: existingCheck?.verificationBadge ?? null,
+    walletBalanceNgn: existingCheck?.walletBalanceNgn ?? 50000,
+    isOnline: true,
+    lastSeen: 'online',
   };
-  usersByPhone.set(cleanPhone, user);
+  usersByPhone.set(storeKey, user);
   saveUsersFile();
   console.log(`✅ [User Registered]: ${user.fullName} (${user.phoneNumber})`);
   io.emit('user_registered', user);
@@ -515,10 +690,10 @@ app.post('/api/users/register', (req: Request, res: Response) => {
   // Store session token for validation
   if (sessionToken) {
     (user as any).sessionToken = sessionToken;
-    usersByPhone.set(cleanPhone, user);
+    usersByPhone.set(storeKey, user);
   }
 
-  res.json({ success: true, user, alreadyRegistered: false });
+  res.json({ success: true, user, alreadyRegistered: Boolean(existingCheck) });
 });
 
 // REST: Check if phone is already registered (for duplicate-number guard)
@@ -590,8 +765,9 @@ app.get('/api/users/lookup', (req: Request, res: Response) => {
   }
 });
 
-// REST: List all registered users
-app.get('/api/users', (_req: Request, res: Response) => {
+// REST: List all registered users (synced live with Supabase registry)
+app.get('/api/users', async (_req: Request, res: Response) => {
+  await syncUsersFromSupabase();
   res.json({ users: Array.from(usersByPhone.values()) });
 });
 
@@ -762,7 +938,8 @@ app.patch('/api/dispatch/orders/:id/status', (req: Request, res: Response) => {
 });
 
 // ── REST: LIVE ADMIN TELEMETRY & COMMAND API ────────────────────────────────
-app.get('/api/admin/metrics', (_req: Request, res: Response) => {
+app.get('/api/admin/metrics', async (_req: Request, res: Response) => {
+  await syncUsersFromSupabase();
   const allOrders = Array.from(dispatchOrdersMap.values());
   const totalVolumeNgn = allOrders.reduce((acc, o: any) => acc + (Number(o.totalFee) || Number(o.estimatedFee) || 0), 0);
   const totalCommissionNgn = allOrders.reduce((acc, o: any) => acc + (Number(o.platformFee) || Math.round((Number(o.estimatedFee) || 0) * 0.05)), 0);
@@ -850,10 +1027,10 @@ app.post('/api/admin/cms', (req: Request, res: Response) => {
   res.json({ success: true, cms: cmsData });
 });
 
-app.patch('/api/admin/users/:phone/badge', (req: Request, res: Response) => {
+app.patch('/api/admin/users/:phone/badge', async (req: Request, res: Response) => {
   const { phone } = req.params;
-  const { verificationBadge, role, status, walletBalanceNgn } = req.body;
-  const match = findUserEntry(phone);
+  const { verificationBadge, role, status, walletBalanceNgn, phoneNumber, fullName, avatarUrl } = req.body;
+  const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
   if (match) {
     const { key, user } = match;
     if (verificationBadge !== undefined) user.verificationBadge = verificationBadge;
@@ -868,10 +1045,10 @@ app.patch('/api/admin/users/:phone/badge', (req: Request, res: Response) => {
   res.status(404).json({ error: 'User not found' });
 });
 
-app.patch('/api/admin/users/:phone/status', (req: Request, res: Response) => {
+app.patch('/api/admin/users/:phone/status', async (req: Request, res: Response) => {
   const { phone } = req.params;
-  const { status, verificationBadge, role, walletBalanceNgn, reason } = req.body;
-  const match = findUserEntry(phone);
+  const { status, verificationBadge, role, walletBalanceNgn, reason, phoneNumber, fullName, avatarUrl } = req.body;
+  const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
   if (match) {
     const { key, user } = match;
     const cleanKey = user.cleanPhone || key;
@@ -911,10 +1088,10 @@ app.patch('/api/admin/users/:phone/status', (req: Request, res: Response) => {
 });
 
 // Admin Permanent Ban Endpoint
-app.post('/api/admin/users/:phone/ban', (req: Request, res: Response) => {
+app.post('/api/admin/users/:phone/ban', async (req: Request, res: Response) => {
   const { phone } = req.params;
-  const { reason } = req.body;
-  const match = findUserEntry(phone);
+  const { reason, phoneNumber, fullName, avatarUrl } = req.body;
+  const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
   if (match) {
     const { key, user } = match;
     const cleanKey = user.cleanPhone || key;
@@ -948,9 +1125,9 @@ app.post('/api/admin/users/:phone/ban', (req: Request, res: Response) => {
 });
 
 // Admin Unban / Restore Endpoint
-app.post('/api/admin/users/:phone/unban', (req: Request, res: Response) => {
+app.post('/api/admin/users/:phone/unban', async (req: Request, res: Response) => {
   const { phone } = req.params;
-  const match = findUserEntry(phone);
+  const match = await ensureUserEntry(phone, req.body);
   if (match) {
     const { key, user } = match;
     user.status = 'active';
@@ -966,10 +1143,10 @@ app.post('/api/admin/users/:phone/unban', (req: Request, res: Response) => {
 });
 
 // Admin Wallet Direct Adjuster
-app.post('/api/admin/users/:phone/adjust-wallet', (req: Request, res: Response) => {
+app.post('/api/admin/users/:phone/adjust-wallet', async (req: Request, res: Response) => {
   const { phone } = req.params;
-  const { newBalance, deltaNgn, note } = req.body;
-  const match = findUserEntry(phone);
+  const { newBalance, deltaNgn, note, phoneNumber, fullName, avatarUrl } = req.body;
+  const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
   if (match) {
     const { key, user } = match;
     const cleanKey = user.cleanPhone || key;
@@ -1053,13 +1230,17 @@ const onlineUsers = new Map<string, { userId: string; userName: string; avatar?:
 io.on('connection', (socket: Socket) => {
   console.log(`⚡ [Socket Connected]: ${socket.id}`);
 
-  // Immediately push authoritative live admin config, feature flags, CMS, and broadcast state
+  // Immediately push authoritative live admin config, feature flags, CMS, broadcast, and user directory
   socket.emit('admin_config_updated', systemConfig);
   socket.emit('admin_features_updated', featureFlags);
   socket.emit('admin_cms_updated', cmsData);
+  socket.emit('admin_users_snapshot', Array.from(usersByPhone.values()));
   if (activeBroadcast) {
     socket.emit('system_broadcast', activeBroadcast);
   }
+  syncUsersFromSupabase().then(() => {
+    socket.emit('admin_users_snapshot', Array.from(usersByPhone.values()));
+  }).catch(() => {});
 
   // User presence registration
   socket.on('user_online', (userData: { userId: string; userName: string; avatar?: string; phoneNumber?: string; role?: string; deviceInfo?: string }) => {
@@ -1070,10 +1251,15 @@ io.on('connection', (socket: Socket) => {
     });
     if (userData?.phoneNumber) {
       const clean = userData.phoneNumber.replace(/\D/g, '');
-      (socket as any)._userCleanPhone = clean;
+      const existingMatch = findUserEntry(userData.phoneNumber) || findUserEntry(clean);
+      const storeKey = existingMatch?.key || clean;
+      (socket as any)._userCleanPhone = storeKey;
       phoneToSocketId.set(clean, socket.id);
+      if (storeKey !== clean) phoneToSocketId.set(storeKey, socket.id);
       socket.join(`phone:${clean}`);
-      const existing = usersByPhone.get(clean);
+      if (storeKey !== clean) socket.join(`phone:${storeKey}`);
+
+      const existing = existingMatch?.user || usersByPhone.get(clean);
       if (existing) {
         if (existing.status === 'banned') {
           console.warn(`🚫 [BANNED USER ATTEMPT]: ${existing.fullName} (${clean}) rejected.`);
@@ -1087,14 +1273,17 @@ io.on('connection', (socket: Socket) => {
         }
         existing.isOnline = true;
         existing.lastSeen = 'online';
-        if (userData.userName) existing.fullName = userData.userName;
+        if (userData.userName && (!existing.fullName || existing.fullName === 'AGC User' || existing.fullName === 'User')) {
+          existing.fullName = userData.userName;
+        }
         if (userData.avatar) existing.avatarUrl = userData.avatar;
-        if (userData.role) existing.role = userData.role;
+        if (!existing.role && userData.role) existing.role = userData.role;
         if (userData.deviceInfo) existing.deviceInfo = userData.deviceInfo;
-        usersByPhone.set(clean, existing);
+        usersByPhone.set(storeKey, existing);
         saveUsersFile();
+        io.emit('user_updated', existing);
       } else {
-        usersByPhone.set(clean, {
+        const createdUser: RegisteredUser = {
           id: userData.userId || `usr_${Date.now()}`,
           fullName: userData.userName || 'AGC User',
           phoneNumber: userData.phoneNumber,
@@ -1103,12 +1292,15 @@ io.on('connection', (socket: Socket) => {
           registeredAt: new Date().toISOString(),
           role: userData.role || 'user',
           status: 'active',
+          verificationBadge: null,
           walletBalanceNgn: 50000,
           isOnline: true,
           lastSeen: 'online',
           deviceInfo: userData.deviceInfo,
-        });
+        };
+        usersByPhone.set(storeKey, createdUser);
         saveUsersFile();
+        io.emit('user_registered', createdUser);
       }
     }
     io.emit('presence_update', Array.from(onlineUsers.values()));
@@ -1118,20 +1310,29 @@ io.on('connection', (socket: Socket) => {
   socket.on('register_user', (userData: any) => {
     if (!userData?.phoneNumber) return;
     const clean = userData.phoneNumber.replace(/\D/g, '');
+    const existingMatch = findUserEntry(userData.phoneNumber) || findUserEntry(clean);
+    const storeKey = existingMatch?.key || clean;
+    const existing = existingMatch?.user;
     const reg: RegisteredUser = {
-      id: userData.id || `usr_${Date.now()}`,
-      fullName: userData.fullName || userData.name || 'AGC User',
-      phoneNumber: userData.phoneNumber,
-      cleanPhone: clean,
-      avatarUrl: userData.avatarUrl || userData.avatar,
-      about: userData.about || 'Available · Using AGC',
-      registeredAt: new Date().toISOString(),
-      role: userData.role || 'user',
+      ...(existing || {}),
+      id: existing?.id || userData.id || `usr_${Date.now()}`,
+      fullName: userData.fullName || userData.name || existing?.fullName || 'AGC User',
+      phoneNumber: existing?.phoneNumber || userData.phoneNumber,
+      cleanPhone: existing?.cleanPhone || clean,
+      avatarUrl: userData.avatarUrl || userData.avatar || existing?.avatarUrl,
+      about: userData.about || existing?.about || 'Available · Using AGC',
+      registeredAt: existing?.registeredAt || new Date().toISOString(),
+      role: existing?.role || userData.role || 'user',
+      status: existing?.status || 'active',
+      verificationBadge: existing?.verificationBadge ?? null,
+      walletBalanceNgn: existing?.walletBalanceNgn ?? 50000,
+      isOnline: true,
+      lastSeen: 'online',
     };
-    usersByPhone.set(clean, reg);
+    usersByPhone.set(storeKey, reg);
     saveUsersFile();
     socket.join(`phone:${clean}`);
-    socket.broadcast.emit('user_registered', reg);
+    io.emit(existing ? 'user_updated' : 'user_registered', reg);
   });
 
   // Town Communities Broadcast
@@ -1348,6 +1549,11 @@ io.on('connection', (socket: Socket) => {
 
 // Start listening with Vite middleware in dev or static dist in production
 async function startServer() {
+  await syncUsersFromSupabase(true);
+  setInterval(() => {
+    syncUsersFromSupabase().catch(() => {});
+  }, 30000);
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -1368,7 +1574,7 @@ async function startServer() {
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 AGC Live Gateway running on http://0.0.0.0:${PORT}`);
-    console.log(`📡 WebSocket & User Registry ready`);
+    console.log(`📡 WebSocket & User Registry ready (${usersByPhone.size} users loaded)`);
   });
 }
 

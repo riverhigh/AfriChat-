@@ -46,6 +46,8 @@ import {
   MessageSquare,
   UserCheck,
   UserX,
+  BadgeCheck,
+  Crown,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
@@ -104,6 +106,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     currentUser,
     isUserOnline,
     getLastSeen,
+    getBadgeForPhone,
     typingUsers,
     sendTypingIndicator,
     friendRequests,
@@ -562,15 +565,54 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 >
                   <div className="font-bold text-sm leading-tight text-white group-hover:text-purple-300 truncate flex items-center gap-1.5 transition-colors">
                     <span>{currentChat.name}</span>
-                    {currentChat.isCelebrityVerified && (
-                      <span
-                        className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-amber-500/25 to-purple-600/30 border border-amber-400/60 text-amber-300 text-[9px] font-extrabold shadow-2xs shrink-0"
-                        title={`Celebrity Verified: ${currentChat.celebrityStageName || currentChat.name} (${currentChat.celebrityCategory || 'VIP / Artist'})`}
-                      >
-                        <CheckCircle2 className="w-3 h-3 text-amber-400 fill-amber-400/20" />
-                        <span>Celebrity</span>
-                      </span>
-                    )}
+                    {(() => {
+                      const liveBadge =
+                        !currentChat.isGroup && !currentChat.isChannel
+                          ? getBadgeForPhone(currentChat.phoneNumber || currentChat.phone || currentChat.id)
+                          : null;
+                      if (liveBadge === 'blue') {
+                        return (
+                          <span
+                            className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-sky-500/25 border border-sky-400/60 text-sky-300 text-[9px] font-extrabold shrink-0"
+                            title="Blue VIP Verified"
+                          >
+                            <BadgeCheck className="w-3 h-3 text-sky-400" />
+                            <span>Verified</span>
+                          </span>
+                        );
+                      }
+                      if (liveBadge === 'gold') {
+                        return (
+                          <span
+                            className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-amber-400/25 border border-amber-400/60 text-amber-300 text-[9px] font-extrabold shrink-0"
+                            title="Gold Verified Merchant"
+                          >
+                            <BadgeCheck className="w-3 h-3 text-amber-400" />
+                            <span>Merchant</span>
+                          </span>
+                        );
+                      }
+                      if (liveBadge === 'creator_plus' || currentChat.isCelebrityVerified) {
+                        return (
+                          <span
+                            className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-amber-500/25 to-purple-600/30 border border-amber-400/60 text-amber-300 text-[9px] font-extrabold shadow-2xs shrink-0"
+                            title={
+                              liveBadge === 'creator_plus'
+                                ? 'Creator+ VIP'
+                                : `Celebrity Verified: ${currentChat.celebrityStageName || currentChat.name} (${currentChat.celebrityCategory || 'VIP / Artist'})`
+                            }
+                          >
+                            {liveBadge === 'creator_plus' ? (
+                              <Crown className="w-3 h-3 text-purple-300" />
+                            ) : (
+                              <CheckCircle2 className="w-3 h-3 text-amber-400 fill-amber-400/20" />
+                            )}
+                            <span>{liveBadge === 'creator_plus' ? 'Creator+' : 'Celebrity'}</span>
+                          </span>
+                        );
+                      }
+                      return null;
+                    })()}
                     {currentChat.isGroup && (
                       <button
                         onClick={() => setIsGroupInfoOpen(true)}

@@ -34,6 +34,8 @@ import {
   ExternalLink,
   UserPlus,
   UserMinus,
+  BadgeCheck,
+  Crown,
 } from 'lucide-react';
 import { ChatThread } from '../types';
 import { useApp } from '../context/AppContext';
@@ -69,6 +71,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
     currency,
     isUserOnline,
     getLastSeen,
+    getBadgeForPhone,
   } = useApp();
 
   // Local UI State
@@ -353,11 +356,33 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 <Radio className="w-4 h-4" />
               </span>
             )}
-            {chat.isCelebrityVerified && (
-              <span className="absolute -bottom-1 -left-1 w-7 h-7 bg-gradient-to-tr from-amber-400 to-amber-600 rounded-full flex items-center justify-center text-black shadow-lg border-2 border-black">
-                <Star className="w-4 h-4 fill-white text-amber-900" />
-              </span>
-            )}
+            {(() => {
+              const liveBadge = !isGroupOrChannel
+                ? getBadgeForPhone(chat.phoneNumber || chat.phone || chat.id)
+                : null;
+              if (liveBadge === 'blue') {
+                return (
+                  <span className="absolute -bottom-1 -left-1 w-7 h-7 bg-sky-500 rounded-full flex items-center justify-center text-white shadow-lg border-2 border-black" title="Blue VIP Verified">
+                    <BadgeCheck className="w-4 h-4" />
+                  </span>
+                );
+              }
+              if (liveBadge === 'gold') {
+                return (
+                  <span className="absolute -bottom-1 -left-1 w-7 h-7 bg-amber-400 rounded-full flex items-center justify-center text-slate-950 shadow-lg border-2 border-black" title="Gold Verified Merchant">
+                    <BadgeCheck className="w-4 h-4" />
+                  </span>
+                );
+              }
+              if (liveBadge === 'creator_plus' || chat.isCelebrityVerified) {
+                return (
+                  <span className="absolute -bottom-1 -left-1 w-7 h-7 bg-gradient-to-tr from-amber-400 to-purple-600 rounded-full flex items-center justify-center text-white shadow-lg border-2 border-black">
+                    {liveBadge === 'creator_plus' ? <Crown className="w-4 h-4" /> : <Star className="w-4 h-4 fill-white text-amber-900" />}
+                  </span>
+                );
+              }
+              return null;
+            })()}
           </div>
 
           {/* Name & Title */}
@@ -373,16 +398,40 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
               />
             </div>
           ) : (
-            <div className="flex items-center gap-2 justify-center">
+            <div className="flex items-center gap-2 justify-center flex-wrap">
               <h1 className="text-xl font-bold text-white text-center tracking-tight leading-snug">
                 {chat.name}
               </h1>
-              {chat.isCelebrityVerified && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gradient-to-r from-amber-500 to-purple-600 text-white shadow-xs">
-                  <Star className="w-3 h-3 fill-white text-amber-900" />
-                  <span>Celebrity</span>
-                </span>
-              )}
+              {(() => {
+                const liveBadge = !isGroupOrChannel
+                  ? getBadgeForPhone(chat.phoneNumber || chat.phone || chat.id)
+                  : null;
+                if (liveBadge === 'blue') {
+                  return (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-sky-500 text-white shadow-xs">
+                      <BadgeCheck className="w-3 h-3" />
+                      <span>Blue Verified</span>
+                    </span>
+                  );
+                }
+                if (liveBadge === 'gold') {
+                  return (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-400 text-slate-950 shadow-xs">
+                      <BadgeCheck className="w-3 h-3" />
+                      <span>Gold Merchant</span>
+                    </span>
+                  );
+                }
+                if (liveBadge === 'creator_plus' || chat.isCelebrityVerified) {
+                  return (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gradient-to-r from-amber-500 to-purple-600 text-white shadow-xs">
+                      {liveBadge === 'creator_plus' ? <Crown className="w-3 h-3" /> : <Star className="w-3 h-3 fill-white text-amber-900" />}
+                      <span>{liveBadge === 'creator_plus' ? 'Creator+' : 'Celebrity'}</span>
+                    </span>
+                  );
+                }
+                return null;
+              })()}
             </div>
           )}
 

@@ -52,10 +52,10 @@ import {
   UserX,
   Smartphone,
   ShieldAlert,
+  BadgeCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { DispatchDeliveryOrder, FeatureFlags, CmsAnnouncement, CmsFaqItem } from '../types';
-import dbFallbackUsers from '../../data_users.json';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 
 interface LiveAdminMetrics {
@@ -83,6 +83,7 @@ export const AdminDashboardModal: React.FC = () => {
     isAdminModalOpen,
     setIsAdminModalOpen,
     adminUsers,
+    refreshAdminUsers,
     toggleUserVerification,
     toggleUserSuspension,
     escrowOrders,
@@ -170,6 +171,7 @@ export const AdminDashboardModal: React.FC = () => {
   const [configSaved, setConfigSaved] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [featureStatusMsg, setFeatureStatusMsg] = useState<string | null>(null);
+  const [badgeStatusMsg, setBadgeStatusMsg] = useState<string | null>(null);
 
   // CMS form state
   const [cmsNewAnnTitle, setCmsNewAnnTitle] = useState('');
@@ -186,6 +188,7 @@ export const AdminDashboardModal: React.FC = () => {
   const fetchLiveMetrics = async () => {
     setIsRefreshing(true);
     fetchSupabaseUsers();
+    refreshAdminUsers?.();
     try {
       let res: Response | null = null;
       try {
@@ -266,41 +269,64 @@ export const AdminDashboardModal: React.FC = () => {
     };
   }, [isAdminModalOpen, autoRefresh]);
 
-  if (!isAdminModalOpen) return null;
-
-  // Comprehensive Customer Aggregator:
-  // Combines (1) AppContext adminUsers, (2) live backend metrics/users, (3) data_users.json file, (4) localStorage registries, (5) active currentUser
+  // Comprehensive Live Customer Aggregator:
+  // Combines (1) Supabase agc_phone_registry (base identity), (2) AppContext adminUsers (live DB/Socket),
+  // (3) live backend metrics/users (authoritative), (4) active currentUser session
   const mergedUsers = useMemo(() => {
     const map = new Map<string, any>();
 
-    const addUser = (raw: any) => {
+    const normalizePhoneKey = (phoneOrId?: string) => {
+      const digits = (phoneOrId || '').replace(/\D/g, '');
+      if (!digits) return '';
+      return digits.length >= 9 ? digits.slice(-9) : digits;
+    };
+
+    const addUser = (raw: any, authoritative = true) => {
       if (!raw) return;
-      const phone = (raw.phoneNumber || raw.phone || '').trim();
-      const id = raw.id || (phone ? `usr_${phone.replace(/\D/g, '')}` : `usr_${Date.now()}`);
-      const cleanPhone = phone.replace(/\D/g, '');
-      const key = cleanPhone || id;
+      const phone = (raw.phoneNumber || raw.phone || raw.full_phone || '').trim();
+      const digits = (phone || raw.phone_digits || raw.id || '').replace(/\D/g, '');
+      const id = raw.id || (digits ? `usr_${digits}` : `usr_${Date.now()}`);
+      const key = normalizePhoneKey(phone || raw.phone_digits || id) || id;
       if (!key) return;
 
-      const isCurrent = currentUser?.phoneNumber && (currentUser.phoneNumber === phone || (cleanPhone && currentUser.phoneNumber.replace(/\D/g, '') === cleanPhone));
+      const isCurrent = Boolean(
+        currentUser?.phoneNumber &&
+        ((phone && normalizePhoneKey(currentUser.phoneNumber) === normalizePhoneKey(phone)) ||
+          (digits && normalizePhoneKey(currentUser.phoneNumber) === normalizePhoneKey(digits)))
+      );
       const online = Boolean(
         isCurrent ||
         raw.isOnline ||
         raw.lastSeen === 'online' ||
-        (cleanPhone && isUserOnline?.(cleanPhone)) ||
-        (isUserOnline?.(id))
+        (digits && isUserOnline?.(digits)) ||
+        (phone && isUserOnline?.(phone)) ||
+        isUserOnline?.(id)
       );
 
       const existing = map.get(key);
       if (existing) {
         map.set(key, {
           ...existing,
-          ...raw,
+          id: existing.id || id,
           fullName: raw.fullName || raw.name || existing.fullName,
+          phoneNumber: phone || existing.phoneNumber,
           avatarUrl: raw.avatarUrl || existing.avatarUrl,
-          status: raw.status || existing.status || 'active',
+          role: authoritative ? (raw.role || existing.role || 'user') : (existing.role || raw.role || 'user'),
+          verificationBadge: authoritative
+            ? (raw.verificationBadge !== undefined ? raw.verificationBadge : existing.verificationBadge ?? null)
+            : (existing.verificationBadge ?? raw.verificationBadge ?? null),
+          isPhoneVerified: raw.isPhoneVerified !== undefined ? Boolean(raw.isPhoneVerified) : existing.isPhoneVerified,
+          status: authoritative ? (raw.status || existing.status || 'active') : (existing.status || raw.status || 'active'),
+          bannedAt: authoritative ? (raw.bannedAt ?? existing.bannedAt) : (existing.bannedAt ?? raw.bannedAt),
+          banReason: authoritative ? (raw.banReason ?? existing.banReason) : (existing.banReason ?? raw.banReason),
+          joinedDate: raw.joinedDate || (raw.createdAt ? new Date(raw.createdAt).toLocaleDateString() : existing.joinedDate) || 'Recent',
+          walletBalanceNgn: authoritative
+            ? (raw.walletBalanceNgn ?? existing.walletBalanceNgn ?? 50000)
+            : (existing.walletBalanceNgn ?? raw.walletBalanceNgn ?? 50000),
+          ordersCount: raw.ordersCount ?? existing.ordersCount ?? 0,
+          deviceInfo: raw.deviceInfo || existing.deviceInfo,
           isOnline: existing.isOnline || online,
           lastSeen: online ? 'online' : (raw.lastSeen || existing.lastSeen || 'Recently active'),
-          walletBalanceNgn: raw.walletBalanceNgn ?? existing.walletBalanceNgn ?? 50000,
         });
       } else {
         map.set(key, {
@@ -309,86 +335,52 @@ export const AdminDashboardModal: React.FC = () => {
           phoneNumber: phone || (isCurrent ? currentUser.phoneNumber : ''),
           avatarUrl: raw.avatarUrl || (isCurrent ? currentUser.avatarUrl : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'),
           role: raw.role || (isCurrent ? (currentUser.role || 'user') : 'user'),
-          verificationBadge: raw.verificationBadge || null,
+          verificationBadge: raw.verificationBadge ?? null,
           isPhoneVerified: raw.isPhoneVerified !== undefined ? Boolean(raw.isPhoneVerified) : true,
           status: raw.status || 'active',
           bannedAt: raw.bannedAt,
           banReason: raw.banReason,
-          joinedDate: raw.createdAt ? new Date(raw.createdAt).toLocaleDateString() : 'Recent',
+          joinedDate: raw.joinedDate || (raw.createdAt ? new Date(raw.createdAt).toLocaleDateString() : 'Recent'),
           walletBalanceNgn: raw.walletBalanceNgn ?? 50000,
           ordersCount: raw.ordersCount || 0,
+          deviceInfo: raw.deviceInfo,
           isOnline: online,
           lastSeen: online ? 'online' : (raw.lastSeen || 'Recently active'),
         });
       }
     };
 
-    // 1. Seed from data_users.json database file
-    if (Array.isArray(dbFallbackUsers)) {
-      dbFallbackUsers.forEach(addUser);
-    }
-
-    // 2. Check localStorage accounts
-    try {
-      const allRaw = localStorage.getItem('AGC_all_registered_users');
-      if (allRaw) {
-        const parsed = JSON.parse(allRaw);
-        if (Array.isArray(parsed)) parsed.forEach(addUser);
-      }
-    } catch (_) {}
-
-    try {
-      const regMapRaw = localStorage.getItem('AGC_registered_phones');
-      if (regMapRaw) {
-        const parsed = JSON.parse(regMapRaw);
-        if (parsed && typeof parsed === 'object') {
-          Object.values(parsed).forEach(addUser);
-        }
-      }
-    } catch (_) {}
-
-    try {
-      const pRaw = localStorage.getItem('AGC_user_profile_v2');
-      if (pRaw) {
-        const parsed = JSON.parse(pRaw);
-        if (parsed?.phoneNumber) addUser(parsed);
-      }
-    } catch (_) {}
-
-    // 3. Logged in currentUser
-    if (currentUser?.phoneNumber) {
-      addUser(currentUser);
-    }
-
-    // 4. AppContext adminUsers state
-    if (Array.isArray(adminUsers)) {
-      adminUsers.forEach(addUser);
-    }
-
-    // 5. Live Supabase SQL Database (agc_phone_registry)
+    // 1. Live Supabase SQL Database (agc_phone_registry) as base registered user directory (non-authoritative for admin fields)
     if (Array.isArray(supabaseUsers) && supabaseUsers.length > 0) {
       supabaseUsers.forEach((row: any) => {
+        const phoneStr = row.full_phone || (row.phone_digits ? `+${String(row.phone_digits).replace(/^\+/, '')}` : '');
+        const cleanDigits = (row.phone_digits || phoneStr).replace(/\D/g, '');
         addUser({
-          id: `usr_${row.phone_digits || (row.full_phone || '').replace(/\D/g, '')}`,
+          id: `usr_${cleanDigits}`,
           fullName: row.username || 'User',
-          phoneNumber: row.full_phone || (row.phone_digits ? `+${row.phone_digits}` : ''),
+          phoneNumber: phoneStr,
           avatarUrl: row.avatar_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || 'user')}`,
-          role: 'user',
-          verificationBadge: null,
           isPhoneVerified: true,
-          status: 'active',
           joinedDate: row.registered_at ? new Date(row.registered_at).toLocaleDateString() : 'Recent',
-          walletBalanceNgn: 50000,
-          ordersCount: 0,
-          isOnline: Boolean(isUserOnline?.(row.full_phone?.replace(/\D/g, ''))),
-          lastSeen: row.updated_at ? new Date(row.updated_at).toLocaleDateString() : null,
-        });
+          isOnline: Boolean(isUserOnline?.(cleanDigits) || isUserOnline?.(phoneStr)),
+          lastSeen: row.updated_at || row.registered_at || null,
+        }, false);
       });
     }
 
-    // 6. Backend live metrics
+    // 2. AppContext live adminUsers state (backed by /api/users + Socket.IO + Supabase broadcast)
+    if (Array.isArray(adminUsers)) {
+      adminUsers.forEach((u) => addUser(u, true));
+    }
+
+    // 3. Backend live metrics registeredUsers (authoritative server memory/file + Supabase merge)
     if (liveMetrics?.registeredUsers && Array.isArray(liveMetrics.registeredUsers)) {
-      liveMetrics.registeredUsers.forEach(addUser);
+      liveMetrics.registeredUsers.forEach((u) => addUser(u, true));
+    }
+
+    // 4. Logged in currentUser on this client (only marks current session & keeps profile fields fresh)
+    if (currentUser?.phoneNumber) {
+      addUser(currentUser, false);
     }
 
     return Array.from(map.values());
@@ -534,6 +526,26 @@ export const AdminDashboardModal: React.FC = () => {
     }
   };
 
+  // Keep selectedCustomer synchronized with live mergedUsers updates
+  useEffect(() => {
+    if (!selectedCustomer) return;
+    const selDigits = (selectedCustomer.phoneNumber || selectedCustomer.id || '').replace(/\D/g, '').slice(-9);
+    const updated = mergedUsers.find(
+      (u) =>
+        u.id === selectedCustomer.id ||
+        (selDigits && (u.phoneNumber || u.id || '').replace(/\D/g, '').slice(-9) === selDigits)
+    );
+    if (updated && (
+      updated.verificationBadge !== selectedCustomer.verificationBadge ||
+      updated.role !== selectedCustomer.role ||
+      updated.status !== selectedCustomer.status ||
+      updated.walletBalanceNgn !== selectedCustomer.walletBalanceNgn ||
+      updated.isOnline !== selectedCustomer.isOnline
+    )) {
+      setSelectedCustomer(updated);
+    }
+  }, [mergedUsers, selectedCustomer]);
+
   const formatLastSeen = (iso?: string): string => {
     if (!iso) return 'Unknown';
     const diff = Date.now() - new Date(iso).getTime();
@@ -551,6 +563,8 @@ export const AdminDashboardModal: React.FC = () => {
     const s = sec % 60;
     return `${hrs}h ${mins}m ${s}s`;
   };
+
+  if (!isAdminModalOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-200">
@@ -984,6 +998,16 @@ export const AdminDashboardModal: React.FC = () => {
                 </div>
               </div>
 
+              {/* Live Badge Sync Banner */}
+              {badgeStatusMsg && (
+                <div className="px-3.5 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-mono font-bold flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>{badgeStatusMsg}</span>
+                  </span>
+                </div>
+              )}
+
               {/* Users Directory Table */}
               <div className="space-y-2">
                 {filteredUsers.length === 0 ? (
@@ -1030,6 +1054,11 @@ export const AdminDashboardModal: React.FC = () => {
                                 ★
                               </span>
                             )}
+                            {user.verificationBadge === 'creator_plus' && (
+                              <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-gradient-to-tr from-purple-500 to-pink-500 text-white rounded-full flex items-center justify-center text-[9px] font-bold shadow-xs">
+                                ✦
+                              </span>
+                            )}
                             {isBanned && (
                               <span className="absolute -top-1 -left-1 w-4 h-4 bg-rose-600 text-white rounded-full flex items-center justify-center text-[8px] font-bold">
                                 🚫
@@ -1042,6 +1071,24 @@ export const AdminDashboardModal: React.FC = () => {
                               <h4 className="text-xs font-bold text-white hover:text-purple-300 transition-colors truncate">
                                 {user.fullName}
                               </h4>
+                              {user.verificationBadge === 'blue' && (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded-full font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40 flex items-center gap-0.5">
+                                  <BadgeCheck className="w-2.5 h-2.5 text-sky-400" />
+                                  <span>Blue VIP</span>
+                                </span>
+                              )}
+                              {user.verificationBadge === 'gold' && (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded-full font-bold bg-amber-400/20 text-amber-300 border border-amber-400/40 flex items-center gap-0.5">
+                                  <BadgeCheck className="w-2.5 h-2.5 text-amber-400" />
+                                  <span>Gold Merchant</span>
+                                </span>
+                              )}
+                              {user.verificationBadge === 'creator_plus' && (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded-full font-bold bg-purple-500/25 text-purple-200 border border-purple-400/50 flex items-center gap-0.5">
+                                  <Sparkles className="w-2.5 h-2.5 text-purple-300" />
+                                  <span>Creator+</span>
+                                </span>
+                              )}
                               <span className="text-[10px] px-1.5 py-0.2 rounded font-mono uppercase font-semibold bg-slate-800 text-slate-300">
                                 {user.role}
                               </span>
@@ -1129,39 +1176,82 @@ export const AdminDashboardModal: React.FC = () => {
                           {/* Blue Checkmark */}
                           <button
                             type="button"
-                            onClick={() =>
-                              toggleUserVerification(
-                                user.id,
-                                user.verificationBadge === 'blue' ? null : 'blue'
-                              )
-                            }
+                            onClick={async () => {
+                              const nextBadge = user.verificationBadge === 'blue' ? null : 'blue';
+                              const ok = await toggleUserVerification(
+                                user.phoneNumber || user.id,
+                                nextBadge,
+                                { phoneNumber: user.phoneNumber, fullName: user.fullName, avatarUrl: user.avatarUrl }
+                              );
+                              setBadgeStatusMsg(
+                                ok
+                                  ? `${user.fullName}: ${nextBadge ? 'Blue VIP Check assigned live!' : 'Badge removed live!'}`
+                                  : `Failed to sync badge for ${user.fullName}`
+                              );
+                              setTimeout(() => setBadgeStatusMsg(null), 2800);
+                            }}
                             className={`p-1.5 rounded-xl text-[10px] border transition-all ${
                               user.verificationBadge === 'blue'
-                                ? 'bg-sky-500 text-white border-sky-400'
+                                ? 'bg-sky-500 text-white border-sky-400 shadow-sm shadow-sky-500/30'
                                 : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-sky-300'
                             }`}
                             title="Toggle Blue VIP Check"
                           >
-                            <Crown className="w-3.5 h-3.5" />
+                            <BadgeCheck className="w-3.5 h-3.5" />
                           </button>
 
                           {/* Gold Merchant Checkmark */}
                           <button
                             type="button"
-                            onClick={() =>
-                              toggleUserVerification(
-                                user.id,
-                                user.verificationBadge === 'gold' ? null : 'gold'
-                              )
-                            }
+                            onClick={async () => {
+                              const nextBadge = user.verificationBadge === 'gold' ? null : 'gold';
+                              const ok = await toggleUserVerification(
+                                user.phoneNumber || user.id,
+                                nextBadge,
+                                { phoneNumber: user.phoneNumber, fullName: user.fullName, avatarUrl: user.avatarUrl }
+                              );
+                              setBadgeStatusMsg(
+                                ok
+                                  ? `${user.fullName}: ${nextBadge ? 'Gold Merchant Check assigned live!' : 'Badge removed live!'}`
+                                  : `Failed to sync badge for ${user.fullName}`
+                              );
+                              setTimeout(() => setBadgeStatusMsg(null), 2800);
+                            }}
                             className={`p-1.5 rounded-xl text-[10px] border transition-all ${
                               user.verificationBadge === 'gold'
-                                ? 'bg-amber-400 text-slate-950 border-amber-300 font-bold'
+                                ? 'bg-amber-400 text-slate-950 border-amber-300 font-bold shadow-sm shadow-amber-400/30'
                                 : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-amber-300'
                             }`}
                             title="Toggle Gold Merchant Check"
                           >
                             <Store className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Creator+ Checkmark */}
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const nextBadge = user.verificationBadge === 'creator_plus' ? null : 'creator_plus';
+                              const ok = await toggleUserVerification(
+                                user.phoneNumber || user.id,
+                                nextBadge,
+                                { phoneNumber: user.phoneNumber, fullName: user.fullName, avatarUrl: user.avatarUrl }
+                              );
+                              setBadgeStatusMsg(
+                                ok
+                                  ? `${user.fullName}: ${nextBadge ? 'Creator+ VIP Badge assigned live!' : 'Badge removed live!'}`
+                                  : `Failed to sync badge for ${user.fullName}`
+                              );
+                              setTimeout(() => setBadgeStatusMsg(null), 2800);
+                            }}
+                            className={`p-1.5 rounded-xl text-[10px] border transition-all ${
+                              user.verificationBadge === 'creator_plus'
+                                ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white border-purple-300 font-bold shadow-sm shadow-purple-500/30'
+                                : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-purple-300'
+                            }`}
+                            title="Toggle Creator+ VIP Badge"
+                          >
+                            <Crown className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </div>
@@ -1303,6 +1393,58 @@ export const AdminDashboardModal: React.FC = () => {
                         <span className="text-[10px] text-slate-500 block">Platform / Device:</span>
                         <span className="font-bold text-slate-300 truncate block">{selectedCustomer.deviceInfo || 'AfriChat Web / PWA'}</span>
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Verification Badge Controls */}
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <BadgeCheck className="w-3.5 h-3.5 text-sky-400" />
+                        <span>Live Verification Badge</span>
+                      </h4>
+                      <span className="text-[10px] font-mono text-slate-400">
+                        Current: <strong className="text-white uppercase">{selectedCustomer.verificationBadge || 'None'}</strong>
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-bold">
+                      {([
+                        { id: 'blue', label: 'Blue VIP', cls: 'bg-sky-500 text-white border-sky-400' },
+                        { id: 'gold', label: 'Gold Merchant', cls: 'bg-amber-400 text-slate-950 border-amber-300' },
+                        { id: 'creator_plus', label: 'Creator+', cls: 'bg-gradient-to-r from-purple-500 to-pink-500 text-white border-purple-400' },
+                        { id: null, label: 'No Badge', cls: 'bg-slate-700 text-white border-slate-500' },
+                      ] as const).map((b) => {
+                        const active = (selectedCustomer.verificationBadge || null) === b.id;
+                        return (
+                          <button
+                            key={String(b.id)}
+                            type="button"
+                            onClick={async () => {
+                              const ok = await toggleUserVerification(
+                                selectedCustomer.phoneNumber || selectedCustomer.id,
+                                b.id,
+                                {
+                                  phoneNumber: selectedCustomer.phoneNumber,
+                                  fullName: selectedCustomer.fullName,
+                                  avatarUrl: selectedCustomer.avatarUrl,
+                                }
+                              );
+                              setSelectedCustomer({ ...selectedCustomer, verificationBadge: b.id });
+                              setBadgeStatusMsg(
+                                ok
+                                  ? `${selectedCustomer.fullName}: ${b.label} saved live!`
+                                  : `Failed to sync badge`
+                              );
+                              setTimeout(() => setBadgeStatusMsg(null), 2800);
+                            }}
+                            className={`px-3 py-2 rounded-xl border transition-all ${
+                              active ? `${b.cls} shadow-md` : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-600'
+                            }`}
+                          >
+                            {b.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 

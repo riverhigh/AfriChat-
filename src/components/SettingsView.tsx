@@ -33,6 +33,7 @@ import {
   Crown,
   BookOpen,
   Camera,
+  BadgeCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { CurrencyCode, LanguageCode, AppFontSize } from '../types';
@@ -110,6 +111,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     CURRENCY_RATES,
     updateUserProfile,
     isFeatureEnabled,
+    getBadgeForPhone,
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan' | 'chat_bg'>('services');
@@ -608,10 +610,47 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               )}
 
               <div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <h3 className="font-bold text-base text-slate-900 dark:text-slate-100">
                     {currentUser.fullName}
                   </h3>
+                  {(() => {
+                    const activeBadge = currentUser.verificationBadge || getBadgeForPhone(currentUser.phoneNumber);
+                    if (activeBadge === 'blue') {
+                      return (
+                        <span
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/40 text-[10px] font-bold"
+                          title="Blue VIP Verified"
+                        >
+                          <BadgeCheck className="w-3.5 h-3.5 text-sky-500 fill-sky-500/15" />
+                          <span>Verified</span>
+                        </span>
+                      );
+                    }
+                    if (activeBadge === 'gold') {
+                      return (
+                        <span
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-700 dark:text-amber-300 border border-amber-400/50 text-[10px] font-bold"
+                          title="Gold Verified Merchant"
+                        >
+                          <BadgeCheck className="w-3.5 h-3.5 text-amber-500 fill-amber-400/20" />
+                          <span>Merchant</span>
+                        </span>
+                      );
+                    }
+                    if (activeBadge === 'creator_plus') {
+                      return (
+                        <span
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-600 dark:text-purple-300 border border-purple-500/40 text-[10px] font-bold"
+                          title="Creator+ VIP"
+                        >
+                          <Crown className="w-3 h-3 text-purple-500" />
+                          <span>Creator+</span>
+                        </span>
+                      );
+                    }
+                    return null;
+                  })()}
                   {currentUser.isPhoneVerified && (
                     <span className="text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.2 rounded-full font-mono">
                       OTP Verified
