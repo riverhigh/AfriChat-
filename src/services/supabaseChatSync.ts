@@ -1,11 +1,18 @@
 import { supabase, isSupabaseConfigured } from './supabase';
-import type { ChatMessage, ChatThread } from '../types';
+import type { ChatMessage, ChatThread, UserProfile, UserWallet } from '../types';
 
 const CHAT_BACKUP_PREFIX = '__agc_sys_chats_';
-const MAX_CHATS_BACKUP = 80;
-const MAX_MESSAGES_PER_CHAT_BACKUP = 60;
-const MAX_AVATAR_LEN = 24000;
-const MAX_MEDIA_LEN = 68000;
+const MAX_CHATS_BACKUP = 120;
+const MAX_MESSAGES_PER_CHAT_BACKUP = 160;
+const MAX_AVATAR_LEN = 32000;
+const MAX_IMAGE_LEN = 120000;
+const MAX_VOICE_LEN = 350000;
+
+export interface AccountBackupSnapshot {
+  wallet?: UserWallet;
+  userProfile?: Partial<UserProfile>;
+  updatedAt?: string;
+}
 
 function getPhoneKeyVariants(phoneNumber?: string): { digits: string; last9: string } {
   const raw = (phoneNumber || '').replace(/\D/g, '');
@@ -20,7 +27,7 @@ function getPhoneKeyVariants(phoneNumber?: string): { digits: string; last9: str
 
 /**
  * Strips heavy/redundant blobs before persisting chats to Supabase
- * so storage usage stays tiny and fast.
+ * so storage usage stays fast while preserving voice notes and photos.
  */
 export function sanitizeChatsForBackup(chats: ChatThread[]): ChatThread[] {
   return (chats || []).slice(0, MAX_CHATS_BACKUP).map((c) => ({
@@ -48,17 +55,17 @@ export function sanitizeMessagesForBackup(
             ? m.senderAvatar
             : undefined,
       };
-      if (sanitized.imageUrl && sanitized.imageUrl.startsWith('data:') && sanitized.imageUrl.length > MAX_MEDIA_LEN) {
+      if (sanitized.imageUrl && sanitized.imageUrl.startsWith('data:') && sanitized.imageUrl.length > MAX_IMAGE_LEN) {
         sanitized.imageUrl = undefined;
         if (!sanitized.text) sanitized.text = '📷 Photo';
       }
-      if (sanitized.memeSticker?.imageUrl && sanitized.memeSticker.imageUrl.startsWith('data:') && sanitized.memeSticker.imageUrl.length > MAX_MEDIA_LEN) {
+      if (sanitized.memeSticker?.imageUrl && sanitized.memeSticker.imageUrl.startsWith('data:') && sanitized.memeSticker.imageUrl.length > MAX_IMAGE_LEN) {
         sanitized.memeSticker = {
           ...sanitized.memeSticker,
           imageUrl: '',
         };
       }
-      if (sanitized.voiceNote?.audioDataUrl && sanitized.voiceNote.audioDataUrl.length > MAX_MEDIA_LEN) {
+      if (sanitized.voiceNote?.audioDataUrl && sanitized.voiceNote.audioDataUrl.length > MAX_VOICE_LEN) {
         sanitized.voiceNote = {
           ...sanitized.voiceNote,
           audioDataUrl: '',
@@ -68,6 +75,17 @@ export function sanitizeMessagesForBackup(
     });
   }
   return out;
+}
+
+export function sanitizeProfileForBackup(profile?: Partial<UserProfile>): Partial<UserProfile> | undefined {
+  if (!profile || !profile.phoneNumber) return undefined;
+  return {
+    ...profile,
+    avatarUrl:
+      profile.avatarUrl && (!profile.avatarUrl.startsWith('data:') || profile.avatarUrl.length <= 48000)
+        ? profile.avatarUrl
+        : undefined,
+  };
 }
 
 export function mergeChatThreadsAndMessages(
@@ -121,6 +139,13 @@ export function mergeChatThreadsAndMessages(
           ...existing,
           ...m,
           imageUrl: m.imageUrl || existing.imageUrl,
+          voiceNote: m.voiceNote
+            ? {
+                ...(existing.voiceNote || {}),
+                ...m.voiceNote,
+                audioDataUrl: m.voiceNote.audioDataUrl || existing.voiceNote?.audioDataUrl,
+              }
+            : existing.voiceNote,
         });
       }
     }
@@ -136,7 +161,8 @@ export function mergeChatThreadsAndMessages(
 export async function saveUserChatsBackupToSupabase(
   phoneNumber: string,
   chats: ChatThread[],
-  messages: Record<string, ChatMessage[]>
+  messages: Record<string, ChatMessage[]>,
+  accountSnapshot?: AccountBackupSnapshot
 ): Promise<boolean> {
   if (!isSupabaseConfigured || !phoneNumber) return false;
   const { last9 } = getPhoneKeyVariants(phoneNumber);
@@ -145,6 +171,15 @@ export async function saveUserChatsBackupToSupabase(
   const cleanChats = sanitizeChatsForBackup(chats);
   const cleanMsgs = sanitizeMessagesForBackup(messages);
   const nowIso = new Date().toISOString();
+  const cleanAccount: AccountBackupSnapshot | undefined = accountSnapshot
+    ? {
+        wallet: accountSnapshot.wallet,
+        userProfile: sanitizeProfileForBackup(accountSnapshot.userProfile),
+        updatedAt: accountSnapshot.updatedAt || nowIso,
+      }
+    : undefined;
+
+  let savedPrimary = false;
 
   // 1. Try dedicated agc_chat_backups table first (if SQL migration was run)
   try {
@@ -158,37 +193,41 @@ export async function saveUserChatsBackupToSupabase(
       },
       { onConflict: 'phone_digits' }
     );
-    if (!error) return true;
+    if (!error) savedPrimary = true;
   } catch (_) {}
 
-  // 2. Automatic fallback using existing live scam_reports table (__agc_sys_chats_*)
-  try {
-    const { error } = await supabase.from('scam_reports').upsert(
-      {
-        target_value: `${CHAT_BACKUP_PREFIX}${last9}`,
-        target_type: 'phone',
-        risk_level: 'verified_clean',
-        reports_count: 0,
-        account_name: 'AGC_CHAT_BACKUP',
-        bank_name: 'AGC_SYSTEM',
-        flags: {
-          chats: cleanChats,
-          messages: cleanMsgs,
-          updatedAt: nowIso,
+  // 2. Always persist to scam_reports (__agc_sys_chats_*) as well when accountSnapshot is provided (or as fallback)
+  if (!savedPrimary || cleanAccount) {
+    try {
+      const { error } = await supabase.from('scam_reports').upsert(
+        {
+          target_value: `${CHAT_BACKUP_PREFIX}${last9}`,
+          target_type: 'phone',
+          risk_level: 'verified_clean',
+          reports_count: 0,
+          account_name: 'AGC_CHAT_BACKUP',
+          bank_name: 'AGC_SYSTEM',
+          flags: {
+            chats: cleanChats,
+            messages: cleanMsgs,
+            ...(cleanAccount ? { accountSnapshot: cleanAccount } : {}),
+            updatedAt: nowIso,
+          },
+          updated_at: nowIso,
         },
-        updated_at: nowIso,
-      },
-      { onConflict: 'target_value,target_type' }
-    );
-    return !error;
-  } catch (_) {
-    return false;
+        { onConflict: 'target_value,target_type' }
+      );
+      if (!error) savedPrimary = true;
+    } catch (_) {}
   }
+
+  return savedPrimary;
 }
 
 export async function fetchUserChatsBackupFromSupabase(phoneNumber: string): Promise<{
   chats: ChatThread[];
   messages: Record<string, ChatMessage[]>;
+  accountSnapshot?: AccountBackupSnapshot;
   updatedAt?: string;
 } | null> {
   if (!isSupabaseConfigured || !phoneNumber) return null;
@@ -196,7 +235,12 @@ export async function fetchUserChatsBackupFromSupabase(phoneNumber: string): Pro
   if (!last9) return null;
 
   let backupA: { chats: ChatThread[]; messages: Record<string, ChatMessage[]>; updatedAt?: string } | null = null;
-  let backupB: { chats: ChatThread[]; messages: Record<string, ChatMessage[]>; updatedAt?: string } | null = null;
+  let backupB: {
+    chats: ChatThread[];
+    messages: Record<string, ChatMessage[]>;
+    accountSnapshot?: AccountBackupSnapshot;
+    updatedAt?: string;
+  } | null = null;
 
   // 1. Try agc_chat_backups
   try {
@@ -217,7 +261,7 @@ export async function fetchUserChatsBackupFromSupabase(phoneNumber: string): Pro
     }
   } catch (_) {}
 
-  // 2. Try scam_reports fallback
+  // 2. Try scam_reports backup (also carries accountSnapshot: wallet + profile)
   try {
     const { data, error } = await supabase
       .from('scam_reports')
@@ -233,6 +277,7 @@ export async function fetchUserChatsBackupFromSupabase(phoneNumber: string): Pro
           flags.messages && typeof flags.messages === 'object'
             ? (flags.messages as Record<string, ChatMessage[]>)
             : {},
+        accountSnapshot: flags.accountSnapshot as AccountBackupSnapshot | undefined,
         updatedAt: flags.updatedAt || data.updated_at,
       };
     }
@@ -252,5 +297,9 @@ export async function fetchUserChatsBackupFromSupabase(phoneNumber: string): Pro
     secondary.chats,
     secondary.messages
   );
-  return { ...merged, updatedAt: primary.updatedAt };
+  return {
+    ...merged,
+    accountSnapshot: backupB?.accountSnapshot,
+    updatedAt: primary.updatedAt,
+  };
 }

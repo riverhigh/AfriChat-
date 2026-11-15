@@ -659,7 +659,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
 
       if (isExistingAccount || existing) {
         setIsVerifying(false);
-        loginWithPhone(fullNormalizedNumber, existing?.name || 'AGC User', existing?.avatarUrl, 'Available · Using AGC');
+        loginWithPhone(fullNormalizedNumber, existing?.name || 'AGC User', existing?.avatarUrl, undefined);
         return;
       }
 
@@ -677,7 +677,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
               const data = await resp.json();
               if (data.registered && data.name) {
                 setIsVerifying(false);
-                loginWithPhone(fullNormalizedNumber, data.name, data.avatarUrl, 'Available · Using AGC');
+                loginWithPhone(fullNormalizedNumber, data.name, data.avatarUrl, undefined);
                 return;
               }
             }
@@ -695,7 +695,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
             .maybeSingle();
           if (reg?.username) {
             setIsVerifying(false);
-            loginWithPhone(fullNormalizedNumber, reg.username, reg.avatar_url, 'Available · Using AGC');
+            loginWithPhone(fullNormalizedNumber, reg.username, reg.avatar_url, undefined);
             return;
           }
         } catch (_) {}
@@ -718,7 +718,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         fullNormalizedNumber,
         crossCheck.username || 'AGC User',
         crossCheck.avatarUrl || selectedAvatar,
-        'Available · Using AGC'
+        undefined
       );
       return;
     }
@@ -726,7 +726,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     // Guard 2: LocalStorage check
     const existing = findExistingAccount(phoneNumber, selectedCountry.code);
     if (existing) {
-      loginWithPhone(fullNormalizedNumber, existing.name, existing.avatarUrl, 'Available · Using AGC');
+      loginWithPhone(fullNormalizedNumber, existing.name, existing.avatarUrl, undefined);
       return;
     }
 

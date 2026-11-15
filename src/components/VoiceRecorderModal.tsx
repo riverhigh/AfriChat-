@@ -40,8 +40,11 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const recordedMimeTypeRef = useRef<string>('audio/webm');
+  const stopResolveRef = useRef<(() => void) | null>(null);
   const timerIntervalRef = useRef<number | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const [isSending, setIsSending] = useState(false);
 
   // Map AGC language codes to BCP-47 for Web Speech API
   const langMap: Record<string, string> = {
@@ -51,6 +54,34 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
     ha: 'ha-NG',
     sw: 'sw-KE',
     fr: 'fr-FR',
+  };
+
+  const stopRecorderGracefully = (): Promise<void> => {
+    const rec = mediaRecorderRef.current;
+    if (!rec || rec.state === 'inactive') {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        stopResolveRef.current = null;
+        resolve();
+      };
+      stopResolveRef.current = done;
+      try {
+        if (typeof rec.requestData === 'function') {
+          rec.requestData();
+        }
+      } catch (_) {}
+      try {
+        rec.stop();
+      } catch (_) {
+        done();
+      }
+      setTimeout(done, 600);
+    });
   };
 
   // RULE 2 & RULE 3: Explicitly stop all audio tracks and cleanup on unmount / cancel
@@ -65,6 +96,19 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
       recognitionRef.current = null;
     }
 
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        if (typeof mediaRecorderRef.current.requestData === 'function') {
+          mediaRecorderRef.current.requestData();
+        }
+      } catch (_) {}
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (e) {
+        console.warn('Error stopping media recorder:', e);
+      }
+    }
+
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => {
         try {
@@ -75,12 +119,6 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
         }
       });
       mediaStreamRef.current = null;
-    }
-
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try { mediaRecorderRef.current.stop(); } catch (e) {
-        console.warn('Error stopping media recorder:', e);
-      }
     }
 
     setIsRecording(false);
@@ -97,8 +135,10 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
   useEffect(() => {
     if (!isOpen) {
       stopAllMediaTracks();
+      audioChunksRef.current = [];
       setSeconds(0);
       setLiveTranscript('');
+      setIsSending(false);
     }
   }, [isOpen]);
 
@@ -107,6 +147,7 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
     try {
       setPermissionError(null);
       stopAllMediaTracks();
+      audioChunksRef.current = [];
       setLiveTranscript('');
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -123,17 +164,38 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
 
       mediaStreamRef.current = stream;
 
-      // Start MediaRecorder to capture audio blob
+      // Start MediaRecorder with the best supported MIME type on this browser
       try {
-        const recorder = new MediaRecorder(stream);
+        const candidates = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/mp4',
+          'audio/ogg;codecs=opus',
+          'audio/ogg',
+        ];
+        let chosenMime = '';
+        if (typeof MediaRecorder !== 'undefined' && typeof MediaRecorder.isTypeSupported === 'function') {
+          chosenMime = candidates.find((m) => MediaRecorder.isTypeSupported(m)) || '';
+        }
+        const recorder = chosenMime
+          ? new MediaRecorder(stream, { mimeType: chosenMime })
+          : new MediaRecorder(stream);
+        recordedMimeTypeRef.current = recorder.mimeType || chosenMime || 'audio/webm';
         mediaRecorderRef.current = recorder;
         audioChunksRef.current = [];
         recorder.ondataavailable = (e) => {
-          if (e.data.size > 0) audioChunksRef.current.push(e.data);
+          if (e.data && e.data.size > 0) {
+            audioChunksRef.current.push(e.data);
+          }
         };
-        recorder.start(250); // collect chunks every 250ms
-      } catch (_) {
-        // MediaRecorder fallback — some browsers (Firefox mobile) may not support all formats
+        recorder.onstop = () => {
+          if (stopResolveRef.current) {
+            stopResolveRef.current();
+          }
+        };
+        recorder.start(200);
+      } catch (recErr) {
+        console.warn('MediaRecorder start notice:', recErr);
       }
 
       // Start Web Speech API for free live transcription (Chrome/Android — no API key needed)
@@ -150,7 +212,7 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
           }
           setLiveTranscript(full);
         };
-        rec.onerror = () => {};  // silently ignore (mic already captured)
+        rec.onerror = () => {};
         rec.onend = () => {};
         try { rec.start(); } catch (_) {}
         recognitionRef.current = rec;
@@ -170,35 +232,45 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({ isOpen, 
     }
   };
 
-  const handleStopRecording = () => {
+  const handleStopRecording = async () => {
+    await stopRecorderGracefully();
     stopAllMediaTracks();
   };
 
   const handleSend = async () => {
-    if (!activeChatId) return;
-    const dur = Math.max(2, seconds);
+    if (!activeChatId || isSending) return;
+    setIsSending(true);
+    const dur = Math.max(1, seconds);
 
-    // Convert blob to base64 so audio survives cross-device broadcast
+    // Ensure MediaRecorder has flushed all trailing audio chunks before creating the Blob
+    await stopRecorderGracefully();
+    stopAllMediaTracks();
+
     let audioDataUrl: string | undefined;
     if (audioChunksRef.current.length > 0) {
-      const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-      audioDataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.readAsDataURL(blob);
-      });
+      const chunkMime = audioChunksRef.current[0]?.type || recordedMimeTypeRef.current || 'audio/webm';
+      const blob = new Blob(audioChunksRef.current, { type: chunkMime });
+      if (blob.size > 0) {
+        audioDataUrl = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+          reader.onerror = () => resolve('');
+          reader.readAsDataURL(blob);
+        });
+        if (!audioDataUrl) audioDataUrl = undefined;
+      }
     }
 
-    // transcript is whatever the Web Speech API captured (empty string if unsupported)
     sendVoiceNote(activeChatId, dur, liveTranscript, audioDataUrl, isOneTimeViewEnabled);
     setIsOneTimeViewEnabled(false);
     audioChunksRef.current = [];
-    stopAllMediaTracks();
+    setIsSending(false);
     onClose();
   };
 
   const handleClose = () => {
     stopAllMediaTracks();
+    audioChunksRef.current = [];
     onClose();
   };
 

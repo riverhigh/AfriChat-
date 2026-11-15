@@ -52,6 +52,9 @@ import {
   Gamepad2,
   Trophy,
   MapPin,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
@@ -147,13 +150,112 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [xoBusyId, setXoBusyId] = useState<string | null>(null);
   const [xoErrors, setXoErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
 
-  // Fullscreen image lightbox
+  // Fullscreen image lightbox + Zoom / Pan / Direct Save state
   const [lightboxImg, setLightboxImg] = useState<{
     url: string;
     caption?: string;
     isOneTime?: boolean;
     msgId?: string;
   } | null>(null);
+  const [lightboxZoom, setLightboxZoom] = useState<number>(1);
+  const [lightboxPan, setLightboxPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const lightboxLastTapRef = useRef<number>(0);
+  const lightboxPinchRef = useRef<{ startDist: number; startZoom: number } | null>(null);
+  const lightboxDragRef = useRef<{
+    active: boolean;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
+
+  useEffect(() => {
+    setLightboxZoom(1);
+    setLightboxPan({ x: 0, y: 0 });
+    lightboxPinchRef.current = null;
+    lightboxDragRef.current = null;
+  }, [lightboxImg?.url]);
+
+  const clampZoom = (z: number) => Math.min(4, Math.max(1, Number(z.toFixed(2))));
+
+  const handleSaveImageToDevice = async (url: string) => {
+    const extMatch = url.match(/^data:image\/([a-zA-Z0-9+.-]+);/);
+    const rawExt = extMatch?.[1]?.split('+')[0]?.toLowerCase() || 'jpg';
+    const ext = rawExt === 'jpeg' ? 'jpg' : rawExt;
+    const filename = `agc-photo-${Date.now()}.${ext}`;
+
+    const triggerBlobDownload = (blob: Blob) => {
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      a.rel = 'noopener';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+      setToastNotice('Image saved to device');
+      setTimeout(() => setToastNotice(null), 2200);
+    };
+
+    try {
+      if (url.startsWith('data:')) {
+        const [header, base64Data] = url.split(',');
+        const mime = header.match(/data:([^;]+)/)?.[1] || 'image/jpeg';
+        const byteChars = atob(base64Data || '');
+        const byteNumbers = new Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) {
+          byteNumbers[i] = byteChars.charCodeAt(i);
+        }
+        const blob = new Blob([new Uint8Array(byteNumbers)], { type: mime });
+        triggerBlobDownload(blob);
+        return;
+      }
+
+      const res = await fetch(url, { mode: 'cors' });
+      if (res.ok) {
+        const blob = await res.blob();
+        triggerBlobDownload(blob);
+        return;
+      }
+    } catch (_) {}
+
+    // Fallback via canvas for cross-origin images or direct anchor download (never target="_blank")
+    try {
+      const img = new window.Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('load failed'));
+        img.src = url;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0);
+        const blob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.92)
+        );
+        if (blob) {
+          triggerBlobDownload(blob);
+          return;
+        }
+      }
+    } catch (_) {}
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setToastNotice('Image download started');
+    setTimeout(() => setToastNotice(null), 2200);
+  };
 
   // One-time disappearing text viewer
   const [lightboxOneTimeText, setLightboxOneTimeText] = useState<{
@@ -380,6 +482,15 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       Object.values(audioRefs.current).forEach((a) => {
         try { a.pause(); a.currentTime = 0; } catch (_) {}
       });
+      audioRefs.current = {};
+      Object.values(voiceObjectUrlsRef.current).forEach((u) => {
+        try { URL.revokeObjectURL(u); } catch (_) {}
+      });
+      voiceObjectUrlsRef.current = {};
+      if (voiceFallbackTimerRef.current) {
+        clearInterval(voiceFallbackTimerRef.current);
+        voiceFallbackTimerRef.current = null;
+      }
       if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }
@@ -433,24 +544,117 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     if (isOneTimeViewEnabled) setIsOneTimeViewEnabled(false);
   };
 
-  // Real audio playback ref map (msgId -> HTMLAudioElement)
+  // Real audio playback ref map (msgId -> HTMLAudioElement) + Blob URLs for reliable cross-browser playback
   const audioRefs = useRef<Record<string, HTMLAudioElement>>({});
+  const voiceObjectUrlsRef = useRef<Record<string, string>>({});
+  const voiceFallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const dataUrlToPlayableUrl = (msgId: string, rawUrl: string): string => {
+    if (!rawUrl.startsWith('data:')) return rawUrl;
+    if (voiceObjectUrlsRef.current[msgId]) return voiceObjectUrlsRef.current[msgId];
+    try {
+      const commaIdx = rawUrl.indexOf(',');
+      if (commaIdx === -1) return rawUrl;
+      const meta = rawUrl.slice(0, commaIdx);
+      const base64 = rawUrl.slice(commaIdx + 1);
+      const mime = meta.match(/data:([^;]+)/)?.[1] || 'audio/webm';
+      const bin = atob(base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) {
+        bytes[i] = bin.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: mime });
+      const objUrl = URL.createObjectURL(blob);
+      voiceObjectUrlsRef.current[msgId] = objUrl;
+      return objUrl;
+    } catch (_) {
+      return rawUrl;
+    }
+  };
+
+  const stopAllVoicePlayback = (exceptMsgId?: string) => {
+    Object.entries(audioRefs.current).forEach(([id, a]) => {
+      if (id !== exceptMsgId && !a.paused) {
+        try { a.pause(); a.currentTime = 0; } catch (_) {}
+      }
+    });
+    if (voiceFallbackTimerRef.current) {
+      clearInterval(voiceFallbackTimerRef.current);
+      voiceFallbackTimerRef.current = null;
+    }
+  };
+
+  const playVoiceFallback = (
+    msgId: string,
+    transcriptText?: string,
+    isOneTime?: boolean,
+    durationSeconds?: number
+  ) => {
+    const cleanText = transcriptText?.trim() || '';
+    if (cleanText && typeof window !== 'undefined' && window.speechSynthesis) {
+      try {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(cleanText);
+        let settled = false;
+        utter.onstart = () => {
+          setPlayingVoiceId(msgId);
+          setVoiceProgress((prev) => ({ ...prev, [msgId]: 35 }));
+        };
+        utter.onend = () => {
+          if (settled) return;
+          settled = true;
+          setPlayingVoiceId(null);
+          setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
+          if (isOneTime) markOneTimeAsOpened(msgId);
+        };
+        utter.onerror = () => {
+          if (settled) return;
+          settled = true;
+          setPlayingVoiceId(null);
+          setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
+        };
+        setPlayingVoiceId(msgId);
+        setVoiceProgress((prev) => ({ ...prev, [msgId]: 20 }));
+        window.speechSynthesis.speak(utter);
+        return;
+      } catch (_) {}
+    }
+
+    // Visual timer + gentle notice when raw audio stream is missing/unavailable
+    const totalMs = Math.max(1200, (durationSeconds || 2) * 1000);
+    const startAt = Date.now();
+    setPlayingVoiceId(msgId);
+    setVoiceProgress((prev) => ({ ...prev, [msgId]: 5 }));
+    setToastNotice(cleanText ? 'Playing transcript audio' : 'Audio recording unavailable for this note');
+    setTimeout(() => setToastNotice(null), 2200);
+    voiceFallbackTimerRef.current = setInterval(() => {
+      const elapsed = Date.now() - startAt;
+      const pct = Math.min(100, (elapsed / totalMs) * 100);
+      setVoiceProgress((prev) => ({ ...prev, [msgId]: pct }));
+      if (elapsed >= totalMs) {
+        if (voiceFallbackTimerRef.current) {
+          clearInterval(voiceFallbackTimerRef.current);
+          voiceFallbackTimerRef.current = null;
+        }
+        setPlayingVoiceId(null);
+        setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
+        if (isOneTime) markOneTimeAsOpened(msgId);
+      }
+    }, 100);
+  };
 
   const toggleVoicePlayback = (
     msgId: string,
     audioDataUrl?: string,
     transcriptText?: string,
-    isOneTime?: boolean
+    isOneTime?: boolean,
+    durationSeconds?: number
   ) => {
-    // Pause any other playing audio
-    Object.entries(audioRefs.current).forEach(([id, a]) => {
-      if (id !== msgId && !a.paused) {
-        try { a.pause(); a.currentTime = 0; } catch (_) {}
-      }
-    });
+    stopAllVoicePlayback(msgId);
 
     const existing = audioRefs.current[msgId];
 
+    // If currently playing this voice note, pause & reset
     if (existing && !existing.paused) {
       existing.pause();
       existing.currentTime = 0;
@@ -460,8 +664,14 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       return;
     }
 
-    if (playingVoiceId === msgId && typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
+    if (playingVoiceId === msgId) {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      if (voiceFallbackTimerRef.current) {
+        clearInterval(voiceFallbackTimerRef.current);
+        voiceFallbackTimerRef.current = null;
+      }
       setPlayingVoiceId(null);
       setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
       if (isOneTime) markOneTimeAsOpened(msgId);
@@ -469,62 +679,67 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     }
 
     if (existing) {
-      existing.play().then(() => {
-        setPlayingVoiceId(msgId);
-      }).catch((err) => {
-        console.warn('Playback resume notice:', err);
-        setPlayingVoiceId(null);
-      });
-      return;
+      try {
+        if (existing.ended || (Number.isFinite(existing.duration) && existing.currentTime >= existing.duration)) {
+          existing.currentTime = 0;
+        }
+        existing.play().then(() => {
+          setPlayingVoiceId(msgId);
+        }).catch((err) => {
+          console.warn('Playback resume notice:', err);
+          delete audioRefs.current[msgId];
+          playVoiceFallback(msgId, transcriptText, isOneTime, durationSeconds);
+        });
+        return;
+      } catch (_) {
+        delete audioRefs.current[msgId];
+      }
     }
 
-    if (audioDataUrl) {
+    if (audioDataUrl && audioDataUrl.trim().length > 10) {
       try {
-        const audio = new Audio(audioDataUrl);
+        const playableSrc = dataUrlToPlayableUrl(msgId, audioDataUrl);
+        const audio = new Audio(playableSrc);
+        audio.preload = 'auto';
         audioRefs.current[msgId] = audio;
-        audio.onended = () => {
+
+        const finishAudio = () => {
           setPlayingVoiceId(null);
           setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
           if (isOneTime) markOneTimeAsOpened(msgId);
         };
+
+        audio.onended = finishAudio;
         audio.ontimeupdate = () => {
-          if (audio.duration && audio.duration > 0) {
-            const pct = (audio.currentTime / audio.duration) * 100;
-            setVoiceProgress((prev) => ({ ...prev, [msgId]: pct }));
-          }
+          // Chrome WebM MediaRecorder blobs often report Infinity duration until ended
+          const effectiveDuration =
+            Number.isFinite(audio.duration) && audio.duration > 0
+              ? audio.duration
+              : Math.max(1, durationSeconds || 2);
+          const pct = Math.min(100, (audio.currentTime / effectiveDuration) * 100);
+          setVoiceProgress((prev) => ({ ...prev, [msgId]: pct }));
         };
         audio.onerror = () => {
           console.warn('Voice note audio format failed to decode');
-          setPlayingVoiceId(null);
+          delete audioRefs.current[msgId];
+          playVoiceFallback(msgId, transcriptText, isOneTime, durationSeconds);
         };
+
         audio.play().then(() => {
           setPlayingVoiceId(msgId);
         }).catch((err) => {
           console.warn('Audio play notice:', err);
-          setPlayingVoiceId(null);
+          delete audioRefs.current[msgId];
+          playVoiceFallback(msgId, transcriptText, isOneTime, durationSeconds);
         });
+        return;
       } catch (e) {
         console.warn('Audio construction error:', e);
+        delete audioRefs.current[msgId];
       }
-    } else if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(transcriptText?.trim() || 'Voice message');
-      utter.onstart = () => {
-        setPlayingVoiceId(msgId);
-        setVoiceProgress((prev) => ({ ...prev, [msgId]: 50 }));
-      };
-      utter.onend = () => {
-        setPlayingVoiceId(null);
-        setVoiceProgress((prev) => ({ ...prev, [msgId]: 0 }));
-        if (isOneTime) markOneTimeAsOpened(msgId);
-      };
-      utter.onerror = () => {
-        setPlayingVoiceId(null);
-      };
-      window.speechSynthesis.speak(utter);
-    } else if (isOneTime) {
-      markOneTimeAsOpened(msgId);
     }
+
+    playVoiceFallback(msgId, transcriptText, isOneTime, durationSeconds);
   };
 
   const toggleTranslation = (msgId: string) => {
@@ -1200,13 +1415,21 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           </span>
         </div>
 
-        {(chatSearchQuery.trim()
-          ? currentMessages.filter((m: ChatMessage) =>
-              (m.text || '').toLowerCase().includes(chatSearchQuery.trim().toLowerCase()) ||
-              (m.senderName || '').toLowerCase().includes(chatSearchQuery.trim().toLowerCase())
-            )
-          : currentMessages
-        ).map((msg: ChatMessage) => {
+        {(() => {
+          const filtered = chatSearchQuery.trim()
+            ? currentMessages.filter((m: ChatMessage) =>
+                (m.text || '').toLowerCase().includes(chatSearchQuery.trim().toLowerCase()) ||
+                (m.senderName || '').toLowerCase().includes(chatSearchQuery.trim().toLowerCase())
+              )
+            : currentMessages;
+          const isOngoingGame = (m: ChatMessage) =>
+            m.type === 'game_xo' &&
+            Boolean(m.xoGame) &&
+            (m.xoGame!.status === 'active' || m.xoGame!.status === 'pending');
+          const nonOngoing = filtered.filter((m) => !isOngoingGame(m));
+          const ongoingGames = filtered.filter((m) => isOngoingGame(m));
+          return [...nonOngoing, ...ongoingGames];
+        })().map((msg: ChatMessage) => {
           const isUser = msg.sender === 'user';
           const isSystem = msg.sender === 'system';
 
@@ -1637,10 +1860,17 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       <div className="flex items-center gap-3">
                         <button
                           type="button"
+                          onPointerDown={(e) => e.stopPropagation()}
                           onClick={(e) => {
                             e.stopPropagation();
                             if (!isExpired) {
-                              toggleVoicePlayback(msg.id, vn.audioDataUrl, vn.transcript, msg.oneTimeView);
+                              toggleVoicePlayback(
+                                msg.id,
+                                vn.audioDataUrl,
+                                vn.transcript,
+                                msg.oneTimeView,
+                                vn.durationSeconds
+                              );
                             }
                           }}
                           className={`w-10 h-10 rounded-full text-white flex items-center justify-center shrink-0 transition-colors shadow-xs ${
@@ -2693,73 +2923,214 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         onOpenThemeModal={() => setIsDisplayModalOpen(true)}
       />
 
-      {/* Fullscreen Lightbox Modal (Click to Enlarge / Disappearing Photo Viewer) */}
+      {/* Fullscreen Lightbox Modal (Pinch/Wheel/Button Zoom + Pan + Direct Device Save) */}
       {lightboxImg && (
         <div
-          className="fixed inset-0 z-[200] bg-black/95 backdrop-blur-md flex flex-col justify-between p-4 animate-in fade-in select-none text-white"
-          onClick={() => setLightboxImg(null)}
+          className="fixed inset-0 z-[200] bg-black/95 backdrop-blur-md flex flex-col justify-between p-4 animate-in fade-in select-none text-white touch-none"
+          onClick={() => {
+            if (lightboxZoom <= 1) setLightboxImg(null);
+          }}
         >
           {/* Top Bar */}
           <div
-            className="flex items-center justify-between z-10 px-2"
+            className="flex items-center justify-between gap-2 z-10 px-1"
             style={{ paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 8px), 14px)' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center gap-2">
-              {lightboxImg.isOneTime && (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-600 text-white text-xs font-bold shadow-lg shadow-purple-600/40">
-                  <span className="w-4 h-4 rounded-full border border-white flex items-center justify-center text-[10px] font-bold">1</span>
-                  <span>1-Time View · Disappears after closing</span>
+            <div className="flex items-center gap-2 min-w-0">
+              {lightboxImg.isOneTime ? (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-600 text-white text-xs font-bold shadow-lg shadow-purple-600/40 truncate">
+                  <span className="w-4 h-4 rounded-full border border-white flex items-center justify-center text-[10px] font-bold shrink-0">1</span>
+                  <span className="truncate">1-Time View · Disappears after closing</span>
                 </span>
+              ) : (
+                <div className="flex items-center gap-1 bg-white/10 backdrop-blur-md rounded-full px-2 py-1 border border-white/10">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = clampZoom(lightboxZoom - 0.5);
+                      setLightboxZoom(next);
+                      if (next <= 1) setLightboxPan({ x: 0, y: 0 });
+                    }}
+                    disabled={lightboxZoom <= 1}
+                    className="p-1.5 rounded-full hover:bg-white/15 disabled:opacity-40 transition-colors"
+                    title="Zoom out"
+                    aria-label="Zoom out"
+                  >
+                    <ZoomOut className="w-4 h-4" />
+                  </button>
+                  <span className="text-xs font-mono font-bold px-1.5 min-w-[44px] text-center">
+                    {Math.round(lightboxZoom * 100)}%
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setLightboxZoom((z) => clampZoom(z + 0.5))}
+                    disabled={lightboxZoom >= 4}
+                    className="p-1.5 rounded-full hover:bg-white/15 disabled:opacity-40 transition-colors"
+                    title="Zoom in"
+                    aria-label="Zoom in"
+                  >
+                    <ZoomIn className="w-4 h-4" />
+                  </button>
+                  {lightboxZoom > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLightboxZoom(1);
+                        setLightboxPan({ x: 0, y: 0 });
+                      }}
+                      className="p-1.5 rounded-full hover:bg-white/15 transition-colors"
+                      title="Reset zoom"
+                      aria-label="Reset zoom"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 shrink-0">
               {!lightboxImg.isOneTime && (
-                <a
-                  href={lightboxImg.url}
-                  download="agc-image.jpg"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
-                  title="Download photo"
-                  onClick={(e) => e.stopPropagation()}
+                <button
+                  type="button"
+                  onClick={() => handleSaveImageToDevice(lightboxImg.url)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-semibold transition-colors border border-white/10"
+                  title="Save image to device"
+                  aria-label="Save image to device"
                 >
-                  <Download className="w-5 h-5" />
-                </a>
+                  <Download className="w-4 h-4" />
+                  <span>Save</span>
+                </button>
               )}
               <button
                 type="button"
                 onClick={() => setLightboxImg(null)}
                 className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
                 title="Close"
+                aria-label="Close"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
           </div>
 
-          {/* Center Enlarged Image */}
+          {/* Center Zoomable & Pannable Image */}
           <div
             className="flex-1 flex items-center justify-center p-2 relative overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              const now = Date.now();
+              if (now - lightboxLastTapRef.current < 280) {
+                if (lightboxZoom > 1) {
+                  setLightboxZoom(1);
+                  setLightboxPan({ x: 0, y: 0 });
+                } else {
+                  setLightboxZoom(2.5);
+                }
+                lightboxLastTapRef.current = 0;
+              } else {
+                lightboxLastTapRef.current = now;
+              }
+            }}
+            onWheel={(e) => {
+              e.preventDefault();
+              const delta = e.deltaY < 0 ? 0.25 : -0.25;
+              const next = clampZoom(lightboxZoom + delta);
+              setLightboxZoom(next);
+              if (next <= 1) setLightboxPan({ x: 0, y: 0 });
+            }}
+            onMouseDown={(e) => {
+              if (lightboxZoom <= 1) return;
+              e.preventDefault();
+              lightboxDragRef.current = {
+                active: true,
+                startX: e.clientX,
+                startY: e.clientY,
+                originX: lightboxPan.x,
+                originY: lightboxPan.y,
+              };
+            }}
+            onMouseMove={(e) => {
+              const drag = lightboxDragRef.current;
+              if (!drag?.active || lightboxZoom <= 1) return;
+              setLightboxPan({
+                x: drag.originX + (e.clientX - drag.startX),
+                y: drag.originY + (e.clientY - drag.startY),
+              });
+            }}
+            onMouseUp={() => {
+              lightboxDragRef.current = null;
+            }}
+            onMouseLeave={() => {
+              lightboxDragRef.current = null;
+            }}
+            onTouchStart={(e) => {
+              if (e.touches.length === 2) {
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                lightboxPinchRef.current = {
+                  startDist: Math.hypot(dx, dy) || 1,
+                  startZoom: lightboxZoom,
+                };
+                lightboxDragRef.current = null;
+              } else if (e.touches.length === 1 && lightboxZoom > 1) {
+                lightboxDragRef.current = {
+                  active: true,
+                  startX: e.touches[0].clientX,
+                  startY: e.touches[0].clientY,
+                  originX: lightboxPan.x,
+                  originY: lightboxPan.y,
+                };
+              }
+            }}
+            onTouchMove={(e) => {
+              if (e.touches.length === 2 && lightboxPinchRef.current) {
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                const dist = Math.hypot(dx, dy);
+                const next = clampZoom(
+                  lightboxPinchRef.current.startZoom * (dist / lightboxPinchRef.current.startDist)
+                );
+                setLightboxZoom(next);
+                if (next <= 1) setLightboxPan({ x: 0, y: 0 });
+              } else if (e.touches.length === 1 && lightboxDragRef.current?.active && lightboxZoom > 1) {
+                const drag = lightboxDragRef.current;
+                setLightboxPan({
+                  x: drag.originX + (e.touches[0].clientX - drag.startX),
+                  y: drag.originY + (e.touches[0].clientY - drag.startY),
+                });
+              }
+            }}
+            onTouchEnd={() => {
+              lightboxPinchRef.current = null;
+              lightboxDragRef.current = null;
+            }}
           >
             <img
               src={lightboxImg.url}
               alt={lightboxImg.caption || 'Enlarged photo'}
-              className="max-h-[82vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl animate-in zoom-in-95 duration-200"
+              draggable={false}
+              style={{
+                transform: `translate3d(${lightboxPan.x}px, ${lightboxPan.y}px, 0) scale(${lightboxZoom})`,
+                transition: lightboxDragRef.current?.active || lightboxPinchRef.current ? 'none' : 'transform 140ms ease-out',
+                cursor: lightboxZoom > 1 ? 'grab' : 'zoom-in',
+              }}
+              className="max-h-[80vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl select-none"
             />
           </div>
 
-          {/* Bottom Caption */}
-          {lightboxImg.caption && (
-            <div
-              className="max-w-md mx-auto px-4 py-2.5 bg-black/75 backdrop-blur-md text-white rounded-2xl text-center text-sm border border-white/10 mb-2"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {lightboxImg.caption}
-            </div>
-          )}
+          {/* Bottom Caption / Hint */}
+          <div className="flex flex-col items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+            {lightboxImg.caption && (
+              <div className="max-w-md mx-auto px-4 py-2.5 bg-black/75 backdrop-blur-md text-white rounded-2xl text-center text-sm border border-white/10">
+                {lightboxImg.caption}
+              </div>
+            )}
+            <span className="text-[11px] text-white/50">
+              {lightboxZoom > 1 ? 'Drag to pan · Double-tap to reset' : 'Pinch, scroll, or double-tap to zoom'}
+            </span>
+          </div>
         </div>
       )}
 

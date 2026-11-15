@@ -106,6 +106,13 @@ function sanitizeLoadedMessages(parsed: unknown): Record<string, ChatMessage[]> 
   return cleaned;
 }
 
+const EMPTY_WALLET: UserWallet = {
+  availableBalance: 0,
+  escrowLockedBalance: 0,
+  currency: 'NGN',
+  transactions: [],
+};
+
 function persistPartitionedChats(chatsToSave: ChatThread[], phoneNumber?: string) {
   const clean = phoneNumber ? normalizePhoneDigits(phoneNumber) : getSavedUserCleanPhone();
   if (!clean) return;
@@ -120,6 +127,104 @@ function persistPartitionedMessages(msgsToSave: Record<string, ChatMessage[]>, p
   try {
     localStorage.setItem(`AGC_messages_v2_${clean}`, JSON.stringify(msgsToSave));
   } catch (_) {}
+}
+
+function persistPartitionedWallet(walletToSave: UserWallet, phoneNumber?: string) {
+  const clean = phoneNumber ? normalizePhoneDigits(phoneNumber) : getSavedUserCleanPhone();
+  try {
+    const serialized = JSON.stringify(walletToSave);
+    if (clean) {
+      localStorage.setItem(`AGC_user_wallet_v2_${clean}`, serialized);
+    }
+    localStorage.setItem('AGC_user_wallet_v2', serialized);
+  } catch (_) {}
+}
+
+function sanitizeLoadedWallet(parsed: any): UserWallet | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (parsed.availableBalance === 125000 && (!Array.isArray(parsed.transactions) || parsed.transactions.length === 0)) {
+    return null;
+  }
+  return {
+    availableBalance: typeof parsed.availableBalance === 'number' && Number.isFinite(parsed.availableBalance) ? parsed.availableBalance : 0,
+    escrowLockedBalance: typeof parsed.escrowLockedBalance === 'number' && Number.isFinite(parsed.escrowLockedBalance) ? parsed.escrowLockedBalance : 0,
+    currency: parsed.currency || 'NGN',
+    transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
+  };
+}
+
+function loadPartitionedWallet(phoneNumber?: string): UserWallet {
+  const targetPhone = phoneNumber || '';
+  const candidates = getCandidatePhoneKeys(targetPhone);
+  for (const keySuffix of candidates) {
+    try {
+      const raw = localStorage.getItem(`AGC_user_wallet_v2_${keySuffix}`);
+      if (raw) {
+        const sanitized = sanitizeLoadedWallet(JSON.parse(raw));
+        if (sanitized) return sanitized;
+      }
+    } catch (_) {}
+  }
+
+  // Fallback migration from legacy unpartitioned key ONLY if the previous profile belonged to this phone (or no other user owns it)
+  try {
+    const legacyRaw = localStorage.getItem('AGC_user_wallet_v2');
+    if (legacyRaw) {
+      const legacyParsed = sanitizeLoadedWallet(JSON.parse(legacyRaw));
+      if (legacyParsed) {
+        const prevProfileRaw = localStorage.getItem('AGC_user_profile_v2');
+        const prevProfile = prevProfileRaw ? JSON.parse(prevProfileRaw) : null;
+        if (!targetPhone || !prevProfile?.phoneNumber || phonesMatch(prevProfile.phoneNumber, targetPhone)) {
+          const norm = normalizePhoneDigits(targetPhone);
+          if (norm) {
+            try { localStorage.setItem(`AGC_user_wallet_v2_${norm}`, JSON.stringify(legacyParsed)); } catch (_) {}
+          }
+          return legacyParsed;
+        }
+      }
+    }
+  } catch (_) {}
+
+  return { ...EMPTY_WALLET, transactions: [] };
+}
+
+function persistPartitionedUserProfile(profile: UserProfile) {
+  if (!profile) return;
+  try {
+    const serialized = JSON.stringify(profile);
+    localStorage.setItem('AGC_user_profile_v2', serialized);
+    const norm = normalizePhoneDigits(profile.phoneNumber);
+    if (norm) {
+      localStorage.setItem(`AGC_user_profile_v2_${norm}`, serialized);
+    }
+  } catch (_) {}
+}
+
+function loadPartitionedUserProfile(phoneNumber?: string): Partial<UserProfile> | null {
+  const targetPhone = phoneNumber || '';
+  const candidates = getCandidatePhoneKeys(targetPhone);
+  for (const keySuffix of candidates) {
+    try {
+      const raw = localStorage.getItem(`AGC_user_profile_v2_${keySuffix}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch (_) {}
+  }
+  try {
+    const allUsers: UserProfile[] = JSON.parse(localStorage.getItem('AGC_all_registered_users') || '[]');
+    const matched = allUsers.find((u) => phonesMatch(u.phoneNumber, targetPhone));
+    if (matched) return matched;
+  } catch (_) {}
+  try {
+    const lastRaw = localStorage.getItem('AGC_user_profile_v2');
+    if (lastRaw) {
+      const parsed = JSON.parse(lastRaw);
+      if (parsed?.phoneNumber && phonesMatch(parsed.phoneNumber, targetPhone)) return parsed;
+    }
+  } catch (_) {}
+  return null;
 }
 
 function loadPartitionedUserChatsAndMessages(phoneNumber?: string): {
@@ -184,6 +289,19 @@ function loadPartitionedUserChatsAndMessages(phoneNumber?: string): {
       }
     }
   } catch (_) {}
+
+  // Ensure sender polarity ('user' vs 'other') stays accurate for self-sent messages after re-login
+  if (targetPhone) {
+    for (const [cid, list] of Object.entries(mergedMsgs)) {
+      mergedMsgs[cid] = list.map((m) => {
+        if (m.sender === 'system') return m;
+        if (m.senderPhone && phonesMatch(m.senderPhone, targetPhone)) {
+          return m.sender === 'user' ? m : { ...m, sender: 'user' as const };
+        }
+        return m;
+      });
+    }
+  }
 
   // Ensure canonical key is populated for fast future lookups
   const canonical = normalizePhoneDigits(targetPhone);
@@ -924,6 +1042,7 @@ const AGC_DATA_VERSION = 'v5_purged_all_mocks_live_2026';
         'AGC_currency',
         'AGC_hide_phone_town',
         'AGC_user_profile_v2',
+        'AGC_user_wallet_v2',
         'AGC_is_authenticated',
         'AGC_device_contacts',
         'AGC_registered_users_cache',
@@ -932,10 +1051,16 @@ const AGC_DATA_VERSION = 'v5_purged_all_mocks_live_2026';
         'AGC_session_token',
         'AGC_all_registered_users',
       ]);
+      const keepPrefixes = [
+        'AGC_chats_v2_',
+        'AGC_messages_v2_',
+        'AGC_user_wallet_v2_',
+        'AGC_user_profile_v2_',
+      ];
       const toRemove: string[] = [];
       for (let i = 0; i < safeLocalStorage.length; i++) {
         const key = safeLocalStorage.key(i);
-        if (key && key.startsWith('AGC_') && !keepKeys.has(key)) {
+        if (key && key.startsWith('AGC_') && !keepKeys.has(key) && !keepPrefixes.some((p) => key.startsWith(p))) {
           toRemove.push(key);
         }
       }
@@ -2700,6 +2825,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const messagesRef = useRef<Record<string, ChatMessage[]>>(messages);
   const loadedPhoneForChatsRef = useRef<string>(getSavedUserCleanPhone());
   const isHydratingChatsRef = useRef<boolean>(false);
+  const loadedPhoneForWalletRef = useRef<string>(getSavedUserCleanPhone());
+  const isHydratingWalletRef = useRef<boolean>(false);
   const chatBackupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -2711,24 +2838,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [messages]);
   useEffect(() => {
     try {
-      const savedWallet = localStorage.getItem('AGC_user_wallet_v2');
-      if (savedWallet) {
-        const parsed = JSON.parse(savedWallet);
-        if (parsed && parsed.availableBalance === 125000) {
-          localStorage.setItem('AGC_user_wallet_v2', JSON.stringify({
-            availableBalance: 0,
-            escrowLockedBalance: 0,
-            currency: 'NGN',
-            transactions: []
-          }));
-          setWallet({
-            availableBalance: 0,
-            escrowLockedBalance: 0,
-            currency: 'NGN',
-            transactions: []
-          });
-        }
-      }
       // Clean legacy mock service providers and other caches
       const sp = localStorage.getItem('AGC_service_providers_v2');
       if (sp && sp.includes('sp_tunde_mechanic')) {
@@ -2756,6 +2865,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return false;
   });
+  const isAuthenticatedRef = useRef<boolean>(isAuthenticated);
+  isAuthenticatedRef.current = isAuthenticated;
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isKickedOut, setIsKickedOut] = useState(false);
 
@@ -2767,7 +2878,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     persistPartitionedChats(chats, currentUser.phoneNumber);
     if (chatBackupTimerRef.current) clearTimeout(chatBackupTimerRef.current);
     chatBackupTimerRef.current = setTimeout(() => {
-      saveUserChatsBackupToSupabase(currentUser.phoneNumber, chatsRef.current, messagesRef.current).catch(() => {});
+      saveUserChatsBackupToSupabase(currentUser.phoneNumber, chatsRef.current, messagesRef.current, {
+        wallet: walletRef.current,
+        userProfile: currentUserRef.current,
+      }).catch(() => {});
     }, 1500);
   }, [chats, currentUser?.phoneNumber, isAuthenticated]);
 
@@ -2778,11 +2892,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     persistPartitionedMessages(messages, currentUser.phoneNumber);
     if (chatBackupTimerRef.current) clearTimeout(chatBackupTimerRef.current);
     chatBackupTimerRef.current = setTimeout(() => {
-      saveUserChatsBackupToSupabase(currentUser.phoneNumber, chatsRef.current, messagesRef.current).catch(() => {});
+      saveUserChatsBackupToSupabase(currentUser.phoneNumber, chatsRef.current, messagesRef.current, {
+        wallet: walletRef.current,
+        userProfile: currentUserRef.current,
+      }).catch(() => {});
     }, 1500);
   }, [messages, currentUser?.phoneNumber, isAuthenticated]);
 
-  // Hydrate chats/messages from localStorage + Supabase backup whenever user logs in or mounts
+  // Hydrate chats/messages/wallet/profile from localStorage + Supabase backup whenever user logs in or mounts
   useEffect(() => {
     if (!isAuthenticated || !currentUser?.phoneNumber) return;
     const phone = currentUser.phoneNumber;
@@ -2796,21 +2913,94 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loadedPhoneForChatsRef.current = norm;
     isHydratingChatsRef.current = false;
 
+    isHydratingWalletRef.current = true;
+    const localWallet = loadPartitionedWallet(phone);
+    setWallet(localWallet);
+    walletRef.current = localWallet;
+    loadedPhoneForWalletRef.current = norm;
+    isHydratingWalletRef.current = false;
+
     let cancelled = false;
     fetchUserChatsBackupFromSupabase(phone)
       .then((remote) => {
         if (cancelled || !remote) return;
-        if (remote.chats.length === 0 && Object.keys(remote.messages).length === 0) return;
-        const merged = mergeChatThreadsAndMessages(
-          chatsRef.current,
-          messagesRef.current,
-          remote.chats,
-          remote.messages
-        );
-        setChats(merged.chats);
-        setMessages(merged.messages);
-        persistPartitionedChats(merged.chats, phone);
-        persistPartitionedMessages(merged.messages, phone);
+        if (remote.chats.length > 0 || Object.keys(remote.messages).length > 0) {
+          const merged = mergeChatThreadsAndMessages(
+            chatsRef.current,
+            messagesRef.current,
+            remote.chats,
+            remote.messages
+          );
+          setChats(merged.chats);
+          setMessages(merged.messages);
+          persistPartitionedChats(merged.chats, phone);
+          persistPartitionedMessages(merged.messages, phone);
+        }
+
+        // Restore wallet snapshot from Supabase if local wallet was empty/cleared or older
+        const remoteWallet = remote.accountSnapshot?.wallet;
+        if (remoteWallet) {
+          const curW = walletRef.current;
+          const localIsEmpty =
+            curW.availableBalance === 0 &&
+            curW.escrowLockedBalance === 0 &&
+            curW.transactions.length === 0;
+          const remoteTxCount = Array.isArray(remoteWallet.transactions) ? remoteWallet.transactions.length : 0;
+          if (localIsEmpty || remoteTxCount > curW.transactions.length) {
+            const txMap = new Map<string, WalletTransaction>();
+            (curW.transactions || []).forEach((tx) => tx?.id && txMap.set(tx.id, tx));
+            (remoteWallet.transactions || []).forEach((tx) => tx?.id && !txMap.has(tx.id) && txMap.set(tx.id, tx));
+            const nextWallet: UserWallet = {
+              availableBalance:
+                typeof remoteWallet.availableBalance === 'number'
+                  ? remoteWallet.availableBalance
+                  : curW.availableBalance,
+              escrowLockedBalance:
+                typeof remoteWallet.escrowLockedBalance === 'number'
+                  ? remoteWallet.escrowLockedBalance
+                  : curW.escrowLockedBalance,
+              currency: remoteWallet.currency || curW.currency || 'NGN',
+              transactions: Array.from(txMap.values()),
+            };
+            isHydratingWalletRef.current = true;
+            setWallet(nextWallet);
+            walletRef.current = nextWallet;
+            persistPartitionedWallet(nextWallet, phone);
+            isHydratingWalletRef.current = false;
+          }
+        }
+
+        // Restore custom profile fields from Supabase if local missed them
+        const remoteProf = remote.accountSnapshot?.userProfile;
+        if (remoteProf && phonesMatch(remoteProf.phoneNumber || phone, phone)) {
+          setCurrentUser((prev) => {
+            const mergedUser: UserProfile = {
+              ...prev,
+              fullName:
+                prev.fullName && prev.fullName !== 'AGC User'
+                  ? prev.fullName
+                  : remoteProf.fullName || prev.fullName,
+              avatarUrl:
+                !isPlaceholderAvatar(prev.avatarUrl)
+                  ? prev.avatarUrl
+                  : remoteProf.avatarUrl || prev.avatarUrl,
+              about:
+                prev.about && prev.about !== 'Available · Using AGC'
+                  ? prev.about
+                  : remoteProf.about || prev.about,
+              username: prev.username || remoteProf.username,
+              email: prev.email || remoteProf.email,
+              verificationBadge: prev.verificationBadge ?? remoteProf.verificationBadge ?? null,
+              isCelebrityVerified: prev.isCelebrityVerified ?? remoteProf.isCelebrityVerified,
+              celebrityCategory: prev.celebrityCategory || remoteProf.celebrityCategory,
+              celebrityStageName: prev.celebrityStageName || remoteProf.celebrityStageName,
+              role: prev.role && prev.role !== 'user' ? prev.role : remoteProf.role || prev.role,
+              createdAt: prev.createdAt || remoteProf.createdAt || new Date().toISOString(),
+            };
+            persistPartitionedUserProfile(mergedUser);
+            return mergedUser;
+          });
+        }
       })
       .catch(() => {});
 
@@ -4182,32 +4372,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [isPayrollModalOpen, setIsPayrollModalOpen] = useState(false);
 
-  // Persistent User Wallet State
+  // Persistent User Wallet State (strictly partitioned per phone + Supabase backup)
   const [wallet, setWallet] = useState<UserWallet>(() => {
-    try {
-      const saved = localStorage.getItem('AGC_user_wallet_v2');
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch (e) {
-      console.warn('Failed to parse saved wallet:', e);
-    }
-    return {
-      availableBalance: 0,
-      escrowLockedBalance: 0,
-      currency: 'NGN',
-      transactions: [],
-    };
+    const savedPhone = getSavedUserCleanPhone();
+    return savedPhone ? loadPartitionedWallet(savedPhone) : { ...EMPTY_WALLET, transactions: [] };
   });
+  const walletRef = useRef<UserWallet>(wallet);
+  walletRef.current = wallet;
 
-  // Keep wallet persistently saved across all page reloads and refreshes
+  // Keep wallet persistently saved per user across logouts, reloads, and refreshes
   useEffect(() => {
-    try {
-      localStorage.setItem('AGC_user_wallet_v2', JSON.stringify(wallet));
-    } catch (e) {
-      console.warn('Failed to save wallet to localStorage:', e);
-    }
-  }, [wallet]);
+    walletRef.current = wallet;
+    if (!isAuthenticated || isHydratingWalletRef.current) return;
+    const norm = normalizePhoneDigits(currentUser?.phoneNumber);
+    if (!norm || loadedPhoneForWalletRef.current !== norm) return;
+    persistPartitionedWallet(wallet, currentUser.phoneNumber);
+    if (chatBackupTimerRef.current) clearTimeout(chatBackupTimerRef.current);
+    chatBackupTimerRef.current = setTimeout(() => {
+      saveUserChatsBackupToSupabase(currentUser.phoneNumber, chatsRef.current, messagesRef.current, {
+        wallet: walletRef.current,
+        userProfile: currentUserRef.current,
+      }).catch(() => {});
+    }, 1500);
+  }, [wallet, currentUser?.phoneNumber, isAuthenticated]);
 
   useEffect(() => {
     if (isDarkMode) {
@@ -6110,15 +6297,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'sent',
     };
 
-    setMessages((prev) => ({
-      ...prev,
-      [chatId]: [...(prev[chatId] || []), newMsg],
-    }));
+    setMessages((prev) => {
+      const updated = {
+        ...prev,
+        [chatId]: [...(prev[chatId] || []), newMsg],
+      };
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
+      return updated;
+    });
 
     setChats((prev) => {
       const exists = prev.some((c) => c.id === chatId);
+      let updated: ChatThread[];
       if (exists) {
-        return prev.map((c) =>
+        updated = prev.map((c) =>
           c.id === chatId
             ? {
                 ...c,
@@ -6127,26 +6319,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               }
             : c
         );
+      } else {
+        const contactMatch = deviceContacts.find(
+          (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
+        );
+        const newThread: ChatThread = {
+          id: chatId,
+          name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
+          avatar:
+            contactMatch?.avatar ||
+            "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+          verifiedStore: false,
+          location: 'Direct Chat',
+          unreadCount: 0,
+          lastMessage: previewLabel,
+          lastMessageTime: newMsg.timestamp,
+          catalog: [],
+          isOnline: true,
+          phone: contactMatch?.rawPhoneNumber || '',
+        };
+        updated = [newThread, ...prev];
       }
-      const contactMatch = deviceContacts.find(
-        (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
-      );
-      const newThread: ChatThread = {
-        id: chatId,
-        name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
-        avatar:
-          contactMatch?.avatar ||
-          "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-        verifiedStore: false,
-        location: 'Direct Chat',
-        unreadCount: 0,
-        lastMessage: previewLabel,
-        lastMessageTime: newMsg.timestamp,
-        catalog: [],
-        isOnline: true,
-        phone: contactMatch?.rawPhoneNumber || '',
-      };
-      return [newThread, ...prev];
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
     });
 
     if (useOneTime) setIsOneTimeViewEnabled(false);
@@ -8433,9 +8628,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       verificationExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
     };
     setCurrentUser(updatedUser);
-    try {
-      localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
-    } catch (_) {}
+    persistPartitionedUserProfile(updatedUser);
 
     return { success: true, message: `${badgeTitle} activated! You can now host verified Ajo clubs.` };
   };
@@ -8552,8 +8745,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       avatarUrl: compactAvatar || userProfile.avatarUrl,
     };
 
-    // Update localStorage user caches consistently
-    safeLocalStorage.setItem('AGC_user_profile_v2', JSON.stringify(userWithCompactAvatar));
+    // Update localStorage user caches consistently (both active + per-phone partition)
+    persistPartitionedUserProfile(userWithCompactAvatar);
     try {
       const regMap = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
       const entry = {
@@ -8694,16 +8887,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     safeLocalStorage.setItem('AGC_session_token', sessionToken);
 
-    // Check locally cached profile for this phone so custom avatars/names are never lost
-    let cachedName = '';
-    let cachedAvatar = '';
-    let cachedId = '';
+    // Load cached/partitioned profile for this phone so custom avatars, names, about, roles & badges are never lost
+    const partitionedCached = loadPartitionedUserProfile(phoneNumber);
+    let cachedName = partitionedCached?.fullName && partitionedCached.fullName !== 'AGC User' ? partitionedCached.fullName : '';
+    let cachedAvatar = partitionedCached?.avatarUrl && !isPlaceholderAvatar(partitionedCached.avatarUrl) ? partitionedCached.avatarUrl : '';
+    let cachedId = partitionedCached?.id || '';
     try {
       const regMap = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
       for (const [k, v] of Object.entries(regMap) as [string, any][]) {
         if (phonesMatch(k, phoneNumber) || phonesMatch(v?.phoneNumber, phoneNumber)) {
-          if (v?.fullName && v.fullName !== 'AGC User') cachedName = v.fullName;
-          if (v?.avatarUrl && !isPlaceholderAvatar(v.avatarUrl)) cachedAvatar = v.avatarUrl;
+          if (!cachedName && v?.fullName && v.fullName !== 'AGC User') cachedName = v.fullName;
+          if (!cachedAvatar && v?.avatarUrl && !isPlaceholderAvatar(v.avatarUrl)) cachedAvatar = v.avatarUrl;
           break;
         }
       }
@@ -8712,7 +8906,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (matchedUser) {
         if (!cachedName && matchedUser.fullName && matchedUser.fullName !== 'AGC User') cachedName = matchedUser.fullName;
         if (!cachedAvatar && matchedUser.avatarUrl && !isPlaceholderAvatar(matchedUser.avatarUrl)) cachedAvatar = matchedUser.avatarUrl;
-        if (matchedUser.id) cachedId = matchedUser.id;
+        if (!cachedId && matchedUser.id) cachedId = matchedUser.id;
       }
       const lastProfileRaw = localStorage.getItem('AGC_user_profile_v2');
       if (lastProfileRaw) {
@@ -8735,33 +8929,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ? avatarUrl
         : cachedAvatar || avatarUrl || DEFAULT_AVATAR_SVG;
 
+    const chosenAbout =
+      about && about !== 'Available · Using AGC'
+        ? about
+        : (partitionedCached?.about || about || 'Available · Using AGC');
+
     const updatedUser: UserProfile = {
+      ...(partitionedCached || {}),
       id: cachedId || `usr_${normPhone || cleanPhone || Date.now()}`,
       phoneNumber,
       fullName: chosenName,
       avatarUrl: chosenAvatar,
-      about: about || 'Available · Using AGC',
-      createdAt: new Date().toISOString(),
+      about: chosenAbout,
+      createdAt: partitionedCached?.createdAt || new Date().toISOString(),
       lastSeen: 'online',
       isPhoneVerified: true,
-      role: role || (phoneNumber.includes('admin') ? 'admin' : 'user'),
+      role: role || partitionedCached?.role || (phoneNumber.includes('admin') ? 'admin' : 'user'),
     };
 
-    // Load local partitioned chats BEFORE flipping isAuthenticated so auto-save never writes []
+    // Load local partitioned chats & wallet BEFORE flipping isAuthenticated so auto-save never writes empty defaults
     isHydratingChatsRef.current = true;
+    isHydratingWalletRef.current = true;
     const localChatState = loadPartitionedUserChatsAndMessages(phoneNumber);
+    const localWalletState = loadPartitionedWallet(phoneNumber);
     loadedPhoneForChatsRef.current = normPhone || cleanPhone;
+    loadedPhoneForWalletRef.current = normPhone || cleanPhone;
     setChats(localChatState.chats);
     setMessages(localChatState.messages);
     chatsRef.current = localChatState.chats;
     messagesRef.current = localChatState.messages;
+    setWallet(localWalletState);
+    walletRef.current = localWalletState;
 
     setCurrentUser(updatedUser);
+    currentUserRef.current = updatedUser;
+    isAuthenticatedRef.current = true;
     setIsAuthenticated(true);
     setActiveChatId(null);
     isHydratingChatsRef.current = false;
+    isHydratingWalletRef.current = false;
 
-    safeLocalStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
+    persistPartitionedUserProfile(updatedUser);
     safeLocalStorage.setItem('AGC_is_authenticated', 'true');
 
     // Register phone in local persistent registry
@@ -8857,9 +9065,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     : prev.verificationBadge,
                 role: (data.user.role as UserProfile['role']) || prev.role,
               };
-              try {
-                localStorage.setItem('AGC_user_profile_v2', JSON.stringify(hydrated));
-              } catch (_) {}
+              persistPartitionedUserProfile(hydrated);
               return hydrated;
             });
             setAdminUsers((prev) => {
@@ -8917,11 +9123,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
 
           if (finalEnriched.fullName !== updatedUser.fullName || finalEnriched.avatarUrl !== updatedUser.avatarUrl) {
-            setCurrentUser((prev) => ({
-              ...prev,
-              fullName: finalEnriched.fullName,
-              avatarUrl: finalEnriched.avatarUrl,
-            }));
+            setCurrentUser((prev) => {
+              const next = {
+                ...prev,
+                fullName: finalEnriched.fullName,
+                avatarUrl: finalEnriched.avatarUrl,
+              };
+              persistPartitionedUserProfile(next);
+              return next;
+            });
           }
 
           await syncProfileToAllRegistries(finalEnriched);
@@ -8929,24 +9139,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           console.warn('Supabase login registry sync notice:', err);
         }
       })();
-
-      // Also restore any remote Supabase chat backup if local was cleared/incomplete
-      fetchUserChatsBackupFromSupabase(phoneNumber)
-        .then((remote) => {
-          if (!remote) return;
-          if (remote.chats.length === 0 && Object.keys(remote.messages).length === 0) return;
-          const merged = mergeChatThreadsAndMessages(
-            chatsRef.current,
-            messagesRef.current,
-            remote.chats,
-            remote.messages
-          );
-          setChats(merged.chats);
-          setMessages(merged.messages);
-          persistPartitionedChats(merged.chats, phoneNumber);
-          persistPartitionedMessages(merged.messages, phoneNumber);
-        })
-        .catch(() => {});
 
       try {
         const syncChannel = supabase.channel('global_user_sync');
@@ -8977,27 +9169,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logoutUser = () => {
-    // Flush current chats & messages to localStorage + Supabase BEFORE clearing React state
-    const activePhone = currentUser?.phoneNumber;
+    // Flush current chats, messages, wallet & profile to partitioned localStorage + Supabase BEFORE clearing React state
+    const activePhone = currentUserRef.current?.phoneNumber || currentUser?.phoneNumber;
+    if (chatBackupTimerRef.current) {
+      clearTimeout(chatBackupTimerRef.current);
+      chatBackupTimerRef.current = null;
+    }
     if (activePhone) {
       persistPartitionedChats(chatsRef.current, activePhone);
       persistPartitionedMessages(messagesRef.current, activePhone);
-      saveUserChatsBackupToSupabase(activePhone, chatsRef.current, messagesRef.current).catch(() => {});
+      persistPartitionedWallet(walletRef.current, activePhone);
+      persistPartitionedUserProfile(currentUserRef.current || currentUser);
+      saveUserChatsBackupToSupabase(activePhone, chatsRef.current, messagesRef.current, {
+        wallet: walletRef.current,
+        userProfile: currentUserRef.current || currentUser,
+      }).catch(() => {});
     }
-    // Clear loaded-phone guard FIRST so auto-save useEffects never overwrite saved storage with []/{}
+    // Clear loaded-phone guards & mark unauthenticated FIRST so auto-save effects & incoming socket/broadcast listeners NEVER overwrite saved storage!
+    isAuthenticatedRef.current = false;
     loadedPhoneForChatsRef.current = '';
+    loadedPhoneForWalletRef.current = '';
     setIsAuthenticated(false);
     safeLocalStorage.setItem('AGC_is_authenticated', 'false');
     setActiveChatId(null);
     setChats([]);
     setMessages({});
+    setWallet({ ...EMPTY_WALLET, transactions: [] });
     setIsAuthModalOpen(true);
   };
 
   const updateUserProfile = (updates: Partial<UserProfile>) => {
     setCurrentUser((prev) => {
       const updated = { ...prev, ...updates };
-      safeLocalStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated));
+      persistPartitionedUserProfile(updated);
 
       // Persist compressed avatar/profile asynchronously to agc_phone_registry, local registries, and Supabase
       (async () => {
@@ -10069,7 +10273,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       celebrityStageName: data.stageName,
     };
     setCurrentUser(updatedUser);
-    localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
+    persistPartitionedUserProfile(updatedUser);
 
     return {
       success: true,
@@ -10085,7 +10289,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       celebrityCategory: nextStatus ? (currentUser.celebrityCategory || 'Public Figure & Creator') : undefined,
     };
     setCurrentUser(updatedUser);
-    localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
+    persistPartitionedUserProfile(updatedUser);
   };
 
   // 25. Store Registration & Tiers System (3k/mo for 30 items, 7k/mo for 100 items limit)
@@ -10948,10 +11152,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const handleIncomingMessage = useCallback(
     async ({ chatId, message, senderId, targetPhone, isGroup, chat }: { chatId: string; message: ChatMessage; senderId?: string; targetPhone?: string; isGroup?: boolean; chat?: any }) => {
       if (!message || !chatId) return;
+      // CRITICAL: Never accept or persist incoming messages while logged out or hydrating!
+      // Otherwise prev state ({} / []) overwrites the user's saved localStorage history.
+      if (!isAuthenticatedRef.current || isHydratingChatsRef.current) return;
 
       const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+      const normMyPhone = normalizePhoneDigits(myCleanPhone);
+      if (!normMyPhone || loadedPhoneForChatsRef.current !== normMyPhone) return;
+
       const senderCleanPhone = (message.senderPhone || '').replace(/\D/g, '');
-      const isFromMe = (senderId && senderId === currentUser.id) || (senderCleanPhone && phonesMatch(senderCleanPhone, myCleanPhone) && message.sender === 'user');
+      const isFromMe =
+        (Boolean(senderId) && senderId === currentUser.id) ||
+        (Boolean(senderCleanPhone && myCleanPhone && phonesMatch(senderCleanPhone, myCleanPhone)) &&
+          message.sender !== 'system');
 
       const isDm = chatId.startsWith('dm_');
       const isChannelChat = Boolean(chatId.startsWith('channel_') || chat?.isChannel);
@@ -11177,6 +11390,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    if (!isAuthenticated || !myCleanPhone) return;
     const normPhone = normalizePhoneDigits(myCleanPhone);
     const socket = initSocket({
       id: currentUser.id,
@@ -11555,7 +11769,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
       if (sbTownFeed) sbTownFeed.unsubscribe();
     };
-  }, [currentUser, activeChatId, handleIncomingMessage, applyXoGameUpdate]);
+  }, [currentUser, activeChatId, isAuthenticated, handleIncomingMessage, applyXoGameUpdate]);
 
   const syncCurrentUserFromRecord = useCallback((me?: AdminUserRecord) => {
     if (!me || !currentUser?.phoneNumber) return;
@@ -11566,7 +11780,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           verificationBadge: me.verificationBadge !== undefined ? me.verificationBadge : prev.verificationBadge,
           role: (me.role as UserProfile['role']) || prev.role,
         };
-        try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
+        persistPartitionedUserProfile(updated);
         return updated;
       });
     }
@@ -12552,7 +12766,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (currentUser.id === userId || (clean && currentUser.phoneNumber && phonesMatch(currentUser.phoneNumber, phoneNum || userId))) {
       setCurrentUser((prev) => {
         const updated = { ...prev, verificationBadge: badge };
-        try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
+        persistPartitionedUserProfile(updated);
         return updated;
       });
     }
@@ -12698,7 +12912,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (currentUser.id === userIdOrPhone || (clean && currentUser.phoneNumber && phonesMatch(currentUser.phoneNumber, userIdOrPhone))) {
       setCurrentUser((prev) => {
         const updated = { ...prev, role };
-        try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
+        persistPartitionedUserProfile(updated);
         return updated;
       });
     }
