@@ -219,6 +219,9 @@ import {
   updateTownCommunityInDb,
   fetchLiveAudioSpaces,
   createAudioSpaceInDb,
+  updateAudioSpaceInDb,
+  mapAudioSpaceRow,
+  getActiveSpacesTable,
   fetchLiveArtisanStations,
   createArtisanStationInDb,
   fetchLiveStoreSubscriptions,
@@ -503,6 +506,8 @@ interface AppContextType {
   setIsMemeStudioOpen: (val: boolean) => void;
   sendMemeSticker: (chatId: string, meme: MemeSticker) => void;
   // 2. Live Audio Spaces / Street Radio
+  isSpacesDashboardOpen: boolean;
+  setIsSpacesDashboardOpen: (val: boolean) => void;
   audioSpaces: AudioSpace[];
   activeAudioSpace: AudioSpace | null;
   joinAudioSpace: (space: AudioSpace) => void;
@@ -2539,6 +2544,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isMemeStudioOpen, setIsMemeStudioOpen] = useState(false);
 
   // 2. Live Audio Spaces / Street Radio State
+  const [isSpacesDashboardOpen, setIsSpacesDashboardOpen] = useState(false);
   const [audioSpaces, setAudioSpaces] = useState<AudioSpace[]>(() => {
     try {
       const saved = localStorage.getItem('AGC_audio_spaces_v2');
@@ -2563,40 +2569,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [audioSpaces]);
   const [activeAudioSpace, setActiveAudioSpace] = useState<AudioSpace | null>(null);
 
-  // 🌐 LIVE SYSTEM: Hydrate and listen for live Audio Spaces across devices
+  // 🌐 LIVE SYSTEM: Hydrate and listen for live Audio Spaces across devices via Supabase + Realtime
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
-    fetchLiveAudioSpaces().then(({ data }: any) => {
-      if (data && Array.isArray(data) && data.length > 0) {
+    const syncFromSupabase = async () => {
+      try {
+        const { data, error } = await fetchLiveAudioSpaces();
+        if (error || !Array.isArray(data)) return;
+        const dbSpaces = data.map(mapAudioSpaceRow);
         setAudioSpaces((prev) => {
-          const map = new Map<string, AudioSpace>();
-          prev.forEach((s) => map.set(s.id, s));
-          data.forEach((row: any) => {
-            map.set(row.id, {
-              id: row.id,
-              title: row.title,
-              topic: row.topic || '',
-              category: row.category || 'Tech & Hustle',
-              hostName: row.host_name || 'Host',
-              hostAvatar: row.host_avatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(row.title)}&backgroundColor=581c87&textColor=ffffff`,
-              listenersCount: row.listeners_count || 1,
-              isLive: row.is_live,
-              isLowBandwidthMode: row.is_low_bandwidth_mode ?? true,
-              speakers: Array.isArray(row.speakers) ? row.speakers : [
-                { id: 'host', name: row.host_name || 'Host', avatar: row.host_avatar || '', role: 'host', isSpeaking: true, isMuted: false }
-              ],
-            });
-          });
-          const merged = Array.from(map.values());
-          try { localStorage.setItem('AGC_audio_spaces_v2', JSON.stringify(merged)); } catch (_) {}
+          const dbIds = new Set(dbSpaces.map((s) => s.id));
+          // Keep any just-created local-only space that doesn't have a DB UUID yet
+          const pendingLocal = prev.filter(
+            (s) => s.isLive && s.id.startsWith('space_') && !dbIds.has(s.id)
+          );
+          const merged = [...dbSpaces, ...pendingLocal];
+          try {
+            localStorage.setItem('AGC_audio_spaces_v2', JSON.stringify(merged));
+          } catch (_) {}
           return merged;
         });
-      }
-    });
+      } catch (_) {}
+    };
 
+    syncFromSupabase();
+
+    const tableName = getActiveSpacesTable();
     const spaceCh = supabase.channel('live_audio_spaces', { config: { broadcast: { self: false } } });
     spaceCh
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: tableName },
+        () => {
+          syncFromSupabase();
+        }
+      )
       .on('broadcast', { event: 'space_started' }, ({ payload }) => {
         if (!payload || !payload.id) return;
         setAudioSpaces((prev) => {
@@ -2606,13 +2614,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       })
       .on('broadcast', { event: 'space_ended' }, ({ payload }) => {
-        if (!payload?.id) return;
-        setAudioSpaces((prev) => prev.filter((s) => s.id !== payload.id));
+        const endedId = payload?.id || payload?.spaceId;
+        if (!endedId) return;
+        setAudioSpaces((prev) => prev.filter((s) => s.id !== endedId));
+        setActiveAudioSpace((prev) => (prev?.id === endedId ? null : prev));
       })
       .subscribe();
 
     return () => {
-      spaceCh.unsubscribe();
+      Promise.resolve(supabase.removeChannel(spaceCh)).catch(() => {});
     };
   }, []);
 
@@ -6505,12 +6515,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     category: AudioSpace['category'],
     isLowBandwidth: boolean = true
   ): AudioSpace => {
-    const spaceId = `space_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const tempSpaceId = `space_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const myName = currentUser.fullName || 'Host';
     const myAvatar = currentUser.avatarUrl || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(myName)}&backgroundColor=581c87&textColor=ffffff`;
 
     const newSpace: AudioSpace = {
-      id: spaceId,
+      id: tempSpaceId,
       title: title.trim(),
       topic: topic.trim() || 'Live community discussion',
       category: category || 'Tech & Hustle',
@@ -6534,7 +6544,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setAudioSpaces((prev) => {
-      const updated = [newSpace, ...prev.filter((s) => s.id !== spaceId)];
+      const updated = [newSpace, ...prev.filter((s) => s.id !== tempSpaceId)];
       try { localStorage.setItem('AGC_audio_spaces_v2', JSON.stringify(updated)); } catch (_) {}
       return updated;
     });
@@ -6547,19 +6557,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         title: newSpace.title,
         topic: newSpace.topic,
         category: newSpace.category,
+        host_id: currentUser.id,
+        host_name: myName,
+        host_avatar: myAvatar,
         is_live: true,
         is_low_bandwidth_mode: newSpace.isLowBandwidthMode,
         listeners_count: 1,
-      }).catch((e) => console.warn('Supabase space create notice:', e));
-
-      try {
-        const spaceCh = supabase.channel('live_audio_spaces', { config: { broadcast: { self: false } } });
-        spaceCh.subscribe((st) => {
-          if (st === 'SUBSCRIBED') {
-            spaceCh.send({ type: 'broadcast', event: 'space_started', payload: newSpace });
+      })
+        .then(({ data }) => {
+          const persistedSpace = data ? mapAudioSpaceRow(data) : newSpace;
+          if (data?.id) {
+            setAudioSpaces((prev) =>
+              prev.map((s) =>
+                s.id === tempSpaceId
+                  ? { ...persistedSpace, speakers: newSpace.speakers, peakListeners: s.peakListeners }
+                  : s
+              )
+            );
+            setActiveAudioSpace((prev) =>
+              prev && prev.id === tempSpaceId
+                ? { ...persistedSpace, speakers: prev.speakers, peakListeners: prev.peakListeners }
+                : prev
+            );
           }
-        });
-      } catch (_) {}
+
+          try {
+            const existing = supabase.getChannels().find((c) => c.topic === 'realtime:live_audio_spaces');
+            if (existing && existing.state === 'joined') {
+              existing.send({ type: 'broadcast', event: 'space_started', payload: persistedSpace });
+            } else {
+              const tempCh = supabase.channel(`live_audio_spaces_pub_${Date.now()}`);
+              tempCh.subscribe((st) => {
+                if (st === 'SUBSCRIBED') {
+                  tempCh.send({ type: 'broadcast', event: 'space_started', payload: persistedSpace });
+                  setTimeout(() => {
+                    Promise.resolve(supabase.removeChannel(tempCh)).catch(() => {});
+                  }, 1000);
+                }
+              });
+            }
+          } catch (_) {}
+        })
+        .catch((e) => console.warn('Supabase space create notice:', e));
     }
 
     return newSpace;
@@ -6596,6 +6635,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       name: currentUser.fullName,
       avatar: currentUser.avatarUrl,
     });
+
+    if (isSupabaseConfigured && !isAlreadyMember) {
+      updateAudioSpaceInDb(space.id, { listeners_count: currentListenersCount }).catch(() => {});
+    }
   };
 
   const leaveAudioSpace = () => {
@@ -6658,13 +6701,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.emit('space_ended', { spaceId, durationFormatted, peakListeners });
     }
     if (isSupabaseConfigured) {
+      updateAudioSpaceInDb(spaceId, {
+        is_live: false,
+        ended_at: new Date().toISOString(),
+      }).catch(() => {});
+
       try {
-        const ch = supabase.channel('town_community_feed', { config: { broadcast: { self: false } } });
-        ch.subscribe((st) => {
-          if (st === 'SUBSCRIBED') {
-            ch.send({ type: 'broadcast', event: 'space_ended', payload: { spaceId, durationFormatted, peakListeners } });
-          }
-        });
+        const existing = supabase.getChannels().find((c) => c.topic === 'realtime:live_audio_spaces');
+        if (existing && existing.state === 'joined') {
+          existing.send({
+            type: 'broadcast',
+            event: 'space_ended',
+            payload: { id: spaceId, spaceId, durationFormatted, peakListeners },
+          });
+        }
       } catch (_) {}
     }
     setActiveAudioSpace(null);
@@ -13104,6 +13154,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsMemeStudioOpen,
         sendMemeSticker,
         // 2. Live Audio Spaces / Street Radio
+        isSpacesDashboardOpen,
+        setIsSpacesDashboardOpen,
         audioSpaces,
         activeAudioSpace,
         joinAudioSpace,

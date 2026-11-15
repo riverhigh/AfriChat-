@@ -84,8 +84,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
     systemBroadcast,
     setSystemBroadcast,
     cmsData,
-    joinAudioSpace,
-    audioSpaces,
+    setIsSpacesDashboardOpen,
     isFeatureEnabled,
   } = useApp();
 
@@ -209,7 +208,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                       { label: 'Creator Hub', sub: 'VIP Calls & Drops', icon: Sparkles, action: () => setIsCreatorModalOpen(true), cat: 'tools', featureKey: 'creator' },
                       { label: 'Store Tiers', sub: '₦3k / ₦7k Monthly', icon: Store, action: () => setIsStoreRegModalOpen(true), cat: 'tools', featureKey: 'storeTiers' },
                       { label: 'Writers Guild', sub: 'Chapters & Buddy', icon: BookOpen, action: () => setIsWritersModalOpen(true), cat: 'tools', featureKey: 'writers' },
-                      { label: 'Spaces', sub: 'Live Audio Spaces', icon: Radio, action: () => { const live = audioSpaces.find((s) => s.isLive) || audioSpaces[0]; if (live) joinAudioSpace(live); }, cat: 'tools', featureKey: 'audioSpaces' },
+                      { label: 'Spaces', sub: 'Live Audio Spaces', icon: Radio, action: () => setIsSpacesDashboardOpen(true), cat: 'tools', featureKey: 'audioSpaces' },
                       { label: 'Invite & Earn', sub: '₦500/Friend', icon: Share2, action: () => setIsReferralModalOpen(true), cat: 'tools', featureKey: 'referral' },
                       { label: 'Tutors', sub: '₦5k · Courses', icon: GraduationCap, action: () => setIsTutorModalOpen(true), cat: 'tools', featureKey: 'tutor' },
                       { label: 'Meme Studio', sub: 'African Stickers', icon: Sparkles, action: () => setIsMemeStudioOpen(true), cat: 'tools', featureKey: 'memeStudio' },

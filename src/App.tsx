@@ -24,6 +24,7 @@ import { WalletModal } from './components/WalletModal';
 import { MemeStickerStudioModal } from './components/MemeStickerStudioModal';
 import { AudioSpaceModal } from './components/AudioSpaceModal';
 import { AudioSpaceBar } from './components/AudioSpaceBar';
+import { SpacesDashboard } from './components/SpacesDashboard';
 import { ScamReputationModal } from './components/ScamReputationModal';
 import { InvoiceGeneratorModal } from './components/InvoiceGeneratorModal';
 import { InvoiceViewerModal } from './components/InvoiceViewerModal';
@@ -60,7 +61,7 @@ import { RootErrorBoundary } from './components/RootErrorBoundary';
 import { safeLocalStorage, safeSessionStorage } from './utils/safeStorage';
 
 const AppContent: React.FC = () => {
-  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, declineIncomingCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled, isBanned, banInfo, systemConfig, currentUser, isAdminModalOpen, setIsAdminModalOpen } = useApp();
+  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, declineIncomingCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled, isBanned, banInfo, systemConfig, currentUser, isAdminModalOpen, setIsAdminModalOpen, isSpacesDashboardOpen, setIsSpacesDashboardOpen } = useApp();
   const [showSplash, setShowSplash] = useState(() => !safeSessionStorage.getItem('agc_splash_shown'));
   const maintenanceTapRef = React.useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
   const handleMaintenanceLogoTap = () => {
@@ -294,6 +295,9 @@ const AppContent: React.FC = () => {
 
         {/* African Super-App Features - Disappear completely when toggled off */}
         {isFeatureEnabled('memeStudio') && <MemeStickerStudioModal />}
+        {isFeatureEnabled('audioSpaces') && isSpacesDashboardOpen && (
+          <SpacesDashboard isModal onBack={() => setIsSpacesDashboardOpen(false)} />
+        )}
         {isFeatureEnabled('audioSpaces') && <AudioSpaceModal />}
         {isFeatureEnabled('scamChecker') && <ScamReputationModal />}
         {isFeatureEnabled('wallet') && <InvoiceGeneratorModal />}

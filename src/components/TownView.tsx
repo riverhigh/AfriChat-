@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { TownCommunity } from '../types';
+import { SpacesDashboard } from './SpacesDashboard';
 
 export const TownView: React.FC = () => {
   const {
@@ -330,7 +331,11 @@ export const TownView: React.FC = () => {
       <div className="p-4 space-y-4">
 
         {/* 1. Live Spaces Section */}
-        {(activeFilter === 'all' || activeFilter === 'spaces') && isFeatureEnabled('audioSpaces') && liveSpaces.length > 0 && (
+        {activeFilter === 'spaces' && isFeatureEnabled('audioSpaces') && (
+          <SpacesDashboard embedded onBack={() => setActiveFilter('all')} />
+        )}
+
+        {activeFilter === 'all' && isFeatureEnabled('audioSpaces') && liveSpaces.length > 0 && (
           <div className="space-y-2.5">
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-2">
@@ -400,32 +405,6 @@ export const TownView: React.FC = () => {
                 </div>
               ))}
             </div>
-          </div>
-        )}
-
-        {/* Empty State for Spaces Filter */}
-        {activeFilter === 'spaces' && isFeatureEnabled('audioSpaces') && liveSpaces.length === 0 && (
-          <div className="py-12 px-4 text-center bg-white dark:bg-[#120924] rounded-3xl border border-dashed border-purple-300/60 dark:border-purple-800/40">
-            <div className="w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-500 flex items-center justify-center mx-auto mb-3">
-              <Radio className="w-6 h-6 animate-pulse" />
-            </div>
-            <h4 className="font-bold text-sm text-slate-900 dark:text-white font-display">
-              No live audio spaces right now
-            </h4>
-            <p className="text-xs text-slate-400 dark:text-purple-300/60 mt-1 max-w-xs mx-auto">
-              Start your own Live Space and broadcast to listeners across Africa in real time!
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                setNewCommunityType('space');
-                setShowCreateModal(true);
-              }}
-              className="mt-4 px-4 py-2 bg-gradient-to-r from-purple-600 to-rose-600 hover:from-purple-500 hover:to-rose-500 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-md shadow-purple-600/20 inline-flex items-center gap-1.5"
-            >
-              <Radio className="w-3.5 h-3.5" />
-              <span>Start Live Space</span>
-            </button>
           </div>
         )}
 

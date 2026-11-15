@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import type { TicTacToeGameState, UserProfile } from '../types';
+import type { AudioSpace, TicTacToeGameState, UserProfile } from '../types';
 import { safeLocalStorage } from '../utils/safeStorage';
 
 const supabaseUrl: string =
@@ -353,12 +353,152 @@ export async function updateTownCommunityInDb(nameOrId: string, updates: {
 
 // ─── Live Audio Spaces (Street Radio / Spaces) ───────────────────────────────
 
+const VALID_SPACE_CATEGORIES: AudioSpace['category'][] = [
+  'Tech & Hustle',
+  'Afrobeats & Music',
+  'Football Banter',
+  'Market Townhall',
+];
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isMissingSpacesTableError(err: any, tableName: string): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    code === 'PGRST205' ||
+    code === '42P01' ||
+    (msg.includes(tableName) && (msg.includes('schema cache') || msg.includes('does not exist')))
+  );
+}
+
+let activeSpacesTable: 'audio_spaces' | 'spaces' = 'audio_spaces';
+
+export function getActiveSpacesTable(): 'audio_spaces' | 'spaces' {
+  return activeSpacesTable;
+}
+
+export function mapAudioSpaceRow(row: Record<string, any>): AudioSpace {
+  const profile =
+    row.profiles && !Array.isArray(row.profiles)
+      ? row.profiles
+      : Array.isArray(row.profiles)
+      ? row.profiles[0]
+      : null;
+
+  const title = (row.title as string) || 'Live Space';
+  const hostName =
+    (row.host_name as string) ||
+    (profile?.full_name as string) ||
+    'Host';
+  const hostAvatar =
+    (row.host_avatar as string) ||
+    (profile?.avatar_url as string) ||
+    `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(hostName)}&backgroundColor=581c87&textColor=ffffff`;
+
+  const rawCategory = row.category as AudioSpace['category'];
+  const category = VALID_SPACE_CATEGORIES.includes(rawCategory)
+    ? rawCategory
+    : 'Tech & Hustle';
+
+  const startedAtMs = row.started_at
+    ? new Date(row.started_at as string).getTime()
+    : row.created_at
+    ? new Date(row.created_at as string).getTime()
+    : Date.now();
+
+  return {
+    id: String(row.id),
+    title,
+    topic: (row.topic as string) || '',
+    category,
+    hostName,
+    hostAvatar,
+    listenersCount: Number(row.listeners_count ?? 0),
+    isLive: Boolean(row.is_live),
+    isLowBandwidthMode: Boolean(row.is_low_bandwidth_mode ?? true),
+    startedAt: Number.isFinite(startedAtMs) ? startedAtMs : Date.now(),
+    speakers: Array.isArray(row.speakers)
+      ? row.speakers
+      : [
+          {
+            id: (row.host_id as string) || `host_${row.id}`,
+            name: hostName,
+            avatar: hostAvatar,
+            role: 'host',
+            isSpeaking: true,
+            isMuted: false,
+          },
+        ],
+  };
+}
+
 export async function fetchLiveAudioSpaces(limit = 60) {
+  if (activeSpacesTable === 'audio_spaces') {
+    const joined = await supabase
+      .from('audio_spaces')
+      .select('*, profiles!host_id(full_name, avatar_url)')
+      .eq('is_live', true)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (!joined.error) return joined;
+
+    if (!isMissingSpacesTableError(joined.error, 'audio_spaces')) {
+      const plain = await supabase
+        .from('audio_spaces')
+        .select('*')
+        .eq('is_live', true)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (!plain.error || !isMissingSpacesTableError(plain.error, 'audio_spaces')) {
+        return plain;
+      }
+    }
+    activeSpacesTable = 'spaces';
+  }
+
   return supabase
-    .from('audio_spaces')
+    .from('spaces')
     .select('*')
     .eq('is_live', true)
-    .order('started_at', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(limit);
+}
+
+export async function fetchScheduledAudioSpaces(limit = 30) {
+  if (activeSpacesTable === 'audio_spaces') {
+    const joined = await supabase
+      .from('audio_spaces')
+      .select('*, profiles!host_id(full_name, avatar_url)')
+      .eq('is_live', false)
+      .is('ended_at', null)
+      .order('started_at', { ascending: true })
+      .limit(limit);
+
+    if (!joined.error) return joined;
+
+    if (!isMissingSpacesTableError(joined.error, 'audio_spaces')) {
+      const plain = await supabase
+        .from('audio_spaces')
+        .select('*')
+        .eq('is_live', false)
+        .is('ended_at', null)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (!plain.error || !isMissingSpacesTableError(plain.error, 'audio_spaces')) {
+        return plain;
+      }
+    }
+    activeSpacesTable = 'spaces';
+  }
+
+  return supabase
+    .from('spaces')
+    .select('*')
+    .eq('is_live', false)
+    .order('created_at', { ascending: false })
     .limit(limit);
 }
 
@@ -366,15 +506,77 @@ export async function createAudioSpaceInDb(space: {
   title: string;
   topic?: string;
   category: string;
+  host_id?: string;
+  host_name?: string;
+  host_avatar?: string;
   is_live: boolean;
   is_low_bandwidth_mode?: boolean;
   listeners_count?: number;
+  started_at?: string;
 }) {
-  return supabase.from('audio_spaces').insert(space).select().maybeSingle();
+  const safeCategory = VALID_SPACE_CATEGORIES.includes(space.category as AudioSpace['category'])
+    ? space.category
+    : 'Tech & Hustle';
+
+  if (activeSpacesTable === 'audio_spaces') {
+    let resolvedHostId = space.host_id && UUID_REGEX.test(space.host_id) ? space.host_id : undefined;
+    if (!resolvedHostId) {
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData?.user?.id && UUID_REGEX.test(authData.user.id)) {
+          resolvedHostId = authData.user.id;
+        }
+      } catch (_) {}
+    }
+
+    if (resolvedHostId) {
+      const res = await supabase
+        .from('audio_spaces')
+        .insert({
+          host_id: resolvedHostId,
+          title: space.title,
+          topic: space.topic || null,
+          category: safeCategory,
+          listeners_count: space.listeners_count ?? 1,
+          is_live: space.is_live,
+          is_low_bandwidth_mode: space.is_low_bandwidth_mode ?? true,
+          started_at: space.started_at || (space.is_live ? new Date().toISOString() : null),
+        })
+        .select('*, profiles!host_id(full_name, avatar_url)')
+        .maybeSingle();
+
+      if (!res.error) return res;
+      if (isMissingSpacesTableError(res.error, 'audio_spaces')) {
+        activeSpacesTable = 'spaces';
+      } else {
+        return res;
+      }
+    }
+  }
+
+  if (activeSpacesTable === 'spaces') {
+    return supabase
+      .from('spaces')
+      .insert({
+        host_name: space.host_name || 'Host',
+        title: space.title,
+        listeners_count: space.listeners_count ?? 1,
+        is_live: space.is_live,
+      })
+      .select()
+      .maybeSingle();
+  }
+
+  return { data: null, error: null };
 }
 
 export async function updateAudioSpaceInDb(id: string, updates: Record<string, unknown>) {
-  return supabase.from('audio_spaces').update(updates).eq('id', id);
+  if (!id) return { data: null, error: null };
+  if (activeSpacesTable === 'audio_spaces') {
+    if (!UUID_REGEX.test(id)) return { data: null, error: null };
+    return supabase.from('audio_spaces').update(updates).eq('id', id);
+  }
+  return supabase.from('spaces').update(updates).eq('id', id);
 }
 
 // ─── Scam Report & Reputation Database ───────────────────────────────────────
