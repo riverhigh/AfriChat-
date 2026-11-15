@@ -13,6 +13,7 @@ import { CallsView } from './components/CallsView';
 import { ActiveCallModal } from './components/ActiveCallModal';
 import { IncomingCallModal } from './components/IncomingCallModal';
 import { IncomingContactRequestModal } from './components/IncomingContactRequestModal';
+import { IncomingGroupInviteModal } from './components/IncomingGroupInviteModal';
 import { SettingsView } from './components/SettingsView';
 import { TownView } from './components/TownView';
 import { CheckoutDrawer } from './components/CheckoutDrawer';
@@ -272,6 +273,7 @@ const AppContent: React.FC = () => {
         <CallErrorBoundary onReset={endCall}>{"\n"}<ActiveCallModal />{"\n"}</CallErrorBoundary>
         <IncomingCallModal />
         <IncomingContactRequestModal />
+        <IncomingGroupInviteModal />
         <CheckoutDrawer />
         {isFeatureEnabled('escrow') && <EscrowModal />}
         {isFeatureEnabled('voiceNotes') && (

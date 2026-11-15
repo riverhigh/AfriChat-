@@ -40,6 +40,9 @@ export const ChatList: React.FC = () => {
     toggleShelfChat,
     setChatLabel,
     getBadgeForPhone,
+    groupInvites,
+    acceptGroupInvite,
+    declineGroupInvite,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -311,6 +314,68 @@ export const ChatList: React.FC = () => {
           >
             Exit Shelf
           </button>
+        </div>
+      )}
+
+      {/* Pending Group & Channel Invitations */}
+      {groupInvites && groupInvites.length > 0 && !showShelvedOnly && (
+        <div className="px-3 py-2.5 bg-purple-50/80 dark:bg-[#17112b] border-b border-purple-200 dark:border-purple-900/50 space-y-2">
+          <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300">
+            <span className="flex items-center gap-1.5">
+              <Users className="w-3.5 h-3.5" />
+              <span>Pending Invites ({groupInvites.length})</span>
+            </span>
+          </div>
+          {groupInvites.map((inv) => {
+            const isChan = inv.entityType === 'channel' || inv.groupId.startsWith('channel_');
+            return (
+              <div
+                key={inv.id}
+                className="flex items-center justify-between gap-2.5 p-2.5 rounded-2xl bg-white dark:bg-[#1f1738] border border-purple-200/80 dark:border-purple-800/40 shadow-2xs"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-10 h-10 rounded-full bg-purple-600/20 text-purple-600 dark:text-purple-300 flex items-center justify-center shrink-0 overflow-hidden border border-purple-500/30">
+                    {inv.groupAvatar ? (
+                      <img src={inv.groupAvatar} alt={inv.groupName} className="w-full h-full object-cover" />
+                    ) : isChan ? (
+                      <Radio className="w-4 h-4" />
+                    ) : (
+                      <Users className="w-4 h-4" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        {inv.groupName}
+                      </span>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 font-semibold shrink-0">
+                        {isChan ? 'Channel' : 'Group'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-purple-300/75 truncate">
+                      Invited by {inv.invitedByName || inv.invitedByPhone}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => declineGroupInvite(inv.id)}
+                    className="px-2.5 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-300 text-[11px] font-semibold transition-colors cursor-pointer"
+                  >
+                    Decline
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => acceptGroupInvite(inv.id)}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors shadow-2xs cursor-pointer"
+                  >
+                    Accept
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 

@@ -91,6 +91,23 @@ export const emitCreateGroup = (chat: any, memberPhones: string[]) => {
   s?.emit('create_group', { chat, memberPhones });
 };
 
+export const emitGroupInvite = (invite: any, chat: any, targetPhone: string) => {
+  const s = getSocket();
+  s?.emit('group_invite', { invite, chat, targetPhone });
+};
+
+export const emitGroupInviteResponse = (payload: {
+  inviteId: string;
+  groupId: string;
+  responderPhone: string;
+  responderName: string;
+  accepted: boolean;
+  targetPhone?: string;
+}) => {
+  const s = getSocket();
+  s?.emit('group_invite_response', payload);
+};
+
 // 3. Audio Spaces / Street Radio
 export const joinSpaceRoom = (spaceId: string, user: { id: string; name: string; avatar?: string }) => {
   const s = getSocket();

@@ -1097,10 +1097,10 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </div>
             <div>
               <div className="font-bold text-slate-900 dark:text-white">
-                Group Invitation: {currentChat.name}
+                {currentChat.isChannel ? 'Channel Invitation' : 'Group Invitation'}: {currentChat.name}
               </div>
               <div className="text-[11px] text-slate-500 dark:text-purple-300/80">
-                You were invited to this group. Accept to start participating.
+                You were invited to this {currentChat.isChannel ? 'channel' : 'group'}. Accept to join or decline to dismiss.
               </div>
             </div>
           </div>

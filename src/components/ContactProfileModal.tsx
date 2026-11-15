@@ -152,11 +152,17 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
     }
   };
 
-  // 2. Add Members logic
+  // 2. Add Members logic (sends invitation so user accepts or declines)
   const handleAddMembersSubmit = () => {
     if (!selectedContactNames.length) return;
-    addMembersToGroup(chat.id, selectedContactNames);
-    showToast(`Added ${selectedContactNames.length} member${selectedContactNames.length > 1 ? 's' : ''} to ${chat.name}!`);
+    const selectedPhones = selectedContactNames.map((name) => {
+      const match = deviceContacts.find((c) => c.name === name);
+      return match?.normalizedPhoneNumber || match?.rawPhoneNumber || '';
+    });
+    addMembersToGroup(chat.id, selectedContactNames, selectedPhones);
+    showToast(
+      `Invitation sent to ${selectedContactNames.length} contact${selectedContactNames.length > 1 ? 's' : ''} for ${chat.name}!`
+    );
     setSelectedContactNames([]);
     setShowAddMembersDrawer(false);
   };
@@ -820,7 +826,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 </div>
 
                 {/* Group / Channel Participants with Admin Permissions & Removal (No mock fallbacks) */}
-                {memberList.length === 0 ? (
+                {memberList.length === 0 && (!chat.pendingMembers || chat.pendingMembers.length === 0) ? (
                   <div className="p-4 text-center">
                     <p className="text-xs text-neutral-400">No other members in this {entityType.toLowerCase()} yet.</p>
                     <button
@@ -833,7 +839,8 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                     </button>
                   </div>
                 ) : (
-                  memberList.map((c: any) => {
+                  <>
+                  {memberList.map((c: any) => {
                     const isMemberAdmin = Boolean(
                       chat.admins?.includes(c.name) ||
                       chat.admins?.includes(c.normalizedPhoneNumber)
@@ -894,7 +901,38 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                         </div>
                       </div>
                     );
-                  })
+                  })}
+                  {(chat.pendingMembers || [])
+                    .filter((pm) => !filteredMemberNames.includes(pm))
+                    .map((pm) => {
+                      const matched = deviceContacts.find((dc) => dc.name === pm || dc.normalizedPhoneNumber === pm);
+                      const avatar =
+                        matched?.avatar ||
+                        `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(pm)}&backgroundColor=581c87&textColor=ffffff`;
+                      return (
+                        <div key={`pending_${pm}`} className="p-3 flex items-center justify-between gap-2 bg-amber-950/10">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <img
+                              src={avatar}
+                              alt={pm}
+                              className="w-9 h-9 rounded-full object-cover border border-amber-700/50 shrink-0 opacity-80"
+                            />
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-white truncate flex items-center gap-1.5">
+                                <span>{matched?.name || pm}</span>
+                                <span className="text-[9px] font-mono text-amber-300 bg-amber-950/80 px-1.5 py-0.2 rounded-full border border-amber-700/60 shrink-0">
+                                  Invite Pending
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-neutral-400 font-mono truncate">
+                                {matched?.normalizedPhoneNumber || 'Awaiting response'}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </>
                 )}
               </div>
             );
@@ -1033,8 +1071,8 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                   <UserPlus className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white leading-tight">Add to {entityType}</h3>
-                  <p className="text-xs text-neutral-400">Select friends or contacts to add directly</p>
+                  <h3 className="text-base font-bold text-white leading-tight">Invite to {entityType}</h3>
+                  <p className="text-xs text-neutral-400">Select contacts to prompt them to accept or decline</p>
                 </div>
               </div>
               <button
@@ -1094,13 +1132,28 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                     c.normalizedPhoneNumber.includes(memberSearchQuery)
                 )
                 .map((contact) => {
+                  const isAlreadyMember = Boolean(
+                    chat.members?.includes(contact.name) ||
+                    chat.members?.includes(contact.normalizedPhoneNumber)
+                  );
+                  const isAlreadyInvited = Boolean(
+                    chat.pendingMembers?.includes(contact.name) ||
+                    chat.pendingMembers?.includes(contact.normalizedPhoneNumber)
+                  );
+                  const isDisabled = isAlreadyMember;
                   const isSelected = selectedContactNames.includes(contact.name);
                   return (
                     <div
                       key={contact.id}
-                      onClick={() => toggleSelectMember(contact.name)}
-                      className={`p-3 rounded-2xl flex items-center justify-between cursor-pointer transition-colors ${
-                        isSelected ? 'bg-purple-950/40 border border-purple-600/40' : 'hover:bg-neutral-800/40'
+                      onClick={() => {
+                        if (!isDisabled) toggleSelectMember(contact.name);
+                      }}
+                      className={`p-3 rounded-2xl flex items-center justify-between transition-colors ${
+                        isDisabled
+                          ? 'opacity-50 cursor-not-allowed'
+                          : isSelected
+                          ? 'bg-purple-950/40 border border-purple-600/40 cursor-pointer'
+                          : 'hover:bg-neutral-800/40 cursor-pointer'
                       }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
@@ -1110,7 +1163,19 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                           className="w-10 h-10 rounded-full object-cover border border-neutral-700 shrink-0"
                         />
                         <div className="min-w-0">
-                          <div className="text-xs font-bold text-white truncate">{contact.name}</div>
+                          <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
+                            <span>{contact.name}</span>
+                            {isAlreadyMember && (
+                              <span className="text-[9px] font-mono text-emerald-400 bg-emerald-950/60 px-1.5 py-0.2 rounded-full">
+                                Joined
+                              </span>
+                            )}
+                            {!isAlreadyMember && isAlreadyInvited && (
+                              <span className="text-[9px] font-mono text-amber-300 bg-amber-950/60 px-1.5 py-0.2 rounded-full">
+                                Invited
+                              </span>
+                            )}
+                          </div>
                           <div className="text-[11px] text-neutral-400 font-mono truncate">
                             {contact.normalizedPhoneNumber}
                           </div>
@@ -1141,8 +1206,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
               >
                 <UserPlus className="w-4 h-4" />
                 <span>
-                  Add {selectedContactNames.length > 0 ? `${selectedContactNames.length} to ` : ''}
-                  {entityType}
+                  Send Invite{selectedContactNames.length !== 1 ? 's' : ''} ({selectedContactNames.length})
                 </span>
               </button>
             </div>

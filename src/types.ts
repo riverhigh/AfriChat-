@@ -349,6 +349,7 @@ export interface ChatThread {
   creatorId?: string;
   members?: string[];
   memberPhones?: string[];
+  pendingMembers?: string[];
   inviteCode?: string;
   invitationStatus?: 'pending' | 'accepted' | 'declined';
   invitedBy?: string;
@@ -363,6 +364,23 @@ export interface ContactRequest {
   senderAvatar?: string;
   recipientPhone: string;
   message?: string;
+  createdAt: string;
+  status: 'pending' | 'accepted' | 'declined';
+}
+
+export interface GroupInvitation {
+  id: string;
+  groupId: string;
+  groupName: string;
+  groupAvatar?: string;
+  entityType: 'group' | 'channel';
+  description?: string;
+  invitedPhone: string;
+  invitedByPhone: string;
+  invitedByName: string;
+  invitedByAvatar?: string;
+  membersCount?: number;
+  chatSnapshot?: ChatThread;
   createdAt: string;
   status: 'pending' | 'accepted' | 'declined';
 }

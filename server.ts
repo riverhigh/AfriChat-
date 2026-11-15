@@ -2358,7 +2358,7 @@ io.on('connection', (socket: Socket) => {
     }
   };
 
-  // 1c. Live Group Creation Relay
+  // 1c. Live Group Creation & Group/Channel Invite Relays
   socket.on('create_group', (payload: { chat: any; memberPhones: string[] }) => {
     const { chat, memberPhones } = payload;
     if (chat && Array.isArray(memberPhones)) {
@@ -2366,6 +2366,28 @@ io.on('connection', (socket: Socket) => {
         emitToPhoneVariantsOnce(phone, 'group_created', { chat });
       });
     }
+  });
+
+  socket.on('group_invite', (payload: { invite?: any; chat?: any; targetPhone?: string }) => {
+    const targetPhone = payload?.targetPhone || payload?.invite?.invitedPhone;
+    const senderPhone = (socket as any)._agcPhone || payload?.invite?.invitedByPhone || '';
+    if (!targetPhone || !payload?.invite) return;
+    const senderVariants = new Set(getPhoneVariants(senderPhone));
+    const targetVariants = getPhoneVariants(targetPhone);
+    if (targetVariants.some((v) => senderVariants.has(v))) return;
+    emitToPhoneVariantsOnce(targetPhone, 'group_invite', {
+      invite: payload.invite,
+      chat: payload.chat,
+      targetPhone,
+    });
+  });
+
+  socket.on('group_invite_response', (payload: any) => {
+    if (!payload?.groupId) return;
+    if (payload.targetPhone) {
+      emitToPhoneVariantsOnce(payload.targetPhone, 'group_invite_response', payload);
+    }
+    socket.to(`chat:${payload.groupId}`).emit('group_invite_response', payload);
   });
 
   // 1d. Friend Request Relay (one-way only, never echoed back to sender)

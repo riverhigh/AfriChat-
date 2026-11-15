@@ -55,6 +55,7 @@ export const ContactsModal: React.FC = () => {
   const [showCreateChannel, setShowCreateChannel] = useState(false);
   const [channelName, setChannelName] = useState('');
   const [channelDesc, setChannelDesc] = useState('');
+  const [selectedChannelMembers, setSelectedChannelMembers] = useState<{ name: string; phone: string }[]>([]);
 
   const handleCreateGroup = () => {
     if (!groupName.trim()) return;
@@ -73,11 +74,18 @@ export const ContactsModal: React.FC = () => {
 
   const handleCreateChannel = () => {
     if (!channelName.trim()) return;
-    createChannel(channelName.trim(), channelDesc.trim());
+    createChannel(
+      channelName.trim(),
+      channelDesc.trim(),
+      undefined,
+      selectedChannelMembers.map((m) => m.name),
+      selectedChannelMembers.map((m) => m.phone)
+    );
     setIsContactsModalOpen(false);
     setShowCreateChannel(false);
     setChannelName('');
     setChannelDesc('');
+    setSelectedChannelMembers([]);
   };
   const [newPhone, setNewPhone] = useState('');
   const [inviteSentToast, setInviteSentToast] = useState<string | null>(null);
@@ -697,7 +705,7 @@ export const ContactsModal: React.FC = () => {
               onClick={handleCreateGroup}
               className="w-full py-2 bg-purple-600 disabled:opacity-50 text-white text-xs font-bold rounded-xl hover:bg-purple-700 transition-colors shadow-xs"
             >
-              Create Group
+              {selectedGroupMembers.length > 0 ? `Create Group & Send ${selectedGroupMembers.length} Invite(s)` : 'Create Group'}
             </button>
           </div>
         )}
@@ -735,13 +743,59 @@ export const ContactsModal: React.FC = () => {
               className="w-full px-3 py-1.5 bg-white dark:bg-[#1c1033] rounded-xl text-xs text-slate-900 dark:text-white border border-indigo-200 dark:border-indigo-900/40 focus:outline-none"
             />
 
+            {registeredList.length > 0 && (
+              <div>
+                <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1.5 uppercase tracking-wider">
+                  Invite Subscribers ({selectedChannelMembers.length} selected)
+                </div>
+                <div className="flex gap-1.5 overflow-x-auto pb-1 max-h-24 flex-wrap">
+                  {registeredList.slice(0, 15).map((c) => {
+                    const memberPhone = c.normalizedPhoneNumber || c.rawPhoneNumber;
+                    const isSelected = selectedChannelMembers.some(
+                      (m) => m.name === c.name || (memberPhone && m.phone === memberPhone)
+                    );
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          if (isSelected) {
+                            setSelectedChannelMembers(
+                              selectedChannelMembers.filter(
+                                (m) => m.name !== c.name && m.phone !== memberPhone
+                              )
+                            );
+                          } else {
+                            setSelectedChannelMembers([
+                              ...selectedChannelMembers,
+                              { name: c.name, phone: memberPhone },
+                            ]);
+                          }
+                        }}
+                        className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1 border transition-colors ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-white dark:bg-[#1c1033] text-slate-700 dark:text-slate-200 border-slate-200 dark:border-indigo-900/50'
+                        }`}
+                      >
+                        {isSelected && <Check className="w-3 h-3" />}
+                        <span>{c.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <button
               type="button"
               disabled={!channelName.trim()}
               onClick={handleCreateChannel}
               className="w-full py-2 bg-indigo-600 disabled:opacity-50 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 transition-colors shadow-xs"
             >
-              Create Broadcast Channel
+              {selectedChannelMembers.length > 0
+                ? `Create Channel & Send ${selectedChannelMembers.length} Invite(s)`
+                : 'Create Broadcast Channel'}
             </button>
           </div>
         )}
