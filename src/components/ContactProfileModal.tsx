@@ -381,6 +381,13 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                   </span>
                 );
               }
+              if (liveBadge === 'admin') {
+                return (
+                  <span className="absolute -bottom-1 -left-1 w-7 h-7 bg-gradient-to-tr from-rose-600 to-violet-600 rounded-full flex items-center justify-center text-white shadow-lg border-2 border-black" title="Verified Platform Admin">
+                    <ShieldCheck className="w-4 h-4" />
+                  </span>
+                );
+              }
               if (liveBadge === 'creator_plus' || chat.isCelebrityVerified) {
                 return (
                   <span className="absolute -bottom-1 -left-1 w-7 h-7 bg-gradient-to-tr from-amber-400 to-purple-600 rounded-full flex items-center justify-center text-white shadow-lg border-2 border-black">
@@ -426,6 +433,14 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                     <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-400 text-slate-950 shadow-xs">
                       <BadgeCheck className="w-3 h-3" />
                       <span>Gold Merchant</span>
+                    </span>
+                  );
+                }
+                if (liveBadge === 'admin') {
+                  return (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-gradient-to-r from-rose-600 to-violet-600 text-white shadow-xs">
+                      <ShieldCheck className="w-3 h-3" />
+                      <span>Verified Admin</span>
                     </span>
                   );
                 }

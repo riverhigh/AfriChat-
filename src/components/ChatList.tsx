@@ -22,6 +22,7 @@ import {
   Package,
   BadgeCheck,
   Crown,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatThread } from '../types';
@@ -559,6 +560,17 @@ export const ChatList: React.FC = () => {
                             >
                               <BadgeCheck className="w-2.5 h-2.5 text-amber-500" />
                               <span>Merchant</span>
+                            </span>
+                          );
+                        }
+                        if (liveBadge === 'admin') {
+                          return (
+                            <span
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-rose-500/20 to-violet-500/20 border border-rose-400/50 text-rose-600 dark:text-rose-300 text-[9px] font-bold shrink-0"
+                              title="Verified Platform Admin"
+                            >
+                              <ShieldCheck className="w-2.5 h-2.5 text-rose-500" />
+                              <span>Admin</span>
                             </span>
                           );
                         }

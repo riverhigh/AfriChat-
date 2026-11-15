@@ -630,6 +630,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         </span>
                       );
                     }
+                    if (activeBadge === 'admin') {
+                      return (
+                        <span
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-gradient-to-r from-rose-500/20 to-violet-500/20 text-rose-600 dark:text-rose-300 border border-rose-500/40 text-[10px] font-bold"
+                          title="Verified Platform Admin"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5 text-rose-500" />
+                          <span>Admin</span>
+                        </span>
+                      );
+                    }
                     return null;
                   })()}
                   {currentUser.isPhoneVerified && (

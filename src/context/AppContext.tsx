@@ -573,6 +573,10 @@ interface AppContextType {
   isDarkMode: boolean;
   toggleDarkMode: () => void;
   sendMessage: (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }, oneTimeView?: boolean) => void;
+  forwardMessage: (
+    targets: Array<{ chatId?: string; phone?: string; name?: string; avatar?: string }>,
+    sourceMessage: ChatMessage
+  ) => number;
   sendVoiceNote: (chatId: string, durationSeconds: number, transcript: string, audioDataUrl?: string, oneTimeView?: boolean) => void;
   sendProductCard: (chatId: string, product: Product, fromSelf?: boolean) => void;
   isShareLocationModalOpen: boolean;
@@ -987,8 +991,8 @@ interface AppContextType {
   setIsAdminModalOpen: (val: boolean) => void;
   adminUsers: AdminUserRecord[];
   refreshAdminUsers: () => Promise<void>;
-  getBadgeForPhone: (phoneOrId?: string) => 'blue' | 'gold' | 'creator_plus' | null;
-  toggleUserVerification: (userId: string, badge: 'blue' | 'gold' | 'creator_plus' | null, hints?: { phoneNumber?: string; fullName?: string; avatarUrl?: string }) => Promise<boolean>;
+  getBadgeForPhone: (phoneOrId?: string) => 'blue' | 'gold' | 'creator_plus' | 'admin' | null;
+  toggleUserVerification: (userId: string, badge: 'blue' | 'gold' | 'creator_plus' | 'admin' | null, hints?: { phoneNumber?: string; fullName?: string; avatarUrl?: string }) => Promise<boolean>;
   toggleUserSuspension: (userId: string) => Promise<boolean>;
   adminResolveEscrow: (orderId: string, action: 'release_to_seller' | 'refund_to_buyer', note: string) => { success: boolean; message: string };
   systemBroadcast: AdminSystemBroadcast | null;
@@ -5907,8 +5911,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Unified Multi-Transport Live Message Broadcaster
-  const broadcastLiveMessage = async (chatId: string, msg: ChatMessage) => {
-    const currentChat = chats.find((c) => c.id === chatId);
+  const broadcastLiveMessage = async (chatId: string, msg: ChatMessage, overrideChat?: ChatThread) => {
+    const currentChat = overrideChat || chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
     const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
     let targetCleanPhone = currentChat?.phone?.replace(/\D/g, '');
 
@@ -6252,6 +6256,163 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 2. Broadcast live
     broadcastLiveMessage(chatId, newMsg);
+  };
+
+  const forwardMessage = (
+    targets: Array<{ chatId?: string; phone?: string; name?: string; avatar?: string }>,
+    sourceMessage: ChatMessage
+  ): number => {
+    if (!targets || targets.length === 0) return 0;
+
+    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    const initialStatus: 'sent' | 'delivered' = isOnline ? 'delivered' : 'sent';
+    const timestampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    // Normalize forwarded payload cleanly (strip 1-time lock, replies, reactions; convert interactive cards cleanly)
+    const passthroughTypes: ChatMessage['type'][] = [
+      'text',
+      'image',
+      'voice',
+      'product_card',
+      'meme_sticker',
+      'location',
+      'invoice_receipt',
+    ];
+    let fwdType: ChatMessage['type'] = passthroughTypes.includes(sourceMessage.type)
+      ? sourceMessage.type
+      : 'text';
+    let fwdText = sourceMessage.text || '';
+
+    if (!passthroughTypes.includes(sourceMessage.type)) {
+      if (sourceMessage.type === 'financial_poll' && sourceMessage.financialPoll) {
+        fwdText = `📊 Poll: ${sourceMessage.financialPoll.title}`;
+      } else if (sourceMessage.type === 'game_xo' && sourceMessage.xoGame) {
+        fwdText = `🎮 X/O Game Challenge (${sourceMessage.xoGame.mode === 'bet' ? `₦${sourceMessage.xoGame.betAmount} stake` : 'Friendly'})`;
+      } else if (sourceMessage.type === 'escrow_receipt' && sourceMessage.order) {
+        fwdText = `🔒 Escrow Order: ${sourceMessage.order.product?.title || 'Protected Deal'}`;
+      } else if (!fwdText) {
+        fwdText = 'Forwarded message';
+      }
+      fwdType = 'text';
+    }
+
+    let previewLabel = fwdText;
+    if (fwdType === 'image') {
+      previewLabel = fwdText ? `📷 ${fwdText}` : '📷 Photo';
+    } else if (fwdType === 'voice' && sourceMessage.voiceNote) {
+      previewLabel = `🎤 Voice message (${sourceMessage.voiceNote.durationSeconds}s)`;
+    } else if (fwdType === 'product_card' && sourceMessage.product) {
+      previewLabel = `🛍️ ${sourceMessage.product.title}`;
+    } else if (fwdType === 'meme_sticker') {
+      previewLabel = '🎭 Sticker';
+    } else if (fwdType === 'location') {
+      previewLabel = `📍 ${sourceMessage.locationData?.addressName || 'Shared Location'}`;
+    } else if (fwdType === 'invoice_receipt') {
+      previewLabel = `🧾 Invoice #${(sourceMessage.invoice || sourceMessage.invoiceData)?.invoiceNumber || ''}`;
+    }
+    const threadPreview = `↪ ${previewLabel || 'Forwarded message'}`;
+
+    const seenChatIds = new Set<string>();
+    const prepared: Array<{ chatId: string; msg: ChatMessage; thread: ChatThread }> = [];
+
+    targets.forEach((t, idx) => {
+      const resolvedChatId =
+        t.chatId || (t.phone ? getDirectChatId(currentUser.phoneNumber, t.phone) : '');
+      if (!resolvedChatId || seenChatIds.has(resolvedChatId)) return;
+      seenChatIds.add(resolvedChatId);
+
+      const existingThread =
+        chatsRef.current.find((c) => c.id === resolvedChatId) ||
+        chats.find((c) => c.id === resolvedChatId);
+
+      const resolvedThread: ChatThread = existingThread
+        ? {
+            ...existingThread,
+            lastMessage: threadPreview,
+            lastMessageTime: timestampStr,
+          }
+        : {
+            id: resolvedChatId,
+            name: t.name || t.phone || 'Direct Chat',
+            avatar: t.avatar || DEFAULT_AVATAR_SVG,
+            verifiedStore: false,
+            location: 'Direct Chat',
+            unreadCount: 0,
+            lastMessage: threadPreview,
+            lastMessageTime: timestampStr,
+            catalog: [],
+            isOnline: false,
+            phone: t.phone || '',
+            phoneNumber: t.phone || '',
+          };
+
+      const fwdMsg: ChatMessage = {
+        id: `msg_fwd_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+        chatId: resolvedChatId,
+        sender: 'user',
+        senderName: currentUser.fullName || 'AGC User',
+        senderPhone: currentUser.phoneNumber,
+        senderAvatar: currentUser.avatarUrl,
+        type: fwdType,
+        text: fwdText,
+        imageUrl: fwdType === 'image' ? sourceMessage.imageUrl : undefined,
+        voiceNote:
+          fwdType === 'voice' && sourceMessage.voiceNote
+            ? {
+                ...sourceMessage.voiceNote,
+                expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+              }
+            : undefined,
+        product: fwdType === 'product_card' ? sourceMessage.product : undefined,
+        memeSticker: fwdType === 'meme_sticker' ? sourceMessage.memeSticker : undefined,
+        locationData: fwdType === 'location' ? sourceMessage.locationData : undefined,
+        invoice: fwdType === 'invoice_receipt' ? sourceMessage.invoice : undefined,
+        invoiceData: fwdType === 'invoice_receipt' ? sourceMessage.invoiceData : undefined,
+        oneTimeView: false,
+        isForwarded: true,
+        timestamp: timestampStr,
+        status: initialStatus,
+      };
+
+      prepared.push({ chatId: resolvedChatId, msg: fwdMsg, thread: resolvedThread });
+    });
+
+    if (prepared.length === 0) return 0;
+
+    setMessages((prev) => {
+      const next = { ...prev };
+      prepared.forEach(({ chatId: cid, msg }) => {
+        next[cid] = [...(next[cid] || []), msg];
+      });
+      messagesRef.current = next;
+      persistPartitionedMessages(next, currentUser.phoneNumber);
+      return next;
+    });
+
+    setChats((prev) => {
+      let next = [...prev];
+      prepared.forEach(({ chatId: cid, thread }) => {
+        const exists = next.some((c) => c.id === cid);
+        if (exists) {
+          next = next.map((c) =>
+            c.id === cid
+              ? { ...c, lastMessage: thread.lastMessage, lastMessageTime: thread.lastMessageTime }
+              : c
+          );
+        } else {
+          next = [thread, ...next];
+        }
+      });
+      chatsRef.current = next;
+      persistPartitionedChats(next, currentUser.phoneNumber);
+      return next;
+    });
+
+    prepared.forEach(({ chatId: cid, msg, thread }) => {
+      broadcastLiveMessage(cid, msg, thread);
+    });
+
+    return prepared.length;
   };
 
   const sendVoiceNote = (
@@ -8784,7 +8945,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             isPhoneVerified: Boolean(userWithCompactAvatar.isPhoneVerified),
             status: 'active',
             joinedDate: 'Just now',
-            walletBalanceNgn: 50000,
+            walletBalanceNgn: 0,
             ordersCount: 0,
             isOnline: true,
             lastSeen: 'online',
@@ -9029,7 +9190,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             isPhoneVerified: Boolean(updatedUser.isPhoneVerified),
             status: 'active',
             joinedDate: 'Just now',
-            walletBalanceNgn: 50000,
+            walletBalanceNgn: 0,
             ordersCount: 0,
             isOnline: true,
             lastSeen: 'online',
@@ -11852,10 +12013,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           isPhoneVerified: true,
           status: 'active',
           joinedDate: row.registered_at ? new Date(row.registered_at).toLocaleDateString() : 'Recent',
-          walletBalanceNgn: 50000,
+          walletBalanceNgn: 0,
           ordersCount: 0,
           isOnline: false,
-          lastSeen: row.updated_at ? new Date(row.updated_at).toLocaleDateString() : undefined,
+          lastSeen: row.updated_at || row.registered_at || undefined,
         }));
         nextList = mergeAdminUsersList(nextList, sbMapped, false);
       }
@@ -12258,10 +12419,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   isPhoneVerified: true,
                   status: 'active',
                   joinedDate: row.registered_at ? new Date(row.registered_at).toLocaleDateString() : 'Recent',
-                  walletBalanceNgn: 50000,
+                  walletBalanceNgn: 0,
                   ordersCount: 0,
                   isOnline: false,
-                  lastSeen: row.updated_at ? new Date(row.updated_at).toLocaleDateString() : undefined,
+                  lastSeen: row.updated_at || row.registered_at || undefined,
                 };
                 setAdminUsers((prev) => {
                   const merged = mergeAdminUsersList(prev, [sbUser], false);
@@ -12529,7 +12690,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     adminWalletAdjustedAt: u.adminWalletAdjustedAt,
     updatedAt: u.updatedAt,
     joinedDate: u.joinedDate || (u.registeredAt || u.createdAt ? new Date(u.registeredAt || u.createdAt).toLocaleDateString() : 'Recent'),
-    walletBalanceNgn: u.walletBalanceNgn ?? 50000,
+    walletBalanceNgn: u.walletBalanceNgn ?? 0,
     ordersCount: u.ordersCount || 0,
     isOnline: Boolean(u.isOnline || u.lastSeen === 'online'),
     lastSeen: u.lastSeen || undefined,
@@ -12583,7 +12744,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return next;
   };
 
-  const getBadgeForPhone = (phoneOrId?: string): 'blue' | 'gold' | 'creator_plus' | null => {
+  const getBadgeForPhone = (phoneOrId?: string): 'blue' | 'gold' | 'creator_plus' | 'admin' | null => {
     if (!phoneOrId) return null;
     if (currentUser?.phoneNumber && phonesMatch(currentUser.phoneNumber, phoneOrId)) {
       if (currentUser.verificationBadge) return currentUser.verificationBadge;
@@ -12735,7 +12896,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const toggleUserVerification = async (
     userId: string,
-    badge: 'blue' | 'gold' | 'creator_plus' | null,
+    badge: 'blue' | 'gold' | 'creator_plus' | 'admin' | null,
     hints?: { phoneNumber?: string; fullName?: string; avatarUrl?: string }
   ): Promise<boolean> => {
     const target = findAdminUserTarget(userId);
@@ -12751,7 +12912,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isPhoneVerified: true,
         status: 'active',
         joinedDate: 'Recent',
-        walletBalanceNgn: 50000,
+        walletBalanceNgn: 0,
         ordersCount: 0,
         isOnline: false,
       }),
@@ -13058,19 +13219,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const target = findAdminUserTarget(phoneOrId);
     const clean = phoneOrId.replace(/\D/g, '');
     const adjustedAt = new Date().toISOString();
-    let resolvedNewBal = isAbsolute ? deltaOrNew : Math.max(0, (target?.walletBalanceNgn ?? 50000) + deltaOrNew);
+    const isTargetCurrentUser = Boolean(
+      currentUser?.phoneNumber &&
+        (currentUser.id === phoneOrId ||
+          (clean && phonesMatch(currentUser.phoneNumber, phoneOrId)) ||
+          (target?.phoneNumber && phonesMatch(currentUser.phoneNumber, target.phoneNumber)))
+    );
+
+    const liveCurrentWalletBal =
+      isTargetCurrentUser && typeof walletRef.current?.availableBalance === 'number'
+        ? walletRef.current.availableBalance
+        : undefined;
+    const baseBal =
+      liveCurrentWalletBal !== undefined &&
+      (!target?.adminWalletAdjustedAt ||
+        Math.abs((target.walletBalanceNgn ?? 0) - liveCurrentWalletBal) > 0)
+        ? liveCurrentWalletBal
+        : (target?.walletBalanceNgn ?? 0);
+
+    const resolvedNewBal = Math.max(
+      0,
+      Math.round(isAbsolute ? deltaOrNew : baseBal + deltaOrNew)
+    );
+
     setAdminUsers((prev) => {
-      const next = prev.map((u) => {
-        if (u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && phonesMatch(u.phoneNumber, phoneOrId))) {
-          const newBal = isAbsolute ? deltaOrNew : Math.max(0, (u.walletBalanceNgn || 0) + deltaOrNew);
-          resolvedNewBal = newBal;
-          return { ...u, walletBalanceNgn: newBal, adminWalletAdjustedAt: adjustedAt };
-        }
-        return u;
-      });
+      const exists = prev.some(
+        (u) => u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && phonesMatch(u.phoneNumber, phoneOrId))
+      );
+      const next = exists
+        ? prev.map((u) => {
+            if (u.id === phoneOrId || u.phoneNumber === phoneOrId || (clean && phonesMatch(u.phoneNumber, phoneOrId))) {
+              return { ...u, walletBalanceNgn: resolvedNewBal, adminWalletAdjustedAt: adjustedAt };
+            }
+            return u;
+          })
+        : [
+            ...prev,
+            {
+              id: target?.id || `usr_${clean || Date.now()}`,
+              fullName: target?.fullName || (isTargetCurrentUser ? currentUser.fullName : 'Registered User'),
+              phoneNumber: target?.phoneNumber || (isTargetCurrentUser ? currentUser.phoneNumber : phoneOrId),
+              avatarUrl: target?.avatarUrl || DEFAULT_AVATAR_SVG,
+              role: target?.role || 'user',
+              verificationBadge: target?.verificationBadge ?? null,
+              isPhoneVerified: true,
+              status: target?.status || 'active',
+              joinedDate: target?.joinedDate || 'Recent',
+              walletBalanceNgn: resolvedNewBal,
+              adminWalletAdjustedAt: adjustedAt,
+              ordersCount: target?.ordersCount || 0,
+              isOnline: isTargetCurrentUser,
+            },
+          ];
       adminUsersRef.current = next;
       return next;
     });
+
+    if (isTargetCurrentUser) {
+      walletRef.current = { ...walletRef.current, availableBalance: resolvedNewBal };
+      setWallet((w) => ({ ...w, availableBalance: resolvedNewBal }));
+      try {
+        const walletTsKey = getUserStorageKey('AGC_last_admin_wallet_ts', currentUser.phoneNumber);
+        localStorage.setItem(walletTsKey, String(Date.parse(adjustedAt) || Date.now()));
+      } catch (_) {}
+    }
+
     const walletPayload = {
       type: 'wallet_adjusted',
       phoneOrId: target?.phoneNumber || phoneOrId,
@@ -13090,17 +13303,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...(isAbsolute ? { newBalance: deltaOrNew } : { deltaNgn: deltaOrNew }),
-          phoneNumber: target?.phoneNumber,
-          fullName: target?.fullName,
+          newBalance: resolvedNewBal,
+          phoneNumber: target?.phoneNumber || (isTargetCurrentUser ? currentUser.phoneNumber : undefined),
+          fullName: target?.fullName || (isTargetCurrentUser ? currentUser.fullName : undefined),
           avatarUrl: target?.avatarUrl,
         }),
       }),
       upsertSupabaseAdminUserOverride(target?.phoneNumber || identifier, {
         walletBalanceNgn: resolvedNewBal,
         adminWalletAdjustedAt: adjustedAt,
-        phoneNumber: target?.phoneNumber,
-        fullName: target?.fullName,
+        phoneNumber: target?.phoneNumber || (isTargetCurrentUser ? currentUser.phoneNumber : undefined),
+        fullName: target?.fullName || (isTargetCurrentUser ? currentUser.fullName : undefined),
         avatarUrl: target?.avatarUrl,
       }),
     ]);
@@ -13344,6 +13557,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isDarkMode,
         toggleDarkMode,
         sendMessage,
+        forwardMessage,
         sendVoiceNote,
         sendProductCard,
         isShareLocationModalOpen,

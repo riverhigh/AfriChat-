@@ -312,6 +312,7 @@ export interface ChatMessage {
   reactions?: Record<string, string[]>;
   deleted?: boolean;
   isEncrypted?: boolean;
+  isForwarded?: boolean;
 }
 
 export interface ChatThread {
@@ -442,7 +443,7 @@ export interface UserProfile {
   isPhoneVerified?: boolean;
   createdAt: string;
   lastSeen: string;
-  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | null;
+  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | 'admin' | null;
   verificationExpiresAt?: string;
   isCelebrityVerified?: boolean;
   celebrityCategory?: string;
@@ -1125,7 +1126,7 @@ export interface AdminUserRecord {
   phoneNumber: string;
   avatarUrl: string;
   role: 'user' | 'creator' | 'merchant' | 'admin';
-  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | null;
+  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | 'admin' | null;
   isPhoneVerified: boolean;
   status: 'active' | 'suspended' | 'flagged' | 'banned';
   joinedDate: string;

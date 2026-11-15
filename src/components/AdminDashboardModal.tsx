@@ -278,6 +278,8 @@ export const AdminDashboardModal: React.FC = () => {
   const [customerBanReason, setCustomerBanReason] = useState('');
   const [customerWalletDelta, setCustomerWalletDelta] = useState('');
   const [customerWalletSuccess, setCustomerWalletSuccess] = useState(false);
+  const [walletAdjustBusy, setWalletAdjustBusy] = useState(false);
+  const [payoutBusy, setPayoutBusy] = useState(false);
 
   // Broadcast compose form state
   const [bcTitle, setBcTitle] = useState('');
@@ -625,8 +627,20 @@ export const AdminDashboardModal: React.FC = () => {
           isUserOnline?.(id)
       );
 
+      const hasValidTimestamp = (val?: string | null) =>
+        Boolean(val && (String(val).toLowerCase() === 'online' || Number.isFinite(Date.parse(String(val)))));
+      const pickLastSeen = (primary?: string | null, secondary?: string | null) => {
+        if (online) return 'online';
+        if (hasValidTimestamp(primary)) return primary as string;
+        if (hasValidTimestamp(secondary)) return secondary as string;
+        return raw.updatedAt || existing?.updatedAt || undefined;
+      };
+
       const existing = map.get(key);
       if (existing) {
+        const mergedWallet = authoritative
+          ? raw.walletBalanceNgn ?? existing.walletBalanceNgn ?? 0
+          : existing.walletBalanceNgn ?? raw.walletBalanceNgn ?? 0;
         map.set(key, {
           ...existing,
           id: existing.id || id,
@@ -646,13 +660,15 @@ export const AdminDashboardModal: React.FC = () => {
           bannedAt: authoritative ? raw.bannedAt ?? existing.bannedAt : existing.bannedAt ?? raw.bannedAt,
           banReason: authoritative ? raw.banReason ?? existing.banReason : existing.banReason ?? raw.banReason,
           joinedDate: raw.joinedDate || (raw.createdAt ? new Date(raw.createdAt).toLocaleDateString() : existing.joinedDate) || 'Recent',
-          walletBalanceNgn: authoritative
-            ? raw.walletBalanceNgn ?? existing.walletBalanceNgn ?? 50000
-            : existing.walletBalanceNgn ?? raw.walletBalanceNgn ?? 50000,
+          walletBalanceNgn:
+            isCurrent && typeof wallet?.availableBalance === 'number'
+              ? wallet.availableBalance
+              : mergedWallet,
           ordersCount: raw.ordersCount ?? existing.ordersCount ?? 0,
           deviceInfo: raw.deviceInfo || existing.deviceInfo,
           isOnline: existing.isOnline || online,
-          lastSeen: online ? 'online' : raw.lastSeen || existing.lastSeen || 'Recently active',
+          lastSeen: pickLastSeen(raw.lastSeen, existing.lastSeen),
+          updatedAt: raw.updatedAt || existing.updatedAt,
         });
       } else {
         map.set(key, {
@@ -671,11 +687,15 @@ export const AdminDashboardModal: React.FC = () => {
           bannedAt: raw.bannedAt,
           banReason: raw.banReason,
           joinedDate: raw.joinedDate || (raw.createdAt ? new Date(raw.createdAt).toLocaleDateString() : 'Recent'),
-          walletBalanceNgn: raw.walletBalanceNgn ?? 50000,
+          walletBalanceNgn:
+            isCurrent && typeof wallet?.availableBalance === 'number'
+              ? wallet.availableBalance
+              : (raw.walletBalanceNgn ?? 0),
           ordersCount: raw.ordersCount || 0,
           deviceInfo: raw.deviceInfo,
           isOnline: online,
-          lastSeen: online ? 'online' : raw.lastSeen || 'Recently active',
+          lastSeen: pickLastSeen(raw.lastSeen, null),
+          updatedAt: raw.updatedAt,
         });
       }
     };
@@ -714,7 +734,7 @@ export const AdminDashboardModal: React.FC = () => {
     }
 
     return Array.from(map.values());
-  }, [adminUsers, liveMetrics?.registeredUsers, currentUser, isUserOnline, supabaseUsers]);
+  }, [adminUsers, liveMetrics?.registeredUsers, currentUser, isUserOnline, supabaseUsers, wallet?.availableBalance]);
 
   // Merge Live Stores (Supabase store_subscriptions + client active storeSubscription + verified store threads)
   const mergedStores = useMemo<LiveStoreRecord[]>(() => {
@@ -1185,6 +1205,7 @@ export const AdminDashboardModal: React.FC = () => {
 
   const handleManualPayout = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (payoutBusy) return;
     setPayoutFeedback(null);
     const amountNum = Number(payoutAmount);
     if (!payoutTargetPhone || isNaN(amountNum) || amountNum === 0) return;
@@ -1207,11 +1228,16 @@ export const AdminDashboardModal: React.FC = () => {
       return;
     }
 
-    await adjustUserWallet(payoutTargetPhone, amountNum, false);
+    setPayoutBusy(true);
     setPayoutAmount('');
     setPayoutNote('');
-    setPayoutFeedback(`Manual payout of ₦${amountNum.toLocaleString()} applied to ${targetName}.`);
-    fetchLiveMetrics();
+    try {
+      await adjustUserWallet(payoutTargetPhone, amountNum, false);
+      setPayoutFeedback(`Manual payout of ₦${amountNum.toLocaleString()} applied to ${targetName}.`);
+      fetchLiveMetrics();
+    } finally {
+      setPayoutBusy(false);
+    }
   };
 
   const handleStoreMutation = async (store: LiveStoreRecord, patch: { tier?: string; status?: string; verified?: boolean }) => {
@@ -1417,8 +1443,11 @@ export const AdminDashboardModal: React.FC = () => {
   };
 
   const formatLastSeen = (iso?: string): string => {
-    if (!iso) return 'Unknown';
-    const diff = Date.now() - new Date(iso).getTime();
+    if (!iso) return 'Offline';
+    if (iso.toLowerCase() === 'online') return 'ONLINE';
+    const parsedMs = Date.parse(iso);
+    if (!Number.isFinite(parsedMs)) return 'Offline';
+    const diff = Math.max(0, Date.now() - parsedMs);
     const mins = Math.floor(diff / 60000);
     if (mins < 1) return 'Just now';
     if (mins < 60) return `${mins}m ago`;
@@ -1493,30 +1522,32 @@ export const AdminDashboardModal: React.FC = () => {
         } ${mobileNavOpen ? 'w-[260px] translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
       >
         {/* Brand Header */}
-        <div className="h-16 px-4 border-b border-zinc-800/90 flex items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-violet-600/20 border border-violet-500/40 flex items-center justify-center text-violet-400 shrink-0">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
-            {!sidebarCollapsed && (
-              <div className="min-w-0">
-                <div className="text-sm font-bold tracking-tight text-white truncate font-display">
-                  AGC Control
-                </div>
-                <div className="text-[11px] font-mono text-zinc-400 truncate">
-                  All Good Connects
-                </div>
+        <div className="pt-safe-admin border-b border-zinc-800/90 shrink-0">
+          <div className="h-14 lg:h-16 px-4 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-violet-600/20 border border-violet-500/40 flex items-center justify-center text-violet-400 shrink-0">
+                <ShieldCheck className="w-5 h-5" />
               </div>
-            )}
+              {!sidebarCollapsed && (
+                <div className="min-w-0">
+                  <div className="text-sm font-bold tracking-tight text-white truncate font-display">
+                    AGC Control
+                  </div>
+                  <div className="text-[11px] font-mono text-zinc-400 truncate">
+                    All Good Connects
+                  </div>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed((c) => !c)}
+              className="hidden lg:inline-flex p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/80 transition-colors"
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {sidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setSidebarCollapsed((c) => !c)}
-            className="hidden lg:inline-flex p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/80 transition-colors"
-            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {sidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
-          </button>
         </div>
 
         {/* Navigation Links */}
@@ -1581,23 +1612,24 @@ export const AdminDashboardModal: React.FC = () => {
       {/* ════════════════════════════════════════════════════════════════════════ */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#09090b]">
         {/* Top Global Utility Bar */}
-        <header className="h-16 px-4 sm:px-6 border-b border-zinc-800/90 bg-zinc-950/80 backdrop-blur-md flex items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => setMobileNavOpen(true)}
-              className="lg:hidden p-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300"
-              aria-label="Open admin menu"
-            >
-              <Menu className="w-4 h-4" />
-            </button>
-            <div className="min-w-0">
-              <div className="text-[11px] font-mono text-zinc-500 truncate">/admin/{activeSection}</div>
-              <h1 className="text-sm font-semibold text-white truncate font-display">
-                {sectionLabelMap[activeSection]}
-              </h1>
+        <header className="pt-safe-admin border-b border-zinc-800/90 bg-zinc-950/80 backdrop-blur-md shrink-0">
+          <div className="h-14 lg:h-16 px-4 sm:px-6 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => setMobileNavOpen(true)}
+                className="lg:hidden p-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300"
+                aria-label="Open admin menu"
+              >
+                <Menu className="w-4 h-4" />
+              </button>
+              <div className="min-w-0">
+                <div className="text-[11px] font-mono text-zinc-500 truncate">/admin/{activeSection}</div>
+                <h1 className="text-sm font-semibold text-white truncate font-display">
+                  {sectionLabelMap[activeSection]}
+                </h1>
+              </div>
             </div>
-          </div>
 
           {/* Global Ctrl+K Search Trigger */}
           <button
@@ -1791,6 +1823,7 @@ export const AdminDashboardModal: React.FC = () => {
             >
               <X className="w-4 h-4" />
             </button>
+          </div>
           </div>
         </header>
 
@@ -2476,9 +2509,10 @@ export const AdminDashboardModal: React.FC = () => {
                   <div className="flex justify-end">
                     <button
                       type="submit"
-                      className="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-semibold whitespace-nowrap"
+                      disabled={payoutBusy || !payoutTargetPhone || !payoutAmount}
+                      className="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-semibold whitespace-nowrap"
                     >
-                      Execute Treasury Payout
+                      {payoutBusy ? 'Executing...' : 'Execute Treasury Payout'}
                     </button>
                   </div>
                 </form>
@@ -2731,7 +2765,24 @@ export const AdminDashboardModal: React.FC = () => {
                                 className="w-8 h-8 rounded-lg object-cover border border-zinc-800 shrink-0"
                               />
                               <div className="min-w-0">
-                                <div className="font-semibold text-white truncate">{user.fullName}</div>
+                                <div className="font-semibold text-white truncate flex items-center gap-1.5">
+                                  <span className="truncate">{user.fullName}</span>
+                                  {user.verificationBadge === 'admin' && (
+                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-gradient-to-r from-rose-500/20 to-violet-500/25 border border-rose-400/50 text-rose-300 text-[9px] font-bold shrink-0">
+                                      <ShieldCheck className="w-2.5 h-2.5 text-rose-400" />
+                                      <span>Admin</span>
+                                    </span>
+                                  )}
+                                  {user.verificationBadge === 'blue' && (
+                                    <BadgeCheck className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                  )}
+                                  {user.verificationBadge === 'gold' && (
+                                    <BadgeCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                  )}
+                                  {user.verificationBadge === 'creator_plus' && (
+                                    <BadgeCheck className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                                  )}
+                                </div>
                                 <div className="text-[11px] font-mono text-zinc-400">{user.phoneNumber || user.id}</div>
                               </div>
                             </div>
@@ -2759,8 +2810,9 @@ export const AdminDashboardModal: React.FC = () => {
                             </span>
                           </td>
                           <td className="py-3 px-4">
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1 flex-wrap">
                               {([
+                                { id: 'admin', label: 'Admin', activeCls: 'bg-gradient-to-r from-rose-600 to-violet-600 text-white font-bold' },
                                 { id: 'blue', label: 'Blue', activeCls: 'bg-sky-600 text-white' },
                                 { id: 'gold', label: 'Gold', activeCls: 'bg-amber-500 text-zinc-950 font-bold' },
                                 { id: 'creator_plus', label: 'C+', activeCls: 'bg-violet-600 text-white' },
@@ -3845,7 +3897,7 @@ export const AdminDashboardModal: React.FC = () => {
       {/* ════════════════════════════════════════════════════════════════════════ */}
       {globalSearchOpen && (
         <div
-          className="fixed inset-0 z-[125] flex items-start justify-center pt-16 p-4 bg-black/75 backdrop-blur-sm"
+          className="fixed inset-0 z-[125] flex items-start justify-center pt-20 sm:pt-16 p-4 bg-black/75 backdrop-blur-sm"
           onClick={() => setGlobalSearchOpen(false)}
         >
           <div
@@ -3996,8 +4048,8 @@ export const AdminDashboardModal: React.FC = () => {
       {/* CUSTOMER INFO DOSSIER MODAL                                              */}
       {/* ════════════════════════════════════════════════════════════════════════ */}
       {selectedCustomer && (
-        <div className="fixed inset-0 z-[115] flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-sm">
-          <div className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl bg-[#09090b] border border-zinc-800 shadow-2xl overflow-hidden text-xs">
+        <div className="fixed inset-0 z-[115] flex items-center justify-center p-3 pt-14 sm:p-6 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-2xl max-h-[88vh] flex flex-col rounded-2xl bg-[#09090b] border border-zinc-800 shadow-2xl overflow-hidden text-xs">
             <div className="px-5 py-4 border-b border-zinc-800 bg-zinc-900/70 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <img
@@ -4006,7 +4058,15 @@ export const AdminDashboardModal: React.FC = () => {
                   className="w-11 h-11 rounded-xl object-cover border border-zinc-700 shrink-0"
                 />
                 <div className="min-w-0">
-                  <h3 className="text-sm font-semibold text-white truncate">{selectedCustomer.fullName}</h3>
+                  <h3 className="text-sm font-semibold text-white truncate flex items-center gap-1.5">
+                    <span className="truncate">{selectedCustomer.fullName}</span>
+                    {selectedCustomer.verificationBadge === 'admin' && (
+                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-gradient-to-r from-rose-500/20 to-violet-500/25 border border-rose-400/50 text-rose-300 text-[9px] font-bold shrink-0">
+                        <ShieldCheck className="w-2.5 h-2.5 text-rose-400" />
+                        <span>Admin</span>
+                      </span>
+                    )}
+                  </h3>
                   <div className="font-mono text-[11px] text-zinc-400">
                     {selectedCustomer.phoneNumber || selectedCustomer.id} · KYC {(selectedCustomer.kycStatus || 'unverified').toUpperCase()}
                   </div>
@@ -4023,7 +4083,7 @@ export const AdminDashboardModal: React.FC = () => {
 
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
               {/* Role & Status */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="p-3 rounded-xl bg-zinc-900/50 border border-zinc-800">
                   <label className="text-[11px] text-zinc-400 block mb-1">Account Role</label>
                   <select
@@ -4043,26 +4103,32 @@ export const AdminDashboardModal: React.FC = () => {
                 </div>
                 <div className="p-3 rounded-xl bg-zinc-900/50 border border-zinc-800">
                   <label className="text-[11px] text-zinc-400 block mb-1">Verification Badge</label>
-                  <div className="flex items-center gap-1">
-                    {(['blue', 'gold', 'creator_plus', null] as const).map((b) => (
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {([
+                      { id: 'admin', label: 'Admin', activeCls: 'bg-gradient-to-r from-rose-600 to-violet-600 text-white font-bold' },
+                      { id: 'blue', label: 'Blue', activeCls: 'bg-sky-600 text-white' },
+                      { id: 'gold', label: 'Gold', activeCls: 'bg-amber-500 text-zinc-950 font-bold' },
+                      { id: 'creator_plus', label: 'C+', activeCls: 'bg-violet-600 text-white' },
+                      { id: null, label: 'None', activeCls: 'bg-zinc-700 text-white' },
+                    ] as const).map((b) => (
                       <button
-                        key={String(b)}
+                        key={String(b.id)}
                         type="button"
                         onClick={async () => {
-                          await toggleUserVerification(selectedCustomer.phoneNumber || selectedCustomer.id, b, {
+                          await toggleUserVerification(selectedCustomer.phoneNumber || selectedCustomer.id, b.id, {
                             phoneNumber: selectedCustomer.phoneNumber,
                             fullName: selectedCustomer.fullName,
                             avatarUrl: selectedCustomer.avatarUrl,
                           });
-                          setSelectedCustomer({ ...selectedCustomer, verificationBadge: b });
+                          setSelectedCustomer({ ...selectedCustomer, verificationBadge: b.id });
                         }}
                         className={`px-2 py-1 rounded text-[11px] font-medium ${
-                          (selectedCustomer.verificationBadge || null) === b
-                            ? 'bg-violet-600 text-white'
+                          (selectedCustomer.verificationBadge || null) === b.id
+                            ? b.activeCls
                             : 'bg-zinc-950 text-zinc-400 border border-zinc-800'
                         }`}
                       >
-                        {b === 'creator_plus' ? 'C+' : b || 'None'}
+                        {b.label}
                       </button>
                     ))}
                   </div>
@@ -4082,26 +4148,38 @@ export const AdminDashboardModal: React.FC = () => {
                     type="number"
                     value={customerWalletDelta}
                     onChange={(e) => setCustomerWalletDelta(e.target.value)}
+                    disabled={walletAdjustBusy}
                     placeholder="Credit/debit delta (e.g. 5000 or -1000)"
                     className="flex-1 px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-white"
                   />
                   <button
                     type="button"
-                    disabled={!customerWalletDelta || isNaN(Number(customerWalletDelta))}
+                    disabled={walletAdjustBusy || !customerWalletDelta || isNaN(Number(customerWalletDelta)) || Number(customerWalletDelta) === 0}
                     onClick={async () => {
+                      if (walletAdjustBusy) return;
                       const delta = Number(customerWalletDelta);
-                      await adjustUserWallet(selectedCustomer.phoneNumber || selectedCustomer.id, delta, false);
-                      setSelectedCustomer({
-                        ...selectedCustomer,
-                        walletBalanceNgn: Math.max(0, (selectedCustomer.walletBalanceNgn || 0) + delta),
-                      });
+                      if (!Number.isFinite(delta) || delta === 0) return;
+                      setWalletAdjustBusy(true);
                       setCustomerWalletDelta('');
-                      setCustomerWalletSuccess(true);
-                      setTimeout(() => setCustomerWalletSuccess(false), 2400);
+                      try {
+                        await adjustUserWallet(selectedCustomer.phoneNumber || selectedCustomer.id, delta, false);
+                        setSelectedCustomer((prev: any) =>
+                          prev
+                            ? {
+                                ...prev,
+                                walletBalanceNgn: Math.max(0, (prev.walletBalanceNgn || 0) + delta),
+                              }
+                            : prev
+                        );
+                        setCustomerWalletSuccess(true);
+                        setTimeout(() => setCustomerWalletSuccess(false), 2400);
+                      } finally {
+                        setWalletAdjustBusy(false);
+                      }
                     }}
-                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold"
+                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold whitespace-nowrap"
                   >
-                    Apply Live
+                    {walletAdjustBusy ? 'Applying...' : 'Apply Live'}
                   </button>
                 </div>
                 {customerWalletSuccess && <div className="text-emerald-400">Wallet updated on server.</div>}

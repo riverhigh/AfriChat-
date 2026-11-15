@@ -45,6 +45,34 @@ html.ios-standalone .pt-safe-chat {
   padding-right: max(env(safe-area-inset-right, 0px), 14px);
 }
 
+.pt-safe-admin {
+  min-height: 4rem;
+  padding-top: max(36px, calc(env(safe-area-inset-top, 0px) + 10px));
+  padding-bottom: 10px;
+}
+
+@media (min-width: 1024px) {
+  .pt-safe-admin {
+    min-height: 4rem;
+    padding-top: 0px;
+    padding-bottom: 0px;
+  }
+}
+
+html.ios-device .pt-safe-admin,
+html.ios-standalone .pt-safe-admin {
+  padding-top: max(48px, calc(env(safe-area-inset-top, 0px) + 10px));
+  padding-bottom: 10px;
+}
+
+@media (min-width: 1024px) {
+  html.ios-device .pt-safe-admin,
+  html.ios-standalone .pt-safe-admin {
+    padding-top: 0px;
+    padding-bottom: 0px;
+  }
+}
+
 html {
   background-color: #ffffff;
   height: 100%;

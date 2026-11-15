@@ -55,6 +55,7 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCcw,
+  CornerUpRight,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
@@ -135,6 +136,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     addStoreProduct,
     sendProductCard,
     currency,
+    forwardMessage,
+    adminUsers,
+    deviceContacts,
   } = useApp();
 
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
@@ -149,6 +153,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [pollCardErrors, setPollCardErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
   const [xoBusyId, setXoBusyId] = useState<string | null>(null);
   const [xoErrors, setXoErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
+  // Message Forwarding modal state
+  const [forwardingMessage, setForwardingMessage] = useState<ChatMessage | null>(null);
+  const [forwardSearch, setForwardSearch] = useState('');
+  const [selectedForwardTargets, setSelectedForwardTargets] = useState<
+    Array<{ key: string; chatId?: string; phone?: string; name: string; avatar?: string; subtitle?: string }>
+  >([]);
 
   // Fullscreen image lightbox + Zoom / Pan / Direct Save state
   const [lightboxImg, setLightboxImg] = useState<{
@@ -916,6 +926,17 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                           </span>
                         );
                       }
+                      if (liveBadge === 'admin') {
+                        return (
+                          <span
+                            className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-rose-500/25 to-violet-600/30 border border-rose-400/60 text-rose-200 text-[9px] font-extrabold shadow-2xs shrink-0"
+                            title="Verified Platform Admin"
+                          >
+                            <ShieldCheck className="w-3 h-3 text-rose-400" />
+                            <span>Admin</span>
+                          </span>
+                        );
+                      }
                       return null;
                     })()}
                     {currentChat.isGroup && (
@@ -1502,12 +1523,14 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       <button
                         type="button"
                         onClick={() => {
-                          setReplyingTo(msg);
+                          setForwardingMessage(msg);
+                          setForwardSearch('');
+                          setSelectedForwardTargets([]);
                           setActiveMenuMsgId(null);
                         }}
                         className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-white/10 transition-colors"
                       >
-                        <Share2 className="w-3.5 h-3.5 text-slate-200" />
+                        <CornerUpRight className="w-3.5 h-3.5 text-slate-200" />
                         <span className="text-[10px] text-slate-300">Forward</span>
                       </button>
                       <button
@@ -1660,6 +1683,18 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   {currentChat?.isGroup && !isUser && msg.senderName && (
                     <div className={`text-[11px] font-bold mb-1 ${getSenderColor(msg.senderName)}`}>
                       {msg.senderName}
+                    </div>
+                  )}
+
+                  {/* Forwarded Label */}
+                  {msg.isForwarded && (
+                    <div
+                      className={`flex items-center gap-1 text-[10px] font-semibold italic mb-1 ${
+                        isUser ? 'text-purple-200/90' : 'text-slate-500 dark:text-slate-400'
+                      }`}
+                    >
+                      <CornerUpRight className="w-3 h-3 shrink-0" />
+                      <span>Forwarded</span>
                     </div>
                   )}
 
@@ -3358,6 +3393,257 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors"
               >
                 Pay Now (Escrow)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Forward Message Recipient Picker Modal */}
+      {forwardingMessage && (
+        <div
+          className="fixed inset-0 z-[190] bg-black/75 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in"
+          onClick={() => setForwardingMessage(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md max-h-[85vh] flex flex-col bg-white dark:bg-[#17122c] border border-slate-200 dark:border-purple-900/40 rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden text-slate-900 dark:text-white"
+          >
+            {/* Header */}
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-purple-900/40 flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-purple-600/15 text-purple-600 dark:text-purple-300 flex items-center justify-center">
+                  <CornerUpRight className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm">Forward Message</h4>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Choose one or more chats or contacts
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setForwardingMessage(null)}
+                className="p-1.5 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Preview Snippet */}
+            <div className="px-5 py-2.5 bg-slate-50 dark:bg-black/25 border-b border-slate-200/80 dark:border-purple-900/30 text-xs shrink-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-purple-600 dark:text-purple-300 mb-0.5 flex items-center gap-1">
+                <CornerUpRight className="w-3 h-3" />
+                <span>Message to Forward</span>
+              </div>
+              <div className="truncate text-slate-700 dark:text-slate-200">
+                {forwardingMessage.type === 'image'
+                  ? forwardingMessage.text
+                    ? `📷 Photo: ${forwardingMessage.text}`
+                    : '📷 Photo'
+                  : forwardingMessage.type === 'voice'
+                  ? `🎤 Voice note (${forwardingMessage.voiceNote?.durationSeconds || 0}s)`
+                  : forwardingMessage.type === 'product_card'
+                  ? `🛍️ ${forwardingMessage.product?.title || 'Product / Deal'}`
+                  : forwardingMessage.type === 'location'
+                  ? `📍 ${forwardingMessage.locationData?.addressName || 'Shared Location'}`
+                  : forwardingMessage.type === 'invoice_receipt'
+                  ? `🧾 Invoice #${(forwardingMessage.invoice || forwardingMessage.invoiceData)?.invoiceNumber || ''}`
+                  : forwardingMessage.text || 'Message'}
+              </div>
+            </div>
+
+            {/* Search Input */}
+            <div className="p-3 border-b border-slate-200/70 dark:border-purple-900/30 shrink-0">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={forwardSearch}
+                  onChange={(e) => setForwardSearch(e.target.value)}
+                  placeholder="Search chats, groups, or phone numbers..."
+                  autoFocus
+                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-100 dark:bg-black/35 border border-slate-200 dark:border-purple-800/40 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
+                />
+              </div>
+            </div>
+
+            {/* Recipient List */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              {(() => {
+                type ForwardCandidate = {
+                  key: string;
+                  chatId?: string;
+                  phone?: string;
+                  name: string;
+                  avatar?: string;
+                  subtitle?: string;
+                };
+                const seenKeys = new Set<string>();
+                const seenPhones = new Set<string>();
+                const candidates: ForwardCandidate[] = [];
+                const myPhoneLast9 = (currentUser?.phoneNumber || '').replace(/\D/g, '').slice(-9);
+
+                const normalizeLast9 = (p?: string) => {
+                  const d = (p || '').replace(/\D/g, '');
+                  return d.length >= 9 ? d.slice(-9) : d;
+                };
+
+                // 1. Existing chats (excluding active chat)
+                chats.forEach((c) => {
+                  if (c.id === activeChatId) return;
+                  const p = c.phoneNumber || c.phone || '';
+                  const last9 = normalizeLast9(p);
+                  if (last9 && last9 === myPhoneLast9 && !c.isGroup && !c.isChannel) return;
+                  const key = `chat_${c.id}`;
+                  if (seenKeys.has(key)) return;
+                  seenKeys.add(key);
+                  if (last9 && !c.isGroup && !c.isChannel) seenPhones.add(last9);
+                  candidates.push({
+                    key,
+                    chatId: c.id,
+                    phone: p || undefined,
+                    name: c.name,
+                    avatar: c.avatar,
+                    subtitle: c.isGroup
+                      ? `Group · ${c.membersCount || c.memberPhones?.length || 0} members`
+                      : c.isChannel
+                      ? 'Channel'
+                      : p || c.location || 'Recent chat',
+                  });
+                });
+
+                // 2. Device contacts not already listed
+                deviceContacts.forEach((ct) => {
+                  const p = ct.rawPhoneNumber || '';
+                  const last9 = normalizeLast9(p);
+                  if (!last9 || last9 === myPhoneLast9 || seenPhones.has(last9)) return;
+                  seenPhones.add(last9);
+                  candidates.push({
+                    key: `phone_${last9}`,
+                    phone: p,
+                    name: ct.name || p,
+                    avatar: ct.avatar,
+                    subtitle: p,
+                  });
+                });
+
+                // 3. Registered platform users not already listed
+                adminUsers.forEach((u) => {
+                  const p = u.phoneNumber || '';
+                  const last9 = normalizeLast9(p);
+                  if (!last9 || last9 === myPhoneLast9 || seenPhones.has(last9)) return;
+                  seenPhones.add(last9);
+                  candidates.push({
+                    key: `phone_${last9}`,
+                    phone: p,
+                    name: u.fullName || p,
+                    avatar: u.avatarUrl,
+                    subtitle: p,
+                  });
+                });
+
+                const q = forwardSearch.trim().toLowerCase();
+                const filtered = q
+                  ? candidates.filter(
+                      (item) =>
+                        item.name.toLowerCase().includes(q) ||
+                        (item.phone || '').toLowerCase().includes(q) ||
+                        (item.subtitle || '').toLowerCase().includes(q)
+                    )
+                  : candidates;
+
+                if (filtered.length === 0) {
+                  return (
+                    <div className="py-10 text-center text-xs text-slate-400">
+                      No matching chats or users found.
+                    </div>
+                  );
+                }
+
+                return filtered.map((item) => {
+                  const isSelected = selectedForwardTargets.some((t) => t.key === item.key);
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => {
+                        setSelectedForwardTargets((prev) =>
+                          prev.some((t) => t.key === item.key)
+                            ? prev.filter((t) => t.key !== item.key)
+                            : [...prev, item]
+                        );
+                      }}
+                      className={`w-full flex items-center gap-3 p-2.5 rounded-2xl text-left transition-colors ${
+                        isSelected
+                          ? 'bg-purple-600/15 border border-purple-500/40'
+                          : 'hover:bg-slate-100 dark:hover:bg-white/5 border border-transparent'
+                      }`}
+                    >
+                      <img
+                        src={
+                          item.avatar ||
+                          `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(item.name)}`
+                        }
+                        alt={item.name}
+                        className="w-10 h-10 rounded-full object-cover shrink-0 border border-slate-200 dark:border-white/10"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-bold truncate">{item.name}</div>
+                        {item.subtitle && (
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate font-mono">
+                            {item.subtitle}
+                          </div>
+                        )}
+                      </div>
+                      <div
+                        className={`w-5 h-5 rounded-full flex items-center justify-center border shrink-0 transition-colors ${
+                          isSelected
+                            ? 'bg-purple-600 border-purple-600 text-white'
+                            : 'border-slate-300 dark:border-slate-600'
+                        }`}
+                      >
+                        {isSelected && <Check className="w-3 h-3" />}
+                      </div>
+                    </button>
+                  );
+                });
+              })()}
+            </div>
+
+            {/* Footer Send Action */}
+            <div className="p-4 border-t border-slate-200 dark:border-purple-900/40 bg-slate-50 dark:bg-black/30 flex items-center justify-between gap-3 shrink-0">
+              <div className="text-xs text-slate-500 dark:text-slate-300 truncate">
+                {selectedForwardTargets.length === 0
+                  ? 'Select recipients'
+                  : `${selectedForwardTargets.length} selected`}
+              </div>
+              <button
+                type="button"
+                disabled={selectedForwardTargets.length === 0}
+                onClick={() => {
+                  if (!forwardingMessage || selectedForwardTargets.length === 0) return;
+                  const count = forwardMessage(
+                    selectedForwardTargets.map((t) => ({
+                      chatId: t.chatId,
+                      phone: t.phone,
+                      name: t.name,
+                      avatar: t.avatar,
+                    })),
+                    forwardingMessage
+                  );
+                  setForwardingMessage(null);
+                  setSelectedForwardTargets([]);
+                  setForwardSearch('');
+                  if (count > 0) {
+                    setToastNotice(`Forwarded to ${count} chat${count > 1 ? 's' : ''}`);
+                    setTimeout(() => setToastNotice(null), 2400);
+                  }
+                }}
+                className="px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:opacity-40 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Forward</span>
               </button>
             </div>
           </div>

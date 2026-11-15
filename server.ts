@@ -389,7 +389,7 @@ interface RegisteredUser {
   registeredAt: string;
   role?: string;
   status?: 'active' | 'suspended' | 'flagged' | 'banned';
-  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | null;
+  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | 'admin' | null;
   kycStatus?: 'unverified' | 'pending' | 'verified' | 'rejected';
   kycType?: 'BVN' | 'NIN';
   walletBalanceNgn?: number;
@@ -892,7 +892,7 @@ async function syncUsersFromSupabase(force = false): Promise<void> {
             role: 'user',
             status: 'active',
             verificationBadge: null,
-            walletBalanceNgn: 50000,
+            walletBalanceNgn: 0,
             isOnline: false,
             lastSeen: row.updated_at || row.registered_at || undefined,
           };
@@ -942,7 +942,7 @@ async function ensureUserEntry(
         role: 'user',
         status: 'active',
         verificationBadge: null,
-        walletBalanceNgn: 50000,
+        walletBalanceNgn: 0,
         isOnline: false,
       };
       usersByPhone.set(clean, created);
@@ -1041,7 +1041,10 @@ try {
           status: u.status || 'active',
           role: u.role || 'user',
           verificationBadge: u.verificationBadge ?? null,
-          walletBalanceNgn: u.walletBalanceNgn ?? 50000,
+          walletBalanceNgn:
+            u.walletBalanceNgn === 50000 && !u.adminWalletAdjustedAt
+              ? 0
+              : (u.walletBalanceNgn ?? 0),
           registeredAt: u.registeredAt || u.createdAt || new Date().toISOString(),
         };
         const existing = findUserEntry(normalized.phoneNumber) || findUserEntry(derivedClean);
@@ -1101,7 +1104,7 @@ app.post('/api/users/register', (req: Request, res: Response) => {
     role: existingCheck?.role || role || 'user',
     status: existingCheck?.status || 'active',
     verificationBadge: existingCheck?.verificationBadge ?? null,
-    walletBalanceNgn: existingCheck?.walletBalanceNgn ?? 50000,
+    walletBalanceNgn: existingCheck?.walletBalanceNgn ?? 0,
     isOnline: true,
     lastSeen: 'online',
   };
@@ -2281,7 +2284,7 @@ io.on('connection', (socket: Socket) => {
           role: userData.role || 'user',
           status: 'active',
           verificationBadge: null,
-          walletBalanceNgn: 50000,
+          walletBalanceNgn: 0,
           isOnline: true,
           lastSeen: 'online',
           deviceInfo: userData.deviceInfo,
@@ -2313,7 +2316,7 @@ io.on('connection', (socket: Socket) => {
       role: existing?.role || userData.role || 'user',
       status: existing?.status || 'active',
       verificationBadge: existing?.verificationBadge ?? null,
-      walletBalanceNgn: existing?.walletBalanceNgn ?? 50000,
+      walletBalanceNgn: existing?.walletBalanceNgn ?? 0,
       isOnline: true,
       lastSeen: 'online',
     };

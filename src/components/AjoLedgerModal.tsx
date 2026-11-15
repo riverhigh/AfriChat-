@@ -137,7 +137,7 @@ export const AjoLedgerModal: React.FC = () => {
     }
   };
 
-  const isVerifiedHost = currentUser.verificationBadge === 'blue' || currentUser.verificationBadge === 'gold' || currentUser.verificationBadge === 'creator_plus';
+  const isVerifiedHost = currentUser.verificationBadge === 'blue' || currentUser.verificationBadge === 'gold' || currentUser.verificationBadge === 'creator_plus' || currentUser.verificationBadge === 'admin';
 
   return (
     <div
@@ -167,11 +167,19 @@ export const AjoLedgerModal: React.FC = () => {
                     className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full ${
                       currentUser.verificationBadge === 'gold'
                         ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                        : currentUser.verificationBadge === 'admin'
+                        ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30'
                         : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/30'
                     }`}
                   >
                     <BadgeCheck className="w-3 h-3" />
-                    <span>{currentUser.verificationBadge === 'gold' ? 'Gold Host' : 'Blue Host'}</span>
+                    <span>
+                      {currentUser.verificationBadge === 'gold'
+                        ? 'Gold Host'
+                        : currentUser.verificationBadge === 'admin'
+                        ? 'Admin Host'
+                        : 'Blue Host'}
+                    </span>
                   </span>
                 )}
               </div>
@@ -415,10 +423,10 @@ export const AjoLedgerModal: React.FC = () => {
                 /* Verified Host - Create Form */
                 <form onSubmit={handleCreateAjo} className="space-y-3">
                   <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-2xl border border-emerald-200/80 dark:border-emerald-900/50 flex items-center gap-2.5">
-                    <BadgeCheck className={`w-5 h-5 ${currentUser.verificationBadge === 'gold' || currentUser.verificationBadge === 'creator_plus' ? 'text-amber-500' : 'text-blue-500'}`} />
+                    <BadgeCheck className={`w-5 h-5 ${currentUser.verificationBadge === 'gold' || currentUser.verificationBadge === 'creator_plus' ? 'text-amber-500' : currentUser.verificationBadge === 'admin' ? 'text-rose-500' : 'text-blue-500'}`} />
                     <div>
                       <div className="font-bold text-xs text-emerald-900 dark:text-emerald-200">
-                        Verified {currentUser.verificationBadge === 'creator_plus' ? 'Creator Plus Host (2% fee)' : currentUser.verificationBadge === 'gold' ? 'Gold Creator Host (5% fee)' : 'Blue Ajo Host (2% fee)'}
+                        Verified {currentUser.verificationBadge === 'admin' ? 'Admin Host (2% fee)' : currentUser.verificationBadge === 'creator_plus' ? 'Creator Plus Host (2% fee)' : currentUser.verificationBadge === 'gold' ? 'Gold Creator Host (5% fee)' : 'Blue Ajo Host (2% fee)'}
                       </div>
                       <div className="text-[10px] text-emerald-700 dark:text-emerald-400">
                         Authorized to host community smart escrow pots
