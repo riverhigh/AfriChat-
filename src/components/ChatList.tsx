@@ -23,6 +23,7 @@ import {
   BadgeCheck,
   Crown,
   ShieldCheck,
+  Bot,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatThread } from '../types';
@@ -44,6 +45,7 @@ export const ChatList: React.FC = () => {
     groupInvites,
     acceptGroupInvite,
     declineGroupInvite,
+    startAiChat,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -540,6 +542,15 @@ export const ChatList: React.FC = () => {
                       <span className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">
                         {chat.name}
                       </span>
+                      {(chat.isBot || chat.id === 'chat_afribot_ai') && (
+                        <span
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-purple-600/20 to-pink-600/20 border border-purple-500/40 text-purple-600 dark:text-purple-300 text-[9px] font-bold shrink-0"
+                          title="AfriBot AI Assistant (Groq)"
+                        >
+                          <Bot className="w-2.5 h-2.5 text-pink-500" />
+                          <span>BOT</span>
+                        </span>
+                      )}
                       {(() => {
                         const liveBadge =
                           !chat.isGroup && !chat.isChannel
@@ -694,6 +705,22 @@ export const ChatList: React.FC = () => {
           </div>
         ) : null}
       </div>
+
+      {/* Floating AI Chatbot Bubble (Stacked on top of Start New Chat button) */}
+      <button
+        type="button"
+        onClick={startAiChat}
+        className="fixed bottom-[148px] right-5.5 w-13 h-13 rounded-2xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-pink-500 hover:from-purple-500 hover:to-pink-400 text-white flex items-center justify-center shadow-xl shadow-purple-600/40 border border-white/20 transition-all hover:scale-105 active:scale-95 z-20 group"
+        aria-label="Chat with AfriBot AI"
+        title="Chat with AfriBot AI (Powered by Groq)"
+      >
+        <div className="relative flex items-center justify-center">
+          <Bot className="w-6 h-6 text-white group-hover:rotate-12 transition-transform duration-300" />
+          <span className="absolute -top-2.5 -right-3 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider bg-pink-500 text-white rounded-full shadow-xs animate-pulse">
+            AI
+          </span>
+        </div>
+      </button>
 
       {/* Floating Action Button (FAB) */}
       <button

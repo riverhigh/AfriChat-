@@ -410,6 +410,8 @@ export interface ChatThread {
   invitedBy?: string;
   isShelved?: boolean;
   label?: string;
+  isBot?: boolean;
+  botModel?: string;
 }
 
 export interface ContactRequest {

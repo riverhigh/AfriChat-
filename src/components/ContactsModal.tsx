@@ -16,6 +16,7 @@ import {
   Check,
   Smartphone,
   BookUser,
+  Bot,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
@@ -40,6 +41,7 @@ export const ContactsModal: React.FC = () => {
     acceptFriendRequest,
     declineFriendRequest,
     setActiveContactRequestPopup,
+    startAiChat,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -464,6 +466,29 @@ export const ContactsModal: React.FC = () => {
             </span>
           </button>
 
+          {/* AfriBot AI Quick Chat */}
+          <button
+            type="button"
+            onClick={startAiChat}
+            className="w-full flex items-center justify-between p-2.5 rounded-2xl bg-gradient-to-r from-pink-600 via-purple-600 to-indigo-600 text-white shadow-md active:scale-[0.98] transition-transform text-left group border border-white/20"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0 group-hover:rotate-12 transition-transform">
+                <Bot className="w-4 h-4 text-white" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-bold leading-tight flex items-center gap-1.5">
+                  <span>Chat with AfriBot AI</span>
+                  <span className="px-1.5 py-0.2 text-[8px] font-black uppercase bg-white/25 rounded-full">Groq LPU</span>
+                </div>
+                <div className="text-[10px] text-pink-200">Personal assistant • Ask anything or add to groups</div>
+              </div>
+            </div>
+            <span className="text-[10px] font-bold bg-white/20 px-2 py-0.5 rounded-full shrink-0">
+              Start Chat 🤖
+            </span>
+          </button>
+
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
@@ -662,6 +687,30 @@ export const ContactsModal: React.FC = () => {
                 Select Members ({selectedGroupMembers.length} selected)
               </div>
               <div className="flex gap-1.5 overflow-x-auto pb-1 max-h-24 flex-wrap">
+                {(() => {
+                  const isBotSelected = selectedGroupMembers.some((m) => m.name === 'AfriBot AI');
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isBotSelected) {
+                          setSelectedGroupMembers(selectedGroupMembers.filter((m) => m.name !== 'AfriBot AI'));
+                        } else {
+                          setSelectedGroupMembers([...selectedGroupMembers, { name: 'AfriBot AI', phone: '+234 BOT AI' }]);
+                        }
+                      }}
+                      className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1 border transition-colors ${
+                        isBotSelected
+                          ? 'bg-gradient-to-r from-pink-600 to-purple-600 text-white border-pink-500'
+                          : 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800'
+                      }`}
+                    >
+                      <Bot className="w-3 h-3" />
+                      <span>AfriBot AI (Admin)</span>
+                      {isBotSelected && <Check className="w-3 h-3" />}
+                    </button>
+                  );
+                })()}
                 {registeredList.slice(0, 15).map((c) => {
                   const memberPhone = c.normalizedPhoneNumber || c.rawPhoneNumber;
                   const isSelected = selectedGroupMembers.some(

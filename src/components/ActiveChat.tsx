@@ -26,6 +26,7 @@ import {
   Sparkles,
   Download,
   CheckCircle2,
+  Bot,
   Maximize2,
   Eye,
   AlertTriangle,
@@ -939,6 +940,15 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       }
                       return null;
                     })()}
+                    {(currentChat.isBot || currentChat.id === 'chat_afribot_ai') && (
+                      <span
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-purple-500/25 to-pink-500/25 border border-pink-400/50 text-pink-200 text-[9px] font-extrabold shadow-2xs shrink-0"
+                        title="AfriBot AI Assistant (Groq)"
+                      >
+                        <Bot className="w-3 h-3 text-pink-400" />
+                        <span>BOT</span>
+                      </span>
+                    )}
                     {currentChat.isGroup && (
                       <button
                         onClick={() => setIsGroupInfoOpen(true)}
@@ -973,6 +983,14 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       if (hasRecentStatus) {
                         return <span className="text-pink-300 font-medium">✨ new story update</span>;
                       }
+                      if (currentChat.isBot || currentChat.id === 'chat_afribot_ai') {
+                        return (
+                          <span className="text-pink-300 font-medium flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-pulse" />
+                            <span>Online • Groq AI Assistant</span>
+                          </span>
+                        );
+                      }
                       if (isPeerOnline) {
                         return (
                           <span className="text-emerald-400 font-medium flex items-center gap-1.5">
@@ -982,6 +1000,15 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         );
                       }
                       if (currentChat.isGroup || currentChat.isChannel) {
+                        const hasBot = currentChat.members?.includes('AfriBot AI') || currentChat.admins?.includes('AfriBot AI');
+                        if (hasBot) {
+                          return (
+                            <span className="text-purple-300/90 font-medium flex items-center gap-1">
+                              <Bot className="w-3 h-3 text-pink-400" />
+                              <span>AfriBot Admin active (type @bot to ask)</span>
+                            </span>
+                          );
+                        }
                         return null;
                       }
                       const lastSeenStr = getLastSeen(currentChat.phoneNumber || currentChat.phone || currentChat.id || currentChat.name);
@@ -1699,8 +1726,13 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 >
                   {/* Group sender name (colored per sender) */}
                   {currentChat?.isGroup && !isUser && msg.senderName && (
-                    <div className={`text-[11px] font-bold mb-1 ${getSenderColor(msg.senderName)}`}>
-                      {msg.senderName}
+                    <div className={`text-[11px] font-bold mb-1 flex items-center gap-1.5 ${getSenderColor(msg.senderName)}`}>
+                      <span>{msg.senderName}</span>
+                      {msg.senderName === 'AfriBot AI' && (
+                        <span className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded-full bg-pink-500/20 text-pink-400 text-[8px] font-black uppercase tracking-wider border border-pink-500/30">
+                          <Bot className="w-2.5 h-2.5" /> BOT ADMIN
+                        </span>
+                      )}
                     </div>
                   )}
 

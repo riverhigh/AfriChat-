@@ -346,6 +346,14 @@ import {
   mergeChatThreadsAndMessages,
 } from '../services/supabaseChatSync';
 import {
+  askGroqAi,
+  AFRIBOT_ID,
+  AFRIBOT_NAME,
+  AFRIBOT_PHONE,
+  AFRIBOT_AVATAR,
+  GroqMessage,
+} from '../services/groq';
+import {
   supabase,
   isSupabaseConfigured,
   fetchProfile,
@@ -769,6 +777,8 @@ interface AppContextType {
   setIsContactsModalOpen: (val: boolean) => void;
   syncDeviceContacts: () => void;
   startChatWithContact: (contact: DeviceContact) => void;
+  startAiChat: () => void;
+  inviteBotToGroup: (groupId: string, makeAdmin?: boolean) => void;
   addNewDeviceContact: (
     name: string,
     phone: string,
@@ -6795,6 +6805,104 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 2. Broadcast live
     broadcastLiveMessage(chatId, newMsg);
+
+    // 3. AI Chatbot Auto-Response (AfriBot AI powered by Groq)
+    const targetChat = chats.find((c) => c.id === chatId);
+    const isBotChat = chatId === AFRIBOT_ID || Boolean(targetChat?.isBot);
+    const isGroupWithBot = Boolean(
+      targetChat?.isGroup &&
+      (targetChat.members?.includes(AFRIBOT_NAME) || targetChat.admins?.includes(AFRIBOT_NAME))
+    );
+    const mentionsBot = /(^|\s)@(bot|afribot|ai)\b/i.test(text) || replyTo?.sender?.includes('AfriBot');
+
+    if (isBotChat || (isGroupWithBot && mentionsBot)) {
+      setTypingUsers((prev) => ({
+        ...prev,
+        [chatId]: ['AfriBot AI is thinking...'],
+      }));
+
+      const cleanedPrompt = isGroupWithBot
+        ? text.replace(/@(bot|afribot|ai)\b/gi, '').trim() || text
+        : text;
+
+      const prevMsgs = messages[chatId] || [];
+      const history: GroqMessage[] = prevMsgs
+        .filter((m) => m.text && !m.deleted)
+        .slice(-10)
+        .map((m) => ({
+          role: (m.sender === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+          content: m.text || '',
+        }));
+      history.push({ role: 'user', content: cleanedPrompt });
+
+      askGroqAi(history, {
+        isGroup: isGroupWithBot,
+        groupName: targetChat?.name,
+        senderName: currentUser.fullName || 'Member',
+      })
+        .then((aiReply: string) => {
+          setTypingUsers((prev) => {
+            const copy = { ...prev };
+            delete copy[chatId];
+            return copy;
+          });
+
+          const botResponseMsg: ChatMessage = {
+            id: `msg_bot_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            chatId,
+            sender: 'other',
+            senderName: AFRIBOT_NAME,
+            senderPhone: AFRIBOT_PHONE,
+            senderAvatar: AFRIBOT_AVATAR,
+            text: aiReply,
+            translatedText: {
+              en: aiReply,
+              pcm: aiReply,
+              sw: aiReply,
+              yo: aiReply,
+              ha: aiReply,
+              fr: aiReply,
+            },
+            type: 'text',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            status: 'read',
+            replyTo: isGroupWithBot
+              ? { id: newMsg.id, sender: newMsg.senderName || 'Member', text: newMsg.text || '' }
+              : undefined,
+          };
+
+          setMessages((prev) => {
+            const updated = {
+              ...prev,
+              [chatId]: [...(prev[chatId] || []), botResponseMsg],
+            };
+            persistPartitionedMessages(updated, currentUser.phoneNumber);
+            return updated;
+          });
+
+          setChats((prev) =>
+            prev.map((c) =>
+              c.id === chatId
+                ? {
+                    ...c,
+                    lastMessage: aiReply,
+                    lastMessageTime: botResponseMsg.timestamp,
+                  }
+                : c
+            )
+          );
+
+          broadcastLiveMessage(chatId, botResponseMsg);
+        })
+        .catch((err: unknown) => {
+          console.error('[AfriBot] Error generating AI response:', err);
+          setTypingUsers((prev) => {
+            const copy = { ...prev };
+            delete copy[chatId];
+            return copy;
+          });
+        });
+    }
   };
 
   const forwardMessage = (
@@ -10305,6 +10413,107 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .then(({ error }) => { if (error) console.warn('[AGC] Participant upsert:', error.message); });
       });
     }
+  };
+
+  const startAiChat = () => {
+    let aiChat = chats.find((c) => c.id === AFRIBOT_ID || c.isBot);
+    if (!aiChat) {
+      aiChat = {
+        id: AFRIBOT_ID,
+        name: AFRIBOT_NAME,
+        avatar: AFRIBOT_AVATAR,
+        verifiedStore: false,
+        location: 'AI Assistant • Groq LPU',
+        unreadCount: 0,
+        lastMessage: 'Hello! I am AfriBot AI. Ask me anything, or invite me to your groups as an Admin! 🤖✨',
+        lastMessageTime: 'Just now',
+        catalog: [],
+        isOnline: true,
+        isBot: true,
+        phone: AFRIBOT_PHONE,
+      };
+      setChats((prev) => {
+        const updated = [aiChat!, ...prev.filter((c) => c.id !== AFRIBOT_ID)];
+        try {
+          const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
+      });
+    }
+
+    setMessages((prev) => {
+      const currentMsgs = prev[AFRIBOT_ID] || [];
+      if (currentMsgs.length === 0) {
+        const welcomeMsg: ChatMessage = {
+          id: `msg_bot_welcome_${Date.now()}`,
+          chatId: AFRIBOT_ID,
+          sender: 'other',
+          senderName: AFRIBOT_NAME,
+          senderAvatar: AFRIBOT_AVATAR,
+          senderPhone: AFRIBOT_PHONE,
+          text: `Habari & Greetings! 👋 I am **AfriBot AI**, powered by Groq ultra-fast LPU inference.\n\nI am your personal AI companion right inside AfriChat. Here are things you can ask me:\n- 💡 Brainstorm business & trade ideas\n- 💰 Explain Ajo savings, crypto, or escrow rules\n- 🌍 Translate between English, Pidgin, Swahili, Yoruba, Hausa, French\n- 📝 Draft contracts, essays, emails, or marketing pitches\n- 👥 **Add me to your Groups as an Admin** to help answer questions, moderate, or summarize chats!\n\nHow can I assist you today?`,
+          type: 'text',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          status: 'read',
+        };
+        const updated = { ...prev, [AFRIBOT_ID]: [welcomeMsg] };
+        persistPartitionedMessages(updated, currentUser.phoneNumber);
+        return updated;
+      }
+      return prev;
+    });
+
+    setActiveTab('chats');
+    setActiveChatId(AFRIBOT_ID);
+    setIsContactsModalOpen(false);
+  };
+
+  const inviteBotToGroup = (groupId: string, makeAdmin: boolean = true) => {
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id !== groupId) return c;
+        const currentMembers = c.members || [];
+        const currentAdmins = c.admins || [];
+        const newMembers = currentMembers.includes(AFRIBOT_NAME)
+          ? currentMembers
+          : [...currentMembers, AFRIBOT_NAME];
+        const newAdmins = makeAdmin && !currentAdmins.includes(AFRIBOT_NAME)
+          ? [...currentAdmins, AFRIBOT_NAME]
+          : currentAdmins;
+        return {
+          ...c,
+          members: newMembers,
+          admins: newAdmins,
+          membersCount: Math.max(c.membersCount || 0, newMembers.length),
+        };
+      })
+    );
+
+    const announceMsg: ChatMessage = {
+      id: `msg_bot_joined_${Date.now()}`,
+      chatId: groupId,
+      sender: 'system',
+      senderName: AFRIBOT_NAME,
+      senderAvatar: AFRIBOT_AVATAR,
+      text: makeAdmin
+        ? `🤖 AfriBot AI was added to this group as an Admin! Tag @AfriBot or @bot anytime to ask questions, settle debates, or get AI assistance.`
+        : `🤖 AfriBot AI joined the group! Tag @AfriBot or @bot to chat with the AI.`,
+      type: 'text',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'delivered',
+    };
+
+    setMessages((prev) => {
+      const updated = {
+        ...prev,
+        [groupId]: [...(prev[groupId] || []), announceMsg],
+      };
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
+      return updated;
+    });
+
+    showLocalNotification('AfriBot AI Added', `🤖 AfriBot AI added to group${makeAdmin ? ' as Admin' : ''}!`);
   };
 
   // 10. Meme Handlers
@@ -14573,6 +14782,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsContactsModalOpen,
         syncDeviceContacts,
         startChatWithContact,
+        startAiChat,
+        inviteBotToGroup,
         addNewDeviceContact,
         importDeviceContacts,
         friendRequests,
