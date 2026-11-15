@@ -22,6 +22,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { ErrandItem, ErrandRunner, ErrandOrder } from '../types';
 import { getHighestMilestone } from '../utils/milestones';
+import { compressChatMediaImage } from '../utils/imageUtils';
 
 export const ErrandsModal: React.FC = () => {
   const {
@@ -164,16 +165,13 @@ export const ErrandsModal: React.FC = () => {
     setNewItemPrice(1000);
   };
 
-  const handleImageProofUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageProofUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setProofImageFile(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressChatMediaImage(file);
+      setProofImageFile(compressed);
+    } catch (_) {}
   };
 
   return (

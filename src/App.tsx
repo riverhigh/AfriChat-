@@ -28,6 +28,7 @@ import { InvoiceGeneratorModal } from './components/InvoiceGeneratorModal';
 import { InvoiceViewerModal } from './components/InvoiceViewerModal';
 import { FinancialPollModal } from './components/FinancialPollModal';
 import { GameXoChallengeModal } from './components/GameXoChallengeModal';
+import { ShareLocationModal } from './components/ShareLocationModal';
 import { AjoLedgerModal } from './components/AjoLedgerModal';
 import { AuthModal } from './components/AuthModal';
 import { ContactsModal } from './components/ContactsModal';
@@ -293,6 +294,7 @@ const AppContent: React.FC = () => {
         {isFeatureEnabled('wallet') && <InvoiceViewerModal />}
         {isFeatureEnabled('wallet') && <FinancialPollModal />}
         <GameXoChallengeModal />
+        <ShareLocationModal />
         {isFeatureEnabled('ajo') && <AjoLedgerModal />}
 
         {/* AGC Carrier Phone Auth, Contacts Discovery & Super-App Extensions */}

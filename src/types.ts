@@ -253,6 +253,16 @@ export interface VoiceNoteMeta {
   transcriptRevealed?: boolean; // hidden by default; revealed on user tap
 }
 
+export interface LocationPinMeta {
+  latitude: number;
+  longitude: number;
+  addressName?: string;
+  landmarkNote?: string;
+  accuracyMeters?: number;
+  purpose?: 'delivery' | 'meetup' | 'artisan_call' | 'general';
+  sharedAt: string;
+}
+
 export interface ChatMessage {
   id: string;
   chatId: string;
@@ -273,7 +283,8 @@ export interface ChatMessage {
     | 'financial_poll'
     | 'ajo_update'
     | 'scam_warning'
-    | 'game_xo';
+    | 'game_xo'
+    | 'location';
   imageUrl?: string;
   imageLoaded?: boolean;
   mediaSizeKB?: number;
@@ -289,6 +300,8 @@ export interface ChatMessage {
   ajoGroup?: AjoGroup;
   scamEntity?: ScamEntity;
   xoGame?: TicTacToeGameState;
+  locationData?: LocationPinMeta;
+  metadata?: Record<string, any>;
   timestamp: string;
   status: 'sent' | 'delivered' | 'read';
   replyTo?: {

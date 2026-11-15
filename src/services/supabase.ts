@@ -208,6 +208,7 @@ export async function sendMessage(payload: {
   type: string;
   text?: string;
   image_url?: string;
+  metadata?: Record<string, unknown>;
 }) {
   return supabase.from('messages').insert(payload).select().single();
 }

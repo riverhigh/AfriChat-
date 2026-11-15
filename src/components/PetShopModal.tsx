@@ -14,6 +14,7 @@ import {
   Star,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { compressImageToBudget } from '../utils/imageUtils';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -76,26 +77,13 @@ const CATEGORY_EMOJI: Record<string, string> = {
 
 // ─── Image Compression ───────────────────────────────────────────────────────
 
-function compressImage(file: File, maxSize = 256, quality = 0.8): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const scale = Math.min(maxSize / img.width, maxSize / img.height, 1);
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return reject(new Error('Canvas 2D context unavailable'));
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      };
-      img.onerror = reject;
-      img.src = e.target?.result as string;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+function compressImage(file: File, maxSize = 320, _quality = 0.58): Promise<string> {
+  return compressImageToBudget(file, {
+    maxDimension: maxSize,
+    minDimension: 180,
+    maxBytes: 35 * 1024,
+    initialQuality: 0.6,
+    minQuality: 0.28,
   });
 }
 

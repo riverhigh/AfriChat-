@@ -17,6 +17,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { LegalComplianceModal } from './LegalComplianceModal';
+import { compressAvatarImage, isPlaceholderAvatar } from '../utils/imageUtils';
 
 interface CountryCode {
   name: string;
@@ -416,10 +417,17 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     try {
       const digits = normalizedPhone.replace(/\D/g, '');
       const last9 = digits.length >= 9 ? digits.slice(-9) : digits;
-      // Keep payload small to avoid HTTP 413 Payload Too Large on data URLs
-      const safeAvatar = (avatarUrl && avatarUrl.length < 3000)
-        ? avatarUrl
-        : (avatarUrl?.startsWith('http') ? avatarUrl : AVATAR_PRESETS[0]);
+      let preparedAvatar = avatarUrl || '';
+      if (preparedAvatar.startsWith('data:image') && !isPlaceholderAvatar(preparedAvatar) && preparedAvatar.length > 20000) {
+        try {
+          preparedAvatar = await compressAvatarImage(preparedAvatar);
+        } catch (_) {}
+      }
+      // Accept compressed avatars up to 45KB base64 (normally 3KB-12KB) or HTTP URLs
+      const safeAvatar =
+        preparedAvatar && (preparedAvatar.length <= 45000 || preparedAvatar.startsWith('http'))
+          ? preparedAvatar
+          : AVATAR_PRESETS[0];
 
       const { error } = await supabase.from('agc_phone_registry').upsert(
         {
@@ -1282,17 +1290,17 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                       type="file"
                       accept="image/*"
                       className="hidden"
-                      onChange={(e) => {
+                      onChange={async (e) => {
                         const file = e.target.files?.[0];
                         if (file) {
-                          const reader = new FileReader();
-                          reader.onload = () => {
-                            if (typeof reader.result === 'string') {
-                              setSelectedAvatar(reader.result);
-                            }
-                          };
-                          reader.readAsDataURL(file);
+                          try {
+                            const compressed = await compressAvatarImage(file);
+                            if (compressed) setSelectedAvatar(compressed);
+                          } catch (_) {
+                            setErrorMessage('Could not process image. Please choose another photo.');
+                          }
                         }
+                        e.target.value = '';
                       }}
                     />
                   </label>

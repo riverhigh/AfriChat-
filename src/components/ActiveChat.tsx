@@ -51,14 +51,16 @@ import {
   Eraser,
   Gamepad2,
   Trophy,
+  MapPin,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
 import { EmojiMemeDrawer } from './EmojiMemeDrawer';
 import { DisplayWallpaperModal } from './DisplayWallpaperModal';
 import { ContactProfileModal } from './ContactProfileModal';
-import { compressImageFile } from '../utils/imageUtils';
+import { compressChatMediaImage } from '../utils/imageUtils';
 import { GroupInfoModal } from './GroupInfoModal';
+import { LocationMessageBubble } from './LocationMessageBubble';
 
 interface ActiveChatProps {
   onOpenVoiceRecorder: () => void;
@@ -94,6 +96,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     setIsFinancialPollModalOpen,
     voteOnFinancialPoll,
     setIsGameXoModalOpen,
+    setIsShareLocationModalOpen,
     acceptXoChallenge,
     declineXoChallenge,
     makeXoMove,
@@ -230,17 +233,10 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     if (!file || !activeChatId) return;
     setShowAttachMenu(false);
     try {
-      const compressedDataUrl = await compressImageFile(file, 1200, 0.75);
+      const compressedDataUrl = await compressChatMediaImage(file);
       sendImageMessage(activeChatId, compressedDataUrl, undefined, isOneTimeViewEnabled);
     } catch (err) {
-      console.warn('Image compression fallback:', err);
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') {
-          sendImageMessage(activeChatId, reader.result, undefined, isOneTimeViewEnabled);
-        }
-      };
-      reader.readAsDataURL(file);
+      console.warn('Image compression failed:', err);
     } finally {
       setIsOneTimeViewEnabled(false);
       e.target.value = '';
@@ -2283,6 +2279,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   </div>
                 )}
 
+                {/* Shared Pin Location Preview Card */}
+                {msg.type === 'location' && (msg.locationData || msg.metadata?.latitude != null) && (
+                  <LocationMessageBubble msg={msg} isUser={isUser} />
+                )}
+
                 {/* Reaction Badges */}
                 {msg.reactions && Object.keys(msg.reactions).length > 0 && (
                   <div className="flex gap-1 flex-wrap mt-1">
@@ -2479,7 +2480,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </button>
           )}
 
-          {/* Send Game: Live Socket.IO X/O (Right after Escrow Deal) */}
+          {/* Send Game: Live Supabase X/O */}
           {!currentChat.isChannel && (
             <button
               type="button"
@@ -2495,6 +2496,21 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
               <span className="text-[10px] leading-tight">Send Game</span>
             </button>
           )}
+
+          {/* Share Pin Location */}
+          <button
+            type="button"
+            onClick={() => {
+              setShowAttachMenu(false);
+              setIsShareLocationModalOpen(true);
+            }}
+            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+          >
+            <div className="w-9 h-9 rounded-full bg-rose-100 dark:bg-rose-900/60 text-rose-600 dark:text-rose-400 flex items-center justify-center mb-1">
+              <MapPin className="w-4 h-4" />
+            </div>
+            <span className="text-[10px] leading-tight">Location Pin</span>
+          </button>
         </div>
       )}
 

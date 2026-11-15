@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, Smile, Sparkles, Upload, Trash2, Image as ImageIcon, Send } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-
+import { compressChatMediaImage } from '../utils/imageUtils';
 import { UserUploadedMeme } from '../types';
 
 const POPULAR_AFRICAN_EMOJIS = [
@@ -33,23 +33,26 @@ export const EmojiMemeDrawer: React.FC = () => {
 
   if (!isEmojiMemeDrawerOpen || !activeChatId) return null;
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     if (file.type === 'image/gif') {
       setNewType('gif');
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (typeof event.target?.result === 'string') {
+          setMediaPreview(event.target.result);
+        }
+      };
+      reader.readAsDataURL(file);
     } else {
       setNewType('image');
+      try {
+        const compressed = await compressChatMediaImage(file);
+        setMediaPreview(compressed);
+      } catch (_) {}
     }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      if (typeof event.target?.result === 'string') {
-        setMediaPreview(event.target.result);
-      }
-    };
-    reader.readAsDataURL(file);
   };
 
   const handleSaveMeme = (e: React.FormEvent) => {

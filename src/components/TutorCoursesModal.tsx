@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   BookOpen,
   GraduationCap,
@@ -26,6 +26,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { openPaystackPopup } from '../services/paystack';
 import { Course, CourseCategory, CourseLesson } from '../types';
+import { compressChatMediaImage } from '../utils/imageUtils';
 
 export const TutorCoursesModal: React.FC = () => {
   const {
@@ -184,14 +185,13 @@ export const TutorCoursesModal: React.FC = () => {
     }
   };
 
-  const handleThumbnailUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleThumbnailUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') setNewThumbnailUrl(reader.result);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressChatMediaImage(file);
+      setNewThumbnailUrl(compressed);
+    } catch (_) {}
   };
 
   const handleLessonVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

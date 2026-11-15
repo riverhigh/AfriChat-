@@ -41,6 +41,7 @@ import { MarketplaceView } from './MarketplaceView';
 import { LegalComplianceModal } from './LegalComplianceModal';
 import { AccountCenterModal } from './AccountCenterModal';
 import { PwaInstallCard } from './PwaInstallCard';
+import { compressAvatarImage, compressWallpaperImage } from '../utils/imageUtils';
 
 interface SettingsViewProps {
   onOpenLanguageModal: () => void;
@@ -121,7 +122,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [isAvatarUploading, setIsAvatarUploading] = useState(false);
   const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -130,18 +131,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       return;
     }
 
-    if (file.size > 8 * 1024 * 1024) {
-      setUploadError('Image size exceeds 8MB. Please choose a smaller photo.');
+    if (file.size > 12 * 1024 * 1024) {
+      setUploadError('Image size exceeds 12MB. Please choose a smaller photo.');
       return;
     }
 
     setUploadError(null);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      setChatWallpaper(result);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressWallpaperImage(file);
+      setChatWallpaper(compressed);
+    } catch (_) {
+      setUploadError('Could not process wallpaper image.');
+    }
+    e.target.value = '';
   };
 
   const fontOptions: { id: AppFontSize; label: string; desc: string; sizePx: string }[] = [
@@ -168,50 +170,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  /** Compress and update user avatar from device image */
-  const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /** Ultra-compress and persist user avatar from device image */
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) {
       setAvatarUploadError('Please select a valid image file.');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      setAvatarUploadError('Image must be under 5MB.');
+    if (file.size > 12 * 1024 * 1024) {
+      setAvatarUploadError('Image must be under 12MB.');
       return;
     }
     setIsAvatarUploading(true);
     setAvatarUploadError(null);
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const src = ev.target?.result as string;
-      const img = new Image();
-      img.onload = () => {
-        const MAX = 256;
-        const scale = Math.min(MAX / img.width, MAX / img.height, 1);
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) { setIsAvatarUploading(false); return; }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const compressed = canvas.toDataURL('image/jpeg', 0.82);
-        updateUserProfile({ avatarUrl: compressed });
-        setIsAvatarUploading(false);
-      };
-      img.onerror = () => {
-        setAvatarUploadError('Failed to process image.');
-        setIsAvatarUploading(false);
-      };
-      img.src = src;
-    };
-    reader.onerror = () => {
-      setAvatarUploadError('Failed to read file.');
+    try {
+      const compressed = await compressAvatarImage(file);
+      updateUserProfile({ avatarUrl: compressed });
+    } catch (_) {
+      setAvatarUploadError('Failed to process image.');
+    } finally {
       setIsAvatarUploading(false);
-    };
-    reader.readAsDataURL(file);
-    // reset input so same file can be re-selected
-    e.target.value = '';
+      e.target.value = '';
+    }
   };
 
   return (

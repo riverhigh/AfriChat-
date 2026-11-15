@@ -243,6 +243,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
         if (m.type === 'voice') content = '[Voice Note]';
         if (m.type === 'product_card' && m.product) content = `[Product Card: ${m.product.title} - ${CURRENCY_SYMBOLS[currency]}${m.product.price}]`;
         if (m.type === 'escrow_receipt' && m.order) content = `[Escrow Receipt #${m.order.id}]`;
+        if (m.type === 'location' && m.locationData) content = `[Location Pin: ${m.locationData.addressName || 'Pinned Point'} (${m.locationData.latitude.toFixed(5)}, ${m.locationData.longitude.toFixed(5)})]`;
         return `[${time}] ${sender}: ${content}`;
       })
       .join('\n');

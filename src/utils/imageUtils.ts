@@ -1,114 +1,255 @@
 /**
  * Africhat Image Compression & Processing Utilities
- * Ensures media files fit within Supabase Realtime payload limits (256KB)
- * and load instantaneously across mobile network speeds.
+ * Enforces aggressive adaptive compression (WebP/JPEG) so avatars and media
+ * consume minimal Supabase DB / storage / Realtime bandwidth.
  */
 
-export async function compressImageFile(
-  file: File,
-  maxDimension = 1200,
-  quality = 0.75
-): Promise<string> {
-  // If it's a GIF or SVG, preserve original animation / vector
-  if (file.type === 'image/gif' || file.type === 'image/svg+xml') {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-  }
+export interface ImageCompressionOptions {
+  maxDimension?: number;
+  minDimension?: number;
+  maxBytes?: number;
+  initialQuality?: number;
+  minQuality?: number;
+  cropSquare?: boolean;
+}
 
+const DEFAULT_SVG_PLACEHOLDER_PREFIX = 'data:image/svg+xml';
+
+/**
+ * Returns true if an avatar URL is empty or a generic placeholder SVG/icon.
+ */
+export function isPlaceholderAvatar(url?: string | null): boolean {
+  if (!url || !url.trim()) return true;
+  const trimmed = url.trim();
+  if (trimmed.startsWith(DEFAULT_SVG_PLACEHOLDER_PREFIX)) return true;
+  if (trimmed.includes('api.dicebear.com/')) return true;
+  return false;
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => resolve(img);
+    img.onerror = (err) => reject(err);
+    img.src = src;
+  });
+}
 
-    img.onload = () => {
-      URL.revokeObjectURL(objectUrl);
-      let { width, height } = img;
+function encodeCanvasSmallest(canvas: HTMLCanvasElement, quality: number): string {
+  const jpegUrl = canvas.toDataURL('image/jpeg', quality);
+  try {
+    const webpUrl = canvas.toDataURL('image/webp', quality);
+    if (webpUrl.startsWith('data:image/webp') && webpUrl.length < jpegUrl.length) {
+      return webpUrl;
+    }
+  } catch (_) {}
+  return jpegUrl;
+}
 
-      if (width > maxDimension || height > maxDimension) {
-        if (width > height) {
-          height = Math.round((height * maxDimension) / width);
-          width = maxDimension;
+/**
+ * Adaptively compresses a File or image data URL until its encoded payload
+ * fits comfortably inside `maxBytes` (using WebP when supported, else JPEG).
+ */
+export async function compressImageToBudget(
+  source: File | string,
+  options: ImageCompressionOptions = {}
+): Promise<string> {
+  const {
+    maxDimension = 640,
+    minDimension = 240,
+    maxBytes = 55 * 1024,
+    initialQuality = 0.65,
+    minQuality = 0.28,
+    cropSquare = false,
+  } = options;
+
+  // Max base64 string length for the target byte budget (~1.37x raw bytes + header)
+  const maxCharLength = Math.round(maxBytes * 1.38) + 64;
+
+  if (typeof source === 'string') {
+    if (!source.startsWith('data:image')) return source;
+    if (source.includes('image/gif') && source.length <= maxCharLength) return source;
+    if (source.includes('image/svg+xml') && source.length <= 4096) return source;
+    if (source.length <= maxCharLength && !cropSquare) return source;
+  } else {
+    if (source.type === 'image/gif' && source.size <= maxBytes) {
+      return readFileAsDataUrl(source);
+    }
+    if (source.type === 'image/svg+xml' && source.size <= 3072) {
+      return readFileAsDataUrl(source);
+    }
+  }
+
+  let objectUrl: string | null = null;
+  try {
+    const src =
+      typeof source === 'string'
+        ? source
+        : ((objectUrl = URL.createObjectURL(source)), objectUrl);
+
+    const img = await loadImageElement(src);
+    const naturalW = img.naturalWidth || img.width || maxDimension;
+    const naturalH = img.naturalHeight || img.height || maxDimension;
+
+    let currentMaxDim = maxDimension;
+    let bestDataUrl = '';
+
+    for (let dimPass = 0; dimPass < 5; dimPass++) {
+      let sx = 0;
+      let sy = 0;
+      let sw = naturalW;
+      let sh = naturalH;
+
+      let targetW = naturalW;
+      let targetH = naturalH;
+
+      if (cropSquare) {
+        const side = Math.min(naturalW, naturalH);
+        sx = Math.floor((naturalW - side) / 2);
+        sy = Math.floor((naturalH - side) / 2);
+        sw = side;
+        sh = side;
+        const outSide = Math.min(side, currentMaxDim);
+        targetW = outSide;
+        targetH = outSide;
+      } else if (naturalW > currentMaxDim || naturalH > currentMaxDim) {
+        if (naturalW >= naturalH) {
+          targetW = currentMaxDim;
+          targetH = Math.max(1, Math.round((naturalH * currentMaxDim) / naturalW));
         } else {
-          width = Math.round((width * maxDimension) / height);
-          height = maxDimension;
+          targetH = currentMaxDim;
+          targetW = Math.max(1, Math.round((naturalW * currentMaxDim) / naturalH));
         }
       }
 
       const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = Math.max(1, targetW);
+      canvas.height = Math.max(1, targetH);
       const ctx = canvas.getContext('2d');
-
       if (!ctx) {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-        return;
+        return typeof source === 'string' ? source : readFileAsDataUrl(source);
       }
 
-      ctx.drawImage(img, 0, 0, width, height);
+      // Fill white background for transparent PNGs converted to JPEG/WebP
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
 
-      // Return high quality compressed JPEG data URL
-      const dataUrl = canvas.toDataURL('image/jpeg', quality);
-      resolve(dataUrl);
-    };
+      for (let q = initialQuality; q >= minQuality - 0.001; q -= 0.1) {
+        const clampedQ = Math.max(minQuality, Number(q.toFixed(2)));
+        const candidate = encodeCanvasSmallest(canvas, clampedQ);
+        bestDataUrl = candidate;
+        if (candidate.length <= maxCharLength) {
+          return candidate;
+        }
+      }
 
-    img.onerror = (err) => {
+      const nextDim = Math.round(currentMaxDim * 0.72);
+      if (nextDim < minDimension || currentMaxDim <= minDimension) {
+        break;
+      }
+      currentMaxDim = Math.max(minDimension, nextDim);
+    }
+
+    if (bestDataUrl) return bestDataUrl;
+    return typeof source === 'string' ? source : readFileAsDataUrl(source);
+  } catch (err) {
+    if (typeof source === 'string') return source;
+    return readFileAsDataUrl(source);
+  } finally {
+    if (objectUrl) {
       URL.revokeObjectURL(objectUrl);
-      reject(err);
-    };
+    }
+  }
+}
 
-    img.src = objectUrl;
+/**
+ * Ultra-compact square avatar compressor (~3KB - 12KB max, 144x144px).
+ * Small enough to persist cleanly inside Supabase DB columns and sync everywhere.
+ */
+export async function compressAvatarImage(source: File | string): Promise<string> {
+  return compressImageToBudget(source, {
+    maxDimension: 144,
+    minDimension: 72,
+    maxBytes: 12 * 1024,
+    initialQuality: 0.68,
+    minQuality: 0.3,
+    cropSquare: true,
   });
 }
 
 /**
- * Downsamples an existing data URL if it exceeds payload size thresholds (~250KB).
+ * Strongly compressed chat/status/product photo (~18KB - 55KB max, 640px).
+ */
+export async function compressChatMediaImage(source: File | string): Promise<string> {
+  return compressImageToBudget(source, {
+    maxDimension: 640,
+    minDimension: 260,
+    maxBytes: 55 * 1024,
+    initialQuality: 0.64,
+    minQuality: 0.28,
+    cropSquare: false,
+  });
+}
+
+/**
+ * Compressed chat background wallpaper (~25KB - 65KB max, 720px).
+ */
+export async function compressWallpaperImage(source: File | string): Promise<string> {
+  return compressImageToBudget(source, {
+    maxDimension: 720,
+    minDimension: 320,
+    maxBytes: 65 * 1024,
+    initialQuality: 0.6,
+    minQuality: 0.28,
+    cropSquare: false,
+  });
+}
+
+export async function compressImageFile(
+  file: File,
+  maxDimension = 640,
+  quality = 0.64
+): Promise<string> {
+  return compressImageToBudget(file, {
+    maxDimension,
+    minDimension: Math.min(240, maxDimension),
+    maxBytes: 55 * 1024,
+    initialQuality: quality,
+    minQuality: 0.28,
+  });
+}
+
+/**
+ * Downsamples an existing data URL if it exceeds tight storage/payload limits (~55KB).
  */
 export async function downsampleDataUrl(
   dataUrl: string,
-  maxDimension = 1200,
-  quality = 0.75
+  maxDimension = 640,
+  quality = 0.64
 ): Promise<string> {
-  if (!dataUrl.startsWith('data:image') || dataUrl.includes('image/gif')) {
+  if (!dataUrl || !dataUrl.startsWith('data:image') || dataUrl.includes('image/gif')) {
     return dataUrl;
   }
-  // If already under 250KB, no downsampling required
-  if (dataUrl.length < 250000) {
+  if (dataUrl.length <= 72000) {
     return dataUrl;
   }
-
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      let { width, height } = img;
-
-      if (width > maxDimension || height > maxDimension) {
-        if (width > height) {
-          height = Math.round((height * maxDimension) / width);
-          width = maxDimension;
-        } else {
-          width = Math.round((width * maxDimension) / height);
-          height = maxDimension;
-        }
-      }
-
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-
-      if (!ctx) return resolve(dataUrl);
-
-      ctx.drawImage(img, 0, 0, width, height);
-      resolve(canvas.toDataURL('image/jpeg', quality));
-    };
-
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
+  return compressImageToBudget(dataUrl, {
+    maxDimension,
+    minDimension: Math.min(240, maxDimension),
+    maxBytes: 55 * 1024,
+    initialQuality: quality,
+    minQuality: 0.28,
   });
 }

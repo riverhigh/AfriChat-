@@ -22,7 +22,8 @@ create type call_direction   as enum ('incoming','outgoing','missed');
 create type call_type        as enum ('voice','video');
 create type message_type     as enum (
   'text','image','voice','product_card','escrow_receipt',
-  'meme_sticker','invoice_receipt','financial_poll','ajo_update','scam_warning'
+  'meme_sticker','invoice_receipt','financial_poll','ajo_update','scam_warning',
+  'game_xo','location'
 );
 create type message_status   as enum ('sent','delivered','read');
 create type risk_level       as enum ('critical_scam','suspicious','verified_clean');
@@ -172,6 +173,7 @@ create table public.messages (
   financial_poll  jsonb,          -- FinancialPoll snapshot
   ajo_group_id    uuid,
   scam_entity     jsonb,
+  metadata        jsonb,          -- LocationPinMeta or custom structured payload
   status          message_status not null default 'sent',
   created_at      timestamptz not null default now()
 );

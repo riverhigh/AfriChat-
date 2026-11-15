@@ -62,10 +62,151 @@ export const getUserStorageKey = (prefix: string, cleanPhone?: string): string =
   return clean ? `${prefix}_${clean}` : prefix;
 };
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DEFAULT_AVATAR_SVG =
+  "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>";
+
+function getCandidatePhoneKeys(phoneNumber?: string): string[] {
+  const raw = (phoneNumber || '').replace(/\D/g, '');
+  const norm = normalizePhoneDigits(phoneNumber);
+  const last9 = norm.length >= 9 ? norm.slice(-9) : norm;
+  return Array.from(new Set([norm, raw, last9].filter(Boolean)));
+}
+
+function sanitizeLoadedChats(parsed: unknown): ChatThread[] {
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(
+    (c: ChatThread) => c && c.id && c.id !== 'chat_balogun_ajo' && c.id !== 'chat_mama_chidinma'
+  );
+}
+
+function sanitizeLoadedMessages(parsed: unknown): Record<string, ChatMessage[]> {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const now = Date.now();
+  const cleaned: Record<string, ChatMessage[]> = {};
+  for (const [cid, msgs] of Object.entries(parsed as Record<string, ChatMessage[]>)) {
+    if (!Array.isArray(msgs)) continue;
+    cleaned[cid] = msgs.map((m) => {
+      if (m.type === 'voice' && m.voiceNote?.expiresAt) {
+        const exp = new Date(m.voiceNote.expiresAt).getTime();
+        if (!isNaN(exp) && now > exp) {
+          return {
+            ...m,
+            type: 'text' as const,
+            text: '🎙️ Voice note expired',
+            voiceNote: undefined,
+          };
+        }
+      }
+      return m;
+    });
+  }
+  return cleaned;
+}
+
+function persistPartitionedChats(chatsToSave: ChatThread[], phoneNumber?: string) {
+  const clean = phoneNumber ? normalizePhoneDigits(phoneNumber) : getSavedUserCleanPhone();
+  if (!clean) return;
+  try {
+    localStorage.setItem(`AGC_chats_v2_${clean}`, JSON.stringify(chatsToSave));
+  } catch (_) {}
+}
+
+function persistPartitionedMessages(msgsToSave: Record<string, ChatMessage[]>, phoneNumber?: string) {
+  const clean = phoneNumber ? normalizePhoneDigits(phoneNumber) : getSavedUserCleanPhone();
+  if (!clean) return;
+  try {
+    localStorage.setItem(`AGC_messages_v2_${clean}`, JSON.stringify(msgsToSave));
+  } catch (_) {}
+}
+
+function loadPartitionedUserChatsAndMessages(phoneNumber?: string): {
+  chats: ChatThread[];
+  messages: Record<string, ChatMessage[]>;
+} {
+  const targetPhone = phoneNumber || '';
+  const candidates = getCandidatePhoneKeys(targetPhone);
+  let mergedChats: ChatThread[] = [];
+  let mergedMsgs: Record<string, ChatMessage[]> = {};
+
+  for (const keySuffix of candidates) {
+    try {
+      const cRaw = localStorage.getItem(`AGC_chats_v2_${keySuffix}`);
+      if (cRaw) {
+        const parsedChats = sanitizeLoadedChats(JSON.parse(cRaw));
+        if (parsedChats.length > 0) {
+          const combined = mergeChatThreadsAndMessages(mergedChats, {}, parsedChats, {});
+          mergedChats = combined.chats;
+        }
+      }
+    } catch (_) {}
+
+    try {
+      const mRaw = localStorage.getItem(`AGC_messages_v2_${keySuffix}`);
+      if (mRaw) {
+        const parsedMsgs = sanitizeLoadedMessages(JSON.parse(mRaw));
+        if (Object.keys(parsedMsgs).length > 0) {
+          const combined = mergeChatThreadsAndMessages([], mergedMsgs, [], parsedMsgs);
+          mergedMsgs = combined.messages;
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Also migrate any orphaned DM chats written to legacy bare keys if they belong to this user
+  try {
+    const bareChatsRaw = localStorage.getItem('AGC_chats_v2');
+    const bareMsgsRaw = localStorage.getItem('AGC_messages_v2');
+    const norm = normalizePhoneDigits(targetPhone);
+    if (norm && bareChatsRaw) {
+      const bareChats = sanitizeLoadedChats(JSON.parse(bareChatsRaw));
+      const matchingChats = bareChats.filter(
+        (c) => c.id.includes(norm) || (norm.length >= 9 && c.id.includes(norm.slice(-9)))
+      );
+      if (matchingChats.length > 0) {
+        const combined = mergeChatThreadsAndMessages(mergedChats, mergedMsgs, matchingChats, {});
+        mergedChats = combined.chats;
+      }
+    }
+    if (norm && bareMsgsRaw) {
+      const bareMsgs = sanitizeLoadedMessages(JSON.parse(bareMsgsRaw));
+      const matchingMsgs: Record<string, ChatMessage[]> = {};
+      for (const [cid, list] of Object.entries(bareMsgs)) {
+        if (cid.includes(norm) || (norm.length >= 9 && cid.includes(norm.slice(-9)))) {
+          matchingMsgs[cid] = list;
+        }
+      }
+      if (Object.keys(matchingMsgs).length > 0) {
+        const combined = mergeChatThreadsAndMessages(mergedChats, mergedMsgs, [], matchingMsgs);
+        mergedMsgs = combined.messages;
+      }
+    }
+  } catch (_) {}
+
+  // Ensure canonical key is populated for fast future lookups
+  const canonical = normalizePhoneDigits(targetPhone);
+  if (canonical && (mergedChats.length > 0 || Object.keys(mergedMsgs).length > 0)) {
+    persistPartitionedChats(mergedChats, canonical);
+    persistPartitionedMessages(mergedMsgs, canonical);
+  }
+
+  return { chats: mergedChats, messages: mergedMsgs };
+}
+
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { safeLocalStorage, safeSessionStorage } from '../utils/safeStorage';
 import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
-import { downsampleDataUrl } from '../utils/imageUtils';
+import {
+  compressAvatarImage,
+  compressChatMediaImage,
+  downsampleDataUrl,
+  isPlaceholderAvatar,
+} from '../utils/imageUtils';
+import {
+  saveUserChatsBackupToSupabase,
+  fetchUserChatsBackupFromSupabase,
+  mergeChatThreadsAndMessages,
+} from '../services/supabaseChatSync';
 import {
   supabase,
   isSupabaseConfigured,
@@ -124,6 +265,7 @@ import {
   FinancialPoll,
   AjoGroup,
   TicTacToeGameState,
+  LocationPinMeta,
   UserProfile,
   DeviceContact,
   UserUploadedMeme,
@@ -305,6 +447,9 @@ interface AppContextType {
   sendMessage: (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }, oneTimeView?: boolean) => void;
   sendVoiceNote: (chatId: string, durationSeconds: number, transcript: string, audioDataUrl?: string, oneTimeView?: boolean) => void;
   sendProductCard: (chatId: string, product: Product, fromSelf?: boolean) => void;
+  isShareLocationModalOpen: boolean;
+  setIsShareLocationModalOpen: (val: boolean) => void;
+  sendLocationMessage: (chatId: string, locationData: LocationPinMeta) => void;
   isOneTimeViewEnabled: boolean;
   setIsOneTimeViewEnabled: (val: boolean) => void;
   loadImage: (chatId: string, messageId: string) => void;
@@ -1385,7 +1530,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     };
                     const updated = [...cPrev];
                     updated[existingIdx] = updatedChat;
-                    try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
+                    persistPartitionedChats(updated, currentUser.phoneNumber);
                     return updated;
                   }
                   return cPrev;
@@ -1458,7 +1603,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               isOnline: true,
             };
             const updated = [newThread, ...prev];
-            try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
+            persistPartitionedChats(updated, currentUser.phoneNumber);
             return updated;
           });
         })
@@ -1559,7 +1704,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setChats((prev) => {
       const updated = [newThread, ...prev.filter((c) => c.id !== communityChatId)];
-      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (e) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -1601,14 +1746,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const communityChatId = `town_comm_${communityId}`;
     setChats((prev) => {
       const updated = prev.filter((c) => c.id !== communityChatId);
-      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
 
     setMessages((prev) => {
       const updated = { ...prev };
       delete updated[communityChatId];
-      try { localStorage.setItem('AGC_messages_v2', JSON.stringify(updated)); } catch (_) {}
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -1646,7 +1791,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isOnline: true,
       };
       const updated = [newThread, ...prev];
-      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (e) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -2256,63 +2401,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return c;
       });
       if (hasChanges) {
-        try {
-          localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
-        } catch (_) {}
+        persistPartitionedChats(updated, currentUser.phoneNumber);
         return updated;
       }
       return prev;
     });
   }, [activeChatId]);
   const [chats, setChats] = useState<ChatThread[]>(() => {
-    try {
-      const userKey = getUserStorageKey('AGC_chats_v2');
-      const saved = localStorage.getItem(userKey);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && !parsed.some((c: ChatThread) => c.id === 'chat_balogun_ajo' || c.id === 'chat_mama_chidinma')) {
-          return parsed;
-        } else {
-          localStorage.removeItem(userKey);
-        }
-      }
-    } catch (e) {
-      console.warn(e);
-    }
-    return [];
+    const savedPhone = getSavedUserCleanPhone();
+    if (!savedPhone) return [];
+    return loadPartitionedUserChatsAndMessages(savedPhone).chats;
   });
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>(() => {
-    try {
-      const userKey = getUserStorageKey('AGC_messages_v2');
-      const saved = localStorage.getItem(userKey);
-      if (saved) {
-        const parsed: Record<string, ChatMessage[]> = JSON.parse(saved);
-        const now = Date.now();
-        // Purge expired voice notes (24h TTL) on load
-        const purged: Record<string, ChatMessage[]> = {};
-        for (const [cid, msgs] of Object.entries(parsed)) {
-          purged[cid] = msgs.map((m) => {
-            if (m.type === 'voice' && m.voiceNote?.expiresAt) {
-              const exp = new Date(m.voiceNote.expiresAt).getTime();
-              if (!isNaN(exp) && now > exp) {
-                // Replace expired voice note with a tombstone text message
-                return {
-                  ...m,
-                  type: 'text' as const,
-                  text: '🎙️ Voice note expired',
-                  voiceNote: undefined,
-                };
-              }
-            }
-            return m;
-          });
-        }
-        return purged;
-      }
-    } catch (e) {
-      console.warn(e);
-    }
-    return {};
+    const savedPhone = getSavedUserCleanPhone();
+    if (!savedPhone) return {};
+    return loadPartitionedUserChatsAndMessages(savedPhone).messages;
   });
   const [calls, setCalls] = useState<CallLogItem[]>(() => {
     try {
@@ -2540,53 +2643,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   });
 
-  // Automatically persist chats & messages strictly partitioned per user
-  useEffect(() => {
-    const clean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
-    if (clean) {
-      try {
-        localStorage.setItem(`AGC_chats_v2_${clean}`, JSON.stringify(chats));
-      } catch (_) {}
-    }
-  }, [chats, currentUser?.phoneNumber]);
+  const chatsRef = useRef<ChatThread[]>(chats);
+  const messagesRef = useRef<Record<string, ChatMessage[]>>(messages);
+  const loadedPhoneForChatsRef = useRef<string>(getSavedUserCleanPhone());
+  const isHydratingChatsRef = useRef<boolean>(false);
+  const chatBackupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const clean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
-    if (clean) {
-      try {
-        localStorage.setItem(`AGC_messages_v2_${clean}`, JSON.stringify(messages));
-      } catch (_) {}
-    }
-  }, [messages, currentUser?.phoneNumber]);
+    chatsRef.current = chats;
+  }, [chats]);
 
-  // Re-read user's chats and messages whenever switching users / phone number
   useEffect(() => {
-    if (!currentUser?.phoneNumber) return;
-    const chatKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
-    const msgKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
-    try {
-      const savedChats = localStorage.getItem(chatKey);
-      if (savedChats) {
-        const parsed = JSON.parse(savedChats);
-        if (Array.isArray(parsed) && !parsed.some((c: ChatThread) => c.id === 'chat_balogun_ajo' || c.id === 'chat_mama_chidinma')) {
-          setChats(parsed);
-        } else {
-          setChats([]);
-        }
-      } else {
-        setChats([]);
-      }
-    } catch (_) {
-      setChats([]);
-    }
-
-    try {
-      const savedMsgs = localStorage.getItem(msgKey);
-      setMessages(savedMsgs ? JSON.parse(savedMsgs) : {});
-    } catch (_) {
-      setMessages({});
-    }
-  }, [currentUser?.phoneNumber]);
+    messagesRef.current = messages;
+  }, [messages]);
   useEffect(() => {
     try {
       const savedWallet = localStorage.getItem('AGC_user_wallet_v2');
@@ -2636,6 +2705,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isKickedOut, setIsKickedOut] = useState(false);
+
+  // Automatically persist chats & messages strictly partitioned per user (ONLY when authenticated & hydrated)
+  useEffect(() => {
+    if (!isAuthenticated || isHydratingChatsRef.current) return;
+    const norm = normalizePhoneDigits(currentUser?.phoneNumber);
+    if (!norm || loadedPhoneForChatsRef.current !== norm) return;
+    persistPartitionedChats(chats, currentUser.phoneNumber);
+    if (chatBackupTimerRef.current) clearTimeout(chatBackupTimerRef.current);
+    chatBackupTimerRef.current = setTimeout(() => {
+      saveUserChatsBackupToSupabase(currentUser.phoneNumber, chatsRef.current, messagesRef.current).catch(() => {});
+    }, 1500);
+  }, [chats, currentUser?.phoneNumber, isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated || isHydratingChatsRef.current) return;
+    const norm = normalizePhoneDigits(currentUser?.phoneNumber);
+    if (!norm || loadedPhoneForChatsRef.current !== norm) return;
+    persistPartitionedMessages(messages, currentUser.phoneNumber);
+    if (chatBackupTimerRef.current) clearTimeout(chatBackupTimerRef.current);
+    chatBackupTimerRef.current = setTimeout(() => {
+      saveUserChatsBackupToSupabase(currentUser.phoneNumber, chatsRef.current, messagesRef.current).catch(() => {});
+    }, 1500);
+  }, [messages, currentUser?.phoneNumber, isAuthenticated]);
+
+  // Hydrate chats/messages from localStorage + Supabase backup whenever user logs in or mounts
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser?.phoneNumber) return;
+    const phone = currentUser.phoneNumber;
+    const norm = normalizePhoneDigits(phone);
+    if (!norm) return;
+
+    isHydratingChatsRef.current = true;
+    const localData = loadPartitionedUserChatsAndMessages(phone);
+    setChats(localData.chats);
+    setMessages(localData.messages);
+    loadedPhoneForChatsRef.current = norm;
+    isHydratingChatsRef.current = false;
+
+    let cancelled = false;
+    fetchUserChatsBackupFromSupabase(phone)
+      .then((remote) => {
+        if (cancelled || !remote) return;
+        if (remote.chats.length === 0 && Object.keys(remote.messages).length === 0) return;
+        const merged = mergeChatThreadsAndMessages(
+          chatsRef.current,
+          messagesRef.current,
+          remote.chats,
+          remote.messages
+        );
+        setChats(merged.chats);
+        setMessages(merged.messages);
+        persistPartitionedChats(merged.chats, phone);
+        persistPartitionedMessages(merged.messages, phone);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.phoneNumber, isAuthenticated]);
 
   // 🌐 LIVE SYSTEM: Hydrate and listen for live Artisan Stations & Service Providers
   useEffect(() => {
@@ -4192,9 +4321,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addDeviceMediaStatus = async (caption: string, mediaUrl: string, mediaType: 'image' | 'video' = 'image') => {
     let finalMediaUrl = mediaUrl;
-    if (mediaType === 'image' && mediaUrl.startsWith('data:image') && mediaUrl.length > 250000) {
+    if (mediaType === 'image' && mediaUrl.startsWith('data:image') && mediaUrl.length > 72000) {
       try {
-        finalMediaUrl = await downsampleDataUrl(mediaUrl, 1200, 0.75);
+        finalMediaUrl = await compressChatMediaImage(mediaUrl);
       } catch (_) {}
     }
 
@@ -4560,9 +4689,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateChat = (chatId: string, updates: Partial<ChatThread>) => {
     setChats((prev) => {
       const updated = prev.map((c) => (c.id === chatId ? { ...c, ...updates } : c));
-      try {
-        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
   };
@@ -4587,9 +4714,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         return c;
       });
-      try {
-        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -4647,9 +4772,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setMessages((prev) => {
       const current = prev[chatId] || [];
       const updated = { ...prev, [chatId]: [...current, sysMsg] };
-      try {
-        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
   };
@@ -4801,17 +4924,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setChats((prev) => {
       const updated = [newThread, ...prev];
-      try {
-        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
 
     setMessages((prev) => {
       const updated = { ...prev, [newChatId]: [sysMsg] };
-      try {
-        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -4832,9 +4951,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         return c;
       });
-      try {
-        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -4849,9 +4966,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setMessages((prev) => {
       const updated = { ...prev, [chatId]: [...(prev[chatId] || []), sysMsg] };
-      try {
-        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
   };
@@ -4869,9 +4984,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         return c;
       });
-      try {
-        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -4886,9 +4999,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setMessages((prev) => {
       const updated = { ...prev, [chatId]: [...(prev[chatId] || []), sysMsg] };
-      try {
-        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
   };
@@ -4898,9 +5009,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const list = prev[chatId] || [];
       const updatedList = list.filter((m) => m.id !== messageId);
       const updated = { ...prev, [chatId]: updatedList };
-      try {
-        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
   };
@@ -4924,9 +5033,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return m;
       });
       const updated = { ...prev, [chatId]: updatedList };
-      try {
-        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
   };
@@ -5066,11 +5173,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const sendImageMessage = async (chatId: string, imageUrl: string, caption?: string, oneTimeView?: boolean) => {
-    // Ensure image data URL fits comfortably within Supabase 256KB Realtime payload
+    // Strongly compress any data URL image so Supabase storage & Realtime stay tiny
     let finalImageUrl = imageUrl;
-    if (imageUrl.startsWith('data:image') && imageUrl.length > 250000) {
+    if (imageUrl.startsWith('data:image') && imageUrl.length > 72000) {
       try {
-        finalImageUrl = await downsampleDataUrl(imageUrl, 1200, 0.75);
+        finalImageUrl = await compressChatMediaImage(imageUrl);
       } catch (_) {}
     }
 
@@ -5095,9 +5202,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setMessages((prev) => {
       const current = prev[chatId] || [];
       const updated = { ...prev, [chatId]: [...current, newMsg] };
-      try {
-        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -5122,7 +5227,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
         avatar:
           contactMatch?.avatar ||
-          "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+          DEFAULT_AVATAR_SVG,
         verifiedStore: false,
         location: 'Direct Chat',
         unreadCount: 0,
@@ -5144,18 +5249,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const clearChat = (chatId: string) => {
     setMessages((prev) => {
       const updated = { ...prev, [chatId]: [] };
-      try {
-        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
     setChats((prev) => {
       const updated = prev.map((c) =>
         c.id === chatId ? { ...c, lastMessage: 'Chat history cleared', lastMessageTime: '' } : c
       );
-      try {
-        localStorage.setItem('AGC_chats_v2', JSON.stringify(updated));
-      } catch (_) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
   };
@@ -5168,13 +5269,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setChats((prev) => {
       const updated = prev.filter((c) => c.id !== chatId);
-      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
     setMessages((prev) => {
       const updated = { ...prev };
       delete updated[chatId];
-      try { localStorage.setItem('AGC_messages_v2', JSON.stringify(updated)); } catch (_) {}
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
     setActiveChatId((curr) => (curr === chatId ? null : curr));
@@ -5183,7 +5284,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleShelfChat = (chatId: string) => {
     setChats((prev) => {
       const updated = prev.map((c) => (c.id === chatId ? { ...c, isShelved: !c.isShelved } : c));
-      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
   };
@@ -5191,7 +5292,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setChatLabel = (chatId: string, label?: string) => {
     setChats((prev) => {
       const updated = prev.map((c) => (c.id === chatId ? { ...c, label: label ? label.trim() : undefined } : c));
-      try { localStorage.setItem('AGC_chats_v2', JSON.stringify(updated)); } catch (_) {}
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
   };
@@ -5232,15 +5333,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: initialStatus,
     };
 
-    // 1. Update local state and persist
+    // 1. Update local state and persist partitioned per user
     setMessages((prev) => {
       const updated = {
         ...prev,
         [chatId]: [...(prev[chatId] || []), newMsg],
       };
-      try {
-        localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
-      } catch (e) {}
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -5405,6 +5504,95 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : c
       )
     );
+
+    broadcastLiveMessage(chatId, newMsg);
+  };
+
+  const sendLocationMessage = (chatId: string, locationData: LocationPinMeta) => {
+    if (!chatId || !Number.isFinite(locationData.latitude) || !Number.isFinite(locationData.longitude)) return;
+
+    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    const label = locationData.addressName?.trim() || `${locationData.latitude.toFixed(4)}, ${locationData.longitude.toFixed(4)}`;
+    const previewLabel = `📍 ${label}`;
+
+    const newMsg: ChatMessage = {
+      id: `msg_loc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      chatId,
+      sender: 'user',
+      senderName: currentUser.fullName || 'AGC User',
+      senderPhone: currentUser.phoneNumber,
+      senderAvatar: currentUser.avatarUrl,
+      type: 'location',
+      text: `📍 Shared Pin Location: ${label}`,
+      locationData: {
+        ...locationData,
+        addressName: label,
+        sharedAt: locationData.sharedAt || new Date().toISOString(),
+      },
+      metadata: {
+        latitude: locationData.latitude,
+        longitude: locationData.longitude,
+        address_name: label,
+        landmark_note: locationData.landmarkNote,
+        accuracy_meters: locationData.accuracyMeters,
+        purpose: locationData.purpose || 'general',
+      },
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: isOnline ? 'delivered' : 'sent',
+    };
+
+    setMessages((prev) => {
+      const updated = {
+        ...prev,
+        [chatId]: [...(prev[chatId] || []), newMsg],
+      };
+      try {
+        const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    setChats((prev) => {
+      const exists = prev.some((c) => c.id === chatId);
+      let updated: ChatThread[];
+      if (exists) {
+        updated = prev.map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                lastMessage: previewLabel,
+                lastMessageTime: newMsg.timestamp,
+              }
+            : c
+        );
+      } else {
+        const contactMatch = deviceContacts.find(
+          (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
+        );
+        const newThread: ChatThread = {
+          id: chatId,
+          name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
+          avatar:
+            contactMatch?.avatar ||
+            "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+          verifiedStore: false,
+          location: 'Direct Chat',
+          unreadCount: 0,
+          lastMessage: previewLabel,
+          lastMessageTime: newMsg.timestamp,
+          catalog: [],
+          isOnline: true,
+          phone: contactMatch?.rawPhoneNumber || '',
+        };
+        updated = [newThread, ...prev];
+      }
+      try {
+        const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+        localStorage.setItem(userKey, JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
 
     broadcastLiveMessage(chatId, newMsg);
   };
@@ -6528,8 +6716,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  // 6b. Real-Time Socket.IO Multiplayer X/O (Tic-Tac-Toe) Handlers & Wallet Escrow (1% Winner Pot Fee)
+  // 6b. Real-Time Supabase Multiplayer X/O (Tic-Tac-Toe) & Location Pin Modal State
   const [isGameXoModalOpen, setIsGameXoModalOpen] = useState(false);
+  const [isShareLocationModalOpen, setIsShareLocationModalOpen] = useState(false);
 
   const getXoLockedStorageKey = (phone?: string) =>
     getUserStorageKey('AGC_xo_locked_ids', phone || currentUser.phoneNumber);
@@ -7353,6 +7542,156 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true, message: `Ajo group "${ajoData.name}" created & posted!` };
   };
 
+  const syncProfileToAllRegistries = async (userProfile: UserProfile) => {
+    const cleanPhone = (userProfile.phoneNumber || '').replace(/\D/g, '');
+    const normPhone = normalizePhoneDigits(userProfile.phoneNumber);
+    const last9 = (normPhone || cleanPhone).length >= 9 ? (normPhone || cleanPhone).slice(-9) : (normPhone || cleanPhone);
+
+    // Always keep avatar strongly compressed before saving to DB
+    let compactAvatar = userProfile.avatarUrl || '';
+    if (
+      compactAvatar.startsWith('data:image') &&
+      !isPlaceholderAvatar(compactAvatar) &&
+      compactAvatar.length > 18000
+    ) {
+      try {
+        compactAvatar = await compressAvatarImage(compactAvatar);
+      } catch (_) {}
+    }
+
+    const userWithCompactAvatar: UserProfile = {
+      ...userProfile,
+      avatarUrl: compactAvatar || userProfile.avatarUrl,
+    };
+
+    // Update localStorage user caches consistently
+    safeLocalStorage.setItem('AGC_user_profile_v2', JSON.stringify(userWithCompactAvatar));
+    try {
+      const regMap = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
+      const entry = {
+        phoneNumber: userWithCompactAvatar.phoneNumber,
+        fullName: userWithCompactAvatar.fullName,
+        avatarUrl: userWithCompactAvatar.avatarUrl,
+        registeredAt: userWithCompactAvatar.createdAt || new Date().toISOString(),
+      };
+      if (cleanPhone) regMap[cleanPhone] = entry;
+      if (normPhone) regMap[normPhone] = entry;
+      if (userWithCompactAvatar.phoneNumber) regMap[userWithCompactAvatar.phoneNumber] = entry;
+      if (last9) regMap[last9] = entry;
+      localStorage.setItem('AGC_registered_phones', JSON.stringify(regMap));
+
+      const allUsers: UserProfile[] = JSON.parse(localStorage.getItem('AGC_all_registered_users') || '[]');
+      const filtered = allUsers.filter(
+        (u) => !phonesMatch(u.phoneNumber, userWithCompactAvatar.phoneNumber)
+      );
+      filtered.push(userWithCompactAvatar);
+      localStorage.setItem('AGC_all_registered_users', JSON.stringify(filtered));
+    } catch (_) {}
+
+    // Update adminUsers list in-memory
+    setAdminUsers((prev) => {
+      const merged = mergeAdminUsersList(
+        prev,
+        [
+          {
+            id: userWithCompactAvatar.id || `usr_${normPhone || cleanPhone}`,
+            fullName: userWithCompactAvatar.fullName || 'User',
+            phoneNumber: userWithCompactAvatar.phoneNumber,
+            avatarUrl: userWithCompactAvatar.avatarUrl || DEFAULT_AVATAR_SVG,
+            role: userWithCompactAvatar.role || 'user',
+            verificationBadge: userWithCompactAvatar.verificationBadge ?? null,
+            isPhoneVerified: Boolean(userWithCompactAvatar.isPhoneVerified),
+            status: 'active',
+            joinedDate: 'Just now',
+            walletBalanceNgn: 50000,
+            ordersCount: 0,
+            isOnline: true,
+            lastSeen: 'online',
+          },
+        ],
+        false
+      );
+      adminUsersRef.current = merged;
+      return merged;
+    });
+
+    if (isSupabaseConfigured && last9) {
+      // Allow compressed avatars up to 45KB (normally 3KB-12KB) or HTTP URLs
+      const dbAvatar =
+        compactAvatar &&
+        !compactAvatar.startsWith('data:image/svg+xml') &&
+        (compactAvatar.length <= 45000 || compactAvatar.startsWith('http'))
+          ? compactAvatar
+          : (compactAvatar && compactAvatar.length <= 45000 ? compactAvatar : '');
+
+      supabase
+        .from('agc_phone_registry')
+        .upsert(
+          {
+            phone_digits: last9,
+            full_phone: userWithCompactAvatar.phoneNumber,
+            username: userWithCompactAvatar.fullName,
+            avatar_url: dbAvatar,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'phone_digits' }
+        )
+        .then(({ error }: any) => {
+          if (error) console.warn('Phone registry sync notice:', error.message);
+        });
+
+      if (UUID_PATTERN.test(userWithCompactAvatar.id)) {
+        supabase
+          .from('profiles')
+          .upsert({
+            id: userWithCompactAvatar.id,
+            full_name: userWithCompactAvatar.fullName,
+            phone_number: userWithCompactAvatar.phoneNumber,
+            avatar_url: dbAvatar || userWithCompactAvatar.avatarUrl,
+            bio: userWithCompactAvatar.about,
+            updated_at: new Date().toISOString(),
+          })
+          .then(({ error }: any) => {
+            if (error) console.warn('Supabase profile sync notice:', error.message);
+          });
+      }
+
+      try {
+        const syncChannel = supabase.channel('global_user_sync');
+        syncChannel.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            syncChannel.send({
+              type: 'broadcast',
+              event: 'user_updated',
+              payload: userWithCompactAvatar,
+            });
+          }
+        });
+      } catch (_) {}
+    }
+
+    // Sync to local Express gateway
+    try {
+      fetch('/api/users/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userWithCompactAvatar),
+      }).catch(() => {});
+    } catch (_) {}
+
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({
+          type: 'broadcast',
+          event: 'user_updated',
+          payload: userWithCompactAvatar,
+        });
+      } catch (_) {}
+    }
+
+    return userWithCompactAvatar;
+  };
+
   const loginWithPhone = (
     phoneNumber: string,
     fullName: string,
@@ -7360,18 +7699,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     about?: string,
     role?: 'user' | 'admin' | 'creator' | 'merchant'
   ) => {
-    // Generate a unique session token for single-device enforcement
     const sessionToken = `${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
     const cleanPhone = phoneNumber.replace(/\D/g, '');
+    const normPhone = normalizePhoneDigits(phoneNumber);
+    const last9 = (normPhone || cleanPhone).length >= 9 ? (normPhone || cleanPhone).slice(-9) : (normPhone || cleanPhone);
 
-    // Store session token so we can detect if another device steals the session
     safeLocalStorage.setItem('AGC_session_token', sessionToken);
 
+    // Check locally cached profile for this phone so custom avatars/names are never lost
+    let cachedName = '';
+    let cachedAvatar = '';
+    let cachedId = '';
+    try {
+      const regMap = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
+      for (const [k, v] of Object.entries(regMap) as [string, any][]) {
+        if (phonesMatch(k, phoneNumber) || phonesMatch(v?.phoneNumber, phoneNumber)) {
+          if (v?.fullName && v.fullName !== 'AGC User') cachedName = v.fullName;
+          if (v?.avatarUrl && !isPlaceholderAvatar(v.avatarUrl)) cachedAvatar = v.avatarUrl;
+          break;
+        }
+      }
+      const allUsers: UserProfile[] = JSON.parse(localStorage.getItem('AGC_all_registered_users') || '[]');
+      const matchedUser = allUsers.find((u) => phonesMatch(u.phoneNumber, phoneNumber));
+      if (matchedUser) {
+        if (!cachedName && matchedUser.fullName && matchedUser.fullName !== 'AGC User') cachedName = matchedUser.fullName;
+        if (!cachedAvatar && matchedUser.avatarUrl && !isPlaceholderAvatar(matchedUser.avatarUrl)) cachedAvatar = matchedUser.avatarUrl;
+        if (matchedUser.id) cachedId = matchedUser.id;
+      }
+      const lastProfileRaw = localStorage.getItem('AGC_user_profile_v2');
+      if (lastProfileRaw) {
+        const lastP = JSON.parse(lastProfileRaw);
+        if (lastP?.phoneNumber && phonesMatch(lastP.phoneNumber, phoneNumber)) {
+          if (!cachedName && lastP.fullName && lastP.fullName !== 'AGC User') cachedName = lastP.fullName;
+          if (!cachedAvatar && lastP.avatarUrl && !isPlaceholderAvatar(lastP.avatarUrl)) cachedAvatar = lastP.avatarUrl;
+          if (!cachedId && lastP.id) cachedId = lastP.id;
+        }
+      }
+    } catch (_) {}
+
+    const chosenName =
+      fullName && fullName !== 'AGC User'
+        ? fullName
+        : cachedName || fullName || 'AGC User';
+
+    const chosenAvatar =
+      avatarUrl && !isPlaceholderAvatar(avatarUrl)
+        ? avatarUrl
+        : cachedAvatar || avatarUrl || DEFAULT_AVATAR_SVG;
+
     const updatedUser: UserProfile = {
-      id: `usr_${Date.now()}`,
+      id: cachedId || `usr_${normPhone || cleanPhone || Date.now()}`,
       phoneNumber,
-      fullName: fullName || 'AGC User',
-      avatarUrl: avatarUrl || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+      fullName: chosenName,
+      avatarUrl: chosenAvatar,
       about: about || 'Available · Using AGC',
       createdAt: new Date().toISOString(),
       lastSeen: 'online',
@@ -7379,39 +7759,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       role: role || (phoneNumber.includes('admin') ? 'admin' : 'user'),
     };
 
+    // Load local partitioned chats BEFORE flipping isAuthenticated so auto-save never writes []
+    isHydratingChatsRef.current = true;
+    const localChatState = loadPartitionedUserChatsAndMessages(phoneNumber);
+    loadedPhoneForChatsRef.current = normPhone || cleanPhone;
+    setChats(localChatState.chats);
+    setMessages(localChatState.messages);
+    chatsRef.current = localChatState.chats;
+    messagesRef.current = localChatState.messages;
+
     setCurrentUser(updatedUser);
     setIsAuthenticated(true);
     setActiveChatId(null);
+    isHydratingChatsRef.current = false;
 
-    // Strictly partition and load chats/messages for this phone number:
-    try {
-      const savedUserChats = localStorage.getItem(`AGC_chats_v2_${cleanPhone}`);
-      if (savedUserChats) {
-        const parsed = JSON.parse(savedUserChats);
-        setChats(Array.isArray(parsed) ? parsed : []);
-      } else {
-        setChats([]);
-      }
-    } catch (_) {
-      setChats([]);
-    }
-
-    try {
-      const savedUserMsgs = localStorage.getItem(`AGC_messages_v2_${cleanPhone}`);
-      if (savedUserMsgs) {
-        setMessages(JSON.parse(savedUserMsgs));
-      } else {
-        setMessages({});
-      }
-    } catch (_) {
-      setMessages({});
-    }
-
-    // 1. LocalStorage Persistence (Never wiped)
     safeLocalStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
     safeLocalStorage.setItem('AGC_is_authenticated', 'true');
 
-    // Register phone in persistent registry for duplicate detection
+    // Register phone in local persistent registry
     try {
       const regMap = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
       const entry = {
@@ -7420,17 +7785,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         avatarUrl: updatedUser.avatarUrl,
         registeredAt: new Date().toISOString(),
       };
-      regMap[cleanPhone] = entry;
+      if (cleanPhone) regMap[cleanPhone] = entry;
+      if (normPhone) regMap[normPhone] = entry;
       regMap[updatedUser.phoneNumber] = entry;
-      const core = cleanPhone.replace(/^234|^233|^254|^27|^256|^250|^225|^255|^237|^20|^44|^1/, '').replace(/^0+/, '');
-      if (core) {
-        regMap[core] = entry;
-        if (core.length >= 9) regMap[core.slice(-9)] = entry;
-      }
+      if (last9) regMap[last9] = entry;
       localStorage.setItem('AGC_registered_phones', JSON.stringify(regMap));
 
       const allUsers: UserProfile[] = JSON.parse(localStorage.getItem('AGC_all_registered_users') || '[]');
-      const filtered = allUsers.filter(u => u.phoneNumber !== updatedUser.phoneNumber);
+      const filtered = allUsers.filter((u) => !phonesMatch(u.phoneNumber, updatedUser.phoneNumber));
       filtered.push(updatedUser);
       localStorage.setItem('AGC_all_registered_users', JSON.stringify(filtered));
 
@@ -7445,10 +7807,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     requestNotificationPermission().catch(() => {});
     setIsAuthModalOpen(false);
 
-    // 2. Register with Socket.io Gateway (pass sessionToken for single-session enforcement)
+    // 2. Register with Socket.io Gateway
     try {
       registerSocketUser(updatedUser);
-      // Also emit register_phone with session token so server can kick old socket
       const sock = getSocket();
       if (sock) {
         sock.emit('register_phone', { phone: cleanPhone, sessionToken });
@@ -7459,21 +7820,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Update adminUsers state immediately via canonical merge
     setAdminUsers((prev) => {
-      const merged = mergeAdminUsersList(prev, [{
-        id: updatedUser.id || `usr_${cleanPhone}`,
-        fullName: updatedUser.fullName || 'User',
-        phoneNumber: updatedUser.phoneNumber,
-        avatarUrl: updatedUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-        role: updatedUser.role || 'user',
-        verificationBadge: updatedUser.verificationBadge ?? null,
-        isPhoneVerified: Boolean(updatedUser.isPhoneVerified),
-        status: 'active',
-        joinedDate: 'Just now',
-        walletBalanceNgn: 50000,
-        ordersCount: 0,
-        isOnline: true,
-        lastSeen: 'online',
-      }], false);
+      const merged = mergeAdminUsersList(
+        prev,
+        [
+          {
+            id: updatedUser.id || `usr_${normPhone || cleanPhone}`,
+            fullName: updatedUser.fullName || 'User',
+            phoneNumber: updatedUser.phoneNumber,
+            avatarUrl: updatedUser.avatarUrl || DEFAULT_AVATAR_SVG,
+            role: updatedUser.role || 'user',
+            verificationBadge: updatedUser.verificationBadge ?? null,
+            isPhoneVerified: Boolean(updatedUser.isPhoneVerified),
+            status: 'active',
+            joinedDate: 'Just now',
+            walletBalanceNgn: 50000,
+            ordersCount: 0,
+            isOnline: true,
+            lastSeen: 'online',
+          },
+        ],
+        false
+      );
       adminUsersRef.current = merged;
       return merged;
     });
@@ -7492,10 +7859,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setCurrentUser((prev) => {
               const hydrated: UserProfile = {
                 ...prev,
-                verificationBadge: data.user.verificationBadge !== undefined ? data.user.verificationBadge : prev.verificationBadge,
+                avatarUrl:
+                  !isPlaceholderAvatar(prev.avatarUrl)
+                    ? prev.avatarUrl
+                    : (data.user.avatarUrl || prev.avatarUrl),
+                verificationBadge:
+                  data.user.verificationBadge !== undefined
+                    ? data.user.verificationBadge
+                    : prev.verificationBadge,
                 role: (data.user.role as UserProfile['role']) || prev.role,
               };
-              try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(hydrated)); } catch (_) {}
+              try {
+                localStorage.setItem('AGC_user_profile_v2', JSON.stringify(hydrated));
+              } catch (_) {}
               return hydrated;
             });
             setAdminUsers((prev) => {
@@ -7520,71 +7896,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
 
-    // 4. Save to Supabase profiles and broadcast global sync
+    // 4. Sequentially hydrate from agc_phone_registry FIRST, then upsert merged profile (prevents wiping DB avatar on login!)
     if (isSupabaseConfigured) {
-      // 4a. Write to agc_phone_registry — no-RLS public table for cross-device duplicate detection
-      const phoneDigits = cleanPhone;
-      const last9 = phoneDigits.length >= 9 ? phoneDigits.slice(-9) : phoneDigits;
+      (async () => {
+        try {
+          const { data: regData } = await supabase
+            .from('agc_phone_registry')
+            .select('username, avatar_url, full_phone')
+            .or(`phone_digits.eq.${last9},full_phone.eq.${updatedUser.phoneNumber},full_phone.eq.${cleanPhone}`)
+            .limit(1)
+            .maybeSingle();
 
-      // Hydrate username and avatar from agc_phone_registry if logging in on a new device
-      supabase
-        .from('agc_phone_registry')
-        .select('username, avatar_url, full_phone')
-        .or(`phone_digits.eq.${last9},full_phone.eq.${updatedUser.phoneNumber},full_phone.eq.${phoneDigits}`)
-        .limit(1)
-        .maybeSingle()
-        .then(({ data: regData }) => {
-          if (regData?.username && (updatedUser.fullName === 'AGC User' || !updatedUser.fullName || regData.username !== 'AGC User')) {
-            setCurrentUser((prev) => {
-              const enriched: UserProfile = {
-                ...prev,
-                fullName: regData.username || prev.fullName,
-                avatarUrl: regData.avatar_url || prev.avatarUrl,
-              };
-              try {
-                localStorage.setItem('AGC_user_profile_v2', JSON.stringify(enriched));
-              } catch (_) {}
-              return enriched;
-            });
+          let resolvedName = updatedUser.fullName;
+          let resolvedAvatar = updatedUser.avatarUrl;
+
+          if (regData) {
+            if (regData.username && regData.username !== 'AGC User') {
+              resolvedName = regData.username;
+            }
+            if (regData.avatar_url && !isPlaceholderAvatar(regData.avatar_url)) {
+              // Prefer DB avatar if incoming login call didn't provide a newer custom photo
+              if (isPlaceholderAvatar(resolvedAvatar) || !avatarUrl) {
+                resolvedAvatar = regData.avatar_url;
+              }
+            }
           }
-        });
 
-      // Keep avatar payload safe (<3000 chars) to prevent HTTP 413
-      const safeAvatar = (updatedUser.avatarUrl && updatedUser.avatarUrl.length < 3000)
-        ? updatedUser.avatarUrl
-        : (updatedUser.avatarUrl?.startsWith('http') ? updatedUser.avatarUrl : '');
+          const finalEnriched: UserProfile = {
+            ...updatedUser,
+            fullName: resolvedName,
+            avatarUrl: resolvedAvatar,
+          };
 
-      supabase
-        .from('agc_phone_registry')
-        .upsert(
-          {
-            phone_digits: last9,
-            full_phone: updatedUser.phoneNumber,
-            username: updatedUser.fullName,
-            avatar_url: safeAvatar,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'phone_digits' }
-        )
-        .then(({ error }: any) => {
-          if (error) console.warn('Phone registry notice:', error.message);
-          else console.log('✅ Cross-device phone registry updated');
-        });
+          if (finalEnriched.fullName !== updatedUser.fullName || finalEnriched.avatarUrl !== updatedUser.avatarUrl) {
+            setCurrentUser((prev) => ({
+              ...prev,
+              fullName: finalEnriched.fullName,
+              avatarUrl: finalEnriched.avatarUrl,
+            }));
+          }
 
-      supabase
-        .from('profiles')
-        .upsert({
-          id: updatedUser.id,
-          full_name: updatedUser.fullName,
-          phone_number: updatedUser.phoneNumber,
-          avatar_url: updatedUser.avatarUrl,
-          bio: updatedUser.about,
-          updated_at: new Date().toISOString(),
+          await syncProfileToAllRegistries(finalEnriched);
+        } catch (err) {
+          console.warn('Supabase login registry sync notice:', err);
+        }
+      })();
+
+      // Also restore any remote Supabase chat backup if local was cleared/incomplete
+      fetchUserChatsBackupFromSupabase(phoneNumber)
+        .then((remote) => {
+          if (!remote) return;
+          if (remote.chats.length === 0 && Object.keys(remote.messages).length === 0) return;
+          const merged = mergeChatThreadsAndMessages(
+            chatsRef.current,
+            messagesRef.current,
+            remote.chats,
+            remote.messages
+          );
+          setChats(merged.chats);
+          setMessages(merged.messages);
+          persistPartitionedChats(merged.chats, phoneNumber);
+          persistPartitionedMessages(merged.messages, phoneNumber);
         })
-        .then(({ error }: any) => {
-          if (error) console.warn('Supabase profile save notice:', error);
-          else console.log('✅ Supabase profile registered');
-        });
+        .catch(() => {});
 
       try {
         const syncChannel = supabase.channel('global_user_sync');
@@ -7599,7 +7973,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       } catch (_) {}
 
-      // Broadcast force_logout via Supabase channel to other devices with this phone
       try {
         const ch = supabase.channel(`phone_call_${cleanPhone}`);
         ch.subscribe((status) => {
@@ -7616,6 +7989,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logoutUser = () => {
+    // Flush current chats & messages to localStorage + Supabase BEFORE clearing React state
+    const activePhone = currentUser?.phoneNumber;
+    if (activePhone) {
+      persistPartitionedChats(chatsRef.current, activePhone);
+      persistPartitionedMessages(messagesRef.current, activePhone);
+      saveUserChatsBackupToSupabase(activePhone, chatsRef.current, messagesRef.current).catch(() => {});
+    }
+    // Clear loaded-phone guard FIRST so auto-save useEffects never overwrite saved storage with []/{}
+    loadedPhoneForChatsRef.current = '';
     setIsAuthenticated(false);
     safeLocalStorage.setItem('AGC_is_authenticated', 'false');
     setActiveChatId(null);
@@ -7629,21 +8011,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updated = { ...prev, ...updates };
       safeLocalStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated));
 
-      if (isSupabaseConfigured && (updated.id || updated.phoneNumber)) {
-        supabase
-          .from('profiles')
-          .upsert({
-            id: updated.id,
-            full_name: updated.fullName,
-            phone_number: updated.phoneNumber,
-            avatar_url: updated.avatarUrl,
-            bio: updated.about,
-            updated_at: new Date().toISOString(),
-          })
-          .then(({ error }: any) => {
-            if (error) console.warn('Supabase profile sync notice:', error);
-          }, () => {});
-      }
+      // Persist compressed avatar/profile asynchronously to agc_phone_registry, local registries, and Supabase
+      (async () => {
+        const compacted = await syncProfileToAllRegistries(updated);
+        if (compacted.avatarUrl !== updated.avatarUrl) {
+          setCurrentUser((curr) =>
+            phonesMatch(curr.phoneNumber, compacted.phoneNumber)
+              ? { ...curr, avatarUrl: compacted.avatarUrl }
+              : curr
+          );
+        }
+      })();
 
       return updated;
     });
@@ -9712,14 +10090,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         const msgText = message.oneTimeView
           ? (message.type === 'image' ? '🔒 1-Time Photo' : message.type === 'voice' ? '🔒 1-Time Voice Note' : '🔒 1-Time Message')
-          : (plainText ||
-            (message.type === 'image'
-              ? '📷 Photo'
-              : message.type === 'voice'
-              ? '🎤 Voice message'
-              : message.type === 'meme_sticker'
-              ? '🎭 Sticker'
-              : '📎 Attachment'));
+          : (message.type === 'location'
+              ? `📍 ${message.locationData?.addressName || message.metadata?.address_name || 'Shared Pin Location'}`
+              : plainText ||
+                (message.type === 'image'
+                  ? '📷 Photo'
+                  : message.type === 'voice'
+                  ? '🎤 Voice message'
+                  : message.type === 'meme_sticker'
+                  ? '🎭 Sticker'
+                  : '📎 Attachment'));
 
         if (index >= 0) {
           const updated = [...prev];
@@ -9785,7 +10165,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (activeChatId !== resolvedChatId && activeChatId !== chatId && !isFromMe) {
         showLocalNotification(
           `💬 ${message.senderName || 'AGC User'}`,
-          message.text || (message.type === 'image' ? '📷 Sent a photo' : 'Sent you an attachment'),
+          message.type === 'location'
+            ? `📍 ${message.locationData?.addressName || 'Shared a pin location'}`
+            : (message.text || (message.type === 'image' ? '📷 Sent a photo' : 'Sent you an attachment')),
           message.senderAvatar || '/icon-192.png'
         );
       }
@@ -10615,9 +10997,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
         });
         if (hasPending) {
-          try {
-            localStorage.setItem('AGC_messages_v2', JSON.stringify(updated));
-          } catch (_) {}
+          persistPartitionedMessages(updated, currentUser.phoneNumber);
           return updated;
         }
         return prev;
@@ -10844,7 +11224,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           next[idx] = {
             ...cur,
             fullName: inc.fullName && inc.fullName !== 'Registered User' && (!cur.fullName || cur.fullName === 'User' || cur.fullName === 'AGC User') ? inc.fullName : cur.fullName,
-            avatarUrl: cur.avatarUrl || inc.avatarUrl,
+            avatarUrl:
+              inc.avatarUrl && !isPlaceholderAvatar(inc.avatarUrl)
+                ? inc.avatarUrl
+                : (cur.avatarUrl || inc.avatarUrl),
             phoneNumber: cur.phoneNumber || inc.phoneNumber,
             joinedDate: cur.joinedDate && cur.joinedDate !== 'Recent' ? cur.joinedDate : inc.joinedDate,
           };
@@ -11619,6 +12002,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sendMessage,
         sendVoiceNote,
         sendProductCard,
+        isShareLocationModalOpen,
+        setIsShareLocationModalOpen,
+        sendLocationMessage,
         isOneTimeViewEnabled,
         setIsOneTimeViewEnabled,
         loadImage,

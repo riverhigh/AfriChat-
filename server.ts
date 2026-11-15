@@ -2594,6 +2594,23 @@ async function startServer() {
     }
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
+      plugins: [
+        {
+          name: 'agc-disable-hmr-client-ws',
+          transform(code, id) {
+            const normalizedId = id.replace(/\\/g, '/').split('?')[0];
+            if (normalizedId.endsWith('/vite/dist/client/client.mjs')) {
+              return {
+                code: code.replace(
+                  'transport.connect(createHMRHandler(handleMessage));',
+                  '/* HMR WebSocket disabled (ws: false, hmr: false) */'
+                ),
+                map: null,
+              };
+            }
+          },
+        },
+      ],
       server: {
         middlewareMode: true,
         host: HOST,

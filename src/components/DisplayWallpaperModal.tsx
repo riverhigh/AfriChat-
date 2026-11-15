@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   Type,
   Image,
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { AppFontSize } from '../types';
+import { compressWallpaperImage } from '../utils/imageUtils';
 
 interface DisplayWallpaperModalProps {
   isOpen: boolean;
@@ -59,7 +60,7 @@ export const DisplayWallpaperModal: React.FC<DisplayWallpaperModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -68,18 +69,19 @@ export const DisplayWallpaperModal: React.FC<DisplayWallpaperModalProps> = ({
       return;
     }
 
-    if (file.size > 8 * 1024 * 1024) {
-      setUploadError('Image size exceeds 8MB. Please choose a smaller photo.');
+    if (file.size > 12 * 1024 * 1024) {
+      setUploadError('Image size exceeds 12MB. Please choose a smaller photo.');
       return;
     }
 
     setUploadError(null);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      setChatWallpaper(result);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressWallpaperImage(file);
+      setChatWallpaper(compressed);
+    } catch (_) {
+      setUploadError('Could not process image.');
+    }
+    e.target.value = '';
   };
 
   const fontOptions: { id: AppFontSize; label: string; desc: string; sizePx: string }[] = [

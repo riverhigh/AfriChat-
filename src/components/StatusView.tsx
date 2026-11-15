@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import { useApp, phonesMatch } from '../context/AppContext';
 import { UserStatus } from '../types';
-import { compressImageFile } from '../utils/imageUtils';
+import { compressChatMediaImage } from '../utils/imageUtils';
 
 const THOUGHT_THEMES = [
   { name: 'Indigo Dusk', bg: 'from-indigo-600 via-purple-600 to-pink-600' },
@@ -235,19 +235,12 @@ export const StatusView: React.FC = () => {
       };
       reader.readAsDataURL(file);
     } else {
-      // Compress photo client-side so it fits comfortably within Supabase 256KB Realtime payload
+      // Strongly compress photo client-side so Supabase storage & Realtime stay tiny
       try {
-        const compressed = await compressImageFile(file, 1200, 0.75);
+        const compressed = await compressChatMediaImage(file);
         setDeviceMediaPreview(compressed);
       } catch (err) {
-        console.warn('Image compression fallback:', err);
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          if (typeof event.target?.result === 'string') {
-            setDeviceMediaPreview(event.target.result);
-          }
-        };
-        reader.readAsDataURL(file);
+        console.warn('Status photo compression notice:', err);
       }
     }
   };

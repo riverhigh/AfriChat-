@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { MemeSticker } from '../types';
+import { compressChatMediaImage } from '../utils/imageUtils';
 
 const POPULAR_SLANGS = [
   'NO EVIDENCE YOU GO EXPLAIN TAYA!',
@@ -188,7 +189,7 @@ export const MemeStickerStudioModal: React.FC = () => {
 
   if (!isMemeStudioOpen) return null;
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -197,17 +198,27 @@ export const MemeStickerStudioModal: React.FC = () => {
     setIsGif(isImageGif);
     setMediaTitle(file.name.replace(/\.[^/.]+$/, '').slice(0, 24));
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      if (typeof event.target?.result === 'string') {
-        const result = event.target.result;
-        setOriginalMediaUrl(result);
-        setCurrentMediaUrl(result);
-        setRemoveBackground(false); // default to original on fresh upload
-        showToast('Media uploaded from device! Toggle "Remove Background" to make a transparent sticker.');
-      }
-    };
-    reader.readAsDataURL(file);
+    if (isImageGif) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (typeof event.target?.result === 'string') {
+          const result = event.target.result;
+          setOriginalMediaUrl(result);
+          setCurrentMediaUrl(result);
+          setRemoveBackground(false);
+          showToast('GIF uploaded from device!');
+        }
+      };
+      reader.readAsDataURL(file);
+    } else {
+      try {
+        const compressed = await compressChatMediaImage(file);
+        setOriginalMediaUrl(compressed);
+        setCurrentMediaUrl(compressed);
+        setRemoveBackground(false);
+        showToast('Media compressed & uploaded! Toggle "Remove Background" to make a sticker.');
+      } catch (_) {}
+    }
   };
 
   const handleApplySlang = (slang: string) => {
