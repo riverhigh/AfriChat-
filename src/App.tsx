@@ -53,10 +53,12 @@ import { PhoneSignUpBanner } from './components/PhoneSignUpBanner';
 import { ErrandsModal } from './components/ErrandsModal';
 import { CallErrorBoundary } from './components/CallErrorBoundary';
 import { ChatErrorBoundary } from './components/ChatErrorBoundary';
+import { RootErrorBoundary } from './components/RootErrorBoundary';
+import { safeLocalStorage, safeSessionStorage } from './utils/safeStorage';
 
 const AppContent: React.FC = () => {
   const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled, isBanned, banInfo, systemConfig, currentUser, isAdminModalOpen, setIsAdminModalOpen } = useApp();
-  const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('agc_splash_shown'));
+  const [showSplash, setShowSplash] = useState(() => !safeSessionStorage.getItem('agc_splash_shown'));
   const maintenanceTapRef = React.useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
   const handleMaintenanceLogoTap = () => {
     const now = Date.now();
@@ -72,7 +74,7 @@ const AppContent: React.FC = () => {
     }
   };
   const handleSplashDone = useCallback(() => {
-    sessionStorage.setItem('agc_splash_shown', 'true');
+    safeSessionStorage.setItem('agc_splash_shown', 'true');
     setShowSplash(false);
   }, []);
   const [isVoiceRecorderOpen, setIsVoiceRecorderOpen] = useState(false);
@@ -382,8 +384,8 @@ const AppContent: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  localStorage.clear();
-                  sessionStorage.clear();
+                  safeLocalStorage.clear();
+                  safeSessionStorage.clear();
                   window.location.reload();
                 }}
                 className="w-full py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-all text-center border border-slate-700"
@@ -400,8 +402,10 @@ const AppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <AppProvider>
-      <AppContent />
-    </AppProvider>
+    <RootErrorBoundary>
+      <AppProvider>
+        <AppContent />
+      </AppProvider>
+    </RootErrorBoundary>
   );
 }

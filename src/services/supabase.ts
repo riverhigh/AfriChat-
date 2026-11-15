@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import type { UserProfile } from '../types';
+import { safeLocalStorage } from '../utils/safeStorage';
 
 const supabaseUrl: string =
   (import.meta.env.VITE_SUPABASE_URL as string) ||
@@ -18,6 +19,7 @@ export const isSupabaseConfigured = Boolean(
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
+    storage: safeLocalStorage,
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,

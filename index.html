@@ -82,7 +82,19 @@
 
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').catch((err) => {
+          const isViteDev = Boolean(document.querySelector('script[src="/@vite/client"], script[src="/src/main.tsx"]'));
+          if (isViteDev) {
+            navigator.serviceWorker.getRegistrations().then((regs) => {
+              regs.forEach((r) => r.unregister());
+            }).catch(() => {});
+            if ('caches' in window) {
+              caches.keys().then((keys) => keys.forEach((k) => caches.delete(k))).catch(() => {});
+            }
+            return;
+          }
+          navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((reg) => {
+            reg.update().catch(() => {});
+          }).catch((err) => {
             console.warn('SW registration skipped:', err);
           });
         });

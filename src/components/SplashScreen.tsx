@@ -37,12 +37,8 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onDone }) => {
         alignItems: 'center',
         justifyContent: 'center',
         background: 'linear-gradient(145deg, #06020d 0%, #0d0520 60%, #12063a 100%)',
-        opacity: phase === 'in' ? 0 : phase === 'hold' ? 1 : 0,
-        transition: phase === 'in'
-          ? 'opacity 0.5s ease-out'
-          : phase === 'out'
-          ? 'opacity 0.5s ease-in'
-          : 'none',
+        opacity: phase === 'out' ? 0 : 1,
+        transition: phase === 'out' ? 'opacity 0.5s ease-in' : 'none',
         pointerEvents: 'none',
       }}
       aria-hidden="true"
@@ -56,8 +52,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onDone }) => {
           overflow: 'hidden',
           boxShadow: '0 0 60px rgba(139, 92, 246, 0.5), 0 0 20px rgba(139, 92, 246, 0.3)',
           marginBottom: 24,
-          transform: phase === 'in' ? 'scale(0.75)' : 'scale(1)',
-          transition: 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
+          opacity: phase === 'in' ? 0.35 : 1,
+          transform: phase === 'in' ? 'scale(0.85)' : 'scale(1)',
+          transition: 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.4s ease-out',
         }}
       >
         <img

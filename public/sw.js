@@ -1,8 +1,6 @@
-// AGC (All Good Connects) Service Worker v3.0.0
-const CACHE_NAME = 'agc-cache-v3.0.0';
+// AGC (All Good Connects) Service Worker v4.0.0
+const CACHE_NAME = 'agc-cache-v4.0.0';
 const ASSETS_TO_CACHE = [
-  '/',
-  '/index.html',
   '/manifest.json',
   '/favicon.svg',
   '/icon-192.png',
@@ -12,7 +10,7 @@ const ASSETS_TO_CACHE = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
+      return cache.addAll(ASSETS_TO_CACHE).catch(() => {});
     }).then(() => self.skipWaiting())
   );
 });
@@ -28,22 +26,69 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Only handle GET requests and skip Supabase/API network requests
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
+  // Never intercept API, WebSocket, or Vite dev module routes
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/socket.io/') ||
+    url.pathname.startsWith('/@') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/node_modules/')
+  ) {
+    return;
+  }
+
+  // Always use Network-First for HTML navigations so fresh hashed bundles load
+  const acceptHeader = event.request.headers.get('accept') || '';
+  const isNavigation =
+    event.request.mode === 'navigate' ||
+    url.pathname === '/' ||
+    url.pathname.endsWith('.html') ||
+    acceptHeader.includes('text/html');
+
+  if (isNavigation) {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-store' })
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.ok) {
+            const copy = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', copy)).catch(() => {});
+          }
+          return networkResponse;
+        })
+        .catch(() => caches.match('/index.html').then((r) => r || Response.error()))
+    );
+    return;
+  }
+
+  // For hashed bundles (/assets/*), prefer network so stale JS/CSS never breaks
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(
+      fetch(event.request).then((networkResponse) => {
+        const contentType = networkResponse.headers.get('content-type') || '';
+        if (networkResponse.ok && !contentType.includes('text/html')) {
+          const copy = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy)).catch(() => {});
+        }
+        return networkResponse;
+      }).catch(() => caches.match(event.request).then((r) => r || Response.error()))
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
-          }
-        }).catch(() => {});
-        return cachedResponse;
-      }
-      return fetch(event.request);
+      if (cachedResponse) return cachedResponse;
+      return fetch(event.request).then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
+          const copy = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy)).catch(() => {});
+        }
+        return networkResponse;
+      });
     })
   );
 });

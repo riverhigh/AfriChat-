@@ -63,6 +63,7 @@ export const getUserStorageKey = (prefix: string, cleanPhone?: string): string =
 };
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { safeLocalStorage, safeSessionStorage } from '../utils/safeStorage';
 import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
 import { downsampleDataUrl } from '../utils/imageUtils';
 import {
@@ -685,35 +686,37 @@ export const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
 const AGC_DATA_VERSION = 'v5_purged_all_mocks_live_2026';
 (function nukeStaleMockData() {
   if (typeof window === 'undefined') return;
-  const stored = localStorage.getItem('AGC_data_version');
-  if (stored !== AGC_DATA_VERSION) {
-    const keepKeys = new Set([
-      'AGC_data_version',
-      'AGC_font_size',
-      'AGC_low_data_mode',
-      'AGC_language',
-      'AGC_currency',
-      'AGC_hide_phone_town',
-      'AGC_user_profile_v2',
-      'AGC_is_authenticated',
-      'AGC_device_contacts',
-      'AGC_registered_users_cache',
-      'AGC_registered_phones',
-      'AGC_taken_usernames',
-      'AGC_session_token',
-      'AGC_all_registered_users',
-    ]);
-    const toRemove: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('AGC_') && !keepKeys.has(key)) {
-        toRemove.push(key);
+  try {
+    const stored = safeLocalStorage.getItem('AGC_data_version');
+    if (stored !== AGC_DATA_VERSION) {
+      const keepKeys = new Set([
+        'AGC_data_version',
+        'AGC_font_size',
+        'AGC_low_data_mode',
+        'AGC_language',
+        'AGC_currency',
+        'AGC_hide_phone_town',
+        'AGC_user_profile_v2',
+        'AGC_is_authenticated',
+        'AGC_device_contacts',
+        'AGC_registered_users_cache',
+        'AGC_registered_phones',
+        'AGC_taken_usernames',
+        'AGC_session_token',
+        'AGC_all_registered_users',
+      ]);
+      const toRemove: string[] = [];
+      for (let i = 0; i < safeLocalStorage.length; i++) {
+        const key = safeLocalStorage.key(i);
+        if (key && key.startsWith('AGC_') && !keepKeys.has(key)) {
+          toRemove.push(key);
+        }
       }
+      toRemove.forEach((k) => safeLocalStorage.removeItem(k));
+      safeLocalStorage.setItem('AGC_data_version', AGC_DATA_VERSION);
+      console.log('[AGC] Stale mock data purged, 100% live system running.');
     }
-    toRemove.forEach((k) => localStorage.removeItem(k));
-    localStorage.setItem('AGC_data_version', AGC_DATA_VERSION);
-    console.log('[AGC] Stale mock data purged, 100% live system running.');
-  }
+  } catch (_) {}
 })();
 
 const INITIAL_ERRAND_RUNNERS: ErrandRunner[] = [];
@@ -1189,12 +1192,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Display & Appearance
   const [fontSize, setFontSizeState] = useState<AppFontSize>(() => {
-    return (localStorage.getItem('AGC_font_size') as AppFontSize) || 'normal';
+    return (safeLocalStorage.getItem('AGC_font_size') as AppFontSize) || 'normal';
   });
 
   const setFontSize = (size: AppFontSize) => {
     setFontSizeState(size);
-    localStorage.setItem('AGC_font_size', size);
+    safeLocalStorage.setItem('AGC_font_size', size);
     document.documentElement.classList.remove('text-size-small', 'text-size-normal', 'text-size-large', 'text-size-huge');
     document.documentElement.classList.add(`text-size-${size}`);
   };
@@ -1205,15 +1208,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [fontSize]);
 
   const [chatWallpaper, setChatWallpaperState] = useState<string | null>(() => {
-    return localStorage.getItem('AGC_wallpaper') || null;
+    return safeLocalStorage.getItem('AGC_wallpaper') || null;
   });
 
   const setChatWallpaper = (wallpaper: string | null) => {
     setChatWallpaperState(wallpaper);
     if (wallpaper) {
-      localStorage.setItem('AGC_wallpaper', wallpaper);
+      safeLocalStorage.setItem('AGC_wallpaper', wallpaper);
     } else {
-      localStorage.removeItem('AGC_wallpaper');
+      safeLocalStorage.removeItem('AGC_wallpaper');
     }
   };
 
@@ -1223,7 +1226,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Town Communities & Anonymous Privacy
   const [townCommunities, setTownCommunities] = useState<TownCommunity[]>(() => {
     try {
-      const saved = localStorage.getItem('AGC_town_communities_v2');
+      const saved = safeLocalStorage.getItem('AGC_town_communities_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
@@ -1241,12 +1244,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return [];
   });
   const [hidePhoneNumberInTown, setHidePhoneNumberInTown] = useState<boolean>(() => {
-    return localStorage.getItem('AGC_hide_phone_town') === 'true';
+    return safeLocalStorage.getItem('AGC_hide_phone_town') === 'true';
   });
   const toggleHidePhoneNumberInTown = () => {
     setHidePhoneNumberInTown((prev) => {
       const next = !prev;
-      localStorage.setItem('AGC_hide_phone_town', String(next));
+      safeLocalStorage.setItem('AGC_hide_phone_town', String(next));
       return next;
     });
   };
@@ -2321,7 +2324,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   } | null>(null);
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
-    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    try {
+      return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+        ? window.matchMedia('(prefers-color-scheme: dark)').matches
+        : false;
+    } catch {
+      return false;
+    }
   });
 
   // 1. Meme & Sticker Studio State
@@ -2791,7 +2800,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .eq('status', 'pending')
       .then(({ data }) => {
         if (data && data.length > 0) {
-          const dismissedPopups: string[] = JSON.parse(sessionStorage.getItem('AGC_dismissed_request_popups') || '[]');
+          let dismissedPopups: string[] = [];
+          try {
+            dismissedPopups = JSON.parse(safeSessionStorage.getItem('AGC_dismissed_request_popups') || '[]');
+          } catch (_) {}
           const unhandled = data.find((d: any) => !dismissedPopups.includes(d.id));
           if (unhandled) {
             setActiveContactRequestPopup((current) => {
@@ -6269,7 +6281,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cleanPhone = phoneNumber.replace(/\D/g, '');
 
     // Store session token so we can detect if another device steals the session
-    localStorage.setItem('AGC_session_token', sessionToken);
+    safeLocalStorage.setItem('AGC_session_token', sessionToken);
 
     const updatedUser: UserProfile = {
       id: `usr_${Date.now()}`,
@@ -6312,8 +6324,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 1. LocalStorage Persistence (Never wiped)
-    localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
-    localStorage.setItem('AGC_is_authenticated', 'true');
+    safeLocalStorage.setItem('AGC_user_profile_v2', JSON.stringify(updatedUser));
+    safeLocalStorage.setItem('AGC_is_authenticated', 'true');
 
     // Register phone in persistent registry for duplicate detection
     try {
@@ -6521,7 +6533,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const logoutUser = () => {
     setIsAuthenticated(false);
-    localStorage.setItem('AGC_is_authenticated', 'false');
+    safeLocalStorage.setItem('AGC_is_authenticated', 'false');
     setActiveChatId(null);
     setChats([]);
     setMessages({});
@@ -6531,7 +6543,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateUserProfile = (updates: Partial<UserProfile>) => {
     setCurrentUser((prev) => {
       const updated = { ...prev, ...updates };
-      localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated));
+      safeLocalStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated));
 
       if (isSupabaseConfigured && (updated.id || updated.phoneNumber)) {
         supabase

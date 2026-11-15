@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Download, Share, PlusSquare, Sparkles, Smartphone } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { safeLocalStorage, safeSessionStorage } from '../utils/safeStorage';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -32,8 +33,8 @@ export const PhoneSignUpBanner: React.FC = () => {
     }
 
     // Only pop up ONCE during the sign-up session
-    const alreadySeen = sessionStorage.getItem('AGC_install_prompt_seen');
-    const dismissedAt = localStorage.getItem('AGC_install_prompt_dismissed');
+    const alreadySeen = safeSessionStorage.getItem('AGC_install_prompt_seen');
+    const dismissedAt = safeLocalStorage.getItem('AGC_install_prompt_dismissed');
 
     if (alreadySeen || dismissedAt) {
       setIsDismissed(true);
@@ -79,7 +80,7 @@ export const PhoneSignUpBanner: React.FC = () => {
     // Pop up once after brief delay (1.2s)
     const timer = setTimeout(() => {
       setIsVisible(true);
-      sessionStorage.setItem('AGC_install_prompt_seen', 'true');
+      safeSessionStorage.setItem('AGC_install_prompt_seen', 'true');
     }, 1200);
 
     return () => {
@@ -93,7 +94,7 @@ export const PhoneSignUpBanner: React.FC = () => {
   const handleDismiss = () => {
     setIsVisible(false);
     setTimeout(() => setIsDismissed(true), 300);
-    localStorage.setItem('AGC_install_prompt_dismissed', 'true');
+    safeLocalStorage.setItem('AGC_install_prompt_dismissed', 'true');
   };
 
   const handleInstallClick = async () => {

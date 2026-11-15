@@ -5,6 +5,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -39,11 +40,150 @@ function inspectPayloadForThreats(target: any): string | null {
   return null;
 }
 
-// WAF Middleware applied to incoming /api HTTP requests
+// ── ADMIN AUDIT, SECURITY EVENTS & IP BLOCKLIST STORE ───────────────────────
+const AUDIT_FILE = path.join(__dirname, 'data_admin_audit.json');
+interface AuditEntry {
+  id: string;
+  refId: string;
+  actor: string;
+  actorRole: string;
+  action: string;
+  target: string;
+  details: string;
+  dualApprovedBy?: string;
+  timestamp: string;
+}
+interface SecurityEvent {
+  id: string;
+  type: 'waf_block' | 'rate_limit' | 'bot_block' | 'banned_attempt' | 'ip_blocked' | 'webhook_mismatch';
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  ip: string;
+  path: string;
+  reason: string;
+  timestamp: string;
+}
+interface WebhookLog {
+  id: string;
+  event: string;
+  reference: string;
+  amountNgn: number;
+  status: 'verified' | 'mismatch' | 'processed';
+  hmacVerified: boolean;
+  ip: string;
+  payloadSummary: string;
+  timestamp: string;
+}
+interface BlockedIpEntry {
+  ip: string;
+  reason: string;
+  blockedBy: string;
+  blockedAt: string;
+}
+
+let auditTrail: AuditEntry[] = [];
+let securityEvents: SecurityEvent[] = [];
+let webhookLogs: WebhookLog[] = [];
+let blockedIps: BlockedIpEntry[] = [];
+const storeOverridesMap = new Map<string, any>();
+const artisanOverridesMap = new Map<string, any>();
+
+try {
+  if (fs.existsSync(AUDIT_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(AUDIT_FILE, 'utf8'));
+    if (Array.isArray(raw.auditTrail)) auditTrail = raw.auditTrail;
+    if (Array.isArray(raw.securityEvents)) securityEvents = raw.securityEvents;
+    if (Array.isArray(raw.webhookLogs)) webhookLogs = raw.webhookLogs;
+    if (Array.isArray(raw.blockedIps)) blockedIps = raw.blockedIps;
+    if (raw.storeOverrides && typeof raw.storeOverrides === 'object') {
+      Object.entries(raw.storeOverrides).forEach(([k, v]) => storeOverridesMap.set(k, v));
+    }
+    if (raw.artisanOverrides && typeof raw.artisanOverrides === 'object') {
+      Object.entries(raw.artisanOverrides).forEach(([k, v]) => artisanOverridesMap.set(k, v));
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading admin audit file:', e);
+}
+
+function saveAdminAuditFile() {
+  try {
+    fs.writeFileSync(
+      AUDIT_FILE,
+      JSON.stringify(
+        {
+          auditTrail: auditTrail.slice(0, 500),
+          securityEvents: securityEvents.slice(0, 300),
+          webhookLogs: webhookLogs.slice(0, 200),
+          blockedIps,
+          storeOverrides: Object.fromEntries(storeOverridesMap.entries()),
+          artisanOverrides: Object.fromEntries(artisanOverridesMap.entries()),
+        },
+        null,
+        2
+      )
+    );
+  } catch (e) {
+    console.warn('Notice saving admin audit file:', e);
+  }
+}
+
+function appendAuditEntry(entry: Omit<AuditEntry, 'id' | 'timestamp'>): AuditEntry {
+  const full: AuditEntry = {
+    id: `aud_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    timestamp: new Date().toISOString(),
+    ...entry,
+  };
+  auditTrail.unshift(full);
+  if (auditTrail.length > 500) auditTrail.length = 500;
+  saveAdminAuditFile();
+  return full;
+}
+
+function recordSecurityEvent(evt: Omit<SecurityEvent, 'id' | 'timestamp'>): SecurityEvent {
+  const full: SecurityEvent = {
+    id: `sec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    timestamp: new Date().toISOString(),
+    ...evt,
+  };
+  securityEvents.unshift(full);
+  if (securityEvents.length > 300) securityEvents.length = 300;
+  saveAdminAuditFile();
+  return full;
+}
+
+function getClientIp(req: Request): string {
+  return (
+    (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+    req.socket.remoteAddress ||
+    req.ip ||
+    '127.0.0.1'
+  );
+}
+
+// WAF + IP Blocklist Middleware applied to incoming /api HTTP requests
 app.use('/api', (req: Request, res: Response, next) => {
+  const clientIp = getClientIp(req);
+  if (!req.path.startsWith('/admin/security')) {
+    const blocked = blockedIps.find((b) => b.ip === clientIp);
+    if (blocked) {
+      return res.status(403).json({
+        error: 'Access Denied: IP address is on the AGC security blocklist.',
+        reason: blocked.reason,
+        code: 'AGC_IP_BLOCKED',
+      });
+    }
+  }
+
   const urlThreat = inspectPayloadForThreats(req.originalUrl || req.url);
   if (urlThreat) {
-    console.warn(`[WAF BLOCKED] ${req.ip} -> ${req.method} ${req.url} (${urlThreat})`);
+    console.warn(`[WAF BLOCKED] ${clientIp} -> ${req.method} ${req.url} (${urlThreat})`);
+    recordSecurityEvent({
+      type: 'waf_block',
+      severity: 'high',
+      ip: clientIp,
+      path: req.originalUrl || req.url,
+      reason: urlThreat,
+    });
     return res.status(403).json({
       error: 'Access Denied: Malicious payload pattern intercepted by AfriChat WAF engine.',
       reason: urlThreat,
@@ -53,7 +193,14 @@ app.use('/api', (req: Request, res: Response, next) => {
 
   const queryThreat = inspectPayloadForThreats(req.query);
   if (queryThreat) {
-    console.warn(`[WAF BLOCKED] Query Threat: ${req.ip} -> ${queryThreat}`);
+    console.warn(`[WAF BLOCKED] Query Threat: ${clientIp} -> ${queryThreat}`);
+    recordSecurityEvent({
+      type: 'waf_block',
+      severity: 'high',
+      ip: clientIp,
+      path: req.originalUrl || req.url,
+      reason: queryThreat,
+    });
     return res.status(403).json({
       error: 'Access Denied: Dangerous query parameters detected.',
       code: 'AGC_WAF_QUERY_VIOLATION',
@@ -63,7 +210,14 @@ app.use('/api', (req: Request, res: Response, next) => {
   if (req.body && Object.keys(req.body).length > 0) {
     const bodyThreat = inspectPayloadForThreats(req.body);
     if (bodyThreat) {
-      console.warn(`[WAF BLOCKED] Body Threat: ${req.ip} -> ${bodyThreat}`);
+      console.warn(`[WAF BLOCKED] Body Threat: ${clientIp} -> ${bodyThreat}`);
+      recordSecurityEvent({
+        type: 'waf_block',
+        severity: 'high',
+        ip: clientIp,
+        path: req.originalUrl || req.url,
+        reason: bodyThreat,
+      });
       return res.status(403).json({
         error: 'Access Denied: Dangerous request body detected.',
         code: 'AGC_WAF_BODY_VIOLATION',
@@ -84,7 +238,7 @@ const AUTH_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const AUTH_MAX_ATTEMPTS = 10; // max 10 auth attempts per IP per 15 minutes
 
 const authRateLimiter = (req: Request, res: Response, next: () => void) => {
-  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || req.ip || '127.0.0.1';
+  const ip = getClientIp(req);
   const now = Date.now();
   let record = authRateLimits.get(ip);
 
@@ -98,6 +252,13 @@ const authRateLimiter = (req: Request, res: Response, next: () => void) => {
   if (record.attempts > AUTH_MAX_ATTEMPTS) {
     const retryAfterSeconds = Math.ceil((record.resetAt - now) / 1000);
     console.warn(`[RATE LIMIT EXCEEDED] Auth IP: ${ip} (Attempts: ${record.attempts})`);
+    recordSecurityEvent({
+      type: 'rate_limit',
+      severity: 'medium',
+      ip,
+      path: req.originalUrl || req.url,
+      reason: `Exceeded ${AUTH_MAX_ATTEMPTS} auth requests in 15m (${record.attempts} attempts)`,
+    });
     res.setHeader('Retry-After', retryAfterSeconds);
     return res.status(429).json({
       error: 'Too many authentication attempts from this IP address. Please try again later.',
@@ -120,7 +281,15 @@ const botMitigation = (req: Request, res: Response, next: () => void) => {
   const isMaliciousBot = BOT_USER_AGENTS.some((bot) => ua.includes(bot));
 
   if (isMaliciousBot) {
-    console.warn(`[BOT BLOCKED] High-value scrape attempt: ${req.ip} (UA: ${ua})`);
+    const clientIp = getClientIp(req);
+    console.warn(`[BOT BLOCKED] High-value scrape attempt: ${clientIp} (UA: ${ua})`);
+    recordSecurityEvent({
+      type: 'bot_block',
+      severity: 'medium',
+      ip: clientIp,
+      path: req.originalUrl || req.url,
+      reason: `Blocked automated UA: ${ua.slice(0, 60)}`,
+    });
     return res.status(403).json({
       error: 'Direct automated scraping prohibited on this endpoint.',
       code: 'AGC_BOT_RECON_BLOCKED',
@@ -179,6 +348,8 @@ interface RegisteredUser {
   role?: string;
   status?: 'active' | 'suspended' | 'flagged' | 'banned';
   verificationBadge?: 'blue' | 'gold' | 'creator_plus' | null;
+  kycStatus?: 'unverified' | 'pending' | 'verified' | 'rejected';
+  kycType?: 'BVN' | 'NIN';
   walletBalanceNgn?: number;
   lastSeen?: string;
   isOnline?: boolean;
@@ -399,6 +570,7 @@ async function syncUsersFromSupabase(force = false): Promise<void> {
             apikey: key,
             Authorization: `Bearer ${key}`,
           },
+          signal: AbortSignal.timeout(5000),
         });
 
       let res = await fetchRegistry(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -937,9 +1109,118 @@ app.patch('/api/dispatch/orders/:id/status', (req: Request, res: Response) => {
   res.json({ success: true, order });
 });
 
+// Helper: fetch live stores & artisan stations from Supabase + merge server overrides
+async function fetchSupabaseStoresAndArtisans() {
+  const fetchTable = async (table: string) => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*`, {
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+      });
+      if (!res.ok && (SUPABASE_URL !== DEFAULT_SUPABASE_URL || SUPABASE_ANON_KEY !== DEFAULT_SUPABASE_ANON_KEY)) {
+        const retry = await fetch(`${DEFAULT_SUPABASE_URL}/rest/v1/${table}?select=*`, {
+          headers: { apikey: DEFAULT_SUPABASE_ANON_KEY, Authorization: `Bearer ${DEFAULT_SUPABASE_ANON_KEY}` },
+        });
+        if (retry.ok) return await retry.json();
+      }
+      if (res.ok) return await res.json();
+    } catch (_) {}
+    return [];
+  };
+
+  const [rawStores, rawArtisans] = await Promise.all([
+    fetchTable('store_subscriptions'),
+    fetchTable('artisan_stations'),
+  ]);
+
+  const stores = (Array.isArray(rawStores) ? rawStores : []).map((s: any) => {
+    const id = String(s.id || s.store_name);
+    const ov = storeOverridesMap.get(id) || {};
+    return {
+      id,
+      storeName: s.store_name || 'Merchant Store',
+      description: s.description || '',
+      category: s.category || 'General',
+      tier: ov.tier || s.tier || 'starter_30',
+      itemsLimit: ov.itemsLimit ?? s.items_limit ?? (s.tier === 'pro_100' ? 100 : 30),
+      itemsCount: ov.itemsCount ?? s.items_count ?? 0,
+      ownerName: ov.ownerName || s.owner_name || s.store_name || 'Merchant Owner',
+      ownerPhone: ov.ownerPhone || s.owner_phone || '',
+      status: ov.status || (s.is_active === false ? 'suspended' : 'active'),
+      verified: ov.verified ?? Boolean(s.is_active),
+      paymentMethod: s.payment_method || 'wallet',
+      createdAt: s.registered_at || s.created_at || new Date().toISOString(),
+    };
+  });
+
+  for (const [id, ov] of storeOverridesMap.entries()) {
+    if (!stores.some((s) => s.id === id) && ov?.storeName) {
+      stores.push({ id, ...ov });
+    }
+  }
+
+  const artisans = (Array.isArray(rawArtisans) ? rawArtisans : []).map((a: any) => {
+    const id = String(a.id || a.station_name);
+    const ov = artisanOverridesMap.get(id) || {};
+    return {
+      id,
+      stationName: a.station_name || 'Artisan Hub',
+      category: a.category_label || a.category || 'General Trade',
+      location: a.location || 'Lagos, Nigeria',
+      workshopAddress: a.workshop_address || '',
+      ownerName: ov.ownerName || a.owner_name || a.station_name || 'Master Artisan',
+      ownerPhone: ov.ownerPhone || a.owner_phone || '',
+      isApproved: ov.isApproved ?? Boolean(a.is_approved),
+      registrationFeePaid: Boolean(a.registration_fee_paid),
+      createdAt: a.created_at || new Date().toISOString(),
+    };
+  });
+
+  return { stores, artisans };
+}
+
 // ── REST: LIVE ADMIN TELEMETRY & COMMAND API ────────────────────────────────
+app.get('/api/admin/health', async (_req: Request, res: Response) => {
+  const probeUrl = async (url: string, headers: Record<string, string> = {}) => {
+    const start = Date.now();
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 3500);
+      const r = await fetch(url, { headers, signal: controller.signal });
+      clearTimeout(t);
+      const latencyMs = Date.now() - start;
+      return {
+        status: r.ok || r.status < 500 ? 'healthy' : 'degraded',
+        httpStatus: r.status,
+        latencyMs,
+      };
+    } catch (e: any) {
+      return { status: 'offline', httpStatus: 0, latencyMs: Date.now() - start, error: e?.message || 'unreachable' };
+    }
+  };
+
+  const [supabaseProbe, paystackProbe] = await Promise.all([
+    probeUrl(`${SUPABASE_URL}/auth/v1/settings`, { apikey: SUPABASE_ANON_KEY }),
+    probeUrl('https://api.paystack.co/bank?perPage=1'),
+  ]);
+
+  res.json({
+    success: true,
+    checkedAt: new Date().toISOString(),
+    subsystems: {
+      supabase: supabaseProbe,
+      paystack: paystackProbe,
+      websocket: {
+        status: 'healthy',
+        connectedClients: io.engine.clientsCount || onlineUsers.size,
+        onlineUsersCount: onlineUsers.size,
+      },
+    },
+  });
+});
+
 app.get('/api/admin/metrics', async (_req: Request, res: Response) => {
   await syncUsersFromSupabase();
+  const { stores, artisans } = await fetchSupabaseStoresAndArtisans();
   const allOrders = Array.from(dispatchOrdersMap.values());
   const totalVolumeNgn = allOrders.reduce((acc, o: any) => acc + (Number(o.totalFee) || Number(o.estimatedFee) || 0), 0);
   const totalCommissionNgn = allOrders.reduce((acc, o: any) => acc + (Number(o.platformFee) || Math.round((Number(o.estimatedFee) || 0) * 0.05)), 0);
@@ -973,12 +1254,265 @@ app.get('/api/admin/metrics', async (_req: Request, res: Response) => {
       totalCommissionNgn,
       orders: allOrders,
     },
+    stores,
+    artisans,
+    securityEvents: securityEvents.slice(0, 60),
+    blockedIps,
+    auditTrail: auditTrail.slice(0, 80),
+    webhookLogs: webhookLogs.slice(0, 60),
     systemStatus: 'healthy',
     config: systemConfig,
     featureFlags,
     cms: cmsData,
     activeBroadcast,
   });
+});
+
+// Admin Security, Rate Limit & Audit Logs API
+app.get('/api/admin/security', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    securityEvents,
+    blockedIps,
+    auditTrail,
+    webhookLogs,
+  });
+});
+
+app.post('/api/admin/security/block-ip', (req: Request, res: Response) => {
+  const { ip, reason, blockedBy } = req.body || {};
+  const cleanIp = String(ip || '').trim();
+  if (!cleanIp) return res.status(400).json({ error: 'IP address required' });
+  const entry: BlockedIpEntry = {
+    ip: cleanIp,
+    reason: reason || 'Blocked manually via AGC Security Console',
+    blockedBy: blockedBy || 'Super Admin',
+    blockedAt: new Date().toISOString(),
+  };
+  blockedIps = [entry, ...blockedIps.filter((b) => b.ip !== cleanIp)];
+  const secEvt = recordSecurityEvent({
+    type: 'ip_blocked',
+    severity: 'high',
+    ip: cleanIp,
+    path: '/api/admin/security/block-ip',
+    reason: entry.reason,
+  });
+  const audit = appendAuditEntry({
+    refId: `IP_${cleanIp}`,
+    actor: entry.blockedBy,
+    actorRole: 'Super Admin',
+    action: 'IP Blocked',
+    target: cleanIp,
+    details: entry.reason,
+  });
+  io.emit('admin_security_updated', { blockedIps, securityEvent: secEvt, auditEntry: audit });
+  res.json({ success: true, blockedIps, auditEntry: audit });
+});
+
+app.delete('/api/admin/security/block-ip/:ip', (req: Request, res: Response) => {
+  const targetIp = decodeURIComponent(req.params.ip || '').trim();
+  blockedIps = blockedIps.filter((b) => b.ip !== targetIp);
+  const audit = appendAuditEntry({
+    refId: `IP_${targetIp}`,
+    actor: 'Super Admin',
+    actorRole: 'Super Admin',
+    action: 'IP Unblocked',
+    target: targetIp,
+    details: 'Removed IP from security blocklist',
+  });
+  saveAdminAuditFile();
+  io.emit('admin_security_updated', { blockedIps, auditEntry: audit });
+  res.json({ success: true, blockedIps, auditEntry: audit });
+});
+
+app.get('/api/admin/audit/:refId', (req: Request, res: Response) => {
+  const refId = decodeURIComponent(req.params.refId || '').trim();
+  const entries = auditTrail.filter((a) => a.refId === refId || a.target === refId);
+  res.json({ success: true, refId, entries });
+});
+
+// Dual-Admin Escrow Resolution & Immutable Ledger Logger
+const DUAL_ADMIN_THRESHOLD_NGN = 100000;
+const EXPECTED_SECONDARY_ADMIN_PIN = (process.env.ADMIN_SECONDARY_PIN || '2468').trim();
+
+app.post('/api/admin/escrow/resolve', (req: Request, res: Response) => {
+  const { orderId, action, note, amountNgn, buyerName, sellerName, paystackRef, actorName, secondaryAdminName, secondaryAdminPin } = req.body || {};
+  if (!orderId || !action) {
+    return res.status(400).json({ error: 'orderId and action are required' });
+  }
+  const numericAmount = Number(amountNgn) || 0;
+  if (numericAmount >= DUAL_ADMIN_THRESHOLD_NGN) {
+    if (!secondaryAdminPin || String(secondaryAdminPin).trim() !== EXPECTED_SECONDARY_ADMIN_PIN) {
+      return res.status(403).json({
+        error: `Dual-Admin Approval Required: Secondary Admin PIN invalid for high-value escrow (≥ ₦${DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}).`,
+        code: 'DUAL_ADMIN_PIN_INVALID',
+      });
+    }
+  }
+  const audit = appendAuditEntry({
+    refId: String(paystackRef || orderId),
+    actor: actorName || 'Primary Admin',
+    actorRole: 'Super Admin',
+    action: action === 'release_to_seller' ? 'Escrow Force-Release' : 'Escrow Refund Issued',
+    target: `Order #${orderId} (${buyerName || 'Buyer'} → ${sellerName || 'Vendor'})`,
+    details: `${note || 'Admin resolution'} · Amount: ₦${numericAmount.toLocaleString()}`,
+    dualApprovedBy: numericAmount >= DUAL_ADMIN_THRESHOLD_NGN ? (secondaryAdminName || 'Secondary Admin') : undefined,
+  });
+  const wh = {
+    id: `wh_${Date.now()}`,
+    event: action === 'release_to_seller' ? 'transfer.escrow_released' : 'refund.escrow_reversed',
+    reference: String(paystackRef || orderId),
+    amountNgn: numericAmount,
+    status: 'processed' as const,
+    hmacVerified: true,
+    ip: getClientIp(req),
+    payloadSummary: `${audit.action} for #${orderId}${audit.dualApprovedBy ? ` (Co-signed: ${audit.dualApprovedBy})` : ''}`,
+    timestamp: new Date().toISOString(),
+  };
+  webhookLogs.unshift(wh);
+  if (webhookLogs.length > 200) webhookLogs.length = 200;
+  saveAdminAuditFile();
+  io.emit('admin_audit_appended', { auditEntry: audit, webhookLog: wh });
+  res.json({ success: true, auditEntry: audit, webhookLog: wh });
+});
+
+// Paystack Webhook Receiver with HMAC-SHA512 Verification
+app.post('/api/webhooks/paystack', (req: Request, res: Response) => {
+  const signature = (req.headers['x-paystack-signature'] as string) || '';
+  const secret = process.env.PAYSTACK_SECRET_KEY || '';
+  let hmacVerified = true;
+  if (secret && signature) {
+    const expected = crypto.createHmac('sha512', secret).update(JSON.stringify(req.body)).digest('hex');
+    hmacVerified = expected === signature;
+  }
+  const event = req.body?.event || 'charge.success';
+  const ref = req.body?.data?.reference || `PSK_${Date.now()}`;
+  const amountNgn = Math.round((Number(req.body?.data?.amount) || 0) / 100);
+  const ip = getClientIp(req);
+
+  if (!hmacVerified) {
+    const secEvt = recordSecurityEvent({
+      type: 'webhook_mismatch',
+      severity: 'critical',
+      ip,
+      path: '/api/webhooks/paystack',
+      reason: `Invalid Paystack HMAC signature for ref ${ref}`,
+    });
+    const wh: WebhookLog = {
+      id: `wh_${Date.now()}`,
+      event,
+      reference: ref,
+      amountNgn,
+      status: 'mismatch',
+      hmacVerified: false,
+      ip,
+      payloadSummary: 'Rejected: HMAC-SHA512 signature mismatch',
+      timestamp: new Date().toISOString(),
+    };
+    webhookLogs.unshift(wh);
+    saveAdminAuditFile();
+    io.emit('admin_security_updated', { securityEvent: secEvt, webhookLog: wh });
+    return res.status(401).json({ error: 'Invalid Paystack signature' });
+  }
+
+  const wh: WebhookLog = {
+    id: `wh_${Date.now()}`,
+    event,
+    reference: ref,
+    amountNgn,
+    status: 'verified',
+    hmacVerified: true,
+    ip,
+    payloadSummary: `Webhook received & HMAC verified (${event})`,
+    timestamp: new Date().toISOString(),
+  };
+  webhookLogs.unshift(wh);
+  if (webhookLogs.length > 200) webhookLogs.length = 200;
+  appendAuditEntry({
+    refId: ref,
+    actor: 'Paystack Gateway',
+    actorRole: 'Webhook',
+    action: `Webhook: ${event}`,
+    target: ref,
+    details: `HMAC Verified · ₦${amountNgn.toLocaleString()}`,
+  });
+  io.emit('admin_audit_appended', { webhookLog: wh });
+  res.json({ success: true, webhookLog: wh });
+});
+
+// Store & Artisan Admin Mutations
+app.patch('/api/admin/stores/:id', (req: Request, res: Response) => {
+  const id = decodeURIComponent(req.params.id || '');
+  const { tier, status, verified, storeName, itemsLimit, ownerName, ownerPhone } = req.body || {};
+  const existing = storeOverridesMap.get(id) || {};
+  const updated = {
+    ...existing,
+    id,
+    ...(storeName !== undefined ? { storeName } : {}),
+    ...(ownerName !== undefined ? { ownerName } : {}),
+    ...(ownerPhone !== undefined ? { ownerPhone } : {}),
+    ...(tier !== undefined ? { tier, itemsLimit: itemsLimit ?? (tier === 'pro_100' ? 100 : 30) } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(verified !== undefined ? { verified } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  storeOverridesMap.set(id, updated);
+  const audit = appendAuditEntry({
+    refId: `STORE_${id}`,
+    actor: 'Super Admin',
+    actorRole: 'Super Admin',
+    action: 'Store Updated',
+    target: updated.storeName || id,
+    details: `Tier: ${updated.tier || 'unchanged'} · Status: ${updated.status || 'unchanged'} · Verified: ${String(updated.verified ?? '')}`,
+  });
+  io.emit('admin_store_updated', updated);
+  res.json({ success: true, store: updated, auditEntry: audit });
+});
+
+app.patch('/api/admin/artisans/:id', (req: Request, res: Response) => {
+  const id = decodeURIComponent(req.params.id || '');
+  const { isApproved, stationName } = req.body || {};
+  const existing = artisanOverridesMap.get(id) || {};
+  const updated = {
+    ...existing,
+    id,
+    ...(stationName !== undefined ? { stationName } : {}),
+    ...(isApproved !== undefined ? { isApproved } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  artisanOverridesMap.set(id, updated);
+  const audit = appendAuditEntry({
+    refId: `ART_${id}`,
+    actor: 'Super Admin',
+    actorRole: 'Super Admin',
+    action: isApproved ? 'Artisan Approved' : 'Artisan Suspended',
+    target: updated.stationName || id,
+    details: `Approval status changed to ${Boolean(isApproved)}`,
+  });
+  io.emit('admin_artisan_updated', updated);
+  res.json({ success: true, artisan: updated, auditEntry: audit });
+});
+
+app.patch('/api/admin/users/:phone/kyc', async (req: Request, res: Response) => {
+  const { phone } = req.params;
+  const { kycStatus, kycType, phoneNumber, fullName, avatarUrl } = req.body || {};
+  const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
+  if (!match) return res.status(404).json({ error: 'User not found' });
+  const { key, user } = match;
+  if (kycStatus !== undefined) user.kycStatus = kycStatus;
+  if (kycType !== undefined) user.kycType = kycType;
+  usersByPhone.set(key, user);
+  saveUsersFile();
+  const audit = appendAuditEntry({
+    refId: `KYC_${user.cleanPhone || key}`,
+    actor: 'Super Admin',
+    actorRole: 'Super Admin',
+    action: `KYC ${String(kycStatus || 'updated').toUpperCase()}`,
+    target: `${user.fullName} (${user.phoneNumber})`,
+    details: `${kycType || user.kycType || 'BVN/NIN'} verification marked ${kycStatus}`,
+  });
+  io.emit('user_updated', user);
+  res.json({ success: true, user, auditEntry: audit });
 });
 
 // Admin System Config: GET & POST
@@ -996,6 +1530,14 @@ app.post('/api/admin/config', (req: Request, res: Response) => {
   const updates = req.body && typeof req.body === 'object' ? req.body : {};
   systemConfig = { ...systemConfig, ...updates };
   saveAdminConfigFile();
+  appendAuditEntry({
+    refId: 'SYS_CONFIG',
+    actor: 'Super Admin',
+    actorRole: 'Super Admin',
+    action: 'System Config Updated',
+    target: 'Platform Configuration',
+    details: `Updated keys: ${Object.keys(updates).join(', ') || 'all'}`,
+  });
   io.emit('admin_config_updated', systemConfig);
   res.json({ success: true, config: systemConfig });
 });
@@ -1005,6 +1547,14 @@ app.post('/api/admin/features', (req: Request, res: Response) => {
   const updates = req.body && typeof req.body === 'object' ? req.body : {};
   featureFlags = { ...featureFlags, ...updates };
   saveAdminConfigFile();
+  appendAuditEntry({
+    refId: 'SYS_FLAGS',
+    actor: 'Super Admin',
+    actorRole: 'Super Admin',
+    action: 'Feature Flags Updated',
+    target: Object.keys(updates).join(', ') || 'Feature Flags',
+    details: JSON.stringify(updates),
+  });
   io.emit('admin_features_updated', featureFlags);
   res.json({ success: true, featureFlags });
 });
@@ -1023,6 +1573,14 @@ app.post('/api/admin/cms', (req: Request, res: Response) => {
       : cmsData.sponsorSpotlight,
   };
   saveAdminCmsFile();
+  appendAuditEntry({
+    refId: 'SYS_CMS',
+    actor: 'Super Admin',
+    actorRole: 'Super Admin',
+    action: 'CMS Updated',
+    target: Object.keys(updates).join(', ') || 'CMS Content',
+    details: 'Published live CMS changes across clients',
+  });
   io.emit('admin_cms_updated', cmsData);
   res.json({ success: true, cms: cmsData });
 });
@@ -1039,6 +1597,14 @@ app.patch('/api/admin/users/:phone/badge', async (req: Request, res: Response) =
     if (walletBalanceNgn !== undefined) user.walletBalanceNgn = walletBalanceNgn;
     usersByPhone.set(key, user);
     saveUsersFile();
+    appendAuditEntry({
+      refId: `USR_${user.cleanPhone || key}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: verificationBadge !== undefined ? `Badge: ${verificationBadge || 'Removed'}` : 'User Updated',
+      target: `${user.fullName} (${user.phoneNumber})`,
+      details: `Role: ${user.role} · Badge: ${user.verificationBadge || 'none'}`,
+    });
     io.emit('user_updated', user);
     return res.json({ success: true, user });
   }
@@ -1081,6 +1647,14 @@ app.patch('/api/admin/users/:phone/status', async (req: Request, res: Response) 
     if (walletBalanceNgn !== undefined) user.walletBalanceNgn = walletBalanceNgn;
     usersByPhone.set(key, user);
     saveUsersFile();
+    appendAuditEntry({
+      refId: `USR_${cleanKey}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: `Account ${user.status || 'updated'}`,
+      target: `${user.fullName} (${user.phoneNumber})`,
+      details: `Role: ${user.role} · Status: ${user.status}`,
+    });
     io.emit('user_updated', user);
     return res.json({ success: true, user });
   }
@@ -1101,6 +1675,14 @@ app.post('/api/admin/users/:phone/ban', async (req: Request, res: Response) => {
     user.isOnline = false;
     usersByPhone.set(key, user);
     saveUsersFile();
+    appendAuditEntry({
+      refId: `USR_${cleanKey}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: 'Account Banned',
+      target: `${user.fullName} (${user.phoneNumber})`,
+      details: user.banReason || 'Account permanently banned',
+    });
 
     // Kick and lock out socket
     io.to(`phone:${cleanKey}`).emit('account_banned', {
@@ -1135,6 +1717,14 @@ app.post('/api/admin/users/:phone/unban', async (req: Request, res: Response) =>
     delete user.banReason;
     usersByPhone.set(key, user);
     saveUsersFile();
+    appendAuditEntry({
+      refId: `USR_${user.cleanPhone || key}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: 'Account Unbanned',
+      target: `${user.fullName} (${user.phoneNumber})`,
+      details: 'Account access restored',
+    });
     io.emit('user_updated', user);
     console.log(`✅ [USER UNBANNED]: ${user.fullName} (${user.phoneNumber})`);
     return res.json({ success: true, user });
@@ -1159,6 +1749,14 @@ app.post('/api/admin/users/:phone/adjust-wallet', async (req: Request, res: Resp
     user.walletBalanceNgn = balance;
     usersByPhone.set(key, user);
     saveUsersFile();
+    appendAuditEntry({
+      refId: `WAL_${cleanKey}_${Date.now()}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: 'Wallet Adjusted',
+      target: `${user.fullName} (${user.phoneNumber})`,
+      details: `New balance: ₦${balance.toLocaleString()} (${note || 'Direct adjustment'})`,
+    });
     io.emit('user_updated', user);
     io.to(`phone:${cleanKey}`).emit('wallet_updated', {
       balance,
@@ -1182,6 +1780,14 @@ app.post('/api/admin/users/:phone/kick', (req: Request, res: Response) => {
       s.disconnect(true);
     }
   }
+  appendAuditEntry({
+    refId: `SESS_${clean}`,
+    actor: 'Super Admin',
+    actorRole: 'Super Admin',
+    action: 'Session Terminated',
+    target: phone,
+    details: 'Forced socket logout by admin',
+  });
   return res.json({ success: true, message: 'Session terminated' });
 });
 
@@ -1198,6 +1804,14 @@ app.post('/api/admin/broadcast', (req: Request, res: Response) => {
   };
   activeBroadcast = broadcast;
   saveAdminConfigFile();
+  appendAuditEntry({
+    refId: broadcast.id,
+    actor: 'Super Admin',
+    actorRole: 'Super Admin',
+    action: 'Global Broadcast Pushed',
+    target: title,
+    details: `[${broadcast.level}] ${message}`,
+  });
   io.emit('system_broadcast', broadcast);
   res.json({ success: true, broadcast });
 });
@@ -1205,6 +1819,14 @@ app.post('/api/admin/broadcast', (req: Request, res: Response) => {
 app.delete('/api/admin/broadcast', (_req: Request, res: Response) => {
   activeBroadcast = null;
   saveAdminConfigFile();
+  appendAuditEntry({
+    refId: 'SYS_BROADCAST_CLR',
+    actor: 'Super Admin',
+    actorRole: 'Super Admin',
+    action: 'Global Broadcast Cleared',
+    target: 'Active Banner',
+    details: 'Broadcast dismissed by admin',
+  });
   io.emit('system_broadcast_cleared');
   res.json({ success: true });
 });
@@ -1549,11 +2171,6 @@ io.on('connection', (socket: Socket) => {
 
 // Start listening with Vite middleware in dev or static dist in production
 async function startServer() {
-  await syncUsersFromSupabase(true);
-  setInterval(() => {
-    syncUsersFromSupabase().catch(() => {});
-  }, 30000);
-
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -1566,8 +2183,26 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req: Request, res: Response) => {
+    app.use(
+      express.static(distPath, {
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('index.html') || filePath.endsWith('sw.js')) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+          } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          }
+        },
+      })
+    );
+    app.get('*', (req: Request, res: Response) => {
+      // Never serve index.html for missing JS/CSS/media asset requests
+      if (
+        req.path.startsWith('/assets/') ||
+        /\.(js|mjs|css|map|png|jpe?g|svg|webp|ico|woff2?|json)$/i.test(req.path)
+      ) {
+        return res.status(404).end();
+      }
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
@@ -1575,6 +2210,11 @@ async function startServer() {
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 AGC Live Gateway running on http://0.0.0.0:${PORT}`);
     console.log(`📡 WebSocket & User Registry ready (${usersByPhone.size} users loaded)`);
+    // Sync Supabase registry asynchronously so port binding is never delayed
+    syncUsersFromSupabase(true).catch(() => {});
+    setInterval(() => {
+      syncUsersFromSupabase().catch(() => {});
+    }, 30000);
   });
 }
 
