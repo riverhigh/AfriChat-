@@ -31,6 +31,7 @@ export const DispatchModal: React.FC = () => {
     wallet,
     currentUser,
     formatPrice,
+    systemConfig,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'book' | 'history'>('book');
@@ -65,9 +66,11 @@ export const DispatchModal: React.FC = () => {
 
   if (!isDispatchModalOpen) return null;
 
-  // Fee calculation: base fee + 5% platform fee
+  // Fee calculation: base fee + live admin-configured platform fee
+  const feePercent = systemConfig?.dispatchCommissionPercent ?? 5;
+  const feeRate = feePercent / 100;
   const baseDeliveryFee = vehicleType === 'bike' ? 2400 : 6500;
-  const platformFee = Math.round(baseDeliveryFee * 0.05); // 5% platform fee
+  const platformFee = Math.round(baseDeliveryFee * feeRate);
   const totalDeliveryCost = baseDeliveryFee + platformFee;
 
   // Auto-select provider based on weight (internal logistics routing)
@@ -351,16 +354,16 @@ export const DispatchModal: React.FC = () => {
                     <div className="flex items-center justify-between font-mono">
                       <span className="text-emerald-300 flex items-center gap-1">
                         <Sparkles className="w-3 h-3" />
-                        AfriChat Fee (5%):
+                        AfriChat Fee ({feePercent}%):
                       </span>
                       <span className="text-emerald-300">
-                        +₦{(activeTrackingOrder.platformFee ?? Math.round(activeTrackingOrder.estimatedFee * 0.05)).toLocaleString()}
+                        +₦{(activeTrackingOrder.platformFee ?? Math.round(activeTrackingOrder.estimatedFee * feeRate)).toLocaleString()}
                       </span>
                     </div>
                     <div className="flex items-center justify-between font-mono font-bold text-xs pt-1 border-t border-white/5">
                       <span className="text-white">Total Charged:</span>
                       <span className="text-emerald-400">
-                        ₦{(activeTrackingOrder.totalFee ?? (activeTrackingOrder.estimatedFee + (activeTrackingOrder.platformFee ?? Math.round(activeTrackingOrder.estimatedFee * 0.05)))).toLocaleString()}
+                        ₦{(activeTrackingOrder.totalFee ?? (activeTrackingOrder.estimatedFee + (activeTrackingOrder.platformFee ?? Math.round(activeTrackingOrder.estimatedFee * feeRate)))).toLocaleString()}
                       </span>
                     </div>
                   </div>
@@ -374,7 +377,7 @@ export const DispatchModal: React.FC = () => {
                     Book New Delivery
                   </h4>
                   <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-md">
-                    5% Platform Fee Included
+                    {feePercent}% Platform Fee Included
                   </span>
                 </div>
 
@@ -493,7 +496,7 @@ export const DispatchModal: React.FC = () => {
                   <div className="flex items-center justify-between text-xs text-emerald-600 dark:text-emerald-400">
                     <span className="flex items-center gap-1">
                       <Sparkles className="w-3 h-3" />
-                      AfriChat Platform Fee (5%):
+                      AfriChat Platform Fee ({feePercent}%):
                     </span>
                     <span className="font-mono font-semibold">+{formatPrice(platformFee, 'NGN')}</span>
                   </div>
@@ -516,7 +519,7 @@ export const DispatchModal: React.FC = () => {
                 {/* Security Guarantee Note */}
                 <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
                   <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
-                  <span>Escrow Protection · Live GPS tracking · 5% platform commission guarantees instant customer support</span>
+                  <span>Escrow Protection · Live GPS tracking · {feePercent}% platform commission guarantees instant customer support</span>
                 </div>
 
                 {/* Submit Button */}
@@ -628,7 +631,7 @@ export const DispatchModal: React.FC = () => {
               ) : (
                 <div className="space-y-3">
                   {filteredOrders.map((ord) => {
-                    const ordPlatformFee = ord.platformFee ?? Math.round(ord.estimatedFee * 0.05);
+                    const ordPlatformFee = ord.platformFee ?? Math.round(ord.estimatedFee * feeRate);
                     const ordTotalFee = ord.totalFee ?? (ord.estimatedFee + ordPlatformFee);
 
                     return (

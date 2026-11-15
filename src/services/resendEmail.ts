@@ -44,8 +44,7 @@ export async function sendResendEmail({
 
     // 1. Try local Express backend route first (avoids browser CORS restrictions on Resend API)
     try {
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const proxyRes = await fetch(`http://${socketHost}:3002/api/email/send`, {
+      const proxyRes = await fetch('/api/email/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ from, to: recipients, subject, html: emailHtml }),

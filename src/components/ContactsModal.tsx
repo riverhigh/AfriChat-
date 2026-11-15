@@ -187,11 +187,9 @@ export const ContactsModal: React.FC = () => {
     // 2. Check live Gateway server / Vite endpoint registry
     if (!foundName) {
       try {
-        const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
         const endpoints = [
           `/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
           `/api/users/lookup?phone=${encodeURIComponent(enteredClean)}`,
-          `http://${socketHost}:3002/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
         ];
         for (const ep of endpoints) {
           try {

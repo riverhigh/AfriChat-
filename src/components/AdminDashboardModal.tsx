@@ -101,6 +101,8 @@ export const AdminDashboardModal: React.FC = () => {
     cmsData,
     updateCmsData,
     setUserStatus,
+    setUserRole,
+    clearAdminBroadcast,
     banUser,
     unbanUser,
     adjustUserWallet,
@@ -166,6 +168,8 @@ export const AdminDashboardModal: React.FC = () => {
   const [cfgDelayMins, setCfgDelayMins] = useState(10);
   const [cfgSupportPhone, setCfgSupportPhone] = useState('');
   const [configSaved, setConfigSaved] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [featureStatusMsg, setFeatureStatusMsg] = useState<string | null>(null);
 
   // CMS form state
   const [cmsNewAnnTitle, setCmsNewAnnTitle] = useState('');
@@ -173,12 +177,12 @@ export const AdminDashboardModal: React.FC = () => {
   const [cmsFaqQuestion, setCmsFaqQuestion] = useState('');
   const [cmsFaqAnswer, setCmsFaqAnswer] = useState('');
   const [cmsSaving, setCmsSaving] = useState(false);
+  const [cmsMarqueeDraft, setCmsMarqueeDraft] = useState('');
+  const [cmsMarqueeSaved, setCmsMarqueeSaved] = useState(false);
   const [cmsGuidelines, setCmsGuidelines] = useState('');
   const [cmsSaved, setCmsSaved] = useState(false);
 
-  const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-
-  // Fetch live metrics from backend (relative first via Vite/proxy, then port 3002)
+  // Fetch live metrics from backend
   const fetchLiveMetrics = async () => {
     setIsRefreshing(true);
     fetchSupabaseUsers();
@@ -187,11 +191,6 @@ export const AdminDashboardModal: React.FC = () => {
       try {
         res = await fetch('/api/admin/metrics');
       } catch (_) {}
-      if (!res || !res.ok) {
-        try {
-          res = await fetch(`http://${socketHost}:3002/api/admin/metrics`);
-        } catch (_) {}
-      }
 
       if (res && res.ok) {
         const data = await res.json();
@@ -266,22 +265,6 @@ export const AdminDashboardModal: React.FC = () => {
       if (channel) supabase.removeChannel(channel);
     };
   }, [isAdminModalOpen, autoRefresh]);
-
-  useEffect(() => {
-    if (!isAdminModalOpen || !systemConfig) return;
-    setCfgMaintenanceMode(systemConfig.maintenanceMode ?? false);
-    setCfgMaintenanceMsg(systemConfig.maintenanceMessage ?? '');
-    setCfgAllowReg(systemConfig.allowNewRegistrations ?? true);
-    setCfgRequireOtp(systemConfig.requirePhoneOtp ?? true);
-    setCfgDispatchComm(systemConfig.dispatchCommissionPercent ?? 5);
-    setCfgEscrowComm(systemConfig.escrowCommissionPercent ?? 2.5);
-    setCfgArtisanComm(systemConfig.artisanCommissionPercent ?? 10);
-    setCfgCreatorComm(systemConfig.creatorCommissionPercent ?? 15);
-    setCfgMinTransfer(systemConfig.minTransferAmountNgn ?? 100);
-    setCfgMaxDailyTransfer(systemConfig.maxDailyTransferNgn ?? 500000);
-    setCfgDelayMins(systemConfig.delayedSendHoldDurationMins ?? 10);
-    setCfgSupportPhone(systemConfig.supportContactPhone ?? '');
-  }, [isAdminModalOpen, systemConfig]);
 
   if (!isAdminModalOpen) return null;
 
@@ -441,12 +424,13 @@ export const AdminDashboardModal: React.FC = () => {
     return true;
   });
 
+  const dispRate = (systemConfig?.dispatchCommissionPercent ?? 5) / 100;
   const totalDispatchCommission = activeOrders.reduce(
-    (sum: number, o: any) => sum + (o.platformFee ?? Math.round((o.estimatedFee || 0) * 0.05)),
+    (sum: number, o: any) => sum + (o.platformFee ?? Math.round((o.estimatedFee || 0) * dispRate)),
     0
   );
   const totalDispatchVolume = activeOrders.reduce(
-    (sum: number, o: any) => sum + (o.totalFee ?? ((o.estimatedFee || 0) + Math.round((o.estimatedFee || 0) * 0.05))),
+    (sum: number, o: any) => sum + (o.totalFee ?? ((o.estimatedFee || 0) + Math.round((o.estimatedFee || 0) * dispRate))),
     0
   );
 
@@ -488,21 +472,6 @@ export const AdminDashboardModal: React.FC = () => {
     e.preventDefault();
     if (!bcTitle.trim() || !bcMessage.trim()) return;
 
-    try {
-      let r = await fetch('/api/admin/broadcast', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: bcTitle.trim(), message: bcMessage.trim(), level: bcLevel }),
-      }).catch(() => null);
-      if (!r || !r.ok) {
-        await fetch(`http://${socketHost}:3002/api/admin/broadcast`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: bcTitle.trim(), message: bcMessage.trim(), level: bcLevel }),
-        }).catch(() => null);
-      }
-    } catch (_) {}
-
     createAdminBroadcast(bcTitle.trim(), bcMessage.trim(), bcLevel);
     setBcTitle('');
     setBcMessage('');
@@ -520,22 +489,30 @@ export const AdminDashboardModal: React.FC = () => {
     setCfgMaintenanceMode(systemConfig.maintenanceMode ?? false);
     setCfgMaintenanceMsg(systemConfig.maintenanceMessage ?? '');
     setCfgAllowReg(systemConfig.allowNewRegistrations ?? true);
-    setCfgRequireOtp(systemConfig.requirePhoneOtp ?? true);
+    setCfgRequireOtp(systemConfig.requirePhoneOtp ?? false);
     setCfgDispatchComm(systemConfig.dispatchCommissionPercent ?? 5);
-    setCfgEscrowComm(systemConfig.escrowCommissionPercent ?? 2.5);
-    setCfgArtisanComm(systemConfig.artisanCommissionPercent ?? 10);
-    setCfgCreatorComm(systemConfig.creatorCommissionPercent ?? 15);
+    setCfgEscrowComm(systemConfig.escrowCommissionPercent ?? 1.5);
+    setCfgArtisanComm(systemConfig.artisanCommissionPercent ?? 2);
+    setCfgCreatorComm(systemConfig.creatorCommissionPercent ?? 5);
     setCfgMinTransfer(systemConfig.minTransferAmountNgn ?? 100);
-    setCfgMaxDailyTransfer(systemConfig.maxDailyTransferNgn ?? 500000);
-    setCfgDelayMins(systemConfig.delayedSendHoldDurationMins ?? 10);
+    setCfgMaxDailyTransfer(systemConfig.maxDailyTransferNgn ?? 5000000);
+    setCfgDelayMins(systemConfig.delayedSendHoldDurationMins ?? 15);
     setCfgSupportPhone(systemConfig.supportContactPhone ?? '');
-    if (cmsData?.communityGuidelines) {
+  }, [isAdminModalOpen, systemConfig]);
+
+  useEffect(() => {
+    if (!isAdminModalOpen || !cmsData) return;
+    if (cmsData.communityGuidelines !== undefined) {
       setCmsGuidelines(cmsData.communityGuidelines);
     }
-  }, [isAdminModalOpen, systemConfig, cmsData]);
+    if (cmsData.marqueeBanner?.text !== undefined) {
+      setCmsMarqueeDraft(cmsData.marqueeBanner.text);
+    }
+  }, [isAdminModalOpen, cmsData]);
 
   const handleSaveConfig = async () => {
-    await updateSystemConfig({
+    setConfigError(null);
+    const ok = await updateSystemConfig({
       maintenanceMode: cfgMaintenanceMode,
       maintenanceMessage: cfgMaintenanceMsg,
       allowNewRegistrations: cfgAllowReg,
@@ -549,8 +526,12 @@ export const AdminDashboardModal: React.FC = () => {
       delayedSendHoldDurationMins: cfgDelayMins,
       supportContactPhone: cfgSupportPhone,
     });
-    setConfigSaved(true);
-    setTimeout(() => setConfigSaved(false), 3000);
+    if (ok) {
+      setConfigSaved(true);
+      setTimeout(() => setConfigSaved(false), 3000);
+    } else {
+      setConfigError('Failed to save configuration to live server. Check connection.');
+    }
   };
 
   const formatLastSeen = (iso?: string): string => {
@@ -595,7 +576,7 @@ export const AdminDashboardModal: React.FC = () => {
                 </span>
               </div>
               <p className="text-[11px] text-purple-200/70 font-mono mt-0.5 flex items-center gap-2">
-                <span>Node: <strong className="text-purple-300">port 3002</strong></span>
+                <span>Node: <strong className="text-purple-300">port 3000</strong></span>
                 <span>•</span>
                 <span>Supabase: <strong className="text-emerald-300 font-mono">sejiretcywvqbzbqalbg</strong></span>
               </p>
@@ -1295,9 +1276,9 @@ export const AdminDashboardModal: React.FC = () => {
                         <span className="text-[10px] text-slate-500 block">Role:</span>
                         <select
                           value={selectedCustomer.role || 'user'}
-                          onChange={(e) => {
-                            const newRole = e.target.value as any;
-                            setUserStatus(selectedCustomer.id || selectedCustomer.phoneNumber, selectedCustomer.status);
+                          onChange={async (e) => {
+                            const newRole = e.target.value as 'user' | 'creator' | 'merchant' | 'admin';
+                            await setUserRole(selectedCustomer.phoneNumber || selectedCustomer.id, newRole);
                             setSelectedCustomer({ ...selectedCustomer, role: newRole });
                           }}
                           className="bg-transparent font-bold text-purple-400 focus:outline-none cursor-pointer"
@@ -1805,7 +1786,7 @@ export const AdminDashboardModal: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => setSystemBroadcast(null)}
+                    onClick={() => clearAdminBroadcast()}
                     className="p-1.5 text-xs text-rose-400 hover:bg-rose-950/40 rounded-lg transition-colors font-bold"
                   >
                     Remove Banner
@@ -1820,12 +1801,19 @@ export const AdminDashboardModal: React.FC = () => {
           {/* ═════════════════════════════════════════════════════════════════ */}
           {activeTab === 'features' && (
             <div className="space-y-5 animate-in fade-in duration-150">
-              <div className="flex items-center gap-2">
-                <ToggleRight className="w-5 h-5 text-purple-400" />
-                <div>
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-white">System Feature Toggles</h3>
-                  <p className="text-[11px] text-slate-400">Enable or disable any subsystem across all connected clients in real time.</p>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <ToggleRight className="w-5 h-5 text-purple-400" />
+                  <div>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-white">System Feature Toggles</h3>
+                    <p className="text-[11px] text-slate-400">Enable or disable any subsystem across all connected clients in real time.</p>
+                  </div>
                 </div>
+                {featureStatusMsg && (
+                  <span className="text-[11px] font-mono font-bold px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                    {featureStatusMsg}
+                  </span>
+                )}
               </div>
 
               {([
@@ -1922,7 +1910,11 @@ export const AdminDashboardModal: React.FC = () => {
                           <button
                             type="button"
                             disabled={isLockedByWallet}
-                            onClick={() => updateAdminFeatureFlag(flagKey)}
+                            onClick={async () => {
+                              const ok = await updateAdminFeatureFlag(flagKey);
+                              setFeatureStatusMsg(ok ? `${label}: Saved Live` : `${label}: Sync Error`);
+                              setTimeout(() => setFeatureStatusMsg(null), 2200);
+                            }}
                             className={`shrink-0 w-12 h-6 rounded-full relative transition-colors ${
                               enabled && !isLockedByWallet ? 'bg-purple-600' : 'bg-slate-700'
                             }`}
@@ -1976,6 +1968,11 @@ export const AdminDashboardModal: React.FC = () => {
                   )}
                 </button>
               </div>
+              {configError && (
+                <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/40 text-xs text-rose-300">
+                  {configError}
+                </div>
+              )}
 
               {/* Maintenance & Registrations */}
               <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
@@ -2206,23 +2203,38 @@ export const AdminDashboardModal: React.FC = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <input
-                    type="text"
-                    value={cmsData?.marqueeBanner?.text || ''}
-                    onChange={(e) =>
-                      updateCmsData({
-                        marqueeBanner: {
-                          ...(cmsData?.marqueeBanner || { enabled: true, speedSeconds: 20 }),
-                          text: e.target.value,
-                        },
-                      })
-                    }
-                    placeholder="Enter ticker message scrolling at top of app..."
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-800 bg-slate-950 text-white focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={cmsMarqueeDraft}
+                      onChange={(e) => setCmsMarqueeDraft(e.target.value)}
+                      placeholder="Enter ticker message scrolling at top of app..."
+                      className="flex-1 px-3 py-2 text-xs rounded-xl border border-slate-800 bg-slate-950 text-white focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const ok = await updateCmsData({
+                          marqueeBanner: {
+                            ...(cmsData?.marqueeBanner || { enabled: true, speed: 'normal', backgroundColor: '#7c3aed', textColor: '#ffffff' }),
+                            text: cmsMarqueeDraft,
+                          },
+                        });
+                        if (ok) {
+                          setCmsMarqueeSaved(true);
+                          setTimeout(() => setCmsMarqueeSaved(false), 2500);
+                        }
+                      }}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 transition-colors ${
+                        cmsMarqueeSaved ? 'bg-emerald-600 text-white' : 'bg-cyan-600 hover:bg-cyan-700 text-white'
+                      }`}
+                    >
+                      {cmsMarqueeSaved ? 'Saved Live!' : 'Save Banner'}
+                    </button>
+                  </div>
                   <div className="flex items-center justify-between text-[11px] text-slate-400">
                     <span>Preview status: <strong className={cmsData?.marqueeBanner?.enabled ? 'text-cyan-400' : 'text-slate-500'}>{cmsData?.marqueeBanner?.enabled ? 'Active on all screens' : 'Disabled'}</strong></span>
-                    <span>Speed: 20s loop</span>
+                    <span>Synced live across all users</span>
                   </div>
                 </div>
               </div>
@@ -2504,7 +2516,7 @@ export const AdminDashboardModal: React.FC = () => {
                 <div className="pt-2 border-t border-slate-800 space-y-2 text-xs">
                   <div className="flex items-center justify-between text-[11px] font-mono py-1 border-b border-slate-800/60">
                     <span className="text-slate-400">Gateway Port</span>
-                    <span className="text-slate-200">http://{socketHost}:3002</span>
+                    <span className="text-slate-200">{typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'}</span>
                   </div>
                   <div className="flex items-center justify-between text-[11px] font-mono py-1 border-b border-slate-800/60">
                     <span className="text-slate-400">Process Memory</span>

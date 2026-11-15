@@ -646,12 +646,14 @@ interface AppContextType {
   systemBroadcast: AdminSystemBroadcast | null;
   setSystemBroadcast: (broadcast: AdminSystemBroadcast | null) => void;
   createAdminBroadcast: (title: string, message: string, level: 'info' | 'warning' | 'alert' | 'urgent') => void;
+  clearAdminBroadcast: () => Promise<boolean>;
   systemConfig: AdminSystemConfig;
-  updateSystemConfig: (updates: Partial<AdminSystemConfig>) => Promise<void>;
-  updateAdminFeatureFlag: (key: keyof FeatureFlags, val?: boolean) => Promise<void>;
+  updateSystemConfig: (updates: Partial<AdminSystemConfig>) => Promise<boolean>;
+  updateAdminFeatureFlag: (key: keyof FeatureFlags, val?: boolean) => Promise<boolean>;
   cmsData: AdminCmsData;
-  updateCmsData: (updates: Partial<AdminCmsData>) => Promise<void>;
+  updateCmsData: (updates: Partial<AdminCmsData>) => Promise<boolean>;
   setUserStatus: (userIdOrPhone: string, status: 'active' | 'suspended' | 'banned' | 'flagged') => void;
+  setUserRole: (userIdOrPhone: string, role: 'user' | 'creator' | 'merchant' | 'admin') => Promise<void>;
   banUser: (phoneOrId: string, reason?: string) => Promise<void>;
   unbanUser: (phoneOrId: string) => Promise<void>;
   adjustUserWallet: (phoneOrId: string, deltaOrNew: number, isAbsolute?: boolean) => Promise<void>;
@@ -844,29 +846,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     payroll: true,
   };
 
-  const [systemConfig, setSystemConfig] = useState<AdminSystemConfig>(() => {
-    try {
-      const s = localStorage.getItem('AGC_system_config_v1');
-      if (s) return { ...DEFAULT_SYSTEM_CONFIG, ...JSON.parse(s) };
-    } catch (_) {}
-    return DEFAULT_SYSTEM_CONFIG;
-  });
+  const [systemConfig, setSystemConfig] = useState<AdminSystemConfig>(DEFAULT_SYSTEM_CONFIG);
+  const [cmsData, setCmsData] = useState<AdminCmsData>(DEFAULT_CMS_DATA);
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(DEFAULT_FEATURE_FLAGS);
 
-  const [cmsData, setCmsData] = useState<AdminCmsData>(() => {
-    try {
-      const s = localStorage.getItem('AGC_cms_data_v1');
-      if (s) return { ...DEFAULT_CMS_DATA, ...JSON.parse(s) };
-    } catch (_) {}
-    return DEFAULT_CMS_DATA;
-  });
+  const systemConfigRef = useRef<AdminSystemConfig>(DEFAULT_SYSTEM_CONFIG);
+  const cmsDataRef = useRef<AdminCmsData>(DEFAULT_CMS_DATA);
+  const featureFlagsRef = useRef<FeatureFlags>(DEFAULT_FEATURE_FLAGS);
+  const adminSupabaseChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(() => {
-    try {
-      const saved = localStorage.getItem('AGC_feature_flags_v1');
-      if (saved) return { ...DEFAULT_FEATURE_FLAGS, ...JSON.parse(saved) };
-    } catch (_) {}
-    return DEFAULT_FEATURE_FLAGS;
-  });
+  useEffect(() => { systemConfigRef.current = systemConfig; }, [systemConfig]);
+  useEffect(() => { cmsDataRef.current = cmsData; }, [cmsData]);
+  useEffect(() => { featureFlagsRef.current = featureFlags; }, [featureFlags]);
 
   const isFeatureEnabled = (key: keyof FeatureFlags): boolean => {
     if (key === 'wallet') return Boolean(featureFlags.wallet);
@@ -879,20 +870,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return Boolean(featureFlags[key] !== false);
   };
 
-  // Helper to reliably call admin API: relative first (Vite/proxy), then port 3002 (Node server)
+  // Helper to reliably call admin API via same-origin /api
   const callAdminApi = async (path: string, options?: RequestInit) => {
-    const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-    let res: Response | null = null;
+    const normalizedPath = path.startsWith('/') ? path : '/' + path;
     try {
-      res = await fetch(path, options);
-      if (res.ok) return res;
-    } catch (_) {}
-    try {
-      const fallbackUrl = `http://${host}:3002${path.startsWith('/') ? path : '/' + path}`;
-      res = await fetch(fallbackUrl, options);
-      if (res.ok) return res;
-    } catch (_) {}
-    return res;
+      return await fetch(normalizedPath, options);
+    } catch (_) {
+      return null;
+    }
   };
 
   const adminSyncChannelRef = useRef<BroadcastChannel | null>(null);
@@ -901,68 +886,136 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     updateAdminFeatureFlag(key);
   };
 
-  const updateSystemConfig = async (updates: Partial<AdminSystemConfig>) => {
-    let nextConfig: AdminSystemConfig = { ...systemConfig, ...updates };
-    setSystemConfig((prev) => {
-      nextConfig = { ...prev, ...updates };
-      try { localStorage.setItem('AGC_system_config_v1', JSON.stringify(nextConfig)); } catch (_) {}
-      return nextConfig;
-    });
+  const updateSystemConfig = async (updates: Partial<AdminSystemConfig>): Promise<boolean> => {
+    const nextConfig: AdminSystemConfig = { ...systemConfigRef.current, ...updates };
+    systemConfigRef.current = nextConfig;
+    setSystemConfig(nextConfig);
+
     try {
       adminSyncChannelRef.current?.postMessage({ type: 'config', data: nextConfig });
     } catch (_) {}
+
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({
+          type: 'broadcast',
+          event: 'admin_config',
+          payload: nextConfig,
+        });
+      } catch (_) {}
+    }
+
     try {
-      await callAdminApi('/api/admin/config', {
+      const res = await callAdminApi('/api/admin/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
       });
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data?.config) {
+          systemConfigRef.current = data.config;
+          setSystemConfig(data.config);
+        }
+        return true;
+      }
+      return false;
     } catch (e) {
       console.warn('Notice syncing admin config to server:', e);
+      return false;
     }
   };
 
-  const updateAdminFeatureFlag = async (key: keyof FeatureFlags, val?: boolean) => {
-    const nextVal = val !== undefined ? val : !featureFlags[key];
+  const updateAdminFeatureFlag = async (key: keyof FeatureFlags, val?: boolean): Promise<boolean> => {
+    const currentFlags = featureFlagsRef.current;
+    const nextVal = val !== undefined ? val : currentFlags[key] === false;
     const updates = { [key]: nextVal };
-    let nextFlags: FeatureFlags = { ...featureFlags, ...updates };
-    setFeatureFlags((prev) => {
-      nextFlags = { ...prev, ...updates };
-      try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(nextFlags)); } catch (_) {}
-      return nextFlags;
-    });
+    const nextFlags: FeatureFlags = { ...currentFlags, ...updates };
+    featureFlagsRef.current = nextFlags;
+    setFeatureFlags(nextFlags);
+
     try {
       adminSyncChannelRef.current?.postMessage({ type: 'features', data: nextFlags });
     } catch (_) {}
+
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({
+          type: 'broadcast',
+          event: 'admin_features',
+          payload: nextFlags,
+        });
+      } catch (_) {}
+    }
+
     try {
-      await callAdminApi('/api/admin/features', {
+      const res = await callAdminApi('/api/admin/features', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
       });
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data?.featureFlags) {
+          featureFlagsRef.current = data.featureFlags;
+          setFeatureFlags(data.featureFlags);
+        }
+        return true;
+      }
+      return false;
     } catch (e) {
       console.warn('Notice syncing admin features to server:', e);
+      return false;
     }
   };
 
-  const updateCmsData = async (updates: Partial<AdminCmsData>) => {
-    let nextCms: AdminCmsData = { ...cmsData, ...updates };
-    setCmsData((prev) => {
-      nextCms = { ...prev, ...updates };
-      try { localStorage.setItem('AGC_cms_data_v1', JSON.stringify(nextCms)); } catch (_) {}
-      return nextCms;
-    });
+  const updateCmsData = async (updates: Partial<AdminCmsData>): Promise<boolean> => {
+    const cur = cmsDataRef.current;
+    const nextCms: AdminCmsData = {
+      ...cur,
+      ...updates,
+      marqueeBanner: updates.marqueeBanner
+        ? { ...cur.marqueeBanner, ...updates.marqueeBanner }
+        : cur.marqueeBanner,
+      sponsorSpotlight: updates.sponsorSpotlight
+        ? { ...cur.sponsorSpotlight, ...updates.sponsorSpotlight }
+        : cur.sponsorSpotlight,
+    };
+    cmsDataRef.current = nextCms;
+    setCmsData(nextCms);
+
     try {
       adminSyncChannelRef.current?.postMessage({ type: 'cms', data: nextCms });
     } catch (_) {}
+
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({
+          type: 'broadcast',
+          event: 'admin_cms',
+          payload: nextCms,
+        });
+      } catch (_) {}
+    }
+
     try {
-      await callAdminApi('/api/admin/cms', {
+      const res = await callAdminApi('/api/admin/cms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
       });
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data?.cms) {
+          cmsDataRef.current = data.cms;
+          setCmsData(data.cms);
+        }
+        return true;
+      }
+      return false;
     } catch (e) {
       console.warn('Notice syncing admin cms to server:', e);
+      return false;
     }
   };
 
@@ -1287,8 +1340,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 2. Fetch from Gateway server /api/communities
     try {
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      fetch(`http://${socketHost}:3002/api/communities`)
+      fetch('/api/communities')
         .then((r) => (r.ok ? r.json() : null))
         .then((json) => {
           if (json?.communities && Array.isArray(json.communities) && json.communities.length > 0) {
@@ -1456,8 +1508,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Save to gateway server
     try {
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      fetch(`http://${socketHost}:3002/api/communities`, {
+      fetch('/api/communities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newCommunity),
@@ -2885,8 +2936,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 2. Fetch from local server registry to enrich contacts (never inject strangers)
     try {
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      fetch(`http://${socketHost}:3002/api/users`)
+      fetch('/api/users')
         .then((r) => (r.ok ? r.json() : null))
         .then((json) => {
           if (json?.users && Array.isArray(json.users)) {
@@ -3267,8 +3317,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 2. Fetch from local server REST fallback
     try {
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      fetch(`http://${socketHost}:3002/api/statuses`)
+      fetch('/api/statuses')
         .then((r) => (r.ok ? r.json() : null))
         .then((serverStatuses) => {
           if (Array.isArray(serverStatuses) && serverStatuses.length > 0) {
@@ -6342,20 +6391,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 3. Register with local server REST API
     try {
-      const payload = JSON.stringify(updatedUser);
       const registerPayload = JSON.stringify({ ...updatedUser, sessionToken });
       fetch('/api/users/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: registerPayload,
-      }).catch(() => {
-        const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-        fetch(`http://${socketHost}:3002/api/users/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: payload,
-        }).catch(() => {});
-      });
+      }).catch(() => {});
     } catch (e) {
       console.warn('REST user register notice:', e);
     }
@@ -6583,8 +6624,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let registeredCount = 0;
     let registeredUsers: any[] = [];
     try {
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const res = await fetch(`http://${socketHost}:3002/api/users`);
+      const res = await fetch('/api/users');
       if (res.ok) {
         const json = await res.json();
         if (Array.isArray(json?.users)) registeredUsers = json.users;
@@ -6820,8 +6860,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     try {
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      fetch(`http://${socketHost}:3002/api/dispatch/orders`, {
+      fetch('/api/dispatch/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newOrder),
@@ -8558,22 +8597,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     };
 
-    const handleAdminConfigUpdated = (cfg: AdminSystemConfig) => {
-      setSystemConfig(cfg);
-      try { localStorage.setItem('AGC_system_config_v1', JSON.stringify(cfg)); } catch (_) {}
-    };
-    const handleAdminFeaturesUpdated = (flags: FeatureFlags) => {
-      setFeatureFlags(flags);
-      try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(flags)); } catch (_) {}
-    };
-    const handleAdminCmsUpdated = (cms: AdminCmsData) => {
-      setCmsData(cms);
-      try { localStorage.setItem('AGC_cms_data_v1', JSON.stringify(cms)); } catch (_) {}
-    };
-    const handleSystemBroadcast = (bc: AdminSystemBroadcast) => {
-      setSystemBroadcast(bc);
-      try { localStorage.setItem('AGC_system_broadcast', JSON.stringify(bc)); } catch (_) {}
-    };
     const handleAccountBanned = (payload: any) => {
       setIsBanned(true);
       setBanInfo(payload);
@@ -8584,10 +8607,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket.on('friend_request', handleFriendRequestSocket);
     socket.on('dispatch_order_created', handleDispatchOrderCreated);
     socket.on('dispatch_status_updated', handleDispatchStatusUpdated);
-    socket.on('admin_config_updated', handleAdminConfigUpdated);
-    socket.on('admin_features_updated', handleAdminFeaturesUpdated);
-    socket.on('admin_cms_updated', handleAdminCmsUpdated);
-    socket.on('system_broadcast', handleSystemBroadcast);
 
     // 2. BroadcastChannel listener (instant multi-tab / window sync)
     let bc: BroadcastChannel | null = null;
@@ -8691,15 +8710,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return () => {
+      socket.off('account_banned', handleAccountBanned);
       socket.off('new_message', handleIncomingMessage);
       socket.off('group_created', handleGroupCreated);
       socket.off('friend_request', handleFriendRequestSocket);
       socket.off('dispatch_order_created', handleDispatchOrderCreated);
       socket.off('dispatch_status_updated', handleDispatchStatusUpdated);
-      socket.off('admin_config_updated', handleAdminConfigUpdated);
-      socket.off('admin_features_updated', handleAdminFeaturesUpdated);
-      socket.off('admin_cms_updated', handleAdminCmsUpdated);
-      socket.off('system_broadcast', handleSystemBroadcast);
       if (bc) bc.close();
       if (sbInboxChannel) sbInboxChannel.unsubscribe();
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
@@ -8707,37 +8723,175 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser, activeChatId, handleIncomingMessage]);
 
-  // Initial fetch for live dispatch orders & admin system configuration from backend API
+  // Global live sync for Admin Feature Flags, System Config, CMS, Broadcasts & User updates (NOT stored in localStorage)
   useEffect(() => {
     try {
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      fetch(`http://${socketHost}:3002/api/dispatch/orders`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (data?.success && Array.isArray(data.orders) && data.orders.length > 0) {
-            setDispatchOrders(data.orders);
-            localStorage.setItem('AGC_dispatch_orders', JSON.stringify(data.orders));
-          }
-        })
-        .catch(() => {});
+      localStorage.removeItem('AGC_system_config_v1');
+      localStorage.removeItem('AGC_feature_flags_v1');
+      localStorage.removeItem('AGC_cms_data_v1');
+      localStorage.removeItem('AGC_system_broadcast');
+    } catch (_) {}
 
-      // Fetch Admin System Config, Feature Flags, and CMS Content
+    const syncAdminFromServer = () => {
       callAdminApi('/api/admin/config')
         .then((r) => (r && r.ok ? r.json() : null))
         .then((data) => {
           if (data?.success) {
             if (data.config) {
-              setSystemConfig((prev) => ({ ...prev, ...data.config }));
-              try { localStorage.setItem('AGC_system_config_v1', JSON.stringify(data.config)); } catch (_) {}
+              const merged = { ...DEFAULT_SYSTEM_CONFIG, ...data.config };
+              systemConfigRef.current = merged;
+              setSystemConfig(merged);
             }
             if (data.featureFlags) {
-              setFeatureFlags((prev) => ({ ...prev, ...data.featureFlags }));
-              try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(data.featureFlags)); } catch (_) {}
+              const merged = { ...DEFAULT_FEATURE_FLAGS, ...data.featureFlags };
+              featureFlagsRef.current = merged;
+              setFeatureFlags(merged);
             }
             if (data.cms) {
-              setCmsData((prev) => ({ ...prev, ...data.cms }));
-              try { localStorage.setItem('AGC_cms_data_v1', JSON.stringify(data.cms)); } catch (_) {}
+              const merged = {
+                ...DEFAULT_CMS_DATA,
+                ...data.cms,
+                marqueeBanner: { ...DEFAULT_CMS_DATA.marqueeBanner, ...(data.cms.marqueeBanner || {}) },
+                sponsorSpotlight: { ...DEFAULT_CMS_DATA.sponsorSpotlight, ...(data.cms.sponsorSpotlight || {}) },
+              };
+              cmsDataRef.current = merged;
+              setCmsData(merged);
             }
+            if (data.activeBroadcast !== undefined) {
+              setSystemBroadcast(data.activeBroadcast || null);
+            }
+          }
+        })
+        .catch(() => {});
+    };
+
+    syncAdminFromServer();
+
+    const socket = initSocket();
+    const onConfig = (cfg: AdminSystemConfig) => {
+      const merged = { ...DEFAULT_SYSTEM_CONFIG, ...cfg };
+      systemConfigRef.current = merged;
+      setSystemConfig(merged);
+    };
+    const onFeatures = (flags: FeatureFlags) => {
+      const merged = { ...DEFAULT_FEATURE_FLAGS, ...flags };
+      featureFlagsRef.current = merged;
+      setFeatureFlags(merged);
+    };
+    const onCms = (cms: AdminCmsData) => {
+      const merged = {
+        ...DEFAULT_CMS_DATA,
+        ...cms,
+        marqueeBanner: { ...DEFAULT_CMS_DATA.marqueeBanner, ...(cms.marqueeBanner || {}) },
+        sponsorSpotlight: { ...DEFAULT_CMS_DATA.sponsorSpotlight, ...(cms.sponsorSpotlight || {}) },
+      };
+      cmsDataRef.current = merged;
+      setCmsData(merged);
+    };
+    const onBroadcast = (bc: AdminSystemBroadcast) => {
+      setSystemBroadcast(bc);
+    };
+    const onBroadcastCleared = () => {
+      setSystemBroadcast(null);
+    };
+    const onUserUpdated = (u: any) => {
+      if (!u) return;
+      const uClean = (u.phoneNumber || '').replace(/\D/g, '');
+      setAdminUsers((prev) => {
+        const idx = prev.findIndex(
+          (item) => item.id === u.id || (uClean && item.phoneNumber.replace(/\D/g, '') === uClean)
+        );
+        if (idx >= 0) {
+          const copy = [...prev];
+          copy[idx] = { ...copy[idx], ...u };
+          return copy;
+        }
+        return prev;
+      });
+      setCurrentUser((prev) => {
+        const myClean = (prev.phoneNumber || '').replace(/\D/g, '');
+        if (prev.id === u.id || (myClean && uClean && myClean === uClean)) {
+          const updated = {
+            ...prev,
+            verificationBadge: u.verificationBadge !== undefined ? u.verificationBadge : prev.verificationBadge,
+            role: u.role !== undefined ? u.role : prev.role,
+          };
+          try { localStorage.setItem('AGC_user_profile_v2', JSON.stringify(updated)); } catch (_) {}
+          return updated;
+        }
+        return prev;
+      });
+    };
+
+    socket.on('admin_config_updated', onConfig);
+    socket.on('admin_features_updated', onFeatures);
+    socket.on('admin_cms_updated', onCms);
+    socket.on('system_broadcast', onBroadcast);
+    socket.on('system_broadcast_cleared', onBroadcastCleared);
+    socket.on('user_updated', onUserUpdated);
+
+    let sbAdminChannel: ReturnType<typeof supabase.channel> | null = null;
+    if (isSupabaseConfigured) {
+      try {
+        sbAdminChannel = supabase.channel('agc_global_admin_sync', {
+          config: { broadcast: { self: false } },
+        });
+        sbAdminChannel
+          .on('broadcast', { event: 'admin_config' }, ({ payload }: any) => {
+            if (payload) onConfig(payload);
+          })
+          .on('broadcast', { event: 'admin_features' }, ({ payload }: any) => {
+            if (payload) onFeatures(payload);
+          })
+          .on('broadcast', { event: 'admin_cms' }, ({ payload }: any) => {
+            if (payload) onCms(payload);
+          })
+          .on('broadcast', { event: 'system_broadcast' }, ({ payload }: any) => {
+            if (payload) onBroadcast(payload);
+          })
+          .on('broadcast', { event: 'system_broadcast_cleared' }, () => {
+            onBroadcastCleared();
+          })
+          .subscribe();
+        adminSupabaseChannelRef.current = sbAdminChannel;
+      } catch (_) {}
+    }
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        syncAdminFromServer();
+      }
+    };
+    window.addEventListener('focus', syncAdminFromServer);
+    document.addEventListener('visibilitychange', handleVisibility);
+    const pollInterval = setInterval(syncAdminFromServer, 25000);
+
+    return () => {
+      socket.off('admin_config_updated', onConfig);
+      socket.off('admin_features_updated', onFeatures);
+      socket.off('admin_cms_updated', onCms);
+      socket.off('system_broadcast', onBroadcast);
+      socket.off('system_broadcast_cleared', onBroadcastCleared);
+      socket.off('user_updated', onUserUpdated);
+      window.removeEventListener('focus', syncAdminFromServer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      clearInterval(pollInterval);
+      if (sbAdminChannel) {
+        sbAdminChannel.unsubscribe();
+        adminSupabaseChannelRef.current = null;
+      }
+    };
+  }, []);
+
+  // Initial fetch for live dispatch orders & users directory from backend API
+  useEffect(() => {
+    try {
+      fetch('/api/dispatch/orders')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.success && Array.isArray(data.orders) && data.orders.length > 0) {
+            setDispatchOrders(data.orders);
+            localStorage.setItem('AGC_dispatch_orders', JSON.stringify(data.orders));
           }
         })
         .catch(() => {});
@@ -8879,23 +9033,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const checkIsAdminUrl = () => {
     if (typeof window === 'undefined') return false;
     const hash = (window.location.hash || '').toLowerCase();
-    const search = (window.location.search || '').toLowerCase();
+    const searchParams = new URLSearchParams(window.location.search || '');
+    const adminParam = (searchParams.get('admin') || '').toLowerCase();
     const path = (window.location.pathname || '').toLowerCase().replace(/\/+$/, '');
     return (
       hash === '#admin' ||
-      hash.startsWith('#admin') ||
+      hash.startsWith('#admin?') ||
       hash === '#/admin' ||
-      hash.startsWith('#/admin') ||
-      search.includes('admin=true') ||
-      search.includes('admin=1') ||
-      search.includes('admin') ||
+      hash.startsWith('#/admin?') ||
+      adminParam === 'true' ||
+      adminParam === '1' ||
       path === '/admin' ||
       path.endsWith('/admin')
     );
   };
 
-  // 29. Super Admin Console & Moderation State
+  // 29. Super Admin Console & Moderation State (Hidden Easter Egg Triggers)
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(() => checkIsAdminUrl());
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        setIsAdminModalOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -8995,25 +9161,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {}
   }, [adminUsers]);
 
-  const [systemBroadcast, setSystemBroadcast] = useState<AdminSystemBroadcast | null>(() => {
-    try {
-      const saved = localStorage.getItem('AGC_system_broadcast');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return null;
-  });
+  const [systemBroadcast, setSystemBroadcast] = useState<AdminSystemBroadcast | null>(null);
 
-  useEffect(() => {
-    try {
-      if (systemBroadcast) {
-        localStorage.setItem('AGC_system_broadcast', JSON.stringify(systemBroadcast));
-      } else {
-        localStorage.removeItem('AGC_system_broadcast');
-      }
-    } catch (e) {}
-  }, [systemBroadcast]);
-
-  // Real-Time Multi-Tab / Multi-Window Admin State Synchronization
+  // Real-Time Multi-Tab / Multi-Window Admin State Synchronization (no localStorage caching of flags/config)
   useEffect(() => {
     let bc: BroadcastChannel | null = null;
     try {
@@ -9023,14 +9173,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const msg = e.data;
         if (!msg || !msg.type) return;
         if (msg.type === 'config' && msg.data) {
+          systemConfigRef.current = msg.data;
           setSystemConfig(msg.data);
-          try { localStorage.setItem('AGC_system_config_v1', JSON.stringify(msg.data)); } catch (_) {}
         } else if (msg.type === 'features' && msg.data) {
+          featureFlagsRef.current = msg.data;
           setFeatureFlags(msg.data);
-          try { localStorage.setItem('AGC_feature_flags_v1', JSON.stringify(msg.data)); } catch (_) {}
         } else if (msg.type === 'cms' && msg.data) {
+          cmsDataRef.current = msg.data;
           setCmsData(msg.data);
-          try { localStorage.setItem('AGC_cms_data_v1', JSON.stringify(msg.data)); } catch (_) {}
+        } else if (msg.type === 'broadcast') {
+          setSystemBroadcast(msg.data || null);
         } else if (msg.type === 'ban') {
           const myPhoneClean = (currentUser?.phoneNumber || '').replace(/\D/g, '');
           const targetClean = (msg.phoneOrId || '').replace(/\D/g, '');
@@ -9076,7 +9228,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const targetClean = (msg.phoneOrId || '').replace(/\D/g, '');
           if (currentUser?.id === msg.phoneOrId || (myPhoneClean && targetClean && myPhoneClean === targetClean)) {
             if (msg.newBalance !== undefined) {
-              setWallet((prev) => ({ ...prev, balance: msg.newBalance }));
+              setWallet((prev) => ({ ...prev, availableBalance: msg.newBalance }));
             }
           }
           setAdminUsers((prev) =>
@@ -9095,58 +9247,99 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser]);
 
-  const toggleUserVerification = (userId: string, badge: 'blue' | 'gold' | 'creator_plus' | null) => {
-    setAdminUsers((prev) =>
-      prev.map((u) => (u.id === userId ? { ...u, verificationBadge: badge } : u))
+  const resolveAdminUserKey = (userIdOrPhone: string): string => {
+    const clean = userIdOrPhone.replace(/\D/g, '');
+    const target = adminUsers.find(
+      (u) =>
+        u.id === userIdOrPhone ||
+        u.phoneNumber === userIdOrPhone ||
+        (clean && u.phoneNumber.replace(/\D/g, '') === clean)
     );
-    if (currentUser.id === userId) {
-      setCurrentUser((prev) => ({ ...prev, verificationBadge: badge }));
-    }
+    const phoneDigits = target?.phoneNumber?.replace(/\D/g, '');
+    return phoneDigits || target?.id || clean || userIdOrPhone;
   };
 
-  const toggleUserSuspension = (userId: string) => {
+  const toggleUserVerification = async (userId: string, badge: 'blue' | 'gold' | 'creator_plus' | null) => {
+    const clean = userId.replace(/\D/g, '');
     setAdminUsers((prev) =>
       prev.map((u) =>
-        u.id === userId
-          ? { ...u, status: u.status === 'suspended' ? 'active' : 'suspended' }
+        u.id === userId || u.phoneNumber === userId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
+          ? { ...u, verificationBadge: badge }
           : u
       )
     );
+    if (currentUser.id === userId || (clean && currentUser.phoneNumber.replace(/\D/g, '') === clean)) {
+      setCurrentUser((prev) => ({ ...prev, verificationBadge: badge }));
+    }
+    const identifier = resolveAdminUserKey(userId);
     try {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const clean = userId.replace(/\D/g, '');
-      if (clean) {
-        fetch(`http://${host}:3002/api/admin/users/${clean}/status`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'suspended' }),
-        }).catch(() => {});
-      }
+      await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/badge`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verificationBadge: badge }),
+      });
     } catch (_) {}
+  };
+
+  const toggleUserSuspension = (userId: string) => {
+    const clean = userId.replace(/\D/g, '');
+    const existing = adminUsers.find(
+      (u) => u.id === userId || u.phoneNumber === userId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
+    );
+    const nextStatus = existing?.status === 'suspended' ? 'active' : 'suspended';
+    setAdminUsers((prev) =>
+      prev.map((u) =>
+        u.id === userId || u.phoneNumber === userId || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
+          ? { ...u, status: nextStatus }
+          : u
+      )
+    );
+    const identifier = resolveAdminUserKey(userId);
+    callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: nextStatus }),
+    });
   };
 
   const [isBanned, setIsBanned] = useState(false);
   const [banInfo, setBanInfo] = useState<{ reason?: string; bannedAt?: string } | null>(null);
 
   const setUserStatus = (userIdOrPhone: string, status: 'active' | 'suspended' | 'banned' | 'flagged') => {
+    const clean = userIdOrPhone.replace(/\D/g, '');
     setAdminUsers((prev) =>
       prev.map((u) =>
-        u.id === userIdOrPhone || u.phoneNumber === userIdOrPhone
+        u.id === userIdOrPhone || u.phoneNumber === userIdOrPhone || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
           ? { ...u, status }
           : u
       )
     );
-    try {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const clean = userIdOrPhone.replace(/\D/g, '');
-      if (clean) {
-        fetch(`http://${host}:3002/api/admin/users/${clean}/status`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status }),
-        }).catch(() => {});
-      }
-    } catch (_) {}
+    const identifier = resolveAdminUserKey(userIdOrPhone);
+    callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+  };
+
+  const setUserRole = async (userIdOrPhone: string, role: 'user' | 'creator' | 'merchant' | 'admin') => {
+    const clean = userIdOrPhone.replace(/\D/g, '');
+    setAdminUsers((prev) =>
+      prev.map((u) =>
+        u.id === userIdOrPhone || u.phoneNumber === userIdOrPhone || (clean && u.phoneNumber.replace(/\D/g, '') === clean)
+          ? { ...u, role }
+          : u
+      )
+    );
+    if (currentUser.id === userIdOrPhone || (clean && currentUser.phoneNumber.replace(/\D/g, '') === clean)) {
+      setCurrentUser((prev) => ({ ...prev, role }));
+    }
+    const identifier = resolveAdminUserKey(userIdOrPhone);
+    await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    });
   };
 
   const banUser = async (phoneOrId: string, reason?: string) => {
@@ -9169,13 +9362,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     } catch (_) {}
     try {
-      if (clean) {
-        await callAdminApi(`/api/admin/users/${clean}/ban`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: banReason }),
-        });
-      }
+      const identifier = resolveAdminUserKey(phoneOrId);
+      await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/ban`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: banReason }),
+      });
     } catch (e) {
       console.warn('Failed to ban user on server:', e);
     }
@@ -9194,12 +9386,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       adminSyncChannelRef.current?.postMessage({ type: 'unban', phoneOrId });
     } catch (_) {}
     try {
-      if (clean) {
-        await callAdminApi(`/api/admin/users/${clean}/unban`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
+      const identifier = resolveAdminUserKey(phoneOrId);
+      await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/unban`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
     } catch (e) {
       console.warn('Failed to unban user on server:', e);
     }
@@ -9226,30 +9417,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     } catch (_) {}
     try {
-      if (clean) {
-        await callAdminApi(`/api/admin/users/${clean}/adjust-wallet`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(isAbsolute ? { newBalance: deltaOrNew } : { deltaNgn: deltaOrNew }),
-        });
-      }
+      const identifier = resolveAdminUserKey(phoneOrId);
+      await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/adjust-wallet`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(isAbsolute ? { newBalance: deltaOrNew } : { deltaNgn: deltaOrNew }),
+      });
     } catch (e) {
       console.warn('Failed to adjust wallet on server:', e);
     }
   };
 
   const kickUserSession = async (phoneOrId: string) => {
-    const clean = phoneOrId.replace(/\D/g, '');
     try {
       adminSyncChannelRef.current?.postMessage({ type: 'kick', phoneOrId });
     } catch (_) {}
     try {
-      if (clean) {
-        await callAdminApi(`/api/admin/users/${clean}/kick`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
+      const identifier = resolveAdminUserKey(phoneOrId);
+      await callAdminApi(`/api/admin/users/${encodeURIComponent(identifier)}/kick`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
     } catch (e) {}
   };
 
@@ -9310,13 +9498,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSystemBroadcast(newBroadcast);
 
     try {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      fetch(`http://${host}:3002/api/admin/broadcast`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, message, level }),
-      }).catch(() => {});
+      adminSyncChannelRef.current?.postMessage({ type: 'broadcast', data: newBroadcast });
     } catch (_) {}
+
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({
+          type: 'broadcast',
+          event: 'system_broadcast',
+          payload: newBroadcast,
+        });
+      } catch (_) {}
+    }
+
+    callAdminApi('/api/admin/broadcast', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, message, level }),
+    });
 
     // Push directly to users' Updates tab as an official status story
     const adminStatus: UserStatus = {
@@ -9347,6 +9546,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (e) {}
       return updated;
     });
+  };
+
+  const clearAdminBroadcast = async (): Promise<boolean> => {
+    setSystemBroadcast(null);
+    try {
+      adminSyncChannelRef.current?.postMessage({ type: 'broadcast', data: null });
+    } catch (_) {}
+    if (adminSupabaseChannelRef.current) {
+      try {
+        adminSupabaseChannelRef.current.send({
+          type: 'broadcast',
+          event: 'system_broadcast_cleared',
+          payload: {},
+        });
+      } catch (_) {}
+    }
+    const res = await callAdminApi('/api/admin/broadcast', { method: 'DELETE' });
+    return Boolean(res && res.ok);
   };
 
   return (
@@ -9703,12 +9920,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         systemBroadcast,
         setSystemBroadcast,
         createAdminBroadcast,
+        clearAdminBroadcast,
         systemConfig,
         updateSystemConfig,
         updateAdminFeatureFlag,
         cmsData,
         updateCmsData,
         setUserStatus,
+        setUserRole,
         banUser,
         unbanUser,
         adjustUserWallet,

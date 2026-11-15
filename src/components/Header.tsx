@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   GraduationCap,
   QrCode,
@@ -81,6 +81,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
     setIsPetShopModalOpen,
     systemBroadcast,
     setSystemBroadcast,
+    cmsData,
     joinAudioSpace,
     audioSpaces,
     isFeatureEnabled,
@@ -89,8 +90,28 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [menuFilter, setMenuFilter] = useState<'finance' | 'services' | 'tools'>('finance');
   const [menuSearch, setMenuSearch] = useState('');
+  const [dismissedAnnIds, setDismissedAnnIds] = useState<string[]>([]);
+  const logoTapRef = useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
+
+  const handleSecretLogoTap = () => {
+    const now = Date.now();
+    if (now - logoTapRef.current.lastAt > 2500) {
+      logoTapRef.current = { count: 1, lastAt: now };
+    } else {
+      logoTapRef.current.count += 1;
+      logoTapRef.current.lastAt = now;
+    }
+    if (logoTapRef.current.count >= 7) {
+      logoTapRef.current = { count: 0, lastAt: 0 };
+      setIsAdminModalOpen(true);
+    }
+  };
 
   const formattedShortBalance = `₦${Math.floor(wallet.availableBalance / 1000)}k`;
+
+  const activeAnnouncements = (cmsData?.announcements || []).filter(
+    (ann) => ann.active && !dismissedAnnIds.includes(ann.id)
+  );
 
   return (
     <header
@@ -170,35 +191,6 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                         </button>
                       ))}
                     </div>
-                  )}
-
-                  {/* Admin Console - Readily available on mobile */}
-                  {(!menuSearch || menuSearch.toLowerCase().includes('admin')) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        setIsAdminModalOpen(true);
-                      }}
-                      className="w-full mb-3 p-3 rounded-2xl bg-purple-500/10 dark:bg-purple-950/40 hover:bg-purple-500/20 border border-purple-500/40 text-left transition-all group flex items-center justify-between"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
-                          <ShieldCheck className="w-4 h-4 text-amber-300" />
-                        </div>
-                        <div>
-                          <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
-                            Super Admin Console
-                          </span>
-                          <span className="text-[10px] text-purple-600 dark:text-purple-400 block mt-0.5 leading-tight">
-                            User Badges, Escrow Vaults & Supabase
-                          </span>
-                        </div>
-                      </div>
-                      <span className="text-[9px] font-mono font-bold bg-amber-400 text-slate-950 px-2 py-0.5 rounded-full">
-                        ROOT
-                      </span>
-                    </button>
                   )}
 
                   {/* 4-col icon launcher */}
@@ -330,7 +322,10 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div
+            onClick={handleSecretLogoTap}
+            className="flex items-center gap-2 select-none"
+          >
             <img
               src="/icon-192.png"
               alt="AGC Logo"
@@ -399,6 +394,59 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
           </button>
         </div>
       </div>
+
+      {/* Live Admin System Broadcast Banner */}
+      {systemBroadcast && systemBroadcast.active && (
+        <div
+          className={`px-3.5 py-1.5 text-xs flex items-center justify-between gap-2 border-t ${
+            systemBroadcast.level === 'urgent' || systemBroadcast.level === 'alert'
+              ? 'bg-rose-600 text-white border-rose-500'
+              : systemBroadcast.level === 'warning'
+              ? 'bg-amber-500 text-slate-950 border-amber-400'
+              : 'bg-indigo-700 text-white border-indigo-600'
+          }`}
+        >
+          <div className="flex-1 min-w-0 truncate">
+            <strong className="font-bold mr-1.5">{systemBroadcast.title}:</strong>
+            <span>{systemBroadcast.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSystemBroadcast(null)}
+            className="p-0.5 rounded hover:bg-black/15 shrink-0"
+            aria-label="Dismiss broadcast"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Live CMS Global Marquee Banner */}
+      {cmsData?.marqueeBanner?.enabled && cmsData?.marqueeBanner?.text?.trim() && (
+        <div className="w-full overflow-hidden bg-purple-950/90 dark:bg-neutral-900/95 border-t border-purple-800/60 dark:border-neutral-800 py-1 px-2 text-[11px] font-medium text-purple-100">
+          <div className="animate-agc-marquee">
+            {cmsData.marqueeBanner.text}
+          </div>
+        </div>
+      )}
+
+      {/* Live CMS Official Announcement Strip */}
+      {activeAnnouncements.length > 0 && (
+        <div className="px-3.5 py-1.5 bg-purple-800/80 dark:bg-neutral-900 border-t border-purple-700/50 dark:border-neutral-800 flex items-center justify-between gap-2 text-[11px] text-purple-100">
+          <div className="flex-1 min-w-0 truncate">
+            <span className="font-bold text-amber-300 mr-1.5">{activeAnnouncements[0].title}:</span>
+            <span className="text-purple-100/90">{activeAnnouncements[0].content}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDismissedAnnIds((prev) => [...prev, activeAnnouncements[0].id])}
+            className="p-0.5 rounded hover:bg-white/10 shrink-0 text-purple-200"
+            aria-label="Dismiss announcement"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </header>
   );
 };

@@ -648,35 +648,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-                    {/* Super Admin Console Access Tile - Available on Mobile */}
-          {true && (
-          <div className="px-4">
-            <button
-              type="button"
-              onClick={() => setIsAdminModalOpen(true)}
-              className="w-full p-4 rounded-2xl bg-gradient-to-r from-purple-900/90 via-indigo-900/90 to-slate-900 text-white shadow-lg border border-purple-500/40 text-left transition-all hover:scale-[1.01] active:scale-[0.99] flex items-center justify-between group"
-            >
-              <div className="flex items-center gap-3.5">
-                <div className="w-10 h-10 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-amber-300 shadow-sm group-hover:scale-105 transition-transform">
-                  <ShieldCheck className="w-5 h-5 text-amber-300" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold tracking-tight">Super Admin Console</h3>
-                    <span className="text-[9px] font-mono font-bold bg-amber-400 text-slate-950 px-2 py-0.2 rounded-full uppercase">
-                      Root
-                    </span>
-                  </div>
-                  <p className="text-xs text-purple-200/80 mt-0.5">
-                    User badging, escrow disputes, broadcasts & Supabase cloud health
-                  </p>
-                </div>
-              </div>
-              <ChevronRight className="w-5 h-5 text-purple-300 group-hover:translate-x-1 transition-transform" />
-            </button>
-          </div>
-          )}
-
           {/* AGC Wallet Card with Privacy Masking - Disappears when wallet toggle is OFF */}
           {isFeatureEnabled('wallet') && (
             <div className="px-4">
@@ -918,6 +889,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           {/* Escrow Orders History Section */}
+          {isFeatureEnabled('escrow') && (
           <div className="px-4">
             <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
               Paystack Escrow Purchases
@@ -965,6 +937,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               )}
             </div>
           </div>
+          )}
 
           {/* Security & Escrow Protection Footer */}
           <div className="px-4">
@@ -981,7 +954,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          <div className="p-4 text-center text-xs text-slate-400">
+          <div
+            onClick={() => {
+              const now = Date.now();
+              const w = window as any;
+              if (!w.__agcSettingsTap || now - w.__agcSettingsTap.lastAt > 2500) {
+                w.__agcSettingsTap = { count: 1, lastAt: now };
+              } else {
+                w.__agcSettingsTap.count += 1;
+                w.__agcSettingsTap.lastAt = now;
+              }
+              if (w.__agcSettingsTap.count >= 7) {
+                w.__agcSettingsTap = { count: 0, lastAt: 0 };
+                setIsAdminModalOpen(true);
+              }
+            }}
+            className="p-4 text-center text-xs text-slate-400 select-none"
+          >
             AGC Super-App · Made for African Markets
           </div>
 
@@ -1015,15 +1004,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           {/* Subtle Invite Friends & Earn — bottom link */}
-          <div className="px-4 pb-2">
-            <button
-              onClick={() => setIsReferralModalOpen(true)}
-              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-2xl border border-slate-200/80 dark:border-purple-900/30 hover:bg-purple-50 dark:hover:bg-purple-950/30 text-slate-500 dark:text-purple-400/80 hover:text-purple-700 dark:hover:text-purple-300 text-xs font-medium transition-all group"
-            >
-              <Share2 className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
-              <span>Invite friends & earn {CURRENCY_SYMBOLS[currency]}500 per active referral</span>
-            </button>
-          </div>
+          {isFeatureEnabled('referral') && (
+            <div className="px-4 pb-2">
+              <button
+                onClick={() => setIsReferralModalOpen(true)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-2xl border border-slate-200/80 dark:border-purple-900/30 hover:bg-purple-50 dark:hover:bg-purple-950/30 text-slate-500 dark:text-purple-400/80 hover:text-purple-700 dark:hover:text-purple-300 text-xs font-medium transition-all group"
+              >
+                <Share2 className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+                <span>Invite friends & earn {CURRENCY_SYMBOLS[currency]}500 per active referral</span>
+              </button>
+            </div>
+          )}
 
           {/* Account Center Banner Tile */}
           <div className="px-4 pb-3">

@@ -55,8 +55,22 @@ import { CallErrorBoundary } from './components/CallErrorBoundary';
 import { ChatErrorBoundary } from './components/ChatErrorBoundary';
 
 const AppContent: React.FC = () => {
-  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled, isBanned, banInfo, systemConfig, currentUser, isAdminModalOpen } = useApp();
+  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled, isBanned, banInfo, systemConfig, currentUser, isAdminModalOpen, setIsAdminModalOpen } = useApp();
   const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('agc_splash_shown'));
+  const maintenanceTapRef = React.useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
+  const handleMaintenanceLogoTap = () => {
+    const now = Date.now();
+    if (now - maintenanceTapRef.current.lastAt > 2500) {
+      maintenanceTapRef.current = { count: 1, lastAt: now };
+    } else {
+      maintenanceTapRef.current.count += 1;
+      maintenanceTapRef.current.lastAt = now;
+    }
+    if (maintenanceTapRef.current.count >= 7) {
+      maintenanceTapRef.current = { count: 0, lastAt: 0 };
+      setIsAdminModalOpen(true);
+    }
+  };
   const handleSplashDone = useCallback(() => {
     sessionStorage.setItem('agc_splash_shown', 'true');
     setShowSplash(false);
@@ -88,6 +102,47 @@ const AppContent: React.FC = () => {
   // Render SplashScreen overlay before anything else (shows once per session)
   if (showSplash) {
     return <SplashScreen onDone={handleSplashDone} />;
+  }
+
+  // ── Global Maintenance Mode Lockout (Live Admin System Config) ──
+  if (systemConfig?.maintenanceMode && currentUser?.role !== 'admin') {
+    return (
+      <>
+        <div className="fixed inset-0 z-[90] bg-[#06020d] flex flex-col items-center justify-center p-6 text-white text-center select-none">
+          <div className="absolute inset-0 pointer-events-none">
+            <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-80 h-80 bg-purple-700/20 rounded-full blur-[130px]" />
+          </div>
+          <div className="relative z-10 max-w-sm space-y-5">
+            <div
+              onClick={handleMaintenanceLogoTap}
+              className="w-20 h-20 rounded-3xl bg-purple-600/20 border border-purple-500/40 flex items-center justify-center mx-auto shadow-2xl shadow-purple-900/40"
+            >
+              <img src="/icon-192.png" alt="AGC" className="w-12 h-12 rounded-2xl object-cover" />
+            </div>
+            <div className="space-y-2">
+              <span className="inline-block px-3 py-1 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                Scheduled Maintenance
+              </span>
+              <h2 className="text-2xl font-black tracking-tight font-display">
+                AfriChat is Updating
+              </h2>
+              <p className="text-sm text-slate-300 leading-relaxed">
+                {systemConfig.maintenanceMessage || 'AfriChat is undergoing scheduled system upgrades. We will be back shortly.'}
+              </p>
+            </div>
+            {systemConfig.supportContactPhone && (
+              <a
+                href={`tel:${systemConfig.supportContactPhone}`}
+                className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shadow-lg shadow-purple-700/30 transition-all"
+              >
+                <span>Support Desk: {systemConfig.supportContactPhone}</span>
+              </a>
+            )}
+          </div>
+        </div>
+        {isAdminModalOpen && <AdminDashboardModal />}
+      </>
+    );
   }
 
   // ── Kicked-out screen: shown when another device logs in with this number ──

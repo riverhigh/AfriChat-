@@ -174,7 +174,7 @@ const findExistingAccount = (
 };
 
 export const WhatsAppPhoneAuth: React.FC = () => {
-  const { loginWithPhone, setIsAdminModalOpen } = useApp();
+  const { loginWithPhone, setIsAdminModalOpen, systemConfig } = useApp();
 
   // Added 'device_conflict' step: shown when the number is active on another device
   const [step, setStep] = useState<'phone' | 'confirm_dialog' | 'device_conflict' | 'otp' | 'profile' | 'initializing'>('phone');
@@ -198,6 +198,21 @@ export const WhatsAppPhoneAuth: React.FC = () => {
 
   const otpInputsRef = useRef<(HTMLInputElement | null)[]>([]);
   const usernameCheckTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const secretTapRef = useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
+
+  const handleSecretTap = () => {
+    const now = Date.now();
+    if (now - secretTapRef.current.lastAt > 2500) {
+      secretTapRef.current = { count: 1, lastAt: now };
+    } else {
+      secretTapRef.current.count += 1;
+      secretTapRef.current.lastAt = now;
+    }
+    if (secretTapRef.current.count >= 7) {
+      secretTapRef.current = { count: 0, lastAt: 0 };
+      setIsAdminModalOpen(true);
+    }
+  };
 
   // Normalized number format: country dial code + clean core subscriber digits
   const formatFullNormalizedNumber = (phone: string, countryCode: string): string => {
@@ -266,12 +281,10 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       }
     } catch (_) {}
 
-    // 2. Server API check (Vite dev server /api or standalone node server on port 3002)
+    // 2. Server API check
     try {
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const endpoints = [
         `/api/users/check-username?username=${encodeURIComponent(clean)}`,
-        `http://${socketHost}:3002/api/users/check-username?username=${encodeURIComponent(clean)}`,
       ];
       for (const ep of endpoints) {
         try {
@@ -464,13 +477,11 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       return;
     }
 
-    // ── 3. Local dev-server registry (data_users.json — same-LAN only) ───────
+    // ── 3. Local server registry (data_users.json) ───────
     try {
       const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const endpoints = [
         `/api/users/check-phone?phone=${cleanPhone}`,
-        `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`,
       ];
       for (const ep of endpoints) {
         try {
@@ -490,6 +501,10 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     } catch (_) {}
 
     setIsCheckingDevice(false);
+    if (systemConfig && systemConfig.allowNewRegistrations === false) {
+      setErrorMessage('New account registrations are temporarily paused by the administrator. Existing accounts can still sign in.');
+      return;
+    }
     setStep('confirm_dialog');
   };
 
@@ -524,12 +539,10 @@ export const WhatsAppPhoneAuth: React.FC = () => {
 
     const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
 
-    // 3. Local server registry (data_users.json — same-LAN fallback)
+    // 3. Local server registry (data_users.json)
     try {
-      const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const endpoints = [
         `/api/users/check-phone?phone=${cleanPhone}`,
-        `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`,
       ];
       for (const ep of endpoints) {
         try {
@@ -549,6 +562,11 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     } catch (_) {}
 
     setIsCheckingDevice(false);
+    if (systemConfig && systemConfig.allowNewRegistrations === false) {
+      setErrorMessage('New account registrations are temporarily paused by the administrator.');
+      setStep('phone');
+      return;
+    }
     setIsExistingAccount(false);
     setExistingSessionInfo(null);
     await sendOtp();
@@ -639,12 +657,10 @@ export const WhatsAppPhoneAuth: React.FC = () => {
 
       const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
 
-      // Check local server endpoints (Vite /api or standalone node on port 3002)
+      // Check local server endpoints
       try {
-        const socketHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
         const endpoints = [
           `/api/users/check-phone?phone=${cleanPhone}`,
-          `http://${socketHost}:3002/api/users/check-phone?phone=${cleanPhone}`,
         ];
         for (const ep of endpoints) {
           try {
@@ -857,17 +873,22 @@ export const WhatsAppPhoneAuth: React.FC = () => {
               ) : null}
 
               {/* AGC Squircle Logo */}
-              <img
-                src="/icon-192.png"
-                alt="AGC Logo"
-                className="w-10 h-10 rounded-2xl object-cover shadow-md shadow-purple-600/30 ring-1 ring-purple-400/30"
-              />
-              <div>
-                <h2 className="text-base font-black tracking-tight font-display flex items-center gap-1.5">
-                  <span>AGC</span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block animate-pulse" />
-                </h2>
-                <p className="text-[10px] text-purple-300/70 font-medium">Pan-African Super-App</p>
+              <div
+                onClick={handleSecretTap}
+                className="flex items-center gap-2.5 select-none"
+              >
+                <img
+                  src="/icon-192.png"
+                  alt="AGC Logo"
+                  className="w-10 h-10 rounded-2xl object-cover shadow-md shadow-purple-600/30 ring-1 ring-purple-400/30"
+                />
+                <div>
+                  <h2 className="text-base font-black tracking-tight font-display flex items-center gap-1.5">
+                    <span>AGC</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block animate-pulse" />
+                  </h2>
+                  <p className="text-[10px] text-purple-300/70 font-medium">Pan-African Super-App</p>
+                </div>
               </div>
             </div>
 
@@ -1395,16 +1416,8 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         {/* MOBILE FOOTER: CORPORATE ENTITY & NDPA */}
         {/* ========================================================================= */}
         <footer className="px-5 py-3.5 text-center text-[10px] text-purple-300/60 border-t border-purple-500/15 bg-white/[0.01] flex items-center justify-between">
-          <span>Web Tab Global Services (RC8554897)</span>
+          <span onClick={handleSecretTap} className="select-none">Web Tab Global Services (RC8554897)</span>
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setIsAdminModalOpen(true)}
-              className="text-purple-400 hover:text-purple-300 font-bold flex items-center gap-1 font-mono"
-            >
-              <span>🛡️</span>
-              <span>/admin</span>
-            </button>
             <button
               type="button"
               onClick={() => setShowLegalModal(true)}

@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   X,
   Send,
@@ -32,6 +32,7 @@ export const DelayedTransferModal: React.FC = () => {
     currency,
     CURRENCY_SYMBOLS,
     CURRENCY_RATES,
+    systemConfig,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'send' | 'pending' | 'history'>('send');
@@ -63,6 +64,22 @@ export const DelayedTransferModal: React.FC = () => {
     }
 
     const amountInNGN = currency === "NGN" ? amountNum : amountNum / (CURRENCY_RATES[currency] || 1);
+    const minTransfer = systemConfig?.minTransferAmountNgn ?? 100;
+    const maxTransfer = systemConfig?.maxDailyTransferNgn ?? 5000000;
+    if (amountInNGN < minTransfer) {
+      setStatusMessage({
+        type: 'error',
+        text: `Minimum transfer amount is ${formatPrice(minTransfer, 'NGN')}.`,
+      });
+      return;
+    }
+    if (maxTransfer > 0 && amountInNGN > maxTransfer) {
+      setStatusMessage({
+        type: 'error',
+        text: `Amount exceeds maximum daily transfer limit of ${formatPrice(maxTransfer, 'NGN')}.`,
+      });
+      return;
+    }
     if (amountInNGN > wallet.availableBalance) {
       setStatusMessage({
         type: 'error',

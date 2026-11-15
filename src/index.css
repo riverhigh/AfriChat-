@@ -175,3 +175,25 @@ html.text-size-huge {
     width: 100%;
   }
 }
+
+/* Global Live CMS Marquee Ticker */
+@keyframes agc-marquee-scroll {
+  0% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+.animate-agc-marquee {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+  animation: agc-marquee-scroll 22s linear infinite;
+}
+
+.animate-agc-marquee:hover {
+  animation-play-state: paused;
+}
+

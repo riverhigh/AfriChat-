@@ -3,17 +3,11 @@ import { ChatMessage } from '../types';
 
 let socket: Socket | null = null;
 
-// Determine backend URL (dynamic hostname allows phone and laptop on same Wi-Fi to connect)
+// Determine backend URL (same-origin on port 3000, or explicit VITE_SOCKET_URL override)
 export const getSocketUrl = (): string => {
   if (typeof window !== 'undefined' && window.location) {
     const envUrl = import.meta.env.VITE_SOCKET_URL as string;
     if (envUrl) return envUrl;
-
-    const hostname = window.location.hostname;
-    const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.');
-    if (isLocal) {
-      return `http://${hostname}:3002`;
-    }
   }
   return '';
 };
@@ -31,7 +25,7 @@ export const initSocket = (user?: { id: string; name: string; avatar?: string; p
     });
 
     socket.on('connect', () => {
-      console.log('🟢 [AGC Live]: Connected to Socket.io Gateway on port 3002 (ID:', socket?.id, ')');
+      console.log('🟢 [AGC Live]: Connected to Socket.io Gateway (ID:', socket?.id, ')');
       if (user) {
         socket?.emit('user_online', { userId: user.id, userName: user.name, avatar: user.avatar, phoneNumber: user.phone });
         if (user.phone) {

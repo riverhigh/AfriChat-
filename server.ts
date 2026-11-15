@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3002;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Enable CORS for Express REST routes (allow any local or hosted origin)
 app.use(
@@ -23,10 +23,10 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '5mb' }));
 
 // ── CUSTOM APPLICATION FIREWALL (WAF) & THREAT INSPECTION ──────────────────
-const SQLI_REGEX = /(union\s+select|select\s+.*\s+from|insert\s+into|drop\s+table|update\s+.*\s+set|delete\s+from|sleep\(\d+\)|benchmark\(|waitfor\s+delay|--|\/\*|\*\/|;\s*drop|'\s*or\s*['\d]=['\d])/i;
+const SQLI_REGEX = /(union\s+select|select\s+.*\s+from|insert\s+into|drop\s+table|update\s+.*\s+set|delete\s+from|sleep\(\d+\)|benchmark\(|waitfor\s+delay|;\s*--|\/\*|\*\/|;\s*drop|'\s*or\s*['\d]=['\d])/i;
 const XSS_REGEX = /(<script.*?>|javascript:|onload\s*=|onerror\s*=|onmouseover\s*=|eval\(|<iframe|<svg.*?onload)/i;
 const PATH_TRAVERSAL_REGEX = /(\.\.[\/\\]|%2e%2e%2f|%2e%2e\/|\.\.%2f|\/etc\/passwd|win\.ini)/i;
 
@@ -39,8 +39,8 @@ function inspectPayloadForThreats(target: any): string | null {
   return null;
 }
 
-// WAF Middleware applied to all incoming HTTP requests
-app.use((req: Request, res: Response, next) => {
+// WAF Middleware applied to incoming /api HTTP requests
+app.use('/api', (req: Request, res: Response, next) => {
   const urlThreat = inspectPayloadForThreats(req.originalUrl || req.url);
   if (urlThreat) {
     console.warn(`[WAF BLOCKED] ${req.ip} -> ${req.method} ${req.url} (${urlThreat})`);
@@ -303,12 +303,14 @@ const DEFAULT_CMS_DATA = {
 let systemConfig = { ...DEFAULT_SYSTEM_CONFIG };
 let featureFlags = { ...DEFAULT_FEATURE_FLAGS };
 let cmsData = { ...DEFAULT_CMS_DATA };
+let activeBroadcast: { id: string; title: string; message: string; level: string; createdAt: string; active: boolean } | null = null;
 
 try {
   if (fs.existsSync(CONFIG_FILE)) {
     const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     if (raw.config) systemConfig = { ...DEFAULT_SYSTEM_CONFIG, ...raw.config };
     if (raw.featureFlags) featureFlags = { ...DEFAULT_FEATURE_FLAGS, ...raw.featureFlags };
+    if (raw.activeBroadcast !== undefined) activeBroadcast = raw.activeBroadcast;
   }
 } catch (e) {
   console.warn('Notice loading admin config:', e);
@@ -317,7 +319,14 @@ try {
 try {
   if (fs.existsSync(CMS_FILE)) {
     const raw = JSON.parse(fs.readFileSync(CMS_FILE, 'utf8'));
-    if (raw) cmsData = { ...DEFAULT_CMS_DATA, ...raw };
+    if (raw) {
+      cmsData = {
+        ...DEFAULT_CMS_DATA,
+        ...raw,
+        marqueeBanner: { ...DEFAULT_CMS_DATA.marqueeBanner, ...(raw.marqueeBanner || {}) },
+        sponsorSpotlight: { ...DEFAULT_CMS_DATA.sponsorSpotlight, ...(raw.sponsorSpotlight || {}) },
+      };
+    }
   }
 } catch (e) {
   console.warn('Notice loading admin cms:', e);
@@ -325,9 +334,9 @@ try {
 
 function saveAdminConfigFile() {
   try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify({ config: systemConfig, featureFlags }, null, 2));
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify({ config: systemConfig, featureFlags, activeBroadcast }, null, 2));
   } catch (e) {
-    console.warn('Notice saving admin config:', e);
+    console.error('Failed saving admin config file:', e);
   }
 }
 
@@ -335,8 +344,27 @@ function saveAdminCmsFile() {
   try {
     fs.writeFileSync(CMS_FILE, JSON.stringify(cmsData, null, 2));
   } catch (e) {
-    console.warn('Notice saving admin cms:', e);
+    console.error('Failed saving admin cms file:', e);
   }
+}
+
+function findUserEntry(phoneOrId: string): { key: string; user: RegisteredUser } | null {
+  const decoded = decodeURIComponent(phoneOrId || '').trim();
+  if (!decoded) return null;
+  const clean = decoded.replace(/\D/g, '');
+  if (clean && usersByPhone.has(clean)) {
+    return { key: clean, user: usersByPhone.get(clean)! };
+  }
+  const variants = getPhoneVariants(decoded);
+  for (const [k, u] of usersByPhone.entries()) {
+    if (u.id === decoded || u.phoneNumber === decoded || u.cleanPhone === clean) {
+      return { key: k, user: u };
+    }
+    if (clean && (k.endsWith(clean) || clean.endsWith(k) || variants.includes(k))) {
+      return { key: k, user: u };
+    }
+  }
+  return null;
 }
 const communitiesMap = new Map<string, any>();
 const statusesMap = new Map<string, any>();
@@ -441,12 +469,19 @@ app.post('/api/users/register', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Phone number required' });
   }
   const cleanPhone = phoneNumber.replace(/\D/g, '');
-  const existingCheck = usersByPhone.get(cleanPhone);
+  const existingEntry = findUserEntry(phoneNumber);
+  const existingCheck = existingEntry?.user || usersByPhone.get(cleanPhone);
   if (existingCheck && existingCheck.status === 'banned') {
     return res.status(403).json({
       error: 'This phone number has been permanently banned from registration.',
       code: 'AGC_USER_BANNED',
       banned: true,
+    });
+  }
+  if (!existingCheck && !systemConfig.allowNewRegistrations) {
+    return res.status(403).json({
+      error: 'New registrations are currently paused by the administrator.',
+      code: 'REGISTRATIONS_DISABLED',
     });
   }
   const user: RegisteredUser = {
@@ -648,8 +683,9 @@ app.post('/api/dispatch/orders', (req: Request, res: Response) => {
     if (!body) return res.status(400).json({ error: 'Order data required' });
 
     const baseFee = Number(body.estimatedFee) || (body.vehicleType === 'van' ? 6500 : 2400);
-    // 5% Platform commission calculation
-    const platformFee = Math.round(baseFee * 0.05);
+    // Live Admin-configurable Dispatch Platform commission
+    const dispatchRate = (Number(systemConfig.dispatchCommissionPercent ?? 5) || 0) / 100;
+    const platformFee = Math.round(baseFee * dispatchRate);
     const totalFee = baseFee + platformFee;
 
     const provider = body.provider || (body.vehicleType === 'van' ? 'pickkr' : 'gokada');
@@ -764,6 +800,7 @@ app.get('/api/admin/metrics', (_req: Request, res: Response) => {
     config: systemConfig,
     featureFlags,
     cms: cmsData,
+    activeBroadcast,
   });
 });
 
@@ -774,11 +811,12 @@ app.get('/api/admin/config', (_req: Request, res: Response) => {
     config: systemConfig,
     featureFlags,
     cms: cmsData,
+    activeBroadcast,
   });
 });
 
 app.post('/api/admin/config', (req: Request, res: Response) => {
-  const updates = req.body;
+  const updates = req.body && typeof req.body === 'object' ? req.body : {};
   systemConfig = { ...systemConfig, ...updates };
   saveAdminConfigFile();
   io.emit('admin_config_updated', systemConfig);
@@ -787,7 +825,7 @@ app.post('/api/admin/config', (req: Request, res: Response) => {
 
 // Admin Feature Toggles: POST
 app.post('/api/admin/features', (req: Request, res: Response) => {
-  const updates = req.body;
+  const updates = req.body && typeof req.body === 'object' ? req.body : {};
   featureFlags = { ...featureFlags, ...updates };
   saveAdminConfigFile();
   io.emit('admin_features_updated', featureFlags);
@@ -796,8 +834,17 @@ app.post('/api/admin/features', (req: Request, res: Response) => {
 
 // Admin CMS Content: POST
 app.post('/api/admin/cms', (req: Request, res: Response) => {
-  const updates = req.body;
-  cmsData = { ...cmsData, ...updates };
+  const updates = req.body && typeof req.body === 'object' ? req.body : {};
+  cmsData = {
+    ...cmsData,
+    ...updates,
+    marqueeBanner: updates.marqueeBanner
+      ? { ...cmsData.marqueeBanner, ...updates.marqueeBanner }
+      : cmsData.marqueeBanner,
+    sponsorSpotlight: updates.sponsorSpotlight
+      ? { ...cmsData.sponsorSpotlight, ...updates.sponsorSpotlight }
+      : cmsData.sponsorSpotlight,
+  };
   saveAdminCmsFile();
   io.emit('admin_cms_updated', cmsData);
   res.json({ success: true, cms: cmsData });
@@ -806,14 +853,14 @@ app.post('/api/admin/cms', (req: Request, res: Response) => {
 app.patch('/api/admin/users/:phone/badge', (req: Request, res: Response) => {
   const { phone } = req.params;
   const { verificationBadge, role, status, walletBalanceNgn } = req.body;
-  const clean = phone.replace(/\D/g, '');
-  const user = usersByPhone.get(clean);
-  if (user) {
+  const match = findUserEntry(phone);
+  if (match) {
+    const { key, user } = match;
     if (verificationBadge !== undefined) user.verificationBadge = verificationBadge;
     if (role !== undefined) user.role = role;
     if (status !== undefined) user.status = status;
     if (walletBalanceNgn !== undefined) user.walletBalanceNgn = walletBalanceNgn;
-    usersByPhone.set(clean, user);
+    usersByPhone.set(key, user);
     saveUsersFile();
     io.emit('user_updated', user);
     return res.json({ success: true, user });
@@ -824,29 +871,22 @@ app.patch('/api/admin/users/:phone/badge', (req: Request, res: Response) => {
 app.patch('/api/admin/users/:phone/status', (req: Request, res: Response) => {
   const { phone } = req.params;
   const { status, verificationBadge, role, walletBalanceNgn, reason } = req.body;
-  const clean = phone.replace(/\D/g, '');
-  let user = usersByPhone.get(clean);
-  if (!user) {
-    for (const [p, u] of usersByPhone.entries()) {
-      if (p.endsWith(clean) || clean.endsWith(p)) {
-        user = u;
-        break;
-      }
-    }
-  }
-  if (user) {
+  const match = findUserEntry(phone);
+  if (match) {
+    const { key, user } = match;
+    const cleanKey = user.cleanPhone || key;
     if (status !== undefined) {
       user.status = status;
       if (status === 'banned') {
         user.bannedAt = new Date().toISOString();
         user.banReason = reason || 'Account permanently banned by platform administrator.';
         user.isOnline = false;
-        io.to(`phone:${user.cleanPhone || clean}`).emit('account_banned', {
+        io.to(`phone:${cleanKey}`).emit('account_banned', {
           banned: true,
           reason: user.banReason,
           bannedAt: user.bannedAt,
         });
-        const sockId = phoneToSocketId.get(user.cleanPhone || clean);
+        const sockId = phoneToSocketId.get(cleanKey);
         if (sockId) {
           const s = io.sockets.sockets.get(sockId);
           if (s) {
@@ -862,7 +902,7 @@ app.patch('/api/admin/users/:phone/status', (req: Request, res: Response) => {
     if (verificationBadge !== undefined) user.verificationBadge = verificationBadge;
     if (role !== undefined) user.role = role;
     if (walletBalanceNgn !== undefined) user.walletBalanceNgn = walletBalanceNgn;
-    usersByPhone.set(user.cleanPhone || clean, user);
+    usersByPhone.set(key, user);
     saveUsersFile();
     io.emit('user_updated', user);
     return res.json({ success: true, user });
@@ -874,31 +914,24 @@ app.patch('/api/admin/users/:phone/status', (req: Request, res: Response) => {
 app.post('/api/admin/users/:phone/ban', (req: Request, res: Response) => {
   const { phone } = req.params;
   const { reason } = req.body;
-  const clean = phone.replace(/\D/g, '');
-  let user = usersByPhone.get(clean);
-  if (!user) {
-    for (const [p, u] of usersByPhone.entries()) {
-      if (p.endsWith(clean) || clean.endsWith(p)) {
-        user = u;
-        break;
-      }
-    }
-  }
-  if (user) {
+  const match = findUserEntry(phone);
+  if (match) {
+    const { key, user } = match;
+    const cleanKey = user.cleanPhone || key;
     user.status = 'banned';
     user.bannedAt = new Date().toISOString();
     user.banReason = reason || 'Permanently blocked by administrator for policy violation.';
     user.isOnline = false;
-    usersByPhone.set(user.cleanPhone || clean, user);
+    usersByPhone.set(key, user);
     saveUsersFile();
 
     // Kick and lock out socket
-    io.to(`phone:${user.cleanPhone || clean}`).emit('account_banned', {
+    io.to(`phone:${cleanKey}`).emit('account_banned', {
       banned: true,
       reason: user.banReason,
       bannedAt: user.bannedAt,
     });
-    const sockId = phoneToSocketId.get(user.cleanPhone || clean);
+    const sockId = phoneToSocketId.get(cleanKey);
     if (sockId) {
       const s = io.sockets.sockets.get(sockId);
       if (s) {
@@ -917,21 +950,13 @@ app.post('/api/admin/users/:phone/ban', (req: Request, res: Response) => {
 // Admin Unban / Restore Endpoint
 app.post('/api/admin/users/:phone/unban', (req: Request, res: Response) => {
   const { phone } = req.params;
-  const clean = phone.replace(/\D/g, '');
-  let user = usersByPhone.get(clean);
-  if (!user) {
-    for (const [p, u] of usersByPhone.entries()) {
-      if (p.endsWith(clean) || clean.endsWith(p)) {
-        user = u;
-        break;
-      }
-    }
-  }
-  if (user) {
+  const match = findUserEntry(phone);
+  if (match) {
+    const { key, user } = match;
     user.status = 'active';
     delete user.bannedAt;
     delete user.banReason;
-    usersByPhone.set(user.cleanPhone || clean, user);
+    usersByPhone.set(key, user);
     saveUsersFile();
     io.emit('user_updated', user);
     console.log(`✅ [USER UNBANNED]: ${user.fullName} (${user.phoneNumber})`);
@@ -944,17 +969,10 @@ app.post('/api/admin/users/:phone/unban', (req: Request, res: Response) => {
 app.post('/api/admin/users/:phone/adjust-wallet', (req: Request, res: Response) => {
   const { phone } = req.params;
   const { newBalance, deltaNgn, note } = req.body;
-  const clean = phone.replace(/\D/g, '');
-  let user = usersByPhone.get(clean);
-  if (!user) {
-    for (const [p, u] of usersByPhone.entries()) {
-      if (p.endsWith(clean) || clean.endsWith(p)) {
-        user = u;
-        break;
-      }
-    }
-  }
-  if (user) {
+  const match = findUserEntry(phone);
+  if (match) {
+    const { key, user } = match;
+    const cleanKey = user.cleanPhone || key;
     let balance = user.walletBalanceNgn || 0;
     if (newBalance !== undefined) {
       balance = Math.max(0, Number(newBalance));
@@ -962,10 +980,10 @@ app.post('/api/admin/users/:phone/adjust-wallet', (req: Request, res: Response) 
       balance = Math.max(0, balance + Number(deltaNgn));
     }
     user.walletBalanceNgn = balance;
-    usersByPhone.set(user.cleanPhone || clean, user);
+    usersByPhone.set(key, user);
     saveUsersFile();
     io.emit('user_updated', user);
-    io.to(`phone:${user.cleanPhone || clean}`).emit('wallet_updated', {
+    io.to(`phone:${cleanKey}`).emit('wallet_updated', {
       balance,
       note: note || 'Adjusted by administrator',
     });
@@ -977,7 +995,8 @@ app.post('/api/admin/users/:phone/adjust-wallet', (req: Request, res: Response) 
 // Admin Force Terminate / Kick Session
 app.post('/api/admin/users/:phone/kick', (req: Request, res: Response) => {
   const { phone } = req.params;
-  const clean = phone.replace(/\D/g, '');
+  const match = findUserEntry(phone);
+  const clean = match?.user.cleanPhone || phone.replace(/\D/g, '');
   const sockId = phoneToSocketId.get(clean);
   if (sockId) {
     const s = io.sockets.sockets.get(sockId);
@@ -1000,8 +1019,17 @@ app.post('/api/admin/broadcast', (req: Request, res: Response) => {
     createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     active: true,
   };
+  activeBroadcast = broadcast;
+  saveAdminConfigFile();
   io.emit('system_broadcast', broadcast);
   res.json({ success: true, broadcast });
+});
+
+app.delete('/api/admin/broadcast', (_req: Request, res: Response) => {
+  activeBroadcast = null;
+  saveAdminConfigFile();
+  io.emit('system_broadcast_cleared');
+  res.json({ success: true });
 });
 
 // Create raw HTTP server to handle both Express REST and WebSocket upgrades
@@ -1024,6 +1052,14 @@ const onlineUsers = new Map<string, { userId: string; userName: string; avatar?:
 // Real-Time Socket Connection Handlers
 io.on('connection', (socket: Socket) => {
   console.log(`⚡ [Socket Connected]: ${socket.id}`);
+
+  // Immediately push authoritative live admin config, feature flags, CMS, and broadcast state
+  socket.emit('admin_config_updated', systemConfig);
+  socket.emit('admin_features_updated', featureFlags);
+  socket.emit('admin_cms_updated', cmsData);
+  if (activeBroadcast) {
+    socket.emit('system_broadcast', activeBroadcast);
+  }
 
   // User presence registration
   socket.on('user_online', (userData: { userId: string; userName: string; avatar?: string; phoneNumber?: string; role?: string; deviceInfo?: string }) => {
@@ -1310,10 +1346,35 @@ io.on('connection', (socket: Socket) => {
   });
 });
 
-// Start listening
-httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 AGC Live Gateway running on http://localhost:${PORT}`);
-  console.log(`📡 WebSocket & User Registry ready`);
+// Start listening with Vite middleware in dev or static dist in production
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR !== 'true',
+      },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(__dirname, 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (_req: Request, res: Response) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 AGC Live Gateway running on http://0.0.0.0:${PORT}`);
+    console.log(`📡 WebSocket & User Registry ready`);
+  });
+}
+
+startServer().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });
 
 export { app, httpServer, io };

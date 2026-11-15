@@ -339,7 +339,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const handleSend = () => {
     if (!inputText.trim() || !activeChatId) return;
     const trimmed = inputText.trim().toLowerCase();
-    if (trimmed === '/admin' || trimmed === '/console' || trimmed === 'admin') {
+    if (trimmed === '/agc-admin') {
       setInputText('');
       setIsAdminModalOpen(true);
       return;
@@ -1630,144 +1630,162 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </span>
           </button>
 
-                    {/* Errand & Market Shopping */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowAttachMenu(false);
-              setIsErrandsModalOpen(true);
-            }}
-            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-          >
-            <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-1">
-              <ShoppingBag className="w-4 h-4" />
-            </div>
-            <span className="text-[10px] leading-tight font-bold text-purple-500 dark:text-purple-300">Errands</span>
-          </button>
+          {/* Errand & Market Shopping */}
+          {isFeatureEnabled('errands') && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                setIsErrandsModalOpen(true);
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-1">
+                <ShoppingBag className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight font-bold text-purple-500 dark:text-purple-300">Errands</span>
+            </button>
+          )}
           {/* 1. Meme & Sticker Studio */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowAttachMenu(false);
-              setIsMemeStudioOpen(true);
-            }}
-            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-          >
-            <div className="w-9 h-9 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-600 flex items-center justify-center mb-1">
-              <Smile className="w-4 h-4" />
-            </div>
-            <span className="text-[10px] leading-tight">Meme Studio</span>
-          </button>
+          {isFeatureEnabled('memeStudio') && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                setIsMemeStudioOpen(true);
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-600 flex items-center justify-center mb-1">
+                <Smile className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight">Meme Studio</span>
+            </button>
+          )}
 
           {/* 2. Automated Invoice & Receipt */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowAttachMenu(false);
-              setIsInvoiceGeneratorOpen(true);
-            }}
-            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-          >
-            <div className="w-9 h-9 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 flex items-center justify-center mb-1">
-              <FileText className="w-4 h-4" />
-            </div>
-            <span className="text-[10px] leading-tight">Invoice PDF</span>
-          </button>
+          {isFeatureEnabled('wallet') && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                setIsInvoiceGeneratorOpen(true);
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 flex items-center justify-center mb-1">
+                <FileText className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight">Invoice PDF</span>
+            </button>
+          )}
 
           {/* 3. Financial Stake Poll */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowAttachMenu(false);
-              setIsFinancialPollModalOpen(true);
-            }}
-            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-          >
-            <div className="w-9 h-9 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 flex items-center justify-center mb-1">
-              <Vote className="w-4 h-4" />
-            </div>
-            <span className="text-[10px] leading-tight">Stake Poll</span>
-          </button>
+          {isFeatureEnabled('wallet') && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                setIsFinancialPollModalOpen(true);
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 flex items-center justify-center mb-1">
+                <Vote className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight">Stake Poll</span>
+            </button>
+          )}
 
           {/* 4. Ajo / Esusu Savings */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowAttachMenu(false);
-              setIsAjoModalOpen(true);
-            }}
-            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-          >
-            <div className="w-9 h-9 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-600 flex items-center justify-center mb-1">
-              <Coins className="w-4 h-4" />
-            </div>
-            <span className="text-[10px] leading-tight">Ajo / Esusu</span>
-          </button>
+          {isFeatureEnabled('ajo') && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                setIsAjoModalOpen(true);
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-600 flex items-center justify-center mb-1">
+                <Coins className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight">Ajo / Esusu</span>
+            </button>
+          )}
 
           {/* 5. Street Radio Space */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowAttachMenu(false);
-              joinAudioSpace(audioSpaces[0]);
-            }}
-            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-          >
-            <div className="w-9 h-9 rounded-full bg-rose-100 dark:bg-rose-900/60 text-rose-600 flex items-center justify-center mb-1">
-              <Radio className="w-4 h-4" />
-            </div>
-            <span className="text-[10px] leading-tight">Street Radio</span>
-          </button>
+          {isFeatureEnabled('audioSpaces') && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                joinAudioSpace(audioSpaces[0]);
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-rose-100 dark:bg-rose-900/60 text-rose-600 flex items-center justify-center mb-1">
+                <Radio className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight">Street Radio</span>
+            </button>
+          )}
 
           {/* 6. Scam Checker */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowAttachMenu(false);
-              if (currentChat.phone) checkEntityReputation(currentChat.phone);
-              setIsScamCheckerModalOpen(true);
-            }}
-            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-          >
-            <div className="w-9 h-9 rounded-full bg-rose-100 dark:bg-rose-900/60 text-rose-600 flex items-center justify-center mb-1">
-              <ShieldAlert className="w-4 h-4" />
-            </div>
-            <span className="text-[10px] leading-tight">Scam Check</span>
-          </button>
+          {isFeatureEnabled('scamChecker') && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                if (currentChat.phone) checkEntityReputation(currentChat.phone);
+                setIsScamCheckerModalOpen(true);
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-rose-100 dark:bg-rose-900/60 text-rose-600 flex items-center justify-center mb-1">
+                <ShieldAlert className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight">Scam Check</span>
+            </button>
+          )}
 
           {/* 7. Catalog / Escrow */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowAttachMenu(false);
-              setShowCatalogDrawer(true);
-            }}
-            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-          >
-            <div className="w-9 h-9 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-1">
-              <Store className="w-4 h-4" />
-            </div>
-            <span className="text-[10px] leading-tight">Catalog</span>
-          </button>
+          {isFeatureEnabled('market') && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                setShowCatalogDrawer(true);
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-1">
+                <Store className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight">Catalog</span>
+            </button>
+          )}
 
           {/* 8. Escrow Direct Deal */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowAttachMenu(false);
-              if (currentChat.catalog && currentChat.catalog[0]) {
-                openCheckout(currentChat.catalog[0]);
-              } else {
-                alert('No catalog product in this chat yet. Use catalog button to attach goods.');
-              }
-            }}
-            className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
-          >
-            <div className="w-9 h-9 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 flex items-center justify-center mb-1">
-              <Lock className="w-4 h-4" />
-            </div>
-            <span className="text-[10px] leading-tight">Escrow Deal</span>
-          </button>
+          {isFeatureEnabled('escrow') && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                if (currentChat.catalog && currentChat.catalog[0]) {
+                  openCheckout(currentChat.catalog[0]);
+                } else {
+                  alert('No catalog product in this chat yet. Use catalog button to attach goods.');
+                }
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 flex items-center justify-center mb-1">
+                <Lock className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight">Escrow Deal</span>
+            </button>
+          )}
 
           {/* 9. Wallpaper & Text Scale */}
           <button
