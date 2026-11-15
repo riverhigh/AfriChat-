@@ -83,19 +83,43 @@ export interface AudioSpaceSpeaker {
   sponsorTagline?: string;
   isSpeaking: boolean;
   isMuted: boolean;
+  isVerified?: boolean;
+  handle?: string;
+}
+
+export interface AudioSpaceListener {
+  id: string;
+  name: string;
+  avatar: string;
+  isMuted?: boolean;
+  isSpeaking?: boolean;
+  isAnonymous?: boolean;
+  isVerified?: boolean;
+  handle?: string;
+}
+
+export interface AudioSpaceChatMessage {
+  id: string;
+  userId: string;
+  userName: string;
+  userAvatar?: string;
+  text: string;
+  timestamp: string;
 }
 
 export interface AudioSpace {
   id: string;
   title: string;
   topic: string;
+  hostId?: string;
+  hostPhone?: string;
   hostName: string;
   hostAvatar: string;
   listenersCount: number;
   peakListeners?: number;
   startedAt?: number;
   speakers: AudioSpaceSpeaker[];
-  listeners?: { id: string; name: string; avatar: string; isMuted?: boolean; isSpeaking?: boolean }[];
+  listeners?: AudioSpaceListener[];
   isLive: boolean;
   category: 'Tech & Hustle' | 'Afrobeats & Music' | 'Football Banter' | 'Market Townhall';
   isLowBandwidthMode: boolean;
@@ -411,7 +435,7 @@ export interface UserStatus {
   userName: string;
   userAvatar: string;
   isMe?: boolean;
-  statusType?: 'image' | 'video' | 'thought' | 'media';
+  statusType?: 'image' | 'video' | 'thought' | 'media' | 'sponsored';
   thoughtBg?: string;
   mediaUrl?: string;
   videoUrl?: string;
@@ -426,6 +450,12 @@ export interface UserStatus {
   hasLikedByMe?: boolean;
   /** True when reshared from another user's post */
   isReshared?: boolean;
+  /** Sponsored Ad fields */
+  isSponsored?: boolean;
+  sponsorBrand?: string;
+  ctaLabel?: string;
+  targetUrl?: string;
+  adClicksCount?: number;
 }
 
 export interface UserProfile {
@@ -1234,6 +1264,19 @@ export interface CmsFaqItem {
   published: boolean;
 }
 
+export interface SponsoredStatusAd {
+  id: string;
+  brandName: string;
+  avatarUrl?: string;
+  mediaUrl: string;
+  caption: string;
+  ctaLabel: string;
+  targetUrl: string;
+  active: boolean;
+  clicksCount?: number;
+  createdAt: string;
+}
+
 export interface AdminCmsData {
   announcements: CmsAnnouncement[];
   marqueeBanner: CmsMarqueeBanner;
@@ -1247,6 +1290,7 @@ export interface AdminCmsData {
     bannerUrl?: string;
     linkUrl?: string;
   };
+  sponsoredStatuses?: SponsoredStatusAd[];
 }
 
 // 30. Errand Delivery & Shopping Service Types

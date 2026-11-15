@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Wallet,
@@ -18,6 +18,7 @@ export const WalletModal: React.FC = () => {
     wallet,
     isWalletModalOpen,
     setIsWalletModalOpen,
+    refreshWalletFromServer,
     topUpWallet,
     withdrawWallet,
     formatPrice,
@@ -39,6 +40,13 @@ export const WalletModal: React.FC = () => {
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // Always pull true wallet balance from server when opening WalletModal
+  useEffect(() => {
+    if (isWalletModalOpen) {
+      refreshWalletFromServer();
+    }
+  }, [isWalletModalOpen]);
+
   if (!isWalletModalOpen) return null;
 
   const handleTopUpSubmit = (e: React.FormEvent) => {
@@ -50,24 +58,36 @@ export const WalletModal: React.FC = () => {
     setFeedback(null);
 
     const userEmail = currentUser.email || `${currentUser.phoneNumber.replace(/[^0-9]/g, '')}@AGC.africa`;
+    const fee = Math.min(Math.round(topUpAmount * 0.01), Math.round(2000 * rate));
+    const totalCharge = topUpAmount + fee;
 
     openPaystackPopup({
       email: userEmail,
-      amount: topUpAmount,
+      amount: totalCharge,
       currency: currency,
       metadata: {
         userId: currentUser.id,
         phoneNumber: currentUser.phoneNumber,
+        creditedAmountNgn: topUpAmount,
+        feeAmountNgn: fee,
         type: 'wallet_topup',
       },
-      onSuccess: (response) => {
+      onSuccess: async (response) => {
+        const res = await topUpWallet(topUpAmount, response.reference);
         setIsProcessing(false);
-        const res = topUpWallet(topUpAmount);
-        setFeedback({
-          type: 'success',
-          text: `${CURRENCY_SYMBOLS[currency]}${topUpAmount.toLocaleString()} credited via Paystack! (1% fee: ${CURRENCY_SYMBOLS[currency]}${res.fee.toLocaleString()}). Ref: ${response.reference || res.reference}`,
-        });
-        setWalletTab('overview');
+        if (res.success) {
+          setFeedback({
+            type: 'success',
+            text: `${res.message || `${CURRENCY_SYMBOLS[currency]}${topUpAmount.toLocaleString()} credited!`} Ref: ${response.reference || res.reference}`,
+          });
+          setWalletTab('overview');
+        } else {
+          setFeedback({
+            type: 'error',
+            text: res.message || `Payment received (Ref: ${response.reference}) — awaiting signed Paystack webhook verification.`,
+          });
+          setWalletTab('overview');
+        }
       },
       onClose: () => {
         setIsProcessing(false);
@@ -86,28 +106,27 @@ export const WalletModal: React.FC = () => {
     });
   };
 
-  const handleWithdrawSubmit = (e: React.FormEvent) => {
+  const handleWithdrawSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     e.stopPropagation();
     if (withdrawAmount <= 0) return;
 
     setIsProcessing(true);
-    setTimeout(() => {
-      setIsProcessing(false);
-      const res = withdrawWallet(withdrawAmount, selectedBank, accountNumber, accountName);
-      if (res.success) {
-        setFeedback({
-          type: 'success',
-          text: res.message,
-        });
-        setWalletTab('overview');
-      } else {
-        setFeedback({
-          type: 'error',
-          text: res.message,
-        });
-      }
-    }, 600);
+    setFeedback(null);
+    const res = await withdrawWallet(withdrawAmount, selectedBank, accountNumber, accountName);
+    setIsProcessing(false);
+    if (res.success) {
+      setFeedback({
+        type: 'success',
+        text: res.message,
+      });
+      setWalletTab('overview');
+    } else {
+      setFeedback({
+        type: 'error',
+        text: res.message,
+      });
+    }
   };
 
   const handleClose = () => {

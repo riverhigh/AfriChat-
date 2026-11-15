@@ -9,8 +9,13 @@ import {
   Repeat,
   Check,
   Trash2,
+  ExternalLink,
+  Megaphone,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+
+const FALLBACK_AVATAR =
+  "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%232e1065'/><circle cx='50' cy='38' r='16' fill='%23a855f7'/><path d='M20 86c0-16.5 13.5-30 30-30s30 13.5 30 30' fill='%23a855f7'/></svg>";
 
 export const StatusViewerModal: React.FC = () => {
   const {
@@ -22,6 +27,8 @@ export const StatusViewerModal: React.FC = () => {
     addStatus,
     sendMessage,
     setActiveChatId,
+    handleAdClick,
+    setActiveTab,
   } = useApp();
 
   const [showViewersSheet, setShowViewersSheet] = useState(false);
@@ -30,15 +37,14 @@ export const StatusViewerModal: React.FC = () => {
   const [reshareNotice, setReshareNotice] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
 
-  // Live countdown: re-compute every minute
   const [nowMs, setNowMs] = React.useState(Date.now());
   React.useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 60_000);
     return () => clearInterval(id);
   }, []);
 
-  /** Returns "Xh Ym left" or "< 1m left" or "Expired" for a status */
-  const getTimeLeft = (s: { id?: string; createdAtISO?: string; createdAt?: string; expiresInHours: number }): string => {
+  const getTimeLeft = (s: { id?: string; createdAtISO?: string; createdAt?: string; expiresInHours: number; isSponsored?: boolean }): string => {
+    if (s.isSponsored) return 'Promoted';
     let createdMs = 0;
     if (s.createdAtISO) {
       createdMs = new Date(s.createdAtISO).getTime();
@@ -68,24 +74,28 @@ export const StatusViewerModal: React.FC = () => {
     return st.caption || '';
   };
 
-  // Group all stacked stories belonging to the user currently being viewed
   const userStories = useMemo(() => {
     if (!activeViewingStatus) return [];
+    if (activeViewingStatus.isSponsored || activeViewingStatus.statusType === 'sponsored') {
+      const adSlides = statuses.filter(
+        (s) => (s.isSponsored || s.statusType === 'sponsored') && s.id === activeViewingStatus.id
+      );
+      return adSlides.length > 0 ? adSlides : [activeViewingStatus];
+    }
     if (activeViewingStatus.isMe) {
-      // Sort oldest to newest so they play in chronological order
-      return statuses.filter((s) => s.isMe).sort((a, b) => a.id.localeCompare(b.id));
+      return statuses.filter((s) => s.isMe && !s.isSponsored).sort((a, b) => a.id.localeCompare(b.id));
     }
     return statuses
       .filter(
         (s) =>
           !s.isMe &&
+          !s.isSponsored &&
           (s.userId === activeViewingStatus.userId ||
             (s.userPhone && activeViewingStatus.userPhone && s.userPhone === activeViewingStatus.userPhone))
       )
       .sort((a, b) => a.id.localeCompare(b.id));
   }, [statuses, activeViewingStatus]);
 
-  // Synchronize current index when opening a new status
   useEffect(() => {
     if (activeViewingStatus && userStories.length > 0) {
       const idx = userStories.findIndex((s) => s.id === activeViewingStatus.id);
@@ -95,7 +105,6 @@ export const StatusViewerModal: React.FC = () => {
 
   const currentStory = userStories[currentIndex] || activeViewingStatus;
 
-  // Auto-advance every 6 seconds for image/thought (unless paused by viewer drawer)
   useEffect(() => {
     if (!activeViewingStatus || showViewersSheet) return;
     if (currentStory?.statusType === 'video' || Boolean(currentStory?.videoUrl)) return;
@@ -106,7 +115,7 @@ export const StatusViewerModal: React.FC = () => {
       } else {
         setActiveViewingStatus(null);
       }
-    }, 6000);
+    }, 6500);
 
     return () => clearTimeout(timer);
   }, [currentIndex, userStories.length, activeViewingStatus, showViewersSheet, currentStory?.id]);
@@ -115,6 +124,7 @@ export const StatusViewerModal: React.FC = () => {
 
   const status = currentStory;
   const isMe = status.isMe;
+  const isSponsored = Boolean(status.isSponsored || status.statusType === 'sponsored');
 
   const handleNext = () => {
     if (currentIndex < userStories.length - 1) {
@@ -132,9 +142,6 @@ export const StatusViewerModal: React.FC = () => {
 
   const handleDelete = () => {
     if (!status?.id) return;
-    const confirmDelete = window.confirm('Delete this story slide?');
-    if (!confirmDelete) return;
-
     deleteStatus(status.id);
     if (userStories.length <= 1) {
       setActiveViewingStatus(null);
@@ -148,10 +155,9 @@ export const StatusViewerModal: React.FC = () => {
   };
 
   const handleReshare = () => {
-    // Always post "reshared" as caption â€” never chain original text/names
     addStatus('reshared', status.mediaUrl);
     setReshared(true);
-    setReshareNotice('Reshared to your 24h updates!');
+    setReshareNotice('Reshared to your 24h updates');
     setTimeout(() => {
       setReshared(false);
       setReshareNotice(null);
@@ -172,6 +178,21 @@ export const StatusViewerModal: React.FC = () => {
     }
   };
 
+  const onSponsoredCtaPress = async () => {
+    await handleAdClick(status.id, status.targetUrl);
+    const target = (status.targetUrl || '').trim();
+    if (/^https?:\/\//i.test(target)) {
+      window.open(target, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    setActiveViewingStatus(null);
+    if (target.includes('town')) {
+      setActiveTab('town');
+    } else {
+      setActiveTab('market');
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col justify-between animate-in fade-in duration-150 select-none">
       {/* Top Segmented Story Progress Bar */}
@@ -183,7 +204,6 @@ export const StatusViewerModal: React.FC = () => {
           paddingRight: 'max(env(safe-area-inset-right, 0px), 14px)',
         }}
       >
-        {/* Segmented Bars (WhatsApp / Instagram Stories Style) */}
         <div className="flex items-center gap-1.5 w-full">
           {userStories.map((storyItem, idx) => (
             <div
@@ -191,7 +211,7 @@ export const StatusViewerModal: React.FC = () => {
               className="flex-1 bg-white/25 h-1 rounded-full overflow-hidden"
             >
               <div
-                className={`h-full bg-white transition-all duration-300 ${
+                className={`h-full ${isSponsored ? 'bg-amber-400' : 'bg-white'} transition-all duration-300 ${
                   idx < currentIndex
                     ? 'w-full'
                     : idx === currentIndex
@@ -203,26 +223,33 @@ export const StatusViewerModal: React.FC = () => {
           ))}
         </div>
 
-        {/* User Info & Actions Bar */}
+        {/* Header */}
         <div className="flex items-center justify-between text-white">
           <div className="flex items-center gap-2.5">
-            <img
-              src={status.userAvatar}
-              alt={status.userName}
-              referrerPolicy="no-referrer"
-              className="w-10 h-10 rounded-full object-cover border border-white/30"
-            />
+            <div className={`rounded-full p-0.5 ${isSponsored ? 'bg-gradient-to-tr from-amber-500 via-violet-600 to-indigo-600' : ''}`}>
+              <img
+                src={status.userAvatar || status.mediaUrl || FALLBACK_AVATAR}
+                alt={status.sponsorBrand || status.userName}
+                referrerPolicy="no-referrer"
+                className="w-10 h-10 rounded-full object-cover border border-black/40"
+              />
+            </div>
             <div>
               <div className="font-semibold text-sm leading-tight flex items-center gap-2">
-                <span>{status.userName}</span>
+                <span>{status.sponsorBrand || status.userName}</span>
+                {isSponsored && (
+                  <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-amber-500 text-black uppercase tracking-wider">
+                    AD
+                  </span>
+                )}
                 {userStories.length > 1 && (
-                  <span className="text-[10px] font-mono px-1.5 py-0.2 bg-white/20 rounded-full text-white/90">
-                    {currentIndex + 1} / {userStories.length}
+                  <span className="text-[10px] font-mono text-white/80">
+                    {currentIndex + 1}/{userStories.length}
                   </span>
                 )}
               </div>
               <div className="text-[11px] text-white/70 flex items-center gap-1.5 font-mono">
-                <span>{status.createdAt}</span>
+                <span>{isSponsored ? 'Sponsored Story' : status.createdAt}</span>
                 <span>·</span>
                 <span className="text-amber-400 font-semibold flex items-center gap-1">
                   <Clock className="w-3 h-3" />
@@ -237,7 +264,7 @@ export const StatusViewerModal: React.FC = () => {
               <button
                 type="button"
                 onClick={handleDelete}
-                className="p-1.5 text-white/80 hover:text-rose-400 rounded-full bg-black/40 backdrop-blur-xs transition-colors"
+                className="p-2 text-white/80 hover:text-rose-400 rounded-full bg-black/40 backdrop-blur-xs transition-colors"
                 title="Delete this story slide"
               >
                 <Trash2 className="w-4 h-4" />
@@ -245,7 +272,8 @@ export const StatusViewerModal: React.FC = () => {
             )}
             <button
               onClick={() => setActiveViewingStatus(null)}
-              className="p-1.5 text-white/80 hover:text-white rounded-full bg-black/40 backdrop-blur-xs"
+              className="p-2 text-white/80 hover:text-white rounded-full bg-black/40 backdrop-blur-xs"
+              aria-label="Close status viewer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -253,16 +281,13 @@ export const StatusViewerModal: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Status Media & Caption Area */}
+      {/* Main Content */}
       <div className="flex-1 flex flex-col items-center justify-center p-4 relative">
-        {/* Left Tap Zone (Previous Story) */}
         <div
           onClick={handlePrev}
           className="absolute left-0 top-0 bottom-0 w-1/3 z-10 cursor-pointer"
           title="Previous story"
         />
-
-        {/* Right Tap Zone (Next Story) */}
         <div
           onClick={handleNext}
           className="absolute right-0 top-0 bottom-0 w-2/3 z-10 cursor-pointer"
@@ -271,28 +296,17 @@ export const StatusViewerModal: React.FC = () => {
 
         {status.statusType === 'thought' ? (
           <div className="w-full max-w-sm flex flex-col items-center justify-center animate-in zoom-in-95 duration-200 z-0">
-            {/* Thought Cloud Bubble */}
             <div
               className={`w-full p-8 rounded-3xl bg-gradient-to-br ${
                 status.thoughtBg || 'from-indigo-600 via-purple-600 to-pink-600'
-              } text-white shadow-2xl relative border-2 border-white/20`}
+              } text-white shadow-2xl relative border border-white/20`}
             >
-              <div className="text-[10px] uppercase font-bold tracking-widest text-white/70 mb-2 font-mono flex items-center gap-1.5">
-                <span>💭 AGC THOUGHT</span>
-              </div>
               <p className="text-xl sm:text-2xl font-bold leading-relaxed font-display text-center drop-shadow-sm">
                 &ldquo;{status.caption}&rdquo;
               </p>
               <div className="mt-4 pt-3 border-t border-white/20 text-center text-xs text-white/80 font-mono">
-                Shared by {status.userName} · {status.createdAt}
+                {status.userName} · {status.createdAt}
               </div>
-            </div>
-
-            {/* Bubble Tail Dots */}
-            <div className="flex flex-col items-center gap-1.5 mt-2 self-start ml-16">
-              <div className="w-4 h-4 rounded-full bg-indigo-500/80 shadow-md" />
-              <div className="w-2.5 h-2.5 rounded-full bg-purple-500/70 shadow-sm" />
-              <div className="w-1.5 h-1.5 rounded-full bg-pink-500/60" />
             </div>
           </div>
         ) : (
@@ -319,13 +333,14 @@ export const StatusViewerModal: React.FC = () => {
                 />
               )
             )}
-            <div className="mt-4 px-4 py-3 bg-black/60 backdrop-blur-md text-white rounded-2xl max-w-sm text-center text-sm leading-relaxed border border-white/10">
-              {getDisplayCaption(status)}
-            </div>
+            {status.caption && (
+              <div className="mt-4 px-4 py-3 bg-black/65 backdrop-blur-md text-white rounded-2xl max-w-sm text-center text-sm leading-relaxed border border-white/10">
+                {getDisplayCaption(status)}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Reshare Notice Toast */}
         {reshareNotice && (
           <div className="absolute top-4 mx-auto px-4 py-2 bg-emerald-600 text-white text-xs font-bold rounded-full shadow-lg animate-in fade-in z-30">
             {reshareNotice}
@@ -333,13 +348,36 @@ export const StatusViewerModal: React.FC = () => {
         )}
       </div>
 
-      {/* Bottom Bar: If Me, show views/likes sheet trigger; if Other, show Like + Reply */}
+      {/* Bottom Bar */}
       <div
-        className="p-4 z-20 bg-gradient-to-t from-black via-black/80 to-transparent"
+        className="p-4 z-20 bg-gradient-to-t from-black via-black/85 to-transparent"
         style={{ paddingBottom: 'max(calc(env(safe-area-inset-bottom, 0px) + 12px), 16px)' }}
       >
-        {isMe ? (
-          /* Viewers & Likes Drawer Trigger for My Status */
+        {isSponsored ? (
+          <div className="max-w-sm mx-auto flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={onSponsoredCtaPress}
+              className="flex-1 py-3 px-5 rounded-full bg-gradient-to-r from-amber-500 via-violet-600 to-indigo-600 hover:opacity-95 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-[0.98]"
+            >
+              <Megaphone className="w-4 h-4" />
+              <span>{status.ctaLabel || 'Explore Offer'}</span>
+              <ExternalLink className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={handleLike}
+              className={`w-11 h-11 rounded-full flex items-center justify-center transition-transform active:scale-125 ${
+                status.hasLikedByMe
+                  ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/50'
+                  : 'bg-white/15 backdrop-blur-md text-white hover:bg-white/25 border border-white/20'
+              }`}
+              title="Like sponsored story"
+            >
+              <Heart className={`w-5 h-5 ${status.hasLikedByMe ? 'fill-white' : ''}`} />
+            </button>
+          </div>
+        ) : isMe ? (
           <div className="space-y-2">
             <button
               onClick={() => setShowViewersSheet(true)}
@@ -356,7 +394,6 @@ export const StatusViewerModal: React.FC = () => {
             </button>
           </div>
         ) : (
-          /* Reply & Like controls for other statuses */
           <div className="flex items-center gap-2">
             <form onSubmit={handleSendReply} className="flex-1 flex items-center bg-white/15 backdrop-blur-md rounded-full px-4 py-2 border border-white/20">
               <input
@@ -392,17 +429,13 @@ export const StatusViewerModal: React.FC = () => {
               }`}
               title="Like this 24h status"
             >
-              <Heart
-                className={`w-5 h-5 ${
-                  status.hasLikedByMe ? 'fill-white' : ''
-                }`}
-              />
+              <Heart className={`w-5 h-5 ${status.hasLikedByMe ? 'fill-white' : ''}`} />
             </button>
           </div>
         )}
       </div>
 
-      {/* Viewers & Likes Bottom Sheet (for My Status) */}
+      {/* Viewers & Likes Bottom Sheet */}
       {showViewersSheet && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end justify-center animate-in fade-in">
           <div className="w-full max-w-md bg-white dark:bg-[#1a172e] rounded-t-3xl p-5 shadow-2xl max-h-[60vh] flex flex-col border-t border-slate-200 dark:border-slate-800 animate-in slide-in-from-bottom">
@@ -436,13 +469,10 @@ export const StatusViewerModal: React.FC = () => {
                 </div>
               ) : (
                 status.viewers.map((viewer) => (
-                  <div
-                    key={viewer.id}
-                    className="py-2.5 flex items-center justify-between"
-                  >
+                  <div key={viewer.id} className="py-2.5 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <img
-                        src={viewer.avatar}
+                        src={viewer.avatar || FALLBACK_AVATAR}
                         alt={viewer.name}
                         referrerPolicy="no-referrer"
                         className="w-10 h-10 rounded-full object-cover"
@@ -458,8 +488,8 @@ export const StatusViewerModal: React.FC = () => {
                     </div>
 
                     {viewer.hasLiked && (
-                      <span className="flex items-center gap-1 text-[11px] text-rose-500 font-bold bg-rose-50 dark:bg-rose-950/40 px-2 py-0.5 rounded-full">
-                        <Heart className="w-3 h-3 fill-rose-500" />
+                      <span className="text-xs text-rose-500 font-semibold flex items-center gap-1">
+                        <Heart className="w-3.5 h-3.5 fill-rose-500" />
                         <span>Liked</span>
                       </span>
                     )}

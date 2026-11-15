@@ -3,25 +3,19 @@ import {
   Plus,
   Eye,
   Heart,
-  Clock,
   Camera,
   Video,
   Edit3,
-  CheckCircle2,
   Upload,
-  MessageCircle,
   Sparkles,
-  Play,
   Film,
-  BadgeCheck,
   Crown,
-  Lock,
-  Music,
-  Ticket,
   X,
   Trash2,
   ChevronDown,
   ChevronRight,
+  Megaphone,
+  ExternalLink,
 } from 'lucide-react';
 import { useApp, phonesMatch } from '../context/AppContext';
 import { UserStatus } from '../types';
@@ -35,6 +29,9 @@ const THOUGHT_THEMES = [
   { name: 'Electric Cyan', bg: 'from-cyan-600 to-blue-800' },
 ];
 
+const FALLBACK_AVATAR =
+  "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%232e1065'/><circle cx='50' cy='38' r='16' fill='%23a855f7'/><path d='M20 86c0-16.5 13.5-30 30-30s30 13.5 30 30' fill='%23a855f7'/></svg>";
+
 /** WhatsApp / Instagram style segmented story ring */
 const StoryRing: React.FC<{ count: number; hasUnviewed: boolean; size?: number }> = ({
   count,
@@ -46,7 +43,7 @@ const StoryRing: React.FC<{ count: number; hasUnviewed: boolean; size?: number }
   const circumference = 2 * Math.PI * radius;
   const gap = count > 1 ? 4 : 0;
   const segmentLength = circumference / count - gap;
-  const strokeColor = hasUnviewed ? '#9333ea' : '#94a3b8'; // purple-600 or slate-400
+  const strokeColor = hasUnviewed ? '#8b5cf6' : '#94a3b8';
 
   return (
     <svg width={size} height={size} className="absolute inset-0 -rotate-90 pointer-events-none">
@@ -93,6 +90,7 @@ export const StatusView: React.FC = () => {
     addDeviceMediaStatus,
     addDeviceVideoStatus,
     addThoughtStatus,
+    addSponsoredStatus,
     deleteStatus,
     currentUser,
     creators,
@@ -100,10 +98,11 @@ export const StatusView: React.FC = () => {
     setIsCreatorModalOpen,
     deviceContacts,
     setIsContactsModalOpen,
+    cmsData,
     t,
   } = useApp();
 
-  const [modalMode, setModalMode] = useState<'none' | 'device_photo' | 'device_video' | 'thought'>('none');
+  const [modalMode, setModalMode] = useState<'none' | 'device_photo' | 'device_video' | 'thought' | 'sponsored_ad'>('none');
   const [showAddStoryMenu, setShowAddStoryMenu] = useState(false);
   const [showMyStoriesTray, setShowMyStoriesTray] = useState(false);
   const [isViewedExpanded, setIsViewedExpanded] = useState(true);
@@ -113,11 +112,55 @@ export const StatusView: React.FC = () => {
   const [thoughtText, setThoughtText] = useState('');
   const [selectedTheme, setSelectedTheme] = useState(THOUGHT_THEMES[0]);
 
-  const myStatuses = useMemo(() => statuses.filter((s) => s.isMe), [statuses]);
-  // Strict Privacy: Only show statuses from saved device contacts
+  // Sponsored Ad Creation Fields
+  const [adBrand, setAdBrand] = useState(currentUser.fullName || '');
+  const [adCaption, setAdCaption] = useState('');
+  const [adCtaLabel, setAdCtaLabel] = useState('Shop Now');
+  const [adTargetUrl, setAdTargetUrl] = useState('');
+  const [statusError, setStatusError] = useState<string | null>(null);
+
+  const myStatuses = useMemo(() => statuses.filter((s) => s.isMe && !s.isSponsored), [statuses]);
+
+  // Sponsored status ads bypass device contact filtering so all users discover promoted vendor stories
+  const sponsoredStatuses = useMemo(() => {
+    const explicitAds = statuses.filter(
+      (s) => Boolean(s.isSponsored || s.statusType === 'sponsored')
+    );
+
+    if (
+      cmsData?.sponsorSpotlight?.enabled &&
+      cmsData.sponsorSpotlight.brandName &&
+      !explicitAds.some((s) => s.id === 'cms_spotlight_ad')
+    ) {
+      const spotlightAd: UserStatus = {
+        id: 'cms_spotlight_ad',
+        userId: 'sponsor_spotlight',
+        userName: cmsData.sponsorSpotlight.brandName,
+        userAvatar: '/src/assets/images/african_textiles_wax_1794210824926.jpg',
+        isMe: false,
+        statusType: 'sponsored',
+        mediaUrl: '/src/assets/images/african_textiles_wax_1794210824926.jpg',
+        caption: cmsData.sponsorSpotlight.tagline || 'Featured marketplace sponsor on AGC',
+        createdAt: 'Sponsored',
+        expiresInHours: 24,
+        viewsCount: 0,
+        likesCount: 0,
+        viewers: [],
+        isSponsored: true,
+        sponsorBrand: cmsData.sponsorSpotlight.brandName,
+        ctaLabel: 'Explore Marketplace',
+        targetUrl: '#market',
+      };
+      return [spotlightAd, ...explicitAds];
+    }
+
+    return explicitAds;
+  }, [statuses, cmsData?.sponsorSpotlight]);
+
+  // Strict Privacy for personal stories: only show non-sponsored statuses from saved device contacts
   const otherStatuses = useMemo(() => {
     return statuses.filter((s) => {
-      if (s.isMe) return false;
+      if (s.isMe || s.isSponsored || s.statusType === 'sponsored') return false;
       if (!s.userPhone) return false;
       return deviceContacts.some((c) => {
         const cp = c.normalizedPhoneNumber || c.rawPhoneNumber;
@@ -126,7 +169,6 @@ export const StatusView: React.FC = () => {
     });
   }, [statuses, deviceContacts]);
 
-  // Live countdown â€” re-compute every 60 s
   const [nowMs, setNowMs] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 60_000);
@@ -140,19 +182,13 @@ export const StatusView: React.FC = () => {
       createdMs = new Date(s.createdAtISO).getTime();
     } else if (s.id) {
       const match = s.id.match(/\d{12,14}/);
-      if (match) {
-        createdMs = parseInt(match[0], 10);
-      }
+      if (match) createdMs = parseInt(match[0], 10);
     }
     if (!createdMs && s.createdAt) {
       const parsed = Date.parse(s.createdAt);
-      if (!isNaN(parsed)) {
-        createdMs = parsed;
-      }
+      if (!isNaN(parsed)) createdMs = parsed;
     }
-    if (!createdMs) {
-      return '23h left';
-    }
+    if (!createdMs) return '23h left';
     const expiresAt = createdMs + expiresInHours * 3_600_000;
     const ms = expiresAt - nowMs;
     if (ms <= 0) return 'Expired';
@@ -163,19 +199,16 @@ export const StatusView: React.FC = () => {
     return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
   };
 
-  /** Status reshare preview must show ONLY "reshared" */
   const formatStatusCaption = (st: UserStatus): string => {
     if (st.isReshared || st.caption?.toLowerCase().includes('reshared')) {
       return 'reshared';
     }
-    return st.caption || (st.statusType === 'thought' ? '💭 Thought' : 'Photo update');
+    return st.caption || (st.statusType === 'thought' ? 'Thought' : 'Photo update');
   };
 
-  // Helper to determine if a status has been viewed by the current user
   const isStatusViewedByMe = (st: UserStatus) =>
     Boolean(st.viewers && st.viewers.some((v) => v.id === currentUser.id));
 
-  // Group other contacts' statuses (1 row per contact with segmented ring)
   const { recentGroups, viewedGroups } = useMemo(() => {
     const groupsMap = new Map<string, ContactStoryGroup>();
 
@@ -187,7 +220,7 @@ export const StatusView: React.FC = () => {
           key,
           userId: st.userId,
           userName: st.userName,
-          userAvatar: st.userAvatar,
+          userAvatar: st.userAvatar || FALLBACK_AVATAR,
           isCreator: creators.some(
             (c) => c.id === st.userId || c.name.toLowerCase() === st.userName.toLowerCase()
           ),
@@ -206,11 +239,8 @@ export const StatusView: React.FC = () => {
     const viewed: ContactStoryGroup[] = [];
 
     groupsMap.forEach((g) => {
-      if (g.hasUnviewed) {
-        recent.push(g);
-      } else {
-        viewed.push(g);
-      }
+      if (g.hasUnviewed) recent.push(g);
+      else viewed.push(g);
     });
 
     return { recentGroups: recent, viewedGroups: viewed };
@@ -221,10 +251,11 @@ export const StatusView: React.FC = () => {
   const handleDeviceFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isVideo: boolean = false) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setStatusError(null);
 
     if (isVideo) {
       if (file.size > 20 * 1024 * 1024) {
-        alert('Video exceeds 20MB limit. Please choose a shorter clip.');
+        setStatusError('Video exceeds 20MB limit. Choose a shorter clip.');
         return;
       }
       const reader = new FileReader();
@@ -235,7 +266,6 @@ export const StatusView: React.FC = () => {
       };
       reader.readAsDataURL(file);
     } else {
-      // Strongly compress photo client-side so Supabase storage & Realtime stay tiny
       try {
         const compressed = await compressChatMediaImage(file);
         setDeviceMediaPreview(compressed);
@@ -248,63 +278,189 @@ export const StatusView: React.FC = () => {
   const handlePostDevicePhoto = (e: React.FormEvent) => {
     e.preventDefault();
     if (!deviceMediaPreview) {
-      alert('Please choose a photo from your device');
+      setStatusError('Please select a photo from your device.');
       return;
     }
-
-    addDeviceMediaStatus(mediaCaption.trim() || 'Photo Status 📸', deviceMediaPreview, 'image');
+    addDeviceMediaStatus(mediaCaption.trim() || 'Photo Status', deviceMediaPreview, 'image');
     setDeviceMediaPreview('');
     setMediaCaption('');
+    setStatusError(null);
     setModalMode('none');
   };
 
   const handlePostDeviceVideo = (e: React.FormEvent) => {
     e.preventDefault();
     if (!deviceMediaPreview) {
-      alert('Please choose a video from your device');
+      setStatusError('Please select a video clip.');
       return;
     }
-
-    addDeviceVideoStatus(mediaCaption.trim() || 'Video Status 🎥', deviceMediaPreview);
+    addDeviceVideoStatus(mediaCaption.trim() || 'Video Status', deviceMediaPreview);
     setDeviceMediaPreview('');
     setMediaCaption('');
+    setStatusError(null);
     setModalMode('none');
   };
 
   const handlePostThought = (e: React.FormEvent) => {
     e.preventDefault();
     if (!thoughtText.trim()) {
-      alert('Please type your thought yarn');
+      setStatusError('Please enter your thought before publishing.');
       return;
     }
-
     addThoughtStatus(thoughtText.trim(), selectedTheme.bg);
     setThoughtText('');
+    setStatusError(null);
+    setModalMode('none');
+  };
+
+  const handlePostSponsoredAd = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adBrand.trim() || !adCaption.trim()) {
+      setStatusError('Enter brand name and promo message.');
+      return;
+    }
+    const visualUrl = deviceMediaPreview || '/src/assets/images/lagos_tech_smartphones_1794210826603.jpg';
+    addSponsoredStatus({
+      brand: adBrand.trim(),
+      caption: adCaption.trim(),
+      mediaUrl: visualUrl,
+      ctaLabel: adCtaLabel.trim() || 'Shop Now',
+      targetUrl: adTargetUrl.trim() || '#market',
+    });
+    setDeviceMediaPreview('');
+    setAdCaption('');
+    setAdTargetUrl('');
+    setStatusError(null);
     setModalMode('none');
   };
 
   const openGroupStories = (group: ContactStoryGroup) => {
-    // Open the earliest unviewed story, or the first slide
     const target = group.statuses.find((s) => !isStatusViewedByMe(s)) || group.statuses[0];
     setActiveViewingStatus(target);
     markStatusViewed(target.id);
   };
 
+  const openSingleStory = (statusItem: UserStatus) => {
+    setActiveViewingStatus(statusItem);
+    markStatusViewed(statusItem.id);
+  };
+
   return (
     <div className="relative flex flex-col pb-28 bg-white dark:bg-black text-slate-900 dark:text-white min-h-[calc(100vh-130px)]">
-      {/* WhatsApp-Style Header */}
+      {/* Header */}
       <div className="px-4 py-3 flex items-center justify-between border-b border-slate-100 dark:border-neutral-800">
         <div>
           <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white font-display">
             Updates
           </h2>
           <p className="text-xs text-slate-500 dark:text-neutral-400">
-            24h Stories from your contacts & creators
+            24h Stories from your contacts, creators &amp; sponsors
           </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setStatusError(null);
+            setDeviceMediaPreview('');
+            setModalMode('sponsored_ad');
+          }}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 text-xs font-semibold transition-colors whitespace-nowrap"
+        >
+          <Megaphone className="w-3.5 h-3.5" />
+          <span>Promote Ad</span>
+        </button>
+      </div>
+
+      {/* Horizontal Stories & Sponsored Ad Rings Carousel */}
+      <div className="px-4 py-3.5 border-b border-slate-100 dark:border-neutral-800 bg-slate-50/40 dark:bg-zinc-950/60">
+        <div className="flex items-start gap-4 overflow-x-auto no-scrollbar pb-1">
+          {/* My Status Ring */}
+          <div
+            onClick={() => {
+              if (myStatuses.length > 0) {
+                setActiveViewingStatus(myStatuses[myStatuses.length - 1] || myStatuses[0]);
+              } else {
+                setShowAddStoryMenu(true);
+              }
+            }}
+            className="flex flex-col items-center shrink-0 cursor-pointer"
+          >
+            <div className="w-16 h-16 rounded-full p-0.5 bg-gradient-to-tr from-violet-500 to-purple-600 relative">
+              <div className="w-full h-full rounded-full overflow-hidden bg-zinc-900 border-2 border-white dark:border-zinc-950">
+                <img
+                  src={currentUser.avatarUrl || FALLBACK_AVATAR}
+                  alt="My status"
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              {myStatuses.length === 0 && (
+                <span className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-violet-600 text-white flex items-center justify-center ring-2 ring-white dark:ring-zinc-950">
+                  <Plus className="w-3 h-3 stroke-[3]" />
+                </span>
+              )}
+            </div>
+            <span className="text-xs text-slate-700 dark:text-zinc-300 font-medium mt-1.5 truncate max-w-[64px]">
+              My Status
+            </span>
+          </div>
+
+          {/* Sponsored Ad Rings (Purple-to-Gold Gradient Ring + AD Badge) */}
+          {sponsoredStatuses.map((adStatus) => (
+            <div
+              key={adStatus.id}
+              onClick={() => openSingleStory(adStatus)}
+              className="flex flex-col items-center shrink-0 cursor-pointer"
+            >
+              <div className="w-16 h-16 rounded-full p-0.5 bg-gradient-to-tr from-amber-500 via-violet-600 to-indigo-600 shadow-lg">
+                <div className="w-full h-full rounded-full overflow-hidden bg-zinc-900 border-2 border-white dark:border-zinc-950 relative">
+                  <img
+                    src={adStatus.mediaUrl || adStatus.userAvatar || FALLBACK_AVATAR}
+                    alt={adStatus.sponsorBrand || 'Sponsored Ad'}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                  />
+                  <span className="absolute bottom-0 inset-x-0 bg-amber-500 text-[8px] font-extrabold text-black text-center py-0.5 tracking-wider">
+                    AD
+                  </span>
+                </div>
+              </div>
+              <span className="text-xs text-amber-600 dark:text-amber-400 font-semibold mt-1.5 truncate max-w-[64px]">
+                {adStatus.sponsorBrand || 'Sponsored'}
+              </span>
+            </div>
+          ))}
+
+          {/* Contact Story Rings (Unviewed & Viewed) */}
+          {[...recentGroups, ...viewedGroups].map((group) => (
+            <div
+              key={group.key}
+              onClick={() => openGroupStories(group)}
+              className="flex flex-col items-center shrink-0 cursor-pointer"
+            >
+              <div
+                className={`w-16 h-16 rounded-full p-0.5 ${
+                  group.hasUnviewed ? 'bg-violet-500' : 'bg-slate-300 dark:bg-zinc-700'
+                }`}
+              >
+                <div className="w-full h-full rounded-full overflow-hidden bg-zinc-900 border-2 border-white dark:border-zinc-950">
+                  <img
+                    src={group.userAvatar || FALLBACK_AVATAR}
+                    alt={group.userName}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
+              <span className="text-xs text-slate-600 dark:text-zinc-300 mt-1.5 truncate max-w-[64px]">
+                {group.userName}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* 1. My Status Row (Clean WhatsApp Style) */}
+      {/* 1. My Status Row (Quick Controls & Manage Tray) */}
       <div className="border-b border-slate-100 dark:border-neutral-800">
         <div className="flex items-center justify-between px-4 py-3 hover:bg-slate-50 dark:hover:bg-neutral-900/60 transition-colors">
           <div
@@ -322,10 +478,7 @@ export const StatusView: React.FC = () => {
                 <>
                   <StoryRing count={myStatuses.length} hasUnviewed={true} size={52} />
                   <img
-                    src={
-                      currentUser.avatarUrl ||
-                      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
-                    }
+                    src={currentUser.avatarUrl || FALLBACK_AVATAR}
                     alt="My status"
                     referrerPolicy="no-referrer"
                     className="w-11 h-11 rounded-full object-cover"
@@ -334,10 +487,7 @@ export const StatusView: React.FC = () => {
               ) : (
                 <div className="relative w-12 h-12">
                   <img
-                    src={
-                      currentUser.avatarUrl ||
-                      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
-                    }
+                    src={currentUser.avatarUrl || FALLBACK_AVATAR}
                     alt="My status"
                     referrerPolicy="no-referrer"
                     className="w-12 h-12 rounded-full object-cover"
@@ -355,8 +505,8 @@ export const StatusView: React.FC = () => {
                   {t('myStatus')}
                 </h3>
                 {myStatuses.length > 0 && (
-                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 rounded-full">
-                    {myStatuses.length}
+                  <span className="text-[10px] font-mono font-bold text-purple-600 dark:text-purple-400">
+                    · {myStatuses.length}
                   </span>
                 )}
               </div>
@@ -368,7 +518,6 @@ export const StatusView: React.FC = () => {
             </div>
           </div>
 
-          {/* Quick Actions (Camera 📷 & Pencil ✍️) */}
           <div className="flex items-center gap-1.5 shrink-0 ml-2">
             {myStatuses.length > 0 && (
               <button
@@ -383,7 +532,7 @@ export const StatusView: React.FC = () => {
             <button
               type="button"
               onClick={() => setModalMode('thought')}
-              className="w-9 h-9 rounded-full bg-slate-100 dark:bg-neutral-800 text-slate-700 dark:text-neutral-200 hover:bg-purple-100 dark:hover:bg-purple-950/50 hover:text-purple-600 flex items-center justify-center transition-all"
+              className="w-10 h-10 rounded-full bg-slate-100 dark:bg-neutral-800 text-slate-700 dark:text-neutral-200 hover:bg-purple-100 dark:hover:bg-purple-950/50 hover:text-purple-600 flex items-center justify-center transition-all"
               title="Write Thought / Text Status"
             >
               <Edit3 className="w-4 h-4" />
@@ -391,7 +540,7 @@ export const StatusView: React.FC = () => {
             <button
               type="button"
               onClick={() => setModalMode('device_photo')}
-              className="w-9 h-9 rounded-full bg-purple-600 text-white hover:bg-purple-700 flex items-center justify-center transition-all shadow-xs"
+              className="w-10 h-10 rounded-full bg-purple-600 text-white hover:bg-purple-700 flex items-center justify-center transition-all shadow-xs"
               title="Take or Upload Photo / Video"
             >
               <Camera className="w-4 h-4" />
@@ -399,7 +548,7 @@ export const StatusView: React.FC = () => {
           </div>
         </div>
 
-        {/* Manage My Stories Tray (Expandable) */}
+        {/* Manage My Stories Tray */}
         {myStatuses.length > 0 && showMyStoriesTray && (
           <div className="px-4 pb-3 pt-1 border-t border-slate-100 dark:border-neutral-800/60 bg-slate-50/50 dark:bg-neutral-950/40">
             <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
@@ -414,18 +563,18 @@ export const StatusView: React.FC = () => {
                       <div
                         className={`w-full h-full bg-gradient-to-br ${
                           st.thoughtBg || 'from-indigo-600 to-purple-600'
-                        } flex items-center justify-center text-xs`}
+                        } flex items-center justify-center text-xs text-white font-bold`}
                       >
-                        💭
+                        Aa
                       </div>
                     ) : st.videoUrl || st.statusType === 'video' ? (
                       <div className="w-full h-full bg-slate-900 flex items-center justify-center text-white text-xs">
-                        🎥
+                        <Film className="w-4 h-4" />
                       </div>
                     ) : st.mediaUrl ? (
                       <img src={st.mediaUrl} alt="" className="w-full h-full object-cover" />
                     ) : (
-                      <span className="text-xs">📸</span>
+                      <Camera className="w-4 h-4 text-purple-500" />
                     )}
                   </div>
 
@@ -446,9 +595,7 @@ export const StatusView: React.FC = () => {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (window.confirm('Delete this story?')) {
-                        deleteStatus(st.id);
-                      }
+                      deleteStatus(st.id);
                     }}
                     className="p-1 text-slate-400 hover:text-rose-500 transition-colors ml-1"
                     title="Delete story"
@@ -462,9 +609,65 @@ export const StatusView: React.FC = () => {
         )}
       </div>
 
+      {/* Sponsored Feed Cards (Promoted System & Vendor Stories) */}
+      {sponsoredStatuses.length > 0 && (
+        <div className="border-b border-slate-100 dark:border-neutral-800">
+          <div className="px-4 pt-3 pb-1.5 flex items-center justify-between">
+            <span className="text-xs font-semibold text-amber-600 dark:text-amber-400 tracking-wide">
+              Sponsored Promotions
+            </span>
+            <span className="text-[11px] text-slate-400 font-mono tabular-nums">
+              {sponsoredStatuses.length} active
+            </span>
+          </div>
+          <div className="divide-y divide-slate-100/80 dark:divide-neutral-900">
+            {sponsoredStatuses.map((ad) => (
+              <div
+                key={ad.id}
+                onClick={() => openSingleStory(ad)}
+                className="flex items-center justify-between px-4 py-2.5 hover:bg-amber-50/40 dark:hover:bg-amber-950/10 cursor-pointer transition-colors"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-13 h-13 rounded-full p-0.5 bg-gradient-to-tr from-amber-500 via-violet-600 to-indigo-600 shrink-0">
+                    <div className="w-full h-full rounded-full overflow-hidden bg-zinc-900 border-2 border-white dark:border-zinc-950 relative">
+                      <img
+                        src={ad.mediaUrl || ad.userAvatar || FALLBACK_AVATAR}
+                        alt={ad.sponsorBrand || ad.userName}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                      />
+                      <span className="absolute bottom-0 inset-x-0 bg-amber-500 text-[7px] font-extrabold text-black text-center">
+                        AD
+                      </span>
+                    </div>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 text-sm">
+                      <h4 className="font-semibold text-slate-900 dark:text-white truncate">
+                        {ad.sponsorBrand || ad.userName}
+                      </h4>
+                      <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                        · Sponsored
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-neutral-400 truncate mt-0.5">
+                      {ad.caption}
+                    </p>
+                  </div>
+                </div>
+                <span className="shrink-0 ml-2 inline-flex items-center gap-1 text-xs font-semibold text-violet-600 dark:text-violet-400">
+                  <span>{ad.ctaLabel || 'View'}</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* 2. Recent Updates Section (Unviewed Contacts) */}
       <div className="mt-2">
-        <div className="px-4 py-2 text-xs font-semibold text-slate-500 dark:text-neutral-400 uppercase tracking-wider">
+        <div className="px-4 py-2 text-xs font-semibold text-slate-500 dark:text-neutral-400 tracking-wide">
           {t('recentUpdates')}
         </div>
 
@@ -493,9 +696,8 @@ export const StatusView: React.FC = () => {
                         {group.userName}
                       </h4>
                       {group.isCreator && (
-                        <span className="inline-flex items-center gap-0.5 text-[9px] font-mono font-bold bg-amber-500/20 text-amber-600 dark:text-amber-400 px-1.5 py-0.2 rounded-full">
-                          <Crown className="w-2.5 h-2.5" />
-                          <span>VIP</span>
+                        <span className="text-xs text-amber-600 dark:text-amber-400 font-semibold">
+                          · VIP
                         </span>
                       )}
                       {group.statuses.length > 1 && (
@@ -523,19 +725,19 @@ export const StatusView: React.FC = () => {
               onClick={() => setIsContactsModalOpen(true)}
               className="mt-2 text-xs font-semibold text-purple-600 dark:text-purple-400 hover:underline inline-block"
             >
-              Sync Phone Contacts to see friends' stories
+              Sync Phone Contacts to see friends&apos; stories
             </button>
           </div>
         )}
       </div>
 
-      {/* 3. Viewed Updates Section (Collapsible WhatsApp Style) */}
+      {/* 3. Viewed Updates Section */}
       {viewedGroups.length > 0 && (
         <div className="mt-2 border-t border-slate-100 dark:border-neutral-800">
           <button
             type="button"
             onClick={() => setIsViewedExpanded(!isViewedExpanded)}
-            className="w-full px-4 py-2.5 flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-neutral-400 uppercase tracking-wider hover:bg-slate-50 dark:hover:bg-neutral-900/40 transition-colors"
+            className="w-full px-4 py-2.5 flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-neutral-400 tracking-wide hover:bg-slate-50 dark:hover:bg-neutral-900/40 transition-colors"
           >
             <span>Viewed updates ({viewedGroups.length})</span>
             {isViewedExpanded ? (
@@ -590,13 +792,13 @@ export const StatusView: React.FC = () => {
         </div>
       )}
 
-      {/* 4. Followed Creators VIP Drops Tray (Compact & Clean) */}
+      {/* 4. Followed Creators VIP Drops Tray */}
       {creators.some((c) => c.isSubscribedByMe || c.isFollowedByMe) && (
         <div className="mt-4 px-4 pt-3 border-t border-slate-100 dark:border-neutral-800">
           <div className="flex items-center justify-between mb-2.5">
-            <span className="text-xs font-semibold text-slate-500 dark:text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
+            <span className="text-xs font-semibold text-slate-500 dark:text-neutral-400 tracking-wide flex items-center gap-1.5">
               <Crown className="w-3.5 h-3.5 text-amber-500" />
-              <span>Channels & VIP Creators</span>
+              <span>Channels &amp; VIP Creators</span>
             </span>
             <button
               onClick={() => setIsCreatorModalOpen(true)}
@@ -646,14 +848,14 @@ export const StatusView: React.FC = () => {
         </div>
       )}
 
-      {/* 5. Creator VIP Drops Feed (preserved from original — rich post cards) */}
+      {/* 5. Creator VIP Drops Feed */}
       {creatorPosts.filter((p) => {
         const c = creators.find((cr) => cr.id === p.creatorId);
         return c?.isSubscribedByMe || c?.isFollowedByMe;
       }).length > 0 && (
         <div className="mt-4 px-3 pb-2 border-t border-slate-100 dark:border-neutral-800 pt-4 space-y-3">
           <div className="flex items-center justify-between px-1 mb-1">
-            <span className="text-xs font-semibold text-slate-500 dark:text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
+            <span className="text-xs font-semibold text-slate-500 dark:text-neutral-400 tracking-wide flex items-center gap-1.5">
               <Crown className="w-3.5 h-3.5 text-amber-500" />
               <span>VIP Creator Drops</span>
             </span>
@@ -676,37 +878,26 @@ export const StatusView: React.FC = () => {
                 <div
                   key={post.id}
                   onClick={() => setIsCreatorModalOpen(true)}
-                  className="p-3.5 rounded-3xl bg-gradient-to-br from-purple-950/20 via-slate-50 to-pink-950/10 dark:from-purple-950/40 dark:via-neutral-900 dark:to-neutral-950 border border-purple-500/30 cursor-pointer shadow-2xs hover:shadow-md transition-all space-y-2.5"
+                  className="p-3.5 rounded-3xl bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 cursor-pointer hover:border-purple-500/40 transition-all space-y-2.5"
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
-                      <div className="relative">
-                        <img
-                          src={creator?.avatar || post.creatorAvatar}
-                          alt={post.creatorName}
-                          className="w-9 h-9 rounded-full object-cover border border-purple-500/40"
-                        />
-                        <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-amber-500 text-white flex items-center justify-center">
-                          <Crown className="w-2 h-2" />
-                        </div>
-                      </div>
+                      <img
+                        src={creator?.avatar || post.creatorAvatar}
+                        alt={post.creatorName}
+                        className="w-9 h-9 rounded-full object-cover"
+                      />
                       <div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-bold text-slate-900 dark:text-white">
-                            {post.creatorName}
-                          </span>
-                          <span className="text-[9px] font-mono font-bold bg-amber-500/20 text-amber-600 dark:text-amber-400 px-1 py-0.5 rounded-full">
-                            {creator?.isSubscribedByMe ? 'VIP Story' : 'Creator Story'}
-                          </span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          {post.createdAt} · Verified African Creator
+                        <span className="text-xs font-bold text-slate-900 dark:text-white block">
+                          {post.creatorName}
+                        </span>
+                        <span className="text-[11px] text-slate-400 font-mono">
+                          {post.createdAt} · {creator?.isSubscribedByMe ? 'VIP Story' : 'Creator Story'}
                         </span>
                       </div>
                     </div>
-
-                    <span className="text-[10px] font-mono font-bold text-purple-600 dark:text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full">
-                      {post.mediaType === 'audio_leak' ? '🎵 Studio Leak' : '🌟 VIP Drop'}
+                    <span className="text-[11px] font-mono text-purple-600 dark:text-purple-400 font-semibold">
+                      {post.mediaType === 'audio_leak' ? 'Studio Leak' : 'VIP Drop'}
                     </span>
                   </div>
 
@@ -715,7 +906,7 @@ export const StatusView: React.FC = () => {
                   </p>
 
                   {post.mediaUrl && (
-                    <div className="rounded-2xl overflow-hidden max-h-48 border border-purple-500/20">
+                    <div className="rounded-2xl overflow-hidden max-h-48">
                       <img
                         src={post.mediaUrl}
                         alt="VIP Post Media"
@@ -726,7 +917,7 @@ export const StatusView: React.FC = () => {
 
                   <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono pt-1 border-t border-slate-100 dark:border-neutral-800">
                     <span className="text-purple-600 dark:text-purple-400 font-semibold">
-                      Tap to open VIP Hub & Leaks
+                      Tap to open VIP Hub &amp; Leaks
                     </span>
                     <span className="flex items-center gap-1 text-rose-500">
                       <Heart className="w-3 h-3 fill-rose-500" /> {post.likesCount}
@@ -738,12 +929,12 @@ export const StatusView: React.FC = () => {
         </div>
       )}
 
-      {/* Floating Action Buttons (FABs) - WhatsApp Signature */}
+      {/* Floating Action Buttons */}
       <div className="fixed bottom-24 right-5 flex flex-col items-center gap-3 z-30">
         <button
           type="button"
           onClick={() => setModalMode('thought')}
-          className="w-10 h-10 rounded-full bg-slate-100 dark:bg-neutral-800 text-slate-700 dark:text-neutral-200 hover:text-purple-600 shadow-md flex items-center justify-center border border-slate-200 dark:border-neutral-700 hover:scale-105 active:scale-95 transition-all"
+          className="w-11 h-11 rounded-full bg-slate-100 dark:bg-neutral-800 text-slate-700 dark:text-neutral-200 hover:text-purple-600 shadow-md flex items-center justify-center border border-slate-200 dark:border-neutral-700 hover:scale-105 active:scale-95 transition-all"
           title="Write Thought Status"
         >
           <Edit3 className="w-4 h-4" />
@@ -758,7 +949,7 @@ export const StatusView: React.FC = () => {
         </button>
       </div>
 
-      {/* MODAL 1: PHOTO STATUS (DEVICE UPLOAD) */}
+      {/* MODAL 1: PHOTO STATUS */}
       {modalMode === 'device_photo' && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-2xl space-y-4 border border-slate-200 dark:border-neutral-800">
@@ -780,6 +971,10 @@ export const StatusView: React.FC = () => {
                 Cancel
               </button>
             </div>
+
+            {statusError && (
+              <p className="text-xs text-rose-500 font-medium">{statusError}</p>
+            )}
 
             <form onSubmit={handlePostDevicePhoto} className="space-y-3.5">
               <label className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-300 dark:border-neutral-700 rounded-2xl cursor-pointer hover:border-purple-600 transition-colors">
@@ -816,7 +1011,7 @@ export const StatusView: React.FC = () => {
                   type="text"
                   value={mediaCaption}
                   onChange={(e) => setMediaCaption(e.target.value)}
-                  placeholder="Type a caption... 📸"
+                  placeholder="Type a caption..."
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
                 />
               </div>
@@ -833,7 +1028,7 @@ export const StatusView: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL 2: VIDEO STATUS (DEVICE VIDEO UPLOAD) */}
+      {/* MODAL 2: VIDEO STATUS */}
       {modalMode === 'device_video' && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-2xl space-y-4 border border-slate-200 dark:border-neutral-800">
@@ -855,6 +1050,10 @@ export const StatusView: React.FC = () => {
                 Cancel
               </button>
             </div>
+
+            {statusError && (
+              <p className="text-xs text-rose-500 font-medium">{statusError}</p>
+            )}
 
             <form onSubmit={handlePostDeviceVideo} className="space-y-3.5">
               <label className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-slate-300 dark:border-neutral-700 rounded-2xl cursor-pointer hover:border-purple-600 transition-colors">
@@ -893,7 +1092,7 @@ export const StatusView: React.FC = () => {
                   type="text"
                   value={mediaCaption}
                   onChange={(e) => setMediaCaption(e.target.value)}
-                  placeholder="Type a video caption... 🎥"
+                  placeholder="Type a video caption..."
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
                 />
               </div>
@@ -910,7 +1109,7 @@ export const StatusView: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL 3: SHARE A THOUGHT (THOUGHT BUBBLE) */}
+      {/* MODAL 3: THOUGHT BUBBLE */}
       {modalMode === 'thought' && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-2xl space-y-4 border border-slate-200 dark:border-neutral-800">
@@ -921,7 +1120,7 @@ export const StatusView: React.FC = () => {
                   <span>Post a Thought Bubble</span>
                 </h3>
                 <p className="text-[11px] text-slate-400">
-                  Displays as an authentic cloud thought bubble
+                  Displays as a 24h gradient thought card
                 </p>
               </div>
               <button
@@ -933,20 +1132,19 @@ export const StatusView: React.FC = () => {
               </button>
             </div>
 
+            {statusError && (
+              <p className="text-xs text-rose-500 font-medium">{statusError}</p>
+            )}
+
             <form onSubmit={handlePostThought} className="space-y-3.5">
-              {/* Live Preview Thought Bubble */}
               <div
                 className={`p-5 rounded-3xl bg-gradient-to-br ${selectedTheme.bg} text-white shadow-lg text-center space-y-2`}
               >
-                <div className="text-[9px] uppercase tracking-widest font-mono text-white/70">
-                  💭 Bubble Preview
-                </div>
                 <p className="text-base font-bold min-h-[48px] flex items-center justify-center leading-snug">
                   {thoughtText.trim() ? `"${thoughtText}"` : 'Type your thoughts below...'}
                 </p>
               </div>
 
-              {/* Theme Selector */}
               <div>
                 <label className="block text-xs font-semibold text-slate-600 dark:text-neutral-300 mb-1.5">
                   Choose Bubble Gradient
@@ -971,7 +1169,6 @@ export const StatusView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Thought Textarea */}
               <div>
                 <label className="block text-xs font-semibold text-slate-600 dark:text-neutral-300 mb-1">
                   Your Thought
@@ -980,7 +1177,7 @@ export const StatusView: React.FC = () => {
                   rows={3}
                   value={thoughtText}
                   onChange={(e) => setThoughtText(e.target.value)}
-                  placeholder="e.g. Lagos traffic today is something else 😩🚗 or Market restocked!"
+                  placeholder="Share what is happening right now..."
                   required
                   autoFocus
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
@@ -998,7 +1195,104 @@ export const StatusView: React.FC = () => {
         </div>
       )}
 
-      {/* Story Action Sheet: Photo, Video & Thought Chooser */}
+      {/* MODAL 4: SPONSORED VENDOR AD */}
+      {modalMode === 'sponsored_ad' && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-2xl space-y-4 border border-amber-500/40">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <Megaphone className="w-4 h-4 text-amber-500" />
+                  <span>Publish Sponsored Status Ad</span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Broadcast a vendor promotion with click tracking
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalMode('none')}
+                className="text-xs text-slate-400 hover:text-slate-600"
+              >
+                Cancel
+              </button>
+            </div>
+
+            {statusError && (
+              <p className="text-xs text-rose-500 font-medium">{statusError}</p>
+            )}
+
+            <form onSubmit={handlePostSponsoredAd} className="space-y-3">
+              <label className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-amber-500/40 rounded-2xl cursor-pointer hover:border-amber-500 transition-colors">
+                {deviceMediaPreview ? (
+                  <img
+                    src={deviceMediaPreview}
+                    alt="Ad Preview"
+                    className="max-h-36 rounded-xl object-cover"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center text-center">
+                    <Upload className="w-6 h-6 text-amber-500 mb-1.5" />
+                    <span className="text-xs font-semibold text-slate-700 dark:text-neutral-200">
+                      Upload Ad Banner (optional)
+                    </span>
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleDeviceFileUpload(e, false)}
+                  className="hidden"
+                />
+              </label>
+
+              <input
+                type="text"
+                value={adBrand}
+                onChange={(e) => setAdBrand(e.target.value)}
+                placeholder="Brand or Store Name"
+                required
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
+
+              <textarea
+                rows={2}
+                value={adCaption}
+                onChange={(e) => setAdCaption(e.target.value)}
+                placeholder="Promotional copy (e.g., 20% off Lagos Weekend Drop)"
+                required
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
+
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={adCtaLabel}
+                  onChange={(e) => setAdCtaLabel(e.target.value)}
+                  placeholder="CTA (e.g. Shop Now)"
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
+                <input
+                  type="text"
+                  value={adTargetUrl}
+                  onChange={(e) => setAdTargetUrl(e.target.value)}
+                  placeholder="https://... or #market"
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-violet-600 text-white rounded-xl text-xs font-bold shadow-md hover:opacity-95 transition-opacity"
+              >
+                Launch Sponsored Ad Story
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Story Action Sheet */}
       {showAddStoryMenu && (
         <div
           className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in"
@@ -1025,23 +1319,36 @@ export const StatusView: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 pt-1">
+            <div className="grid grid-cols-3 gap-2.5 pt-1">
               <button
                 type="button"
                 onClick={() => {
                   setShowAddStoryMenu(false);
                   setModalMode('device_photo');
                 }}
-                className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/30 border border-slate-200 dark:border-neutral-800 hover:border-purple-500/50 transition-all text-center group"
+                className="flex flex-col items-center justify-center gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/30 border border-slate-200 dark:border-neutral-800 transition-all text-center group"
               >
-                <div className="w-12 h-12 rounded-2xl bg-purple-600/10 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition-colors">
-                  <Camera className="w-6 h-6" />
+                <div className="w-10 h-10 rounded-2xl bg-purple-600/10 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition-colors">
+                  <Camera className="w-5 h-5" />
                 </div>
                 <span className="text-xs font-bold text-slate-800 dark:text-neutral-200">
-                  Photo or Video
+                  Photo
                 </span>
-                <span className="text-[10px] text-purple-600 dark:text-purple-400 font-semibold">
-                  Camera & Upload
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddStoryMenu(false);
+                  setModalMode('device_video');
+                }}
+                className="flex flex-col items-center justify-center gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/30 border border-slate-200 dark:border-neutral-800 transition-all text-center group"
+              >
+                <div className="w-10 h-10 rounded-2xl bg-purple-600/10 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition-colors">
+                  <Video className="w-5 h-5" />
+                </div>
+                <span className="text-xs font-bold text-slate-800 dark:text-neutral-200">
+                  Video
                 </span>
               </button>
 
@@ -1051,16 +1358,13 @@ export const StatusView: React.FC = () => {
                   setShowAddStoryMenu(false);
                   setModalMode('thought');
                 }}
-                className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/30 border border-slate-200 dark:border-neutral-800 hover:border-purple-500/50 transition-all text-center group"
+                className="flex flex-col items-center justify-center gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 hover:bg-purple-50 dark:hover:bg-purple-950/30 border border-slate-200 dark:border-neutral-800 transition-all text-center group"
               >
-                <div className="w-11 h-11 rounded-2xl bg-purple-600/10 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition-colors">
+                <div className="w-10 h-10 rounded-2xl bg-purple-600/10 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition-colors">
                   <Sparkles className="w-5 h-5" />
                 </div>
                 <span className="text-xs font-bold text-slate-800 dark:text-neutral-200">
                   Thought
-                </span>
-                <span className="text-[9px] text-slate-400">
-                  Color gradient
                 </span>
               </button>
             </div>

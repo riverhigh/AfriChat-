@@ -1144,13 +1144,13 @@ create policy "profiles_read_all"   on public.profiles for select using (true);
 create policy "profiles_update_own" on public.profiles for update using (auth.uid() = id);
 create policy "profiles_insert_own" on public.profiles for insert with check (auth.uid() = id);
 
--- Wallets: only owner
-create policy "wallet_owner_only" on public.wallets
-  for all using (auth.uid() = user_id);
+-- Wallets: strict SELECT-only for owner (mutations exclusively via server service_role / SECURITY DEFINER RPCs)
+create policy "wallet_select_own" on public.wallets
+  for select using (auth.uid() = user_id);
 
--- Wallet transactions: only owner
-create policy "wallet_tx_owner_only" on public.wallet_transactions
-  for all using (auth.uid() = user_id);
+-- Wallet transactions: strict SELECT-only for owner
+create policy "wallet_tx_select_own" on public.wallet_transactions
+  for select using (auth.uid() = user_id);
 
 -- Messages: chat participants only
 create policy "messages_chat_members" on public.messages

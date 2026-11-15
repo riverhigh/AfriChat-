@@ -10,6 +10,8 @@ import {
   emitCallSignal,
   joinLiveSpace,
   leaveLiveSpace,
+  emitSpaceStageAction,
+  emitEndSpace,
   registerSocketUser,
   emitPostStatus,
   emitViewStatus,
@@ -35,6 +37,21 @@ export const phonesMatch = (p1?: string, p2?: string): boolean => {
   const n2 = normalizePhoneDigits(p2);
   if (n1 && n2 && n1 === n2) return true;
   if (c1.length >= 9 && c2.length >= 9 && c1.slice(-9) === c2.slice(-9)) return true;
+  return false;
+};
+
+export const isSpaceCreator = (
+  space?: Pick<AudioSpace, 'hostId' | 'hostPhone' | 'speakers'> | null,
+  user?: Pick<UserProfile, 'id' | 'phoneNumber'> | null
+): boolean => {
+  if (!space || !user) return false;
+  if (space.hostId && user.id && space.hostId === user.id) return true;
+  if (space.hostPhone && user.phoneNumber && phonesMatch(space.hostPhone, user.phoneNumber)) {
+    return true;
+  }
+  if (!space.hostId && Array.isArray(space.speakers)) {
+    return space.speakers.some((s) => s.role === 'host' && Boolean(user.id) && s.id === user.id);
+  }
   return false;
 };
 
@@ -340,6 +357,8 @@ import {
   updateAudioSpaceInDb,
   mapAudioSpaceRow,
   getActiveSpacesTable,
+  fetchStatusFeedWithAds,
+  trackAdClickInDb,
   fetchLiveArtisanStations,
   createArtisanStationInDb,
   fetchLiveStoreSubscriptions,
@@ -551,17 +570,27 @@ interface AppContextType {
   addThoughtStatus: (thoughtText: string, themeBg: string) => void;
   addDeviceMediaStatus: (caption: string, mediaUrl: string, mediaType?: 'image' | 'video') => void;
   addDeviceVideoStatus: (caption: string, videoUrl: string, thumbnail?: string) => void;
+  addSponsoredStatus: (ad: { brand: string; caption: string; mediaUrl: string; ctaLabel?: string; targetUrl?: string }) => void;
   deleteStatus: (statusId: string) => void;
+  handleAdClick: (statusId: string, targetUrl?: string) => Promise<void>;
   wallet: UserWallet;
   isWalletModalOpen: boolean;
   setIsWalletModalOpen: (val: boolean) => void;
-  topUpWallet: (amount: number) => { success: boolean; reference: string; fee: number; totalPaid: number };
+  refreshWalletFromServer: () => Promise<void>;
+  topUpWallet: (
+    amount: number,
+    reference?: string
+  ) => Promise<{ success: boolean; reference: string; fee: number; totalPaid: number; message?: string }>;
   withdrawWallet: (
     amount: number,
     bankName: string,
     accountNumber: string,
     accountName: string
-  ) => { success: boolean; message: string };
+  ) => Promise<{ success: boolean; message: string }>;
+  updateUsername: (
+    newUsername: string,
+    newAbout?: string
+  ) => Promise<{ success: boolean; error?: string; username?: string }>;
   hideBalanceOnNav: boolean;
   toggleHideBalance: () => void;
   activeCheckoutProduct: Product | null;
@@ -630,6 +659,8 @@ interface AppContextType {
   // 2. Live Audio Spaces / Street Radio
   isSpacesDashboardOpen: boolean;
   setIsSpacesDashboardOpen: (val: boolean) => void;
+  isAudioSpaceMinimized: boolean;
+  setIsAudioSpaceMinimized: (val: boolean) => void;
   audioSpaces: AudioSpace[];
   activeAudioSpace: AudioSpace | null;
   joinAudioSpace: (space: AudioSpace) => void;
@@ -642,6 +673,7 @@ interface AppContextType {
   ) => AudioSpace;
   toggleAudioSpaceMute: () => void;
   toggleSpaceLowBandwidth: () => void;
+  isSpaceCreator: (space?: AudioSpace | null) => boolean;
   // 3. Scam Alert & Reputation Checker
   scamDatabase: Record<string, ScamEntity>;
   isScamCheckerModalOpen: boolean;
@@ -1175,6 +1207,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       bannerUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
       linkUrl: '',
     },
+    sponsoredStatuses: [],
   };
 
   const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
@@ -2697,10 +2730,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {}
   }, [audioSpaces]);
   const [activeAudioSpace, setActiveAudioSpace] = useState<AudioSpace | null>(null);
+  const [isAudioSpaceMinimized, setIsAudioSpaceMinimized] = useState(false);
+  const activeAudioSpaceRef = useRef<AudioSpace | null>(null);
+  activeAudioSpaceRef.current = activeAudioSpace;
 
-  // 🌐 LIVE SYSTEM: Hydrate and listen for live Audio Spaces across devices via Supabase + Realtime
+  // 🌐 LIVE SYSTEM: Hydrate and listen for live Audio Spaces across devices via Supabase + Socket.IO
   useEffect(() => {
-    if (!isSupabaseConfigured) return;
+    const socket = getSocket();
+    const handleSpaceEndedEvent = (payload: any) => {
+      const endedId = payload?.id || payload?.spaceId;
+      if (!endedId) return;
+      setAudioSpaces((prev) => prev.filter((s) => s.id !== endedId));
+      setActiveAudioSpace((prev) => {
+        if (prev && prev.id === endedId) {
+          setSpaceEndedSummary({
+            spaceId: endedId,
+            title: prev.title || 'Live Community Space',
+            durationFormatted: payload?.durationFormatted || 'Ended by host',
+            peakListeners: payload?.peakListeners || prev.peakListeners || prev.listenersCount || 1,
+          });
+          setIsAudioSpaceMinimized(false);
+          return null;
+        }
+        return prev;
+      });
+    };
+    socket?.on('space_ended', handleSpaceEndedEvent);
+
+    if (!isSupabaseConfigured) {
+      return () => {
+        socket?.off('space_ended', handleSpaceEndedEvent);
+      };
+    }
 
     const syncFromSupabase = async () => {
       try {
@@ -2743,14 +2804,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       })
       .on('broadcast', { event: 'space_ended' }, ({ payload }) => {
-        const endedId = payload?.id || payload?.spaceId;
-        if (!endedId) return;
-        setAudioSpaces((prev) => prev.filter((s) => s.id !== endedId));
-        setActiveAudioSpace((prev) => (prev?.id === endedId ? null : prev));
+        handleSpaceEndedEvent(payload);
       })
       .subscribe();
 
     return () => {
+      socket?.off('space_ended', handleSpaceEndedEvent);
       Promise.resolve(supabase.removeChannel(spaceCh)).catch(() => {});
     };
   }, []);
@@ -2925,6 +2984,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isHydratingWalletRef.current = false;
 
     let cancelled = false;
+    // Always hydrate authoritative wallet balance & ledger directly from the backend server
+    fetch(`/api/wallet/${encodeURIComponent(phone)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((res) => {
+        if (cancelled || !res?.success || !res?.wallet) return;
+        const serverWallet: UserWallet = {
+          availableBalance: Number(res.wallet.availableBalance) || 0,
+          escrowLockedBalance: Number(res.wallet.escrowLockedBalance) || 0,
+          currency: res.wallet.currency || 'NGN',
+          transactions: Array.isArray(res.wallet.transactions) ? res.wallet.transactions : [],
+        };
+        isHydratingWalletRef.current = true;
+        setWallet(serverWallet);
+        walletRef.current = serverWallet;
+        persistPartitionedWallet(serverWallet, phone);
+        isHydratingWalletRef.current = false;
+      })
+      .catch(() => {});
+
     fetchUserChatsBackupFromSupabase(phone)
       .then((remote) => {
         if (cancelled || !remote) return;
@@ -2941,38 +3019,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           persistPartitionedMessages(merged.messages, phone);
         }
 
-        // Restore wallet snapshot from Supabase if local wallet was empty/cleared or older
-        const remoteWallet = remote.accountSnapshot?.wallet;
-        if (remoteWallet) {
-          const curW = walletRef.current;
-          const localIsEmpty =
-            curW.availableBalance === 0 &&
-            curW.escrowLockedBalance === 0 &&
-            curW.transactions.length === 0;
-          const remoteTxCount = Array.isArray(remoteWallet.transactions) ? remoteWallet.transactions.length : 0;
-          if (localIsEmpty || remoteTxCount > curW.transactions.length) {
-            const txMap = new Map<string, WalletTransaction>();
-            (curW.transactions || []).forEach((tx) => tx?.id && txMap.set(tx.id, tx));
-            (remoteWallet.transactions || []).forEach((tx) => tx?.id && !txMap.has(tx.id) && txMap.set(tx.id, tx));
-            const nextWallet: UserWallet = {
-              availableBalance:
-                typeof remoteWallet.availableBalance === 'number'
-                  ? remoteWallet.availableBalance
-                  : curW.availableBalance,
-              escrowLockedBalance:
-                typeof remoteWallet.escrowLockedBalance === 'number'
-                  ? remoteWallet.escrowLockedBalance
-                  : curW.escrowLockedBalance,
-              currency: remoteWallet.currency || curW.currency || 'NGN',
-              transactions: Array.from(txMap.values()),
-            };
-            isHydratingWalletRef.current = true;
-            setWallet(nextWallet);
-            walletRef.current = nextWallet;
-            persistPartitionedWallet(nextWallet, phone);
-            isHydratingWalletRef.current = false;
-          }
-        }
+        // Security rule: never overwrite authoritative server wallet balances from client backup snapshots.
 
         // Restore custom profile fields from Supabase if local missed them
         const remoteProf = remote.accountSnapshot?.userProfile;
@@ -4008,50 +4055,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (!error) console.log('[AGC] Purged expired statuses from Supabase DB to free storage');
         });
 
-      supabase
-        .from('user_statuses')
-        .select('*')
-        .gte('expires_at', new Date().toISOString())
-        .order('created_at', { ascending: false })
-        .limit(200)
-        .then(({ data }: any) => {
-          if (!data || !Array.isArray(data)) return;
-          const incoming = data
-            .filter((row: any) => {
-              const isDifferentUser = row.user_id ? row.user_id !== currentUser.id : true;
-              const rp = (row.user_phone || '').replace(/\D/g, '');
-              const isDifferentPhone = myCleanPhone ? (!rp || rp !== myCleanPhone) : true;
-              return isDifferentUser && isDifferentPhone;
-            })
-            .map((row: any): UserStatus => ({
+      fetchStatusFeedWithAds(200).then(({ data }: any) => {
+        if (!data || !Array.isArray(data)) return;
+        const incoming = data
+          .filter((row: any) => {
+            if (row.is_sponsored) return true;
+            const isDifferentUser = row.user_id ? row.user_id !== currentUser.id : true;
+            const rp = (row.user_phone || '').replace(/\D/g, '');
+            const isDifferentPhone = myCleanPhone ? (!rp || rp !== myCleanPhone) : true;
+            return isDifferentUser && isDifferentPhone;
+          })
+          .map((row: any): UserStatus => {
+            const isSponsored = Boolean(row.is_sponsored);
+            const brand = row.sponsor_brand || row.profiles?.username || row.user_name || 'Sponsored';
+            return {
               id: row.id,
-              userId: row.user_id,
-              userPhone: row.user_phone,
-              userName: row.user_name || 'AGC User',
-              userAvatar: row.user_avatar || '',
+              userId: row.user_id || (isSponsored ? `sponsor_${row.id}` : ''),
+              userPhone: row.user_phone || undefined,
+              userName: isSponsored ? brand : (row.user_name || row.profiles?.username || 'AGC User'),
+              userAvatar: row.user_avatar || row.profiles?.avatar_url || row.media_url || '',
               isMe: false,
-              statusType: row.status_type || 'thought',
+              statusType: isSponsored ? 'sponsored' : (row.status_type || 'thought'),
               mediaUrl: row.media_url || undefined,
               videoUrl: row.video_url || undefined,
               thoughtBg: row.thought_bg || undefined,
               caption: row.caption || '',
-              createdAt: row.created_at ? new Date(row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently',
+              createdAt: isSponsored
+                ? 'Sponsored'
+                : row.created_at
+                ? new Date(row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : 'Recently',
+              createdAtISO: row.created_at || undefined,
               expiresInHours: 24,
               viewsCount: row.views_count || 0,
               likesCount: row.likes_count || 0,
               hasLikedByMe: false,
               viewers: [],
-            }));
-          if (incoming.length > 0) {
-            setStatuses((prev) => {
-              const myStatuses = prev.filter((s) => s.isMe);
-              const otherStatuses = prev.filter((s) => !s.isMe);
-              const existingIds = new Set(otherStatuses.map((s) => s.id));
-              const newOnes = incoming.filter((s) => !existingIds.has(s.id));
-              return [...myStatuses, ...newOnes, ...otherStatuses];
-            });
-          }
-        });
+              isSponsored,
+              sponsorBrand: brand,
+              ctaLabel: row.cta_label || 'Learn More',
+              targetUrl: row.target_url || undefined,
+              adClicksCount: row.ad_clicks_count || 0,
+            };
+          });
+        if (incoming.length > 0) {
+          setStatuses((prev) => {
+            const myStatuses = prev.filter((s) => s.isMe);
+            const otherStatuses = prev.filter((s) => !s.isMe);
+            const existingIds = new Set(otherStatuses.map((s) => s.id));
+            const newOnes = incoming.filter((s) => !existingIds.has(s.id));
+            return [...myStatuses, ...newOnes, ...otherStatuses];
+          });
+        }
+      });
     }
 
     // 2. Fetch from local server REST fallback
@@ -4171,27 +4227,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'user_statuses' }, (payload: any) => {
         if (!payload?.new) return;
         const row = payload.new;
-        if (row.user_id === currentUser.id) return;
-        const rp = (row.user_phone || '').replace(/\D/g, '');
-        if (myCleanPhone && rp && rp === myCleanPhone) return;
+        if (!row.is_sponsored) {
+          if (row.user_id === currentUser.id) return;
+          const rp = (row.user_phone || '').replace(/\D/g, '');
+          if (myCleanPhone && rp && rp === myCleanPhone) return;
+        }
+        const isSponsored = Boolean(row.is_sponsored);
         const incoming: UserStatus = {
           id: row.id,
-          userId: row.user_id,
+          userId: row.user_id || (isSponsored ? `sponsor_${row.id}` : ''),
           userPhone: row.user_phone,
-          userName: row.user_name || 'AGC User',
-          userAvatar: row.user_avatar || '',
+          userName: isSponsored ? (row.sponsor_brand || row.user_name || 'Sponsored') : (row.user_name || 'AGC User'),
+          userAvatar: row.user_avatar || row.media_url || '',
           isMe: false,
-          statusType: row.status_type || 'thought',
+          statusType: isSponsored ? 'sponsored' : (row.status_type || 'thought'),
           mediaUrl: row.media_url || undefined,
           videoUrl: row.video_url || undefined,
           thoughtBg: row.thought_bg || undefined,
           caption: row.caption || '',
-          createdAt: 'Just now',
+          createdAt: isSponsored ? 'Sponsored' : 'Just now',
+          createdAtISO: row.created_at || new Date().toISOString(),
           expiresInHours: 24,
           viewsCount: row.views_count || 0,
           likesCount: row.likes_count || 0,
           hasLikedByMe: false,
           viewers: [],
+          isSponsored,
+          sponsorBrand: row.sponsor_brand || undefined,
+          ctaLabel: row.cta_label || undefined,
+          targetUrl: row.target_url || undefined,
+          adClicksCount: row.ad_clicks_count || 0,
         };
         setStatuses((prev) => {
           if (prev.some((s) => s.id === incoming.id)) return prev;
@@ -4255,6 +4320,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket?.off('status_liked', onSocketLiked);
     };
   }, [isAuthenticated, currentUser?.phoneNumber]);
+
+  // Sync Admin-managed CMS Sponsored Status Ads into the live Status feed
+  useEffect(() => {
+    const activeAds = (cmsData?.sponsoredStatuses || []).filter((ad) => ad && ad.active && ad.mediaUrl);
+    setStatuses((prev) => {
+      const nonCmsStatuses = prev.filter((s) => !s.id.startsWith('cms_ad_'));
+      if (activeAds.length === 0) return nonCmsStatuses;
+      const mappedAds: UserStatus[] = activeAds.map((ad) => {
+        const existing = prev.find((p) => p.id === `cms_ad_${ad.id}`);
+        return {
+          id: `cms_ad_${ad.id}`,
+          userId: `sponsor_${ad.id}`,
+          userName: ad.brandName || 'Sponsored',
+          userAvatar: ad.avatarUrl || ad.mediaUrl,
+          isMe: false,
+          statusType: 'sponsored',
+          mediaUrl: ad.mediaUrl,
+          caption: ad.caption || '',
+          createdAt: 'Sponsored',
+          createdAtISO: ad.createdAt || new Date().toISOString(),
+          expiresInHours: 24,
+          viewsCount: existing?.viewsCount || 0,
+          likesCount: existing?.likesCount || 0,
+          viewers: existing?.viewers || [],
+          hasLikedByMe: existing?.hasLikedByMe || false,
+          isSponsored: true,
+          sponsorBrand: ad.brandName,
+          ctaLabel: ad.ctaLabel || 'Learn More',
+          targetUrl: ad.targetUrl,
+          adClicksCount: existing?.adClicksCount ?? ad.clicksCount ?? 0,
+        };
+      });
+      return [...mappedAds, ...nonCmsStatuses];
+    });
+  }, [cmsData?.sponsoredStatuses]);
+
+  const handleAdClick = async (statusId: string, targetUrl?: string) => {
+    if (!statusId) return;
+    setStatuses((prev) =>
+      prev.map((s) =>
+        s.id === statusId ? { ...s, adClicksCount: (s.adClicksCount || 0) + 1 } : s
+      )
+    );
+    const cleanAdId = statusId.startsWith('cms_ad_') ? statusId.replace('cms_ad_', '') : statusId;
+    await trackAdClickInDb(cleanAdId, targetUrl, currentUser?.id);
+  };
 
   // 10. User Uploaded Memes & GIFs + In-Chat Drawer State
   const [userMemes, setUserMemes] = useState<UserUploadedMeme[]>(() => {
@@ -4455,66 +4566,129 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Wallet Funding via Paystack (1% fee capped at ₦2,000)
-  const topUpWallet = (amount: number) => {
-    const fee = Math.min(Math.round(amount * 0.01), 2000);
-    const totalPaid = amount + fee;
-    const ref = `PSK_${Math.floor(10000000 + Math.random() * 90000000)}`;
-    const newTx: WalletTransaction = {
-      id: `tx_${Date.now()}`,
-      type: 'topup',
-      title: `Wallet Top-up via Paystack (Fee: ₦${fee.toLocaleString()})`,
-      amount,
-      currency: 'NGN',
-      timestamp: 'Just now',
-      status: 'completed',
-      reference: ref,
-      channel: 'paystack',
-    };
-
-    setWallet((prev) => ({
-      ...prev,
-      availableBalance: prev.availableBalance + amount,
-      transactions: [newTx, ...prev.transactions],
-    }));
-
-    return { success: true, reference: ref, fee, totalPaid };
+  const refreshWalletFromServer = async () => {
+    const phone = currentUserRef.current?.phoneNumber;
+    if (!phone) return;
+    try {
+      const resp = await fetch(`/api/wallet/${encodeURIComponent(phone)}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data?.success && data?.wallet) {
+        const nextWallet: UserWallet = {
+          availableBalance: Number(data.wallet.availableBalance) || 0,
+          escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
+          currency: data.wallet.currency || 'NGN',
+          transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+        };
+        setWallet(nextWallet);
+        walletRef.current = nextWallet;
+        persistPartitionedWallet(nextWallet, phone);
+      }
+    } catch (_) {}
   };
 
-  // Wallet Withdrawal to Bank
-  const withdrawWallet = (
+  // Wallet Funding via Server-Side Paystack Verification & Signed Webhook (Never trusts client balance math)
+  const topUpWallet = async (amount: number, reference?: string) => {
+    const fee = Math.min(Math.round(amount * 0.01), 2000);
+    const totalPaid = amount + fee;
+    const phone = currentUserRef.current?.phoneNumber;
+    const ref = (reference || '').trim();
+
+    if (!phone || !ref) {
+      return {
+        success: false,
+        reference: ref,
+        fee,
+        totalPaid,
+        message: 'Valid Paystack transaction reference is required for server verification.',
+      };
+    }
+
+    try {
+      const resp = await fetch('/api/wallet/verify-paystack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: phone, reference: ref }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data?.success && data?.wallet) {
+        const verifiedWallet: UserWallet = {
+          availableBalance: Number(data.wallet.availableBalance) || 0,
+          escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
+          currency: data.wallet.currency || 'NGN',
+          transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+        };
+        setWallet(verifiedWallet);
+        walletRef.current = verifiedWallet;
+        persistPartitionedWallet(verifiedWallet, phone);
+        return {
+          success: true,
+          reference: ref,
+          fee: Number(data.fee ?? fee),
+          totalPaid: Number(data.amountCredited ?? amount) + Number(data.fee ?? fee),
+          message: `${CURRENCY_SYMBOLS.NGN}${Number(data.amountCredited ?? amount).toLocaleString()} verified & credited to wallet.`,
+        };
+      }
+      return {
+        success: false,
+        reference: ref,
+        fee,
+        totalPaid,
+        message:
+          data?.message ||
+          'Payment awaiting server-side Paystack webhook verification. Wallet will update automatically once verified.',
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        reference: ref,
+        fee,
+        totalPaid,
+        message: err?.message || 'Unable to verify transaction with server.',
+      };
+    }
+  };
+
+  // Wallet Withdrawal to Bank (Authoritative Server Balance Check & Debit)
+  const withdrawWallet = async (
     amount: number,
     bankName: string,
     accountNumber: string,
     accountName: string
   ) => {
-    if (amount > wallet.availableBalance) {
-      return { success: false, message: 'Insufficient wallet balance for this withdrawal.' };
+    const phone = currentUserRef.current?.phoneNumber;
+    if (!phone) {
+      return { success: false, message: 'Sign in required to withdraw funds.' };
     }
-
-    const ref = `WDR_${Math.floor(10000000 + Math.random() * 90000000)}`;
-    const newTx: WalletTransaction = {
-      id: `tx_${Date.now()}`,
-      type: 'withdrawal',
-      title: `Payout to ${bankName} (${accountNumber.slice(-4)})`,
-      amount,
-      currency: 'NGN',
-      timestamp: 'Just now',
-      status: 'completed',
-      reference: ref,
-      channel: 'bank_transfer',
-    };
-
-    setWallet((prev) => ({
-      ...prev,
-      availableBalance: prev.availableBalance - amount,
-      transactions: [newTx, ...prev.transactions],
-    }));
-
-    return {
-      success: true,
-      message: `Withdrawal of ${CURRENCY_SYMBOLS.NGN}${amount.toLocaleString()} to ${accountName} sent successfully.`,
-    };
+    try {
+      const resp = await fetch('/api/wallet/withdraw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: phone, amount, bankName, accountNumber, accountName }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.success) {
+        await refreshWalletFromServer();
+        return { success: false, message: data?.message || 'Withdrawal could not be authorized by server.' };
+      }
+      if (data.wallet) {
+        const nextWallet: UserWallet = {
+          availableBalance: Number(data.wallet.availableBalance) || 0,
+          escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
+          currency: data.wallet.currency || 'NGN',
+          transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+        };
+        setWallet(nextWallet);
+        walletRef.current = nextWallet;
+        persistPartitionedWallet(nextWallet, phone);
+      }
+      return {
+        success: true,
+        message: data.message || `Withdrawal of ${CURRENCY_SYMBOLS.NGN}${amount.toLocaleString()} to ${accountName} processed.`,
+      };
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Network error verifying withdrawal with server.' };
+    }
   };
 
   const likeStatus = (statusId: string) => {
@@ -4638,13 +4812,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           id: newStatus.id,
           user_id: currentUser.id,
           user_phone: cleanPhone,
-          user_name: currentUser.fullName || 'AGC User',
+          user_name: newStatus.sponsorBrand || currentUser.fullName || 'AGC User',
           user_avatar: currentUser.avatarUrl || '',
           status_type: newStatus.statusType || 'thought',
           media_url: newStatus.mediaUrl || null,
           video_url: newStatus.videoUrl || null,
           thought_bg: newStatus.thoughtBg || null,
           caption: newStatus.caption || '',
+          is_sponsored: Boolean(newStatus.isSponsored),
+          sponsor_brand: newStatus.sponsorBrand || null,
+          cta_label: newStatus.ctaLabel || null,
+          target_url: newStatus.targetUrl || null,
           expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
           views_count: 0,
           likes_count: 0,
@@ -4750,6 +4928,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // Stack new status with existing ones without deleting older ones
+    setStatuses((prev) => {
+      const updated = [newStatus, ...prev.filter((s) => s.id !== newStatus.id)];
+      try {
+        localStorage.setItem('AGC_statuses_v2', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+
+    publishStatusLive(newStatus);
+  };
+
+  const addSponsoredStatus = (ad: {
+    brand: string;
+    caption: string;
+    mediaUrl: string;
+    ctaLabel?: string;
+    targetUrl?: string;
+  }) => {
+    const newStatus: UserStatus = {
+      id: `status_ad_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      userId: currentUser.id,
+      userPhone: currentUser.phoneNumber,
+      userName: ad.brand.trim() || currentUser.fullName || 'Sponsored',
+      userAvatar: currentUser.avatarUrl || ad.mediaUrl,
+      isMe: true,
+      statusType: 'sponsored',
+      mediaUrl: ad.mediaUrl,
+      caption: ad.caption.trim() || 'Promoted vendor update',
+      createdAt: 'Sponsored',
+      createdAtISO: new Date().toISOString(),
+      expiresInHours: 24,
+      viewsCount: 0,
+      likesCount: 0,
+      hasLikedByMe: false,
+      viewers: [],
+      isSponsored: true,
+      sponsorBrand: ad.brand.trim() || 'Sponsored Brand',
+      ctaLabel: ad.ctaLabel?.trim() || 'Visit Offer',
+      targetUrl: ad.targetUrl?.trim() || '',
+      adClicksCount: 0,
+    };
+
     setStatuses((prev) => {
       const updated = [newStatus, ...prev.filter((s) => s.id !== newStatus.id)];
       try {
@@ -6865,6 +7085,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // 2. Live Audio Spaces / Street Radio Handlers
+  const checkIsSpaceCreator = useCallback(
+    (space?: AudioSpace | null): boolean => isSpaceCreator(space, currentUser),
+    [currentUser?.id, currentUser?.phoneNumber]
+  );
+
   const createAudioSpace = (
     title: string,
     topic: string,
@@ -6874,12 +7099,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const tempSpaceId = `space_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const myName = currentUser.fullName || 'Host';
     const myAvatar = currentUser.avatarUrl || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(myName)}&backgroundColor=581c87&textColor=ffffff`;
+    const myHostId = currentUser.id || `host_${Date.now()}`;
 
     const newSpace: AudioSpace = {
       id: tempSpaceId,
       title: title.trim(),
       topic: topic.trim() || 'Live community discussion',
       category: category || 'Tech & Hustle',
+      hostId: myHostId,
+      hostPhone: currentUser.phoneNumber,
       hostName: myName,
       hostAvatar: myAvatar,
       listenersCount: 1,
@@ -6889,11 +7117,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isLowBandwidthMode: isLowBandwidth,
       speakers: [
         {
-          id: currentUser.id || `sp_${Date.now()}`,
+          id: myHostId,
           name: myName,
+          handle: currentUser.username ? `@${currentUser.username}` : undefined,
           avatar: myAvatar,
           role: 'host',
-          isSpeaking: true,
+          isVerified: Boolean(currentUser.verificationBadge || currentUser.isCelebrityVerified),
+          isSpeaking: false,
           isMuted: false,
         },
       ],
@@ -6905,7 +7135,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
+    setIsAudioSpaceMinimized(false);
     setActiveAudioSpace(newSpace);
+    joinLiveSpace(
+      tempSpaceId,
+      { id: myHostId, name: myName, avatar: myAvatar },
+      {
+        hostId: myHostId,
+        hostName: myName,
+        hostAvatar: myAvatar,
+        speakers: newSpace.speakers,
+      }
+    );
 
     // 🌐 LIVE SYSTEM: Persist to Supabase and broadcast live across all devices
     if (isSupabaseConfigured) {
@@ -6913,7 +7154,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         title: newSpace.title,
         topic: newSpace.topic,
         category: newSpace.category,
-        host_id: currentUser.id,
+        host_id: myHostId,
         host_name: myName,
         host_avatar: myAvatar,
         is_live: true,
@@ -6921,7 +7162,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         listeners_count: 1,
       })
         .then(({ data }) => {
-          const persistedSpace = data ? mapAudioSpaceRow(data) : newSpace;
+          const persistedSpace = data
+            ? {
+                ...mapAudioSpaceRow(data),
+                hostId: myHostId,
+                hostPhone: currentUser.phoneNumber,
+              }
+            : newSpace;
           if (data?.id) {
             setAudioSpaces((prev) =>
               prev.map((s) =>
@@ -6934,6 +7181,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               prev && prev.id === tempSpaceId
                 ? { ...persistedSpace, speakers: prev.speakers, peakListeners: prev.peakListeners }
                 : prev
+            );
+            joinLiveSpace(
+              String(data.id),
+              { id: myHostId, name: myName, avatar: myAvatar },
+              {
+                hostId: myHostId,
+                hostName: myName,
+                hostAvatar: myAvatar,
+                speakers: newSpace.speakers,
+              }
             );
           }
 
@@ -6984,13 +7241,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ],
     };
 
+    setIsAudioSpaceMinimized(false);
     setActiveAudioSpace(updatedSpace);
     setAudioSpaces((prev) => prev.map((s) => (s.id === space.id ? updatedSpace : s)));
-    joinLiveSpace(space.id, {
-      id: currentUser.id,
-      name: currentUser.fullName,
-      avatar: currentUser.avatarUrl,
-    });
+    joinLiveSpace(
+      space.id,
+      {
+        id: currentUser.id,
+        name: currentUser.fullName,
+        avatar: currentUser.avatarUrl,
+      },
+      {
+        hostId: space.hostId,
+        hostPhone: space.hostPhone,
+        hostName: space.hostName,
+        hostAvatar: space.hostAvatar,
+        speakers: space.speakers,
+        pinnedNote: space.pinnedAnnouncement,
+      }
+    );
 
     if (isSupabaseConfigured && !isAlreadyMember) {
       updateAudioSpaceInDb(space.id, { listeners_count: currentListenersCount }).catch(() => {});
@@ -7001,6 +7270,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (activeAudioSpace) {
       leaveLiveSpace(activeAudioSpace.id, currentUser.id);
     }
+    setIsAudioSpaceMinimized(false);
     setActiveAudioSpace(null);
   };
 
@@ -7011,10 +7281,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         ...prev,
         speakers: prev.speakers.map((sp) =>
-          sp.id === 'sp_2' ? { ...sp, isMuted: !sp.isMuted } : sp
+          sp.id === currentUser.id ? { ...sp, isMuted: !sp.isMuted, isSpeaking: sp.isMuted ? sp.isSpeaking : false } : sp
         ),
       };
     });
+    emitSpaceStageAction(activeAudioSpace.id, currentUser.id, 'toggle_self_mute');
   };
 
   const toggleSpaceLowBandwidth = () => {
@@ -7024,6 +7295,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const endAudioSpace = (spaceId: string, customStats?: { durationFormatted?: string; peakListeners?: number }) => {
     const space = audioSpaces.find((s) => s.id === spaceId) || activeAudioSpace;
+    // Strict creator-only check: non-creators can only leave, never end the space
+    if (!checkIsSpaceCreator(space)) {
+      leaveAudioSpace();
+      return;
+    }
+
     const startTime = space?.startedAt || activeAudioSpace?.startedAt || Date.now();
     const elapsedMs = Math.max(1000, Date.now() - startTime);
 
@@ -7052,10 +7329,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setAudioSpaces((prev) => prev.filter((s) => s.id !== spaceId));
 
-    const socket = getSocket();
-    if (socket) {
-      socket.emit('space_ended', { spaceId, durationFormatted, peakListeners });
-    }
+    emitEndSpace(spaceId, currentUser.id, durationFormatted, peakListeners, currentUser.phoneNumber);
+
     if (isSupabaseConfigured) {
       updateAudioSpaceInDb(spaceId, {
         is_live: false,
@@ -7073,6 +7348,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       } catch (_) {}
     }
+    setIsAudioSpaceMinimized(false);
     setActiveAudioSpace(null);
   };
 
@@ -9378,6 +9654,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       return updated;
     });
+  };
+
+  const updateUsername = async (
+    newUsername: string,
+    newAbout?: string
+  ): Promise<{ success: boolean; error?: string; username?: string }> => {
+    const clean = newUsername.trim().toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9_.]/g, '');
+    if (clean.length < 3 || clean.length > 24) {
+      return { success: false, error: 'Username must be 3–24 characters (letters, numbers, _ or .).' };
+    }
+    const reserved = new Set([
+      'admin', 'administrator', 'agc', 'africhat', 'support', 'help', 'official',
+      'system', 'root', 'moderator', 'mod', 'paystack', 'escrow', 'staff',
+    ]);
+    if (reserved.has(clean)) {
+      return { success: false, error: `@${clean} is reserved and cannot be used.` };
+    }
+
+    const myPhone = currentUserRef.current?.phoneNumber || '';
+    const prevHandle = (currentUserRef.current?.username || currentUserRef.current?.fullName || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^@+/, '');
+
+    // Server uniqueness + profile update
+    try {
+      const checkResp = await fetch(
+        `/api/users/check-username?username=${encodeURIComponent(clean)}&excludePhone=${encodeURIComponent(myPhone)}`
+      );
+      if (checkResp.ok) {
+        const checkData = await checkResp.json();
+        if (checkData.taken) {
+          return { success: false, error: `@${clean} is already taken by another user.` };
+        }
+      }
+
+      if (myPhone) {
+        const patchResp = await fetch('/api/users/profile', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phoneNumber: myPhone,
+            username: clean,
+            ...(newAbout !== undefined ? { about: newAbout.trim() } : {}),
+          }),
+        });
+        const patchData = await patchResp.json().catch(() => ({}));
+        if (!patchResp.ok) {
+          return { success: false, error: patchData?.error || 'Could not update username.' };
+        }
+      }
+    } catch (_) {}
+
+    // Swap old handle in local taken list cleanly
+    try {
+      const taken: string[] = JSON.parse(localStorage.getItem('AGC_taken_usernames') || '[]');
+      const nextTaken = taken.filter((u) => u.toLowerCase().replace(/^@+/, '') !== prevHandle);
+      if (!nextTaken.includes(clean)) nextTaken.push(clean);
+      localStorage.setItem('AGC_taken_usernames', JSON.stringify(nextTaken));
+    } catch (_) {}
+
+    updateUserProfile({
+      fullName: clean,
+      username: clean,
+      ...(newAbout !== undefined ? { about: newAbout.trim() || 'Available · Using AGC' } : {}),
+    });
+
+    return { success: true, username: clean };
   };
 
   // PWA App Badge: show unread message count on installed PWA icon
@@ -11732,6 +12076,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBanInfo(payload);
     };
 
+    const handleSpaceEndedSocket = (payload: any) => {
+      const endedId = payload?.spaceId || payload?.id;
+      if (!endedId) return;
+      setAudioSpaces((prev) => prev.filter((s) => s.id !== endedId));
+      const active = activeAudioSpaceRef.current;
+      if (active && active.id === endedId) {
+        setSpaceEndedSummary({
+          spaceId: endedId,
+          title: active.title || 'Live Community Space',
+          durationFormatted: payload?.durationFormatted || 'Live session',
+          peakListeners: payload?.peakListeners || active.peakListeners || active.listenersCount || 1,
+        });
+        setActiveAudioSpace(null);
+      }
+    };
+
+    const handleSpaceStateSyncSocket = (payload: any) => {
+      if (!payload?.spaceId) return;
+      setAudioSpaces((prev) =>
+        prev.map((s) =>
+          s.id === payload.spaceId
+            ? {
+                ...s,
+                hostId: payload.hostId || s.hostId,
+                speakers: Array.isArray(payload.speakers) ? payload.speakers : s.speakers,
+                listeners: Array.isArray(payload.listeners) ? payload.listeners : s.listeners,
+                listenersCount: payload.listenersCount ?? s.listenersCount,
+                peakListeners: Math.max(s.peakListeners || 0, payload.listenersCount || 0),
+                pinnedAnnouncement: payload.pinnedNote ?? s.pinnedAnnouncement,
+              }
+            : s
+        )
+      );
+      setActiveAudioSpace((prev) => {
+        if (!prev || prev.id !== payload.spaceId) return prev;
+        return {
+          ...prev,
+          hostId: payload.hostId || prev.hostId,
+          speakers: Array.isArray(payload.speakers) ? payload.speakers : prev.speakers,
+          listeners: Array.isArray(payload.listeners) ? payload.listeners : prev.listeners,
+          listenersCount: payload.listenersCount ?? prev.listenersCount,
+          peakListeners: Math.max(prev.peakListeners || 0, payload.listenersCount || 0),
+          pinnedAnnouncement: payload.pinnedNote ?? prev.pinnedAnnouncement,
+        };
+      });
+    };
+
     socket.on('account_banned', handleAccountBanned);
     socket.on('group_created', handleGroupCreated);
     socket.on('group_invite', handleGroupInviteSocket);
@@ -11740,6 +12131,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket.on('friend_request_accepted', handleFriendRequestAccepted);
     socket.on('dispatch_order_created', handleDispatchOrderCreated);
     socket.on('dispatch_status_updated', handleDispatchStatusUpdated);
+    socket.on('space_ended', handleSpaceEndedSocket);
+    socket.on('space_state_sync', handleSpaceStateSyncSocket);
 
     // 2. BroadcastChannel listener (instant multi-tab / window sync)
     let bc: BroadcastChannel | null = null;
@@ -11925,6 +12318,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('friend_request_accepted', handleFriendRequestAccepted);
       socket.off('dispatch_order_created', handleDispatchOrderCreated);
       socket.off('dispatch_status_updated', handleDispatchStatusUpdated);
+      socket.off('space_ended', handleSpaceEndedSocket);
+      socket.off('space_state_sync', handleSpaceStateSyncSocket);
       if (bc) bc.close();
       if (sbInboxChannel) sbInboxChannel.unsubscribe();
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
@@ -12339,6 +12734,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    const onWalletUpdatedEvent = (payload: any) => {
+      if (!payload) return;
+      const phone = currentUserRef.current?.phoneNumber;
+      if (!phone) return;
+      setWallet((prev) => {
+        const nextWallet: UserWallet = {
+          availableBalance:
+            typeof payload.balance === 'number'
+              ? payload.balance
+              : typeof payload.availableBalance === 'number'
+              ? payload.availableBalance
+              : prev.availableBalance,
+          escrowLockedBalance:
+            typeof payload.escrowLockedBalance === 'number'
+              ? payload.escrowLockedBalance
+              : prev.escrowLockedBalance,
+          currency: payload.currency || prev.currency || 'NGN',
+          transactions: Array.isArray(payload.transactions) ? payload.transactions : prev.transactions,
+        };
+        walletRef.current = nextWallet;
+        persistPartitionedWallet(nextWallet, phone);
+        return nextWallet;
+      });
+    };
+
     socket.on('admin_config_updated', onConfig);
     socket.on('admin_features_updated', onFeatures);
     socket.on('admin_cms_updated', onCms);
@@ -12347,6 +12767,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket.on('admin_users_snapshot', onUsersSnapshot);
     socket.on('user_registered', onUserRegistered);
     socket.on('user_updated', onUserUpdated);
+    socket.on('wallet_updated', onWalletUpdatedEvent);
     socket.on('force_logout', onKickEvent);
     socket.on('admin_store_updated', syncAdminFromServer);
     socket.on('admin_artisan_updated', syncAdminFromServer);
@@ -12454,6 +12875,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('admin_users_snapshot', onUsersSnapshot);
       socket.off('user_registered', onUserRegistered);
       socket.off('user_updated', onUserUpdated);
+      socket.off('wallet_updated', onWalletUpdatedEvent);
       socket.off('force_logout', onKickEvent);
       socket.off('admin_store_updated', syncAdminFromServer);
       socket.off('admin_artisan_updated', syncAdminFromServer);
@@ -13540,12 +13962,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addThoughtStatus,
         addDeviceMediaStatus,
         addDeviceVideoStatus,
+        addSponsoredStatus,
         deleteStatus,
+        handleAdClick,
         wallet,
         isWalletModalOpen,
         setIsWalletModalOpen,
+        refreshWalletFromServer,
         topUpWallet,
         withdrawWallet,
+        updateUsername,
         hideBalanceOnNav,
         toggleHideBalance,
         activeCheckoutProduct,
@@ -13584,6 +14010,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // 2. Live Audio Spaces / Street Radio
         isSpacesDashboardOpen,
         setIsSpacesDashboardOpen,
+        isAudioSpaceMinimized,
+        setIsAudioSpaceMinimized,
         audioSpaces,
         activeAudioSpace,
         joinAudioSpace,
@@ -13591,6 +14019,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createAudioSpace,
         toggleAudioSpaceMute,
         toggleSpaceLowBandwidth,
+        isSpaceCreator,
         // 3. Scam Alert & Reputation Checker
         scamDatabase,
         isScamCheckerModalOpen,

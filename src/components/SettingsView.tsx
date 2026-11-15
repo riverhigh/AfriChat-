@@ -34,6 +34,10 @@ import {
   BookOpen,
   Camera,
   BadgeCheck,
+  Edit3,
+  AtSign,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { CurrencyCode, LanguageCode, AppFontSize } from '../types';
@@ -42,6 +46,7 @@ import { LegalComplianceModal } from './LegalComplianceModal';
 import { AccountCenterModal } from './AccountCenterModal';
 import { PwaInstallCard } from './PwaInstallCard';
 import { compressAvatarImage, compressWallpaperImage } from '../utils/imageUtils';
+import { supabase, isSupabaseConfigured } from '../services/supabase';
 
 interface SettingsViewProps {
   onOpenLanguageModal: () => void;
@@ -111,6 +116,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     CURRENCY_SYMBOLS,
     CURRENCY_RATES,
     updateUserProfile,
+    updateUsername,
     isFeatureEnabled,
     getBadgeForPhone,
   } = useApp();
@@ -121,6 +127,100 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isAvatarUploading, setIsAvatarUploading] = useState(false);
   const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);
+
+  // Hub Profile Username & Bio Editor state
+  const currentHandle = (currentUser.username || currentUser.fullName || 'agc_user')
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_.]/g, '') || 'agc_user';
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [usernameInput, setUsernameInput] = useState(currentHandle);
+  const [aboutInput, setAboutInput] = useState(currentUser.about || 'Hey there! I am using AGC.');
+  const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'same'>('same');
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileSaveFeedback, setProfileSaveFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const usernameDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const openProfileEditor = () => {
+    setUsernameInput(currentHandle);
+    setAboutInput(currentUser.about || 'Hey there! I am using AGC.');
+    setUsernameStatus('same');
+    setProfileSaveFeedback(null);
+    setIsEditingProfile(true);
+  };
+
+  const handleUsernameInputChange = (rawVal: string) => {
+    const clean = rawVal.toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9_.]/g, '');
+    setUsernameInput(clean);
+    setProfileSaveFeedback(null);
+
+    if (usernameDebounceRef.current) clearTimeout(usernameDebounceRef.current);
+
+    if (clean === currentHandle) {
+      setUsernameStatus('same');
+      return;
+    }
+    if (clean.length < 3) {
+      setUsernameStatus('idle');
+      return;
+    }
+
+    setUsernameStatus('checking');
+    usernameDebounceRef.current = setTimeout(async () => {
+      try {
+        const resp = await fetch(
+          `/api/users/check-username?username=${encodeURIComponent(clean)}&excludePhone=${encodeURIComponent(currentUser.phoneNumber || '')}`
+        );
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.taken) {
+            setUsernameStatus('taken');
+            return;
+          }
+        }
+      } catch (_) {}
+
+      if (isSupabaseConfigured) {
+        try {
+          const { data: reg } = await supabase
+            .from('agc_phone_registry')
+            .select('username, full_phone')
+            .or(`username.ilike.${clean},username.ilike.@${clean}`)
+            .limit(2);
+          if (Array.isArray(reg)) {
+            const myDigits = (currentUser.phoneNumber || '').replace(/\D/g, '').slice(-9);
+            const conflict = reg.find((r: any) => {
+              const rDigits = String(r.full_phone || '').replace(/\D/g, '').slice(-9);
+              return !myDigits || rDigits !== myDigits;
+            });
+            if (conflict) {
+              setUsernameStatus('taken');
+              return;
+            }
+          }
+        } catch (_) {}
+      }
+
+      setUsernameStatus('available');
+    }, 300);
+  };
+
+  const handleSaveProfileEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (usernameStatus === 'taken' || usernameStatus === 'checking') return;
+    setIsSavingProfile(true);
+    setProfileSaveFeedback(null);
+    const res = await updateUsername(usernameInput, aboutInput);
+    setIsSavingProfile(false);
+    if (res.success) {
+      setProfileSaveFeedback({ type: 'success', text: `Username updated to @${res.username}` });
+      setIsEditingProfile(false);
+      setTimeout(() => setProfileSaveFeedback(null), 4000);
+    } else {
+      setProfileSaveFeedback({ type: 'error', text: res.error || 'Could not update username.' });
+    }
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -650,8 +750,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   )}
                 </div>
 
-                <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
-                  <Phone className="w-3 h-3 text-indigo-500 shrink-0" />
+                <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
+                  <span className="text-purple-600 dark:text-purple-400 font-semibold">@{currentHandle}</span>
+                  <span aria-hidden="true">·</span>
                   <span>{currentUser.phoneNumber}</span>
                 </div>
 
@@ -663,21 +764,152 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             <div className="flex items-center gap-1">
               <button
+                type="button"
+                onClick={() => (isEditingProfile ? setIsEditingProfile(false) : openProfileEditor())}
+                className="min-h-[44px] px-3 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 rounded-xl transition-colors flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap shrink-0"
+                title="Edit Username & Bio"
+              >
+                <Edit3 className="w-4 h-4" />
+                <span>{isEditingProfile ? 'Close' : 'Edit'}</span>
+              </button>
+              <button
                 onClick={() => setIsAuthModalOpen(true)}
-                className="p-2 text-indigo-600 dark:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center text-indigo-600 dark:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
                 title="Switch Account or Phone Number"
               >
                 <Smartphone className="w-5 h-5" />
               </button>
               <button
                 onClick={() => setIsScanQrModalOpen(true)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
                 title="View AGC QR Code"
               >
                 <QrCode className="w-5 h-5" />
               </button>
             </div>
           </div>
+
+          {/* Hub Profile Success Notice */}
+          {profileSaveFeedback && !isEditingProfile && (
+            <div
+              className={`mx-4 px-3.5 py-2.5 rounded-xl text-xs font-medium flex items-center gap-2 border ${
+                profileSaveFeedback.type === 'success'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300'
+              }`}
+            >
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>{profileSaveFeedback.text}</span>
+            </div>
+          )}
+
+          {/* Inline Hub Username & Bio Editor */}
+          {isEditingProfile && (
+            <form
+              onSubmit={handleSaveProfileEdit}
+              className="mx-4 p-4 rounded-2xl bg-slate-50 dark:bg-[#141126] border border-slate-200 dark:border-purple-900/40 space-y-3.5 animate-in fade-in"
+            >
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white">Edit Hub Profile</h4>
+                <span className="text-[11px] font-mono text-slate-400">Unique Handle</span>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  Username
+                </label>
+                <div className="relative flex items-center">
+                  <AtSign className="w-4 h-4 text-purple-500 absolute left-3 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={usernameInput}
+                    onChange={(e) => handleUsernameInputChange(e.target.value)}
+                    placeholder="your_username"
+                    minLength={3}
+                    maxLength={24}
+                    required
+                    className="w-full pl-9 pr-24 py-2.5 bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                  <div className="absolute right-3 flex items-center gap-1 text-[11px] font-semibold">
+                    {usernameStatus === 'checking' && (
+                      <span className="text-slate-400 flex items-center gap-1">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking
+                      </span>
+                    )}
+                    {usernameStatus === 'available' && (
+                      <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                        <Check className="w-3.5 h-3.5" /> Available
+                      </span>
+                    )}
+                    {usernameStatus === 'taken' && (
+                      <span className="text-rose-500 flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5" /> Taken
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  3–24 characters using lowercase letters, numbers, underscores, or dots.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  About / Bio
+                </label>
+                <input
+                  type="text"
+                  value={aboutInput}
+                  onChange={(e) => setAboutInput(e.target.value)}
+                  maxLength={180}
+                  placeholder="Available · Using AGC"
+                  className="w-full px-3.5 py-2.5 bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+              </div>
+
+              {profileSaveFeedback && profileSaveFeedback.type === 'error' && (
+                <p className="text-xs text-rose-500 font-medium flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{profileSaveFeedback.text}</span>
+                </p>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingProfile(false);
+                    setProfileSaveFeedback(null);
+                  }}
+                  className="min-h-[44px] px-4 py-2 rounded-xl bg-slate-200/70 dark:bg-neutral-800 text-slate-700 dark:text-slate-300 text-xs font-semibold whitespace-nowrap shrink-0 hover:bg-slate-200 dark:hover:bg-neutral-700 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={
+                    isSavingProfile ||
+                    usernameInput.length < 3 ||
+                    usernameStatus === 'taken' ||
+                    usernameStatus === 'checking'
+                  }
+                  className="min-h-[44px] px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-xs font-bold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-colors shadow-sm"
+                >
+                  {isSavingProfile ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Save Username</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
 
           {/* AGC Wallet Card with Privacy Masking - Disappears when wallet toggle is OFF */}
           {isFeatureEnabled('wallet') && (

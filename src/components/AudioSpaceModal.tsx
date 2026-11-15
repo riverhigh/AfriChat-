@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   X,
   Mic,
@@ -6,26 +6,45 @@ import {
   Radio,
   Users,
   Wifi,
-  Sparkles,
-  Volume2,
   Hand,
   Share2,
   Crown,
   Shield,
   Gem,
-  Settings,
-  UserCheck,
+  Sliders,
   UserX,
   VolumeX,
   Pin,
-  Megaphone,
   Check,
-  Plus,
   Clock,
-  XCircle,
+  ChevronDown,
+  MessageCircle,
+  SmilePlus,
+  Send,
+  BadgeCheck,
+  Volume2,
+  AlertCircle,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, phonesMatch } from '../context/AppContext';
 import { AudioSpaceSpeaker } from '../types';
+import { useSpaceAudio } from '../hooks/useSpaceAudio';
+
+const SPACE_REACTION_EMOJIS = ['😂', '😮', '😢', '💜', '💯', '👏', '✊', '👍', '🔥'];
+
+const RemoteAudioPlayer: React.FC<{ stream: MediaStream }> = ({ stream }) => {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (el.srcObject !== stream) {
+      el.srcObject = stream;
+    }
+    el.play().catch(() => {});
+  }, [stream]);
+
+  return <audio ref={audioRef} autoPlay playsInline className="hidden" />;
+};
 
 export const AudioSpaceModal: React.FC = () => {
   const {
@@ -34,31 +53,132 @@ export const AudioSpaceModal: React.FC = () => {
     endAudioSpace,
     spaceEndedSummary,
     setSpaceEndedSummary,
-    toggleAudioSpaceMute,
     toggleSpaceLowBandwidth,
+    isSpaceCreator,
     currentUser,
   } = useApp();
 
-  const [floatingEmojis, setFloatingEmojis] = useState<{ id: number; emoji: string; x: number }[]>([]);
-  const [hasRequestedMic, setHasRequestedMic] = useState(false);
+  // Strictly identify whether currentUser is the Space creator (ONLY creator can end Space)
+  const isCreator = useMemo(() => {
+    if (!activeAudioSpace || !currentUser?.id) return false;
+    if (isSpaceCreator(activeAudioSpace)) return true;
+    if (activeAudioSpace.hostId && activeAudioSpace.hostId === currentUser.id) return true;
+    if (
+      activeAudioSpace.hostPhone &&
+      currentUser.phoneNumber &&
+      phonesMatch(activeAudioSpace.hostPhone, currentUser.phoneNumber)
+    ) {
+      return true;
+    }
+    return false;
+  }, [activeAudioSpace, currentUser?.id, currentUser?.phoneNumber, isSpaceCreator]);
+
+  // Pre-join sheet for listeners joining a Space they didn't create
+  const [hasStartedListening, setHasStartedListening] = useState<boolean>(false);
+  const [listenAnonymously, setListenAnonymously] = useState<boolean>(false);
+
+  // Sub-sheets & UI drawers
+  const [showParticipantsSheet, setShowParticipantsSheet] = useState(false);
+  const [participantFilter, setParticipantFilter] = useState<'all' | 'cohosts' | 'speakers' | 'listeners'>('all');
   const [showManageDeck, setShowManageDeck] = useState(false);
+  const [showEmojiTray, setShowEmojiTray] = useState(false);
+  const [showChatSheet, setShowChatSheet] = useState(false);
+  const [confirmEndPrompt, setConfirmEndPrompt] = useState(false);
   const [selectedSpeakerForAction, setSelectedSpeakerForAction] = useState<AudioSpaceSpeaker | null>(null);
+  const [shareCopiedToast, setShareCopiedToast] = useState(false);
 
-  // Live duration timer & live peak listeners
+  const [pinDraft, setPinDraft] = useState<string>('');
+  const [isEditingPin, setIsEditingPin] = useState(false);
+  const [chatInput, setChatInput] = useState('');
   const [liveSeconds, setLiveSeconds] = useState(0);
-  const [livePeak, setLivePeak] = useState(() => activeAudioSpace?.listenersCount || 1);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
+  // Reset per-Space UI state when activeAudioSpace changes
+  useEffect(() => {
+    if (!activeAudioSpace) {
+      setHasStartedListening(false);
+      setShowParticipantsSheet(false);
+      setShowManageDeck(false);
+      setShowEmojiTray(false);
+      setShowChatSheet(false);
+      setConfirmEndPrompt(false);
+      setSelectedSpeakerForAction(null);
+      return;
+    }
+
+    setHasStartedListening(isCreator);
+    setPinDraft(activeAudioSpace.pinnedAnnouncement || '');
+  }, [activeAudioSpace?.id, isCreator]);
+
+  // Live clock
   useEffect(() => {
     if (!activeAudioSpace) return;
     const start = activeAudioSpace.startedAt || Date.now();
     setLiveSeconds(Math.max(0, Math.floor((Date.now() - start) / 1000)));
-
     const timer = setInterval(() => {
       setLiveSeconds(Math.max(0, Math.floor((Date.now() - start) / 1000)));
     }, 1000);
-
     return () => clearInterval(timer);
   }, [activeAudioSpace?.id, activeAudioSpace?.startedAt]);
+
+  // Unified Live WebRTC + Socket.IO + Supabase Space Room Engine
+  const {
+    speakers: speakersList,
+    listeners: listenersList,
+    raisedHands: raisedHandsQueue,
+    chatMessages,
+    pinnedNote,
+    listenersCount,
+    peakListeners,
+    floatingReactions,
+    avatarReactions,
+    speakingPeers,
+    remoteStreams,
+    audioConnectedPeers,
+    micPermissionError,
+    myRole,
+    canSpeak: isOnStage,
+    isMeMuted,
+    hasRaisedHand,
+    sendReaction,
+    toggleMyMute,
+    raiseOrLowerHand,
+    approveHand,
+    declineHand,
+    setParticipantRole,
+    toggleParticipantMute,
+    muteAllSpeakers,
+    removeFromStage,
+    updatePinnedNote,
+    sendChatMessage,
+  } = useSpaceAudio({
+    space: activeAudioSpace,
+    currentUser: {
+      id: currentUser.id,
+      fullName: currentUser.fullName,
+      avatarUrl: currentUser.avatarUrl,
+      phoneNumber: currentUser.phoneNumber,
+    },
+    hasJoinedLive: Boolean(activeAudioSpace && hasStartedListening),
+    isAnonymous: listenAnonymously,
+    isCreator,
+    onSpaceEnded: (payload) => {
+      if (!activeAudioSpace) return;
+      setSpaceEndedSummary({
+        spaceId: payload.spaceId,
+        title: activeAudioSpace.title || 'Live Community Space',
+        durationFormatted: payload.durationFormatted || formatLiveDuration(liveSeconds),
+        peakListeners: payload.peakListeners || peakListeners || 1,
+      });
+    },
+  });
+
+  // Auto-scroll space chat
+  useEffect(() => {
+    if (showChatSheet && chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatMessages.length, showChatSheet]);
 
   const formatLiveDuration = (totalSec: number): string => {
     const hours = Math.floor(totalSec / 3600);
@@ -75,61 +195,35 @@ export const AudioSpaceModal: React.FC = () => {
     return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   };
 
-  // Local state for interactive stage management
-  const [speakersList, setSpeakersList] = useState<AudioSpaceSpeaker[]>(() => {
-    if (!activeAudioSpace) return [];
-    const current = activeAudioSpace.speakers || [];
-    const hasHost = current.some((s) => s.role === 'host');
-
-    let enhanced = [...current];
-    if (!hasHost) {
-      enhanced.unshift({
-        id: 'host_main',
-        name: activeAudioSpace.hostName || 'Host',
-        avatar: activeAudioSpace.hostAvatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-        role: 'host',
-        isSpeaking: true,
-        isMuted: false,
-      });
-    }
-
-    return enhanced;
-  });
-
-  const [raisedHandsQueue, setRaisedHandsQueue] = useState<{ id: string; name: string; avatar: string; time: string }[]>([]);
-
-  const [pinnedNote, setPinnedNote] = useState<string>(activeAudioSpace?.pinnedAnnouncement || '');
-  const [isEditingPin, setIsEditingPin] = useState(false);
-  const [pinInput, setPinInput] = useState(pinnedNote);
-
+  // Space Ended Summary Modal
   if (spaceEndedSummary) {
     return (
-      <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
-        <div className="w-full max-w-sm rounded-3xl bg-gradient-to-b from-[#1f0b3b] via-[#120624] to-[#0b0317] border border-purple-500/40 p-6 text-center space-y-4 shadow-2xl text-white">
-          <div className="w-14 h-14 rounded-full bg-purple-600/20 text-purple-400 mx-auto flex items-center justify-center border border-purple-500/30">
+      <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+        <div className="w-full max-w-sm rounded-3xl bg-[#0b0b0f] border border-zinc-800 p-6 text-center space-y-4 shadow-2xl text-white">
+          <div className="w-14 h-14 rounded-full bg-[#7856ff]/15 text-[#7856ff] mx-auto flex items-center justify-center border border-[#7856ff]/30">
             <Radio className="w-7 h-7" />
           </div>
           <div>
-            <span className="text-[10px] font-mono uppercase tracking-wider text-purple-400 bg-purple-950/60 border border-purple-500/30 px-2.5 py-0.5 rounded-full">
-              Space Concluded
+            <span className="text-[11px] font-bold uppercase tracking-wider text-violet-400">
+              Space Ended
             </span>
-            <h3 className="text-lg font-black font-display text-white mt-2">
+            <h3 className="text-lg font-extrabold text-white mt-1.5 leading-snug">
               {spaceEndedSummary.title}
             </h3>
           </div>
 
           <div className="grid grid-cols-2 gap-2.5 py-2">
-            <div className="p-3 bg-purple-950/50 rounded-2xl border border-purple-500/20 text-center">
-              <Clock className="w-4 h-4 text-amber-400 mx-auto mb-1" />
-              <div className="text-[10px] text-purple-300/70 font-mono">Total Duration</div>
-              <div className="text-base font-black font-mono text-white mt-0.5">
+            <div className="p-3 bg-zinc-900 rounded-2xl border border-zinc-800 text-center">
+              <Clock className="w-4 h-4 text-violet-400 mx-auto mb-1" />
+              <div className="text-[11px] text-zinc-400">Duration</div>
+              <div className="text-base font-bold text-white mt-0.5">
                 {spaceEndedSummary.durationFormatted}
               </div>
             </div>
-            <div className="p-3 bg-purple-950/50 rounded-2xl border border-purple-500/20 text-center">
+            <div className="p-3 bg-zinc-900 rounded-2xl border border-zinc-800 text-center">
               <Users className="w-4 h-4 text-emerald-400 mx-auto mb-1" />
-              <div className="text-[10px] text-purple-300/70 font-mono">Peak Listeners</div>
-              <div className="text-base font-black font-mono text-white mt-0.5">
+              <div className="text-[11px] text-zinc-400">Peak listeners</div>
+              <div className="text-base font-bold text-white mt-0.5">
                 {spaceEndedSummary.peakListeners}
               </div>
             </div>
@@ -138,9 +232,9 @@ export const AudioSpaceModal: React.FC = () => {
           <button
             type="button"
             onClick={() => setSpaceEndedSummary(null)}
-            className="w-full py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl shadow-md transition-all active:scale-95"
+            className="w-full py-3.5 bg-[#7856ff] hover:bg-[#6a45ff] text-white font-bold text-sm rounded-full transition-all active:scale-95"
           >
-            Return to Town
+            Done
           </button>
         </div>
       </div>
@@ -149,333 +243,125 @@ export const AudioSpaceModal: React.FC = () => {
 
   if (!activeAudioSpace) return null;
 
-  // Determine current user's role in this Space
-  const mySpeaker = speakersList.find(
-    (s) => s.id === currentUser.id || s.name.toLowerCase().includes(currentUser.fullName.toLowerCase())
+  const isCoHost = myRole === 'co-host';
+  const canManage = isCreator || isCoHost;
+  const totalListeningCount = Math.max(
+    listenersCount || 0,
+    activeAudioSpace.listenersCount || 0,
+    speakersList.length + listenersList.length,
+    1
   );
-  const isHost = mySpeaker?.role === 'host' || activeAudioSpace.hostName.toLowerCase().includes(currentUser.fullName.toLowerCase()) || true; // allow manage controls for creator
-  const isCoHost = mySpeaker?.role === 'co-host';
-  const isSponsor = mySpeaker?.role === 'sponsor';
-  const canManage = isHost || isCoHost;
-  const isMeMuted = mySpeaker?.isMuted ?? false;
+
+  const handleStartListening = () => {
+    // Resume Web Audio on user gesture so incoming streams play cleanly on iOS/Chrome
+    try {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        if (ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
+        }
+        setTimeout(() => ctx.close().catch(() => {}), 300);
+      }
+    } catch (_) {}
+    setHasStartedListening(true);
+  };
 
   const handleSendReaction = (emoji: string) => {
-    const newEmoji = {
-      id: Date.now() + Math.random(),
-      emoji,
-      x: Math.floor(Math.random() * 80) + 10,
-    };
-    setFloatingEmojis((prev) => [...prev, newEmoji]);
-    setTimeout(() => {
-      setFloatingEmojis((prev) => prev.filter((e) => e.id !== newEmoji.id));
-    }, 2000);
+    sendReaction(emoji);
+    setShowEmojiTray(false);
   };
 
-  const handleMuteAll = () => {
-    setSpeakersList((prev) =>
-      prev.map((s) => (s.role === 'host' ? s : { ...s, isMuted: true, isSpeaking: false }))
-    );
+  const handleSendSpaceChat = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+    sendChatMessage(chatInput.trim());
+    setChatInput('');
   };
 
-  const handleApproveRaisedHand = (hand: { id: string; name: string; avatar: string }) => {
-    // Promote to stage
-    setSpeakersList((prev) => [
-      ...prev,
-      {
-        id: hand.id,
-        name: hand.name,
-        avatar: hand.avatar,
-        role: 'speaker',
-        isSpeaking: false,
-        isMuted: false,
-      },
-    ]);
-    setRaisedHandsQueue((prev) => prev.filter((h) => h.id !== hand.id));
+  const handleSavePinnedNote = (e: React.FormEvent) => {
+    e.preventDefault();
+    updatePinnedNote(pinDraft.trim());
+    setIsEditingPin(false);
   };
 
-  const handleDeclineRaisedHand = (id: string) => {
-    setRaisedHandsQueue((prev) => prev.filter((h) => h.id !== id));
+  const handleShareSpace = () => {
+    const shareText = `Join "${activeAudioSpace.title}" live on AfriChat Spaces!`;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(shareText).catch(() => {});
+    }
+    setShareCopiedToast(true);
+    setTimeout(() => setShareCopiedToast(false), 2000);
   };
 
-  const handleToggleSpeakerMute = (speakerId: string) => {
-    setSpeakersList((prev) =>
-      prev.map((s) => (s.id === speakerId ? { ...s, isMuted: !s.isMuted } : s))
-    );
-  };
-
-  const handleSetRole = (speakerId: string, newRole: 'host' | 'co-host' | 'sponsor' | 'speaker') => {
-    setSpeakersList((prev) =>
-      prev.map((s) => (s.id === speakerId ? { ...s, role: newRole } : s))
-    );
-    setSelectedSpeakerForAction(null);
-  };
-
-  const handleRemoveFromStage = (speakerId: string) => {
-    setSpeakersList((prev) => prev.filter((s) => s.id !== speakerId));
-    setSelectedSpeakerForAction(null);
-  };
-
+  // Grouping for Participants Sheet
+  const hostSpeakers = speakersList.filter((s) => s.role === 'host');
+  const coHostSpeakers = speakersList.filter((s) => s.role === 'co-host');
+  const stageSpeakers = speakersList.filter((s) => s.role !== 'host' && s.role !== 'co-host');
   const sponsorSpeaker = speakersList.find((s) => s.role === 'sponsor');
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
-      <div className="w-full max-w-lg bg-gradient-to-b from-[#190d33] via-[#100824] to-[#080414] rounded-t-3xl sm:rounded-3xl shadow-2xl max-h-[92vh] flex flex-col overflow-hidden border border-purple-500/30 text-white relative">
-        
-        {/* Floating animated reaction emojis */}
-        <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
-          {floatingEmojis.map((item) => (
-            <div
-              key={item.id}
-              style={{ left: `${item.x}%` }}
-              className="absolute bottom-24 text-3xl animate-bounce duration-1000 transition-all opacity-90"
-            >
-              {item.emoji}
-            </div>
-          ))}
-        </div>
-
-        {/* ── Top Header ─────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-purple-500/20 shrink-0 bg-white/5">
-          <div className="flex items-center gap-2">
-            <span className="flex h-2.5 w-2.5 relative">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500" />
-            </span>
-            <div className="flex items-center gap-1.5 font-mono text-xs font-black text-rose-400 uppercase tracking-wider">
-              <Radio className="w-4 h-4" />
-              <span>Street Radio Live</span>
-            </div>
-            {/* Live Ticking Duration Clock */}
-            <div className="flex items-center gap-1 text-[11px] font-mono font-bold text-amber-300 bg-amber-500/10 px-2.5 py-0.5 rounded-full border border-amber-500/20">
-              <Clock className="w-3 h-3 text-amber-400" />
-              <span>{formatClockDisplay(liveSeconds)}</span>
-            </div>
+  // ── PRE-JOIN PREVIEW SHEET (Matches Twitter/X Spaces IMG_7137.png) ───────────
+  if (!hasStartedListening) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-150">
+        <div className="w-full max-w-md bg-black rounded-t-[28px] sm:rounded-3xl border-t sm:border border-zinc-800/90 shadow-2xl max-h-[90vh] flex flex-col overflow-hidden text-white">
+          {/* Drag Handle */}
+          <div className="pt-3 pb-1 flex justify-center shrink-0">
+            <div className="w-9 h-1 rounded-full bg-zinc-700" />
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Manage Deck Toggle (for Host / Co-Host) */}
-            {canManage && (
-              <button
-                type="button"
-                onClick={() => setShowManageDeck(!showManageDeck)}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-bold flex items-center gap-1 border transition-all ${
-                  showManageDeck
-                    ? 'bg-amber-500 text-black border-amber-400 shadow-md shadow-amber-500/30'
-                    : 'bg-white/10 border-white/20 text-amber-300 hover:bg-white/20'
-                }`}
-                title="Host & Co-Host Stage Management Controls"
-              >
-                <Settings className="w-3.5 h-3.5" />
-                <span>Host Deck</span>
-                {raisedHandsQueue.length > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-rose-600 text-white text-[9px] font-black flex items-center justify-center">
-                    {raisedHandsQueue.length}
-                  </span>
-                )}
-              </button>
-            )}
-
-            {/* Low Bandwidth Mode Badge Toggle */}
-            <button
-              type="button"
-              onClick={toggleSpaceLowBandwidth}
-              className={`px-2.5 py-1 rounded-full text-[10px] font-mono font-bold flex items-center gap-1 border transition-colors ${
-                activeAudioSpace.isLowBandwidthMode
-                  ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300'
-                  : 'bg-white/10 border-white/20 text-slate-300'
-              }`}
-              title="Compress stream for poor 2G/3G network zones"
-            >
-              <Wifi className="w-3 h-3" />
-              <span>{activeAudioSpace.isLowBandwidthMode ? '12kbps Stream' : 'HD Voice'}</span>
-            </button>
-
+          <div className="px-5 pt-2 pb-4 flex items-center justify-between shrink-0">
+            <span className="text-xs font-extrabold tracking-wider uppercase text-[#8b6cff]">
+              LIVE
+            </span>
             <button
               type="button"
               onClick={leaveAudioSpace}
-              className="p-1 rounded-full text-slate-400 hover:text-white"
+              className="p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors"
+              aria-label="Close space preview"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
-        </div>
 
-        {/* ── Main Body ──────────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          
-          {/* Space Title & Category */}
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-purple-600/30 border border-purple-500/40 text-purple-300 uppercase font-bold tracking-wider">
-                {activeAudioSpace.category}
-              </span>
-              <span className="text-[11px] font-mono text-purple-300/80 flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-white font-semibold">{activeAudioSpace.listenersCount} tuned in</span>
-                <span className="text-[10px] text-purple-400 font-medium">· Peak: {livePeak}</span>
-              </span>
-            </div>
-            <h2 className="text-xl font-black font-display mt-1 leading-snug text-white">
+          <div className="flex-1 overflow-y-auto px-5 pb-6 space-y-6">
+            <h2 className="text-2xl font-extrabold leading-tight tracking-tight text-white">
               {activeAudioSpace.title}
             </h2>
-            {activeAudioSpace.topic && (
-              <p className="text-xs text-purple-200/70 mt-1 leading-relaxed">
-                {activeAudioSpace.topic}
-              </p>
-            )}
-          </div>
 
-          {/* 💎 Official Sponsor Spotlight Banner */}
-          {sponsorSpeaker && (
-            <div className="p-3 rounded-2xl bg-gradient-to-r from-emerald-950/60 via-teal-950/40 to-purple-950/50 border border-emerald-500/40 flex items-center justify-between gap-3 shadow-lg shadow-emerald-950/30">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 p-0.5 shrink-0 shadow-sm">
-                  <img
-                    src={sponsorSpeaker.avatar}
-                    alt={sponsorSpeaker.sponsorBrand || sponsorSpeaker.name}
-                    className="w-full h-full rounded-[10px] object-cover"
-                  />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="inline-flex items-center gap-1 text-[9px] font-black bg-emerald-500 text-black px-1.5 py-0.2 rounded font-mono uppercase tracking-wider">
-                      <Gem className="w-2.5 h-2.5" />
-                      SPONSOR
-                    </span>
-                    <span className="font-bold text-xs text-white truncate">
-                      {sponsorSpeaker.sponsorBrand || sponsorSpeaker.name}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-emerald-200/80 truncate mt-0.5">
-                    {sponsorSpeaker.sponsorTagline || 'Official space patron & African brand sponsor'}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => alert(`Visiting ${sponsorSpeaker.sponsorBrand || sponsorSpeaker.name} store on AGC!`)}
-                className="px-2.5 py-1 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-[10px] font-bold shrink-0 transition-transform active:scale-95"
-              >
-                Explore 🛍️
-              </button>
-            </div>
-          )}
-
-          {/* 📌 Pinned Announcement Bar */}
-          {pinnedNote && (
-            <div className="p-2.5 rounded-xl bg-purple-950/40 border border-purple-500/30 flex items-center justify-between gap-2 text-xs text-purple-200">
-              <div className="flex items-center gap-2 min-w-0">
-                <Pin className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span className="truncate">{pinnedNote}</span>
-              </div>
-              {canManage && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const updated = prompt('Edit pinned announcement:', pinnedNote);
-                    if (updated !== null) setPinnedNote(updated.trim());
-                  }}
-                  className="text-[10px] font-bold text-purple-400 hover:text-white shrink-0 underline"
-                >
-                  Edit
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* ── Speakers on Stage (Distinct Role Avatars) ─────────────────── */}
-          <div>
-            <div className="flex items-center justify-between text-xs font-semibold text-purple-300/80 mb-3 px-1">
-              <span className="font-mono uppercase tracking-wider text-[11px] font-bold">
-                Speakers & Stage Leaders
-              </span>
-              <span className="font-mono text-[11px] text-purple-400">
-                {speakersList.length} on Stage
-              </span>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
+            {/* Clean 4-column avatar grid */}
+            <div className="grid grid-cols-4 gap-x-3 gap-y-5">
               {speakersList.map((speaker) => {
-                const isThisHost = speaker.role === 'host';
-                const isThisCoHost = speaker.role === 'co-host';
-                const isThisSponsor = speaker.role === 'sponsor';
-
+                const roleLabel =
+                  speaker.role === 'host'
+                    ? 'Host'
+                    : speaker.role === 'co-host'
+                    ? 'Co-host'
+                    : speaker.role === 'sponsor'
+                    ? 'Sponsor'
+                    : 'Speaker';
                 return (
-                  <div
-                    key={speaker.id}
-                    onClick={() => canManage && setSelectedSpeakerForAction(speaker)}
-                    className={`flex flex-col items-center p-3 rounded-2xl relative text-center transition-all cursor-pointer ${
-                      isThisHost
-                        ? 'bg-gradient-to-b from-amber-950/30 to-purple-950/40 border-2 border-amber-500/60 shadow-lg shadow-amber-950/30'
-                        : isThisCoHost
-                        ? 'bg-gradient-to-b from-purple-950/40 to-indigo-950/40 border-2 border-purple-500/50 shadow-md shadow-purple-950/30'
-                        : isThisSponsor
-                        ? 'bg-gradient-to-b from-emerald-950/40 to-teal-950/40 border-2 border-emerald-500/50 shadow-md shadow-emerald-950/30'
-                        : 'bg-white/5 border border-white/10 hover:border-purple-500/40'
-                    }`}
-                  >
-                    {/* Ring around avatar indicating role & speaking waveform */}
-                    <div
-                      className={`w-14 h-14 rounded-full p-0.5 relative transition-all ${
-                        isThisHost
-                          ? 'ring-4 ring-amber-400 ring-offset-2 ring-offset-[#100824]'
-                          : isThisCoHost
-                          ? 'ring-4 ring-purple-500 ring-offset-2 ring-offset-[#100824]'
-                          : isThisSponsor
-                          ? 'ring-4 ring-emerald-400 ring-offset-2 ring-offset-[#100824]'
-                          : speaker.isSpeaking
-                          ? 'ring-4 ring-emerald-500 ring-offset-2 ring-offset-[#100824]'
-                          : 'ring-1 ring-white/20'
-                      }`}
-                    >
+                  <div key={speaker.id} className="flex flex-col items-center text-center min-w-0">
+                    <div className="w-14 h-14 rounded-full overflow-hidden bg-zinc-900">
                       <img
                         src={speaker.avatar}
                         alt={speaker.name}
-                        className="w-full h-full rounded-full object-cover"
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
                       />
-
-                      {/* Mic Status Badge */}
-                      <div
-                        className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-[10px] ring-2 ring-[#100824] ${
-                          speaker.isMuted
-                            ? 'bg-rose-500 text-white'
-                            : 'bg-emerald-500 text-white'
-                        }`}
-                      >
-                        {speaker.isMuted ? <MicOff className="w-2.5 h-2.5" /> : <Mic className="w-2.5 h-2.5" />}
-                      </div>
                     </div>
-
-                    {/* Role Pill */}
-                    <div className="mt-2.5">
-                      {isThisHost && (
-                        <span className="inline-flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-400 to-amber-600 text-black font-mono tracking-wider shadow-sm">
-                          <Crown className="w-2.5 h-2.5 fill-black" />
-                          HOST
-                        </span>
-                      )}
-                      {isThisCoHost && (
-                        <span className="inline-flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-mono tracking-wider shadow-sm">
-                          <Shield className="w-2.5 h-2.5 fill-white" />
-                          CO-HOST
-                        </span>
-                      )}
-                      {isThisSponsor && (
-                        <span className="inline-flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full bg-gradient-to-r from-emerald-400 to-teal-500 text-black font-mono tracking-wider shadow-sm">
-                          <Gem className="w-2.5 h-2.5 fill-black" />
-                          SPONSOR
-                        </span>
-                      )}
-                      {!isThisHost && !isThisCoHost && !isThisSponsor && (
-                        <span className="text-[9px] font-mono text-purple-300 font-bold uppercase tracking-wider">
-                          Speaker
-                        </span>
+                    <div className="mt-2 w-full flex items-center justify-center gap-0.5 min-w-0">
+                      <span className="text-xs font-bold text-white truncate">
+                        {speaker.name}
+                      </span>
+                      {(speaker.isVerified || speaker.role === 'host') && (
+                        <BadgeCheck className="w-3.5 h-3.5 text-sky-500 shrink-0" />
                       )}
                     </div>
-
-                    <span className="font-bold text-xs mt-1 truncate w-full text-white">
-                      {speaker.name}
+                    <span className="text-[11px] text-zinc-400 font-medium mt-0.5">
+                      {roleLabel}
                     </span>
                   </div>
                 );
@@ -483,70 +369,443 @@ export const AudioSpaceModal: React.FC = () => {
             </div>
           </div>
 
-          {/* ── Host & Co-Host Interactive Management Deck (Collapsible) ──── */}
-          {showManageDeck && canManage && (
-            <div className="p-4 rounded-2xl bg-[#140b2a] border border-amber-500/40 space-y-3.5 animate-in slide-in-from-top-2 shadow-xl">
-              <div className="flex items-center justify-between border-b border-purple-500/20 pb-2">
-                <div className="flex items-center gap-2">
-                  <Crown className="w-4 h-4 text-amber-400" />
-                  <span className="font-bold text-xs uppercase tracking-wide text-amber-300">
-                    Host & Co-Host Control Deck
-                  </span>
+          {/* Bottom Pre-Join Controls */}
+          <div className="px-5 pt-4 pb-6 border-t border-zinc-800/90 bg-black space-y-4 shrink-0">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-bold text-white">Listen anonymously</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={listenAnonymously}
+                onClick={() => setListenAnonymously((prev) => !prev)}
+                className={`w-12 h-7 rounded-full relative transition-colors ${
+                  listenAnonymously ? 'bg-[#7856ff]' : 'bg-zinc-800'
+                }`}
+              >
+                <span
+                  className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-transform shadow-sm ${
+                    listenAnonymously ? 'left-6' : 'left-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-500 text-center leading-relaxed px-2">
+              Audio streams live via encrypted voice channels. Your mic stays off unless you are invited to speak on stage.
+            </p>
+
+            <button
+              type="button"
+              onClick={handleStartListening}
+              className="w-full py-3.5 rounded-full bg-[#7856ff] hover:bg-[#6a45ff] text-white font-bold text-sm transition-all active:scale-[0.99] shadow-lg shadow-[#7856ff]/25"
+            >
+              Start listening
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── ACTIVE LIVE SPACE VIEW (Matches Twitter/X Spaces IMG_7140.png) ───────────
+  return (
+    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-150">
+      {/* Remote WebRTC Audio Streams */}
+      {remoteStreams.map((rs) => (
+        <RemoteAudioPlayer key={rs.peerId} stream={rs.stream} />
+      ))}
+
+      <div className="w-full max-w-md bg-black sm:bg-[#07070a] rounded-t-[28px] sm:rounded-3xl border-t sm:border border-zinc-800/90 shadow-2xl max-h-[94vh] flex flex-col overflow-hidden text-white relative">
+        {/* Floating Animated Reaction Emojis */}
+        <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
+          {floatingReactions.map((item) => (
+            <div
+              key={item.id}
+              style={{ left: `${item.x}%` }}
+              className="absolute bottom-24 flex flex-col items-center animate-bounce duration-1000 transition-all"
+            >
+              <span className="text-3xl drop-shadow-lg">{item.emoji}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Drag Handle */}
+        <div className="pt-2.5 pb-1 flex justify-center shrink-0">
+          <div className="w-9 h-1 rounded-full bg-zinc-700" />
+        </div>
+
+        {/* Top Bar */}
+        <div className="px-5 py-2.5 flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => setHasStartedListening(false)}
+              className="p-1 -ml-1 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors"
+              title="Minimize to preview"
+            >
+              <ChevronDown className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-1.5 text-xs font-bold truncate">
+              <span className="text-[#8b6cff] uppercase tracking-wide">LIVE</span>
+              <span className="text-zinc-500">·</span>
+              <span className="text-zinc-300 font-medium">
+                {totalListeningCount} listening
+              </span>
+              <span className="text-zinc-600">·</span>
+              <span className="text-zinc-400 font-mono text-[11px]">
+                {formatClockDisplay(liveSeconds)}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={toggleSpaceLowBandwidth}
+              className={`px-2 py-1 rounded-full text-[10px] font-semibold border transition-colors ${
+                activeAudioSpace.isLowBandwidthMode
+                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                  : 'border-zinc-800 bg-zinc-900 text-zinc-400'
+              }`}
+              title="Toggle low-data audio compression"
+            >
+              <Wifi className="w-3 h-3 inline mr-1" />
+              {activeAudioSpace.isLowBandwidthMode ? '12kbps' : 'HD'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleShareSpace}
+              className="p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors"
+              title="Share Space"
+            >
+              <Share2 className="w-4 h-4" />
+            </button>
+
+            {/* STRICT PERMISSION: Only the creator sees End; listeners & speakers only see Leave */}
+            {isCreator ? (
+              confirmEndPrompt ? (
+                <div className="flex items-center gap-1 bg-zinc-900 border border-rose-500/40 rounded-full px-2 py-0.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      endAudioSpace(activeAudioSpace.id, {
+                        durationFormatted: formatLiveDuration(liveSeconds),
+                        peakListeners: peakListeners || totalListeningCount,
+                      })
+                    }
+                    className="text-[11px] font-bold text-rose-400 hover:text-rose-300 px-1.5 py-0.5"
+                  >
+                    Confirm
+                  </button>
+                  <span className="text-zinc-700">|</span>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmEndPrompt(false)}
+                    className="text-[11px] font-medium text-zinc-400 hover:text-white px-1.5 py-0.5"
+                  >
+                    No
+                  </button>
                 </div>
+              ) : (
                 <button
                   type="button"
-                  onClick={handleMuteAll}
-                  className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold flex items-center gap-1"
+                  onClick={() => setConfirmEndPrompt(true)}
+                  className="px-3 py-1 rounded-full text-xs font-bold text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-colors"
                 >
-                  <VolumeX className="w-3 h-3" />
-                  <span>Mute All</span>
+                  End
                 </button>
-              </div>
+              )
+            ) : (
+              <button
+                type="button"
+                onClick={leaveAudioSpace}
+                className="px-3 py-1 rounded-full text-xs font-bold text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-colors"
+              >
+                Leave
+              </button>
+            )}
+          </div>
+        </div>
 
-              {/* Raised Hands Queue */}
-              <div>
-                <div className="flex items-center justify-between text-xs font-semibold text-purple-300 mb-2">
-                  <span className="flex items-center gap-1.5">
-                    <Hand className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Raised Hands Requesting Mic ({raisedHandsQueue.length})</span>
+        {shareCopiedToast && (
+          <div className="mx-5 mb-2 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-[11px] text-center text-zinc-200 font-medium">
+            Space invite copied to clipboard
+          </div>
+        )}
+
+        {micPermissionError && (
+          <div className="mx-5 mb-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{micPermissionError}</span>
+          </div>
+        )}
+
+        {/* Main Scrollable Stage */}
+        <div className="flex-1 overflow-y-auto px-5 pb-6 space-y-5">
+          {/* Title & Category */}
+          <div>
+            <h2 className="text-xl font-extrabold leading-snug text-white">
+              {activeAudioSpace.title}
+            </h2>
+            {activeAudioSpace.topic && (
+              <p className="text-xs text-zinc-400 mt-1">{activeAudioSpace.topic}</p>
+            )}
+          </div>
+
+          {/* Pinned Note / Embedded Post Card (Matches IMG_7139 / IMG_7140 style) */}
+          {(pinnedNote || sponsorSpeaker) && (
+            <div className="p-3.5 rounded-2xl bg-zinc-900/75 border border-zinc-800/90 space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <img
+                    src={sponsorSpeaker?.avatar || activeAudioSpace.hostAvatar}
+                    alt=""
+                    className="w-5 h-5 rounded-full object-cover"
+                  />
+                  <span className="font-bold text-white truncate">
+                    {sponsorSpeaker?.sponsorBrand || activeAudioSpace.hostName}
+                  </span>
+                  {sponsorSpeaker && (
+                    <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300">
+                      Sponsor
+                    </span>
+                  )}
+                </div>
+                {canManage && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPinDraft(pinnedNote);
+                      setIsEditingPin(true);
+                      setShowManageDeck(true);
+                    }}
+                    className="text-[11px] text-zinc-400 hover:text-white"
+                  >
+                    Edit
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-zinc-300 leading-relaxed">
+                {pinnedNote || sponsorSpeaker?.sponsorTagline || 'Live voice stage active'}
+              </p>
+            </div>
+          )}
+
+          {/* Clean 4-Column Stage Grid (No Heavy Boxes) */}
+          <div className="grid grid-cols-4 gap-x-3 gap-y-5 pt-1">
+            {speakersList.map((speaker) => {
+              const isMe = speaker.id === currentUser.id;
+              const isSpeakingLive =
+                !speaker.isMuted && Boolean(speakingPeers[speaker.id] || speaker.isSpeaking);
+              const activeEmoji = avatarReactions[speaker.id]?.emoji;
+              const isRaisingHand = raisedHandsQueue.some((h) => h.id === speaker.id);
+              const roleLabel =
+                speaker.role === 'host'
+                  ? 'Host'
+                  : speaker.role === 'co-host'
+                  ? 'Co-host'
+                  : speaker.role === 'sponsor'
+                  ? 'Sponsor'
+                  : 'Speaker';
+
+              return (
+                <div
+                  key={speaker.id}
+                  onClick={() => {
+                    if (canManage && speaker.role !== 'host') {
+                      setSelectedSpeakerForAction(speaker);
+                    }
+                  }}
+                  className={`flex flex-col items-center text-center min-w-0 relative ${
+                    canManage && speaker.role !== 'host' ? 'cursor-pointer' : ''
+                  }`}
+                >
+                  <div className="relative">
+                    <div
+                      className={`w-15 h-15 rounded-full overflow-hidden bg-zinc-900 transition-all ${
+                        isSpeakingLive
+                          ? 'ring-2 ring-[#7856ff] ring-offset-2 ring-offset-black'
+                          : 'ring-1 ring-zinc-800'
+                      }`}
+                    >
+                      <img
+                        src={speaker.avatar}
+                        alt={speaker.name}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+
+                    {/* Live Emoji Bubble on Reacting User */}
+                    {activeEmoji && (
+                      <div className="absolute -top-2 -right-2 w-7 h-7 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center text-base shadow-lg animate-bounce">
+                        {activeEmoji}
+                      </div>
+                    )}
+
+                    {/* Raised Hand Indicator */}
+                    {!activeEmoji && isRaisingHand && (
+                      <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-amber-500 text-black flex items-center justify-center text-xs shadow-md">
+                        ✋
+                      </div>
+                    )}
+
+                    {/* Live Mic / Speaking Equalizer Badge */}
+                    <div
+                      className={`absolute -bottom-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center ring-2 ring-black ${
+                        speaker.isMuted
+                          ? 'bg-zinc-800 text-rose-400'
+                          : isSpeakingLive
+                          ? 'bg-[#7856ff] text-white'
+                          : 'bg-zinc-800 text-zinc-200'
+                      }`}
+                    >
+                      {speaker.isMuted ? (
+                        <MicOff className="w-3 h-3" />
+                      ) : isSpeakingLive ? (
+                        <div className="flex items-end gap-[2px] h-3">
+                          <span className="w-[2px] h-2 bg-white rounded-full animate-pulse" />
+                          <span className="w-[2px] h-3 bg-white rounded-full animate-bounce" />
+                          <span className="w-[2px] h-1.5 bg-white rounded-full animate-pulse" />
+                        </div>
+                      ) : (
+                        <Mic className="w-3 h-3" />
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 w-full flex items-center justify-center gap-0.5 min-w-0">
+                    <span className="text-xs font-bold text-white truncate">
+                      {isMe ? 'You' : speaker.name}
+                    </span>
+                    {(speaker.isVerified || speaker.role === 'host') && (
+                      <BadgeCheck className="w-3.5 h-3.5 text-sky-500 shrink-0" />
+                    )}
+                  </div>
+                  <span className="text-[11px] text-zinc-400 font-medium mt-0.5">
+                    {roleLabel}
                   </span>
                 </div>
+              );
+            })}
+          </div>
 
+          {/* Live Voice Status Indicator */}
+          <div className="flex items-center justify-between pt-2 text-[11px] text-zinc-500">
+            <span className="flex items-center gap-1.5">
+              <Volume2 className="w-3.5 h-3.5 text-[#8b6cff]" />
+              <span>
+                {audioConnectedPeers > 0
+                  ? `Live audio connected (${audioConnectedPeers} ${audioConnectedPeers === 1 ? 'peer' : 'peers'})`
+                  : 'Live audio channel active'}
+              </span>
+            </span>
+            {raisedHandsQueue.length > 0 && canManage && (
+              <button
+                type="button"
+                onClick={() => setShowManageDeck(true)}
+                className="text-amber-400 font-semibold hover:underline"
+              >
+                {raisedHandsQueue.length} hand{raisedHandsQueue.length > 1 ? 's' : ''} raised
+              </button>
+            )}
+          </div>
+
+          {/* Collapsible Host / Co-Host Management Deck */}
+          {showManageDeck && canManage && (
+            <div className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-3.5 animate-in slide-in-from-top-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Crown className="w-4 h-4 text-amber-400" />
+                  <span>Host Controls</span>
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPinDraft(pinnedNote);
+                      setIsEditingPin((v) => !v);
+                    }}
+                    className="px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] font-semibold flex items-center gap-1"
+                  >
+                    <Pin className="w-3 h-3" />
+                    <span>Pin note</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={muteAllSpeakers}
+                    className="px-2.5 py-1 rounded-full bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-[11px] font-semibold flex items-center gap-1"
+                  >
+                    <VolumeX className="w-3 h-3" />
+                    <span>Mute all</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowManageDeck(false)}
+                    className="p-1 text-zinc-400 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {isEditingPin && (
+                <form onSubmit={handleSavePinnedNote} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={pinDraft}
+                    onChange={(e) => setPinDraft(e.target.value)}
+                    placeholder="Write a pinned announcement for the Space..."
+                    className="flex-1 px-3 py-2 rounded-xl bg-black border border-zinc-700 text-xs text-white focus:outline-none focus:border-[#7856ff]"
+                  />
+                  <button
+                    type="submit"
+                    className="px-3 py-2 rounded-xl bg-[#7856ff] text-white text-xs font-bold"
+                  >
+                    Save
+                  </button>
+                </form>
+              )}
+
+              <div>
+                <div className="text-[11px] font-semibold text-zinc-400 mb-2 flex items-center gap-1.5">
+                  <Hand className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Speaker requests ({raisedHandsQueue.length})</span>
+                </div>
                 {raisedHandsQueue.length === 0 ? (
-                  <p className="text-[11px] text-purple-400/60 italic py-1">
-                    No listeners requesting the microphone right now.
-                  </p>
+                  <p className="text-xs text-zinc-500">No listeners requesting to speak right now.</p>
                 ) : (
-                  <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                  <div className="space-y-2 max-h-36 overflow-y-auto">
                     {raisedHandsQueue.map((hand) => (
                       <div
                         key={hand.id}
-                        className="flex items-center justify-between p-2 rounded-xl bg-white/5 border border-purple-500/20 text-xs"
+                        className="flex items-center justify-between p-2 rounded-xl bg-black/60 border border-zinc-800 text-xs"
                       >
-                        <div className="flex items-center gap-2 min-w-0">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           <img
-                            src={hand.avatar}
+                            src={
+                              hand.avatar ||
+                              `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(hand.name)}`
+                            }
                             alt={hand.name}
                             className="w-7 h-7 rounded-full object-cover"
                           />
-                          <span className="font-bold text-white truncate">{hand.name}</span>
-                          <span className="text-[10px] text-purple-400 font-mono">{hand.time}</span>
+                          <span className="font-semibold text-white truncate">{hand.name}</span>
                         </div>
-
                         <div className="flex items-center gap-1.5 shrink-0">
                           <button
                             type="button"
-                            onClick={() => handleApproveRaisedHand(hand)}
-                            className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] flex items-center gap-1"
+                            onClick={() => approveHand(hand.id)}
+                            className="px-2.5 py-1 rounded-full bg-[#7856ff] hover:bg-[#6a45ff] text-white font-bold text-[11px] flex items-center gap-1"
                           >
                             <Check className="w-3 h-3" />
-                            <span>Bring to Stage</span>
+                            <span>Invite</span>
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleDeclineRaisedHand(hand.id)}
-                            className="p-1 rounded-lg text-slate-400 hover:text-rose-400"
-                            title="Decline"
+                            onClick={() => declineHand(hand.id)}
+                            className="p-1 text-zinc-400 hover:text-rose-400"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
@@ -558,126 +817,385 @@ export const AudioSpaceModal: React.FC = () => {
               </div>
             </div>
           )}
-
-          {/* ── Audio Stream Waveform Simulator ────────────────────────────── */}
-          <div className="p-3 rounded-2xl bg-white/5 border border-purple-500/20 flex items-center justify-between gap-1.5 px-4">
-            <div className="flex items-center gap-2">
-              <Volume2 className="w-4 h-4 text-emerald-400 animate-pulse" />
-              <span className="text-xs font-mono text-emerald-300 font-bold">Encrypted African Audio Stream</span>
-            </div>
-            <div className="flex items-end gap-1 h-6">
-              {[10, 22, 16, 28, 14, 24, 18, 30, 12, 26, 16].map((h, i) => (
-                <div
-                  key={i}
-                  style={{ height: `${h}px` }}
-                  className="w-1 bg-gradient-to-t from-emerald-500 via-purple-500 to-indigo-400 rounded-full animate-pulse"
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* ── Reaction Bar ──────────────────────────────────────────────── */}
-          <div>
-            <div className="text-[10px] uppercase font-bold text-purple-300/80 mb-1.5 px-1 font-mono">
-              Tap Live Reactions
-            </div>
-            <div className="flex justify-between items-center bg-white/5 p-2 rounded-2xl border border-purple-500/20">
-              {['🔥', '👏', '🇳🇬', '💃', '💯', '💎'].map((emoji) => (
-                <button
-                  key={emoji}
-                  type="button"
-                  onClick={() => handleSendReaction(emoji)}
-                  className="text-2xl hover:scale-125 transition-transform active:scale-95 p-1"
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
 
-        {/* ── Bottom Controls Dock ─────────────────────────────────────────── */}
-        <div className="p-4 border-t border-purple-500/20 bg-[#0a0517] flex items-center justify-between gap-2.5 shrink-0">
-          {/* Mute / Unmute Toggle */}
-          <button
-            type="button"
-            onClick={toggleAudioSpaceMute}
-            className={`flex-1 py-3 px-4 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all active:scale-95 ${
-              isMeMuted
-                ? 'bg-rose-600 hover:bg-rose-700 text-white'
-                : 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-400/40'
-            }`}
-          >
-            {isMeMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-            <span>{isMeMuted ? 'Unmute My Mic' : 'Mic Active (Tap to Mute)'}</span>
-          </button>
+        {/* Floating Live Emoji Reaction Tray */}
+        {showEmojiTray && (
+          <div className="mx-5 mb-2 p-2 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-around shadow-xl animate-in slide-in-from-bottom-2 z-20">
+            {SPACE_REACTION_EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => handleSendReaction(emoji)}
+                className="text-xl hover:scale-125 active:scale-95 transition-transform p-1"
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        )}
 
-          {/* Raise Hand Toggle */}
-          <button
-            type="button"
-            onClick={() => {
-              setHasRequestedMic(!hasRequestedMic);
-              if (!hasRequestedMic) {
-                // Add current user to raised hands queue
-                setRaisedHandsQueue((prev) => [
-                  ...prev,
-                  {
-                    id: currentUser.id,
-                    name: `${currentUser.fullName || 'You'}`,
-                    avatar: currentUser.avatarUrl || 'https://api.dicebear.com/8.x/initials/svg?seed=You',
-                    time: 'Just now',
-                  },
-                ]);
-              }
-            }}
-            className={`py-3 px-4 rounded-2xl font-bold text-xs flex items-center gap-1.5 border transition-all active:scale-95 ${
-              hasRequestedMic
-                ? 'bg-amber-500 text-black border-amber-400 shadow-md shadow-amber-500/30'
-                : 'bg-white/10 border-white/20 text-white hover:bg-white/15'
-            }`}
-          >
-            <Hand className="w-4 h-4" />
-            <span>{hasRequestedMic ? 'Hand Raised' : 'Request Mic'}</span>
-          </button>
+        {/* Bottom Dock (Matches Twitter/X Spaces Dock) */}
+        <div
+          className="px-5 py-3 border-t border-zinc-900 bg-black flex items-center justify-between gap-3 shrink-0"
+          style={{ paddingBottom: 'max(calc(env(safe-area-inset-bottom, 0px) + 12px), 14px)' }}
+        >
+          {/* Left: Mic toggle if on stage, OR Raise Hand button if listener */}
+          <div className="flex items-center gap-2.5">
+            {isOnStage ? (
+              <button
+                type="button"
+                onClick={toggleMyMute}
+                className={`h-11 px-4 rounded-full font-bold text-xs flex items-center gap-2 transition-all active:scale-95 ${
+                  isMeMuted
+                    ? 'bg-zinc-900 border border-zinc-700 text-white hover:bg-zinc-800'
+                    : 'bg-[#7856ff] text-white shadow-lg shadow-[#7856ff]/30'
+                }`}
+              >
+                {isMeMuted ? <MicOff className="w-4 h-4 text-rose-400" /> : <Mic className="w-4 h-4" />}
+                <span>{isMeMuted ? 'Mic off' : 'Mic on'}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => raiseOrLowerHand()}
+                className={`h-11 px-4 rounded-full font-bold text-xs flex items-center gap-2 border transition-all active:scale-95 ${
+                  hasRaisedHand
+                    ? 'bg-amber-500 text-black border-amber-400'
+                    : 'bg-zinc-900 border-zinc-700 text-white hover:bg-zinc-800'
+                }`}
+              >
+                <Hand className="w-4 h-4" />
+                <span>{hasRaisedHand ? 'Requested' : 'Request'}</span>
+              </button>
+            )}
+          </div>
 
-          {/* End Space Button for Host */}
-          {isHost && (
+          {/* Right Action Icons: Participants, Host Controls, React, Live Chat Pill */}
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() =>
-                endAudioSpace(activeAudioSpace.id, {
-                  durationFormatted: formatLiveDuration(liveSeconds),
-                  peakListeners: livePeak,
-                })
-              }
-              className="py-3 px-4 bg-rose-600/80 hover:bg-rose-600 text-white border border-rose-500 rounded-2xl text-xs font-bold transition-all shadow-md active:scale-95 flex items-center gap-1.5 cursor-pointer"
+              onClick={() => setShowParticipantsSheet(true)}
+              className="w-10 h-10 rounded-full bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 flex items-center justify-center text-zinc-200 transition-colors"
+              title="Participants"
             >
-              <XCircle className="w-4 h-4" />
-              <span>End Space</span>
+              <Users className="w-4 h-4" />
             </button>
-          )}
 
-          {/* Leave Button */}
-          <button
-            type="button"
-            onClick={leaveAudioSpace}
-            className="py-3 px-4 bg-white/5 hover:bg-rose-950/40 text-rose-400 border border-white/10 rounded-2xl text-xs font-bold transition-colors"
-          >
-            Leave
-          </button>
+            {canManage && (
+              <button
+                type="button"
+                onClick={() => setShowManageDeck((v) => !v)}
+                className={`relative w-10 h-10 rounded-full border flex items-center justify-center transition-colors ${
+                  showManageDeck
+                    ? 'bg-white text-black border-white'
+                    : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800 text-zinc-200'
+                }`}
+                title="Host controls"
+              >
+                <Sliders className="w-4 h-4" />
+                {raisedHandsQueue.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#7856ff] text-white text-[9px] font-bold flex items-center justify-center">
+                    {raisedHandsQueue.length}
+                  </span>
+                )}
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowEmojiTray((v) => !v)}
+              className={`w-10 h-10 rounded-full border flex items-center justify-center transition-colors ${
+                showEmojiTray
+                  ? 'bg-white text-black border-white'
+                  : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800 text-zinc-200'
+              }`}
+              title="Send live reaction"
+            >
+              <SmilePlus className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowChatSheet(true)}
+              className="h-10 px-4 rounded-full bg-[#7856ff] hover:bg-[#6a45ff] text-white font-bold text-xs flex items-center gap-1.5 transition-all active:scale-95"
+              title="Open Space chat"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>{chatMessages.length}</span>
+            </button>
+          </div>
         </div>
 
-        {/* ── Speaker Action Popup (When Host taps a speaker) ──────────────── */}
-        {selectedSpeakerForAction && canManage && (
+        {/* ── PARTICIPANTS BOTTOM SHEET (Matches Twitter/X IMG_7139.png) ──────── */}
+        {showParticipantsSheet && (
           <div
-            onClick={() => setSelectedSpeakerForAction(null)}
-            className="fixed inset-0 z-60 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+            onClick={() => setShowParticipantsSheet(false)}
+            className="absolute inset-0 z-40 bg-black/70 backdrop-blur-xs flex items-end animate-in fade-in"
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-xs bg-[#150a2b] border border-purple-500/40 rounded-3xl p-5 shadow-2xl space-y-3 text-white animate-in zoom-in-95"
+              className="w-full bg-black border-t border-zinc-800 rounded-t-[28px] max-h-[82vh] flex flex-col animate-in slide-in-from-bottom"
             >
-              <div className="flex items-center gap-3 border-b border-purple-500/20 pb-3">
+              <div className="pt-3 pb-2 flex justify-center shrink-0">
+                <div className="w-9 h-1 rounded-full bg-zinc-700" />
+              </div>
+
+              {/* Filter Pills: All, Co-hosts, Speakers, Listeners */}
+              <div className="px-5 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+                {(
+                  [
+                    { id: 'all', label: 'All' },
+                    { id: 'cohosts', label: 'Co-hosts' },
+                    { id: 'speakers', label: 'Speakers' },
+                    { id: 'listeners', label: 'Listeners' },
+                  ] as const
+                ).map((pill) => (
+                  <button
+                    key={pill.id}
+                    type="button"
+                    onClick={() => setParticipantFilter(pill.id)}
+                    className={`px-4 py-1.5 rounded-full text-xs font-bold shrink-0 transition-colors ${
+                      participantFilter === pill.id
+                        ? 'bg-white text-black'
+                        : 'bg-transparent border border-zinc-700 text-white hover:border-zinc-500'
+                    }`}
+                  >
+                    {pill.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
+                {/* Host */}
+                {participantFilter === 'all' && hostSpeakers.length > 0 && (
+                  <div className="space-y-3">
+                    <h4 className="text-base font-extrabold text-white">Host</h4>
+                    {hostSpeakers.map((h) => (
+                      <div key={h.id} className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <img src={h.avatar} alt={h.name} className="w-10 h-10 rounded-full object-cover" />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1 text-sm font-bold text-white truncate">
+                              <span>{h.name}</span>
+                              <BadgeCheck className="w-4 h-4 text-sky-500 shrink-0" />
+                            </div>
+                            <div className="text-xs text-zinc-500 truncate">
+                              {h.handle || `@${h.name.toLowerCase().replace(/\s+/g, '')}`}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Co-hosts */}
+                {(participantFilter === 'all' || participantFilter === 'cohosts') && (
+                  <div className="space-y-3">
+                    <div>
+                      <h4 className="text-base font-extrabold text-white">Co-hosts</h4>
+                      <p className="text-xs text-zinc-500">{coHostSpeakers.length} Co-hosts</p>
+                    </div>
+                    {coHostSpeakers.length === 0 ? (
+                      <p className="text-xs text-zinc-500">No co-hosts assigned yet.</p>
+                    ) : (
+                      coHostSpeakers.map((ch) => (
+                        <div key={ch.id} className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <img src={ch.avatar} alt={ch.name} className="w-10 h-10 rounded-full object-cover" />
+                            <div className="min-w-0">
+                              <div className="text-sm font-bold text-white truncate">{ch.name}</div>
+                              <div className="text-xs text-zinc-500 truncate">
+                                {ch.handle || `@${ch.name.toLowerCase().replace(/\s+/g, '')}`}
+                              </div>
+                            </div>
+                          </div>
+                          {canManage && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowParticipantsSheet(false);
+                                setSelectedSpeakerForAction(ch);
+                              }}
+                              className="text-xs text-zinc-400 hover:text-white px-2.5 py-1 rounded-full border border-zinc-800"
+                            >
+                              Manage
+                            </button>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {/* Speakers */}
+                {(participantFilter === 'all' || participantFilter === 'speakers') && (
+                  <div className="space-y-3">
+                    <div>
+                      <h4 className="text-base font-extrabold text-white">Speakers</h4>
+                      <p className="text-xs text-zinc-500">Speakers: {stageSpeakers.length}</p>
+                    </div>
+                    {stageSpeakers.length === 0 ? (
+                      <p className="text-xs text-zinc-500">Only host on stage right now.</p>
+                    ) : (
+                      stageSpeakers.map((sp) => (
+                        <div key={sp.id} className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <img src={sp.avatar} alt={sp.name} className="w-10 h-10 rounded-full object-cover" />
+                            <div className="min-w-0">
+                              <div className="text-sm font-bold text-white truncate">{sp.name}</div>
+                              <div className="text-xs text-zinc-500 truncate">
+                                {sp.isMuted ? 'Muted' : 'Mic active'}
+                              </div>
+                            </div>
+                          </div>
+                          {canManage && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowParticipantsSheet(false);
+                                setSelectedSpeakerForAction(sp);
+                              }}
+                              className="text-xs text-zinc-400 hover:text-white px-2.5 py-1 rounded-full border border-zinc-800"
+                            >
+                              Manage
+                            </button>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {/* Listeners */}
+                {(participantFilter === 'all' || participantFilter === 'listeners') && (
+                  <div className="space-y-3 pb-4">
+                    <div>
+                      <h4 className="text-base font-extrabold text-white">Listeners</h4>
+                      <p className="text-xs text-zinc-500">{listenersList.length} listening</p>
+                    </div>
+                    {listenersList.length === 0 ? (
+                      <p className="text-xs text-zinc-500">No listeners in the audience yet.</p>
+                    ) : (
+                      listenersList.map((ln) => (
+                        <div key={ln.id} className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <img
+                              src={
+                                ln.avatar ||
+                                `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(ln.name || 'L')}`
+                              }
+                              alt={ln.name}
+                              className="w-10 h-10 rounded-full object-cover"
+                            />
+                            <div className="min-w-0">
+                              <div className="text-sm font-bold text-white truncate">{ln.name}</div>
+                              <div className="text-xs text-zinc-500">Listener</div>
+                            </div>
+                          </div>
+                          {canManage && (
+                            <button
+                              type="button"
+                              onClick={() => approveHand(ln.id)}
+                              className="px-3 py-1 rounded-full bg-[#7856ff]/20 text-[#9c82ff] hover:bg-[#7856ff] hover:text-white text-xs font-bold transition-colors"
+                            >
+                              Invite to speak
+                            </button>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── LIVE SPACE CHAT SHEET ────────────────────────────────────────── */}
+        {showChatSheet && (
+          <div
+            onClick={() => setShowChatSheet(false)}
+            className="absolute inset-0 z-40 bg-black/70 backdrop-blur-xs flex items-end animate-in fade-in"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full bg-black border-t border-zinc-800 rounded-t-[28px] h-[68vh] flex flex-col animate-in slide-in-from-bottom"
+            >
+              <div className="px-5 py-3 border-b border-zinc-900 flex items-center justify-between shrink-0">
+                <h4 className="text-sm font-extrabold text-white">Space Chat</h4>
+                <button
+                  type="button"
+                  onClick={() => setShowChatSheet(false)}
+                  className="p-1 text-zinc-400 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div ref={chatScrollRef} className="flex-1 overflow-y-auto px-5 py-3 space-y-3">
+                {chatMessages.length === 0 ? (
+                  <div className="text-center py-12 text-xs text-zinc-500">
+                    No messages yet. Say hello to everyone in the Space!
+                  </div>
+                ) : (
+                  chatMessages.map((m) => (
+                    <div key={m.id} className="flex items-start gap-2.5 text-xs">
+                      <img
+                        src={
+                          m.userAvatar ||
+                          `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(m.userName)}`
+                        }
+                        alt={m.userName}
+                        className="w-7 h-7 rounded-full object-cover shrink-0 mt-0.5"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline gap-2">
+                          <span className="font-bold text-white">{m.userName}</span>
+                          <span className="text-[10px] text-zinc-500">{m.timestamp}</span>
+                        </div>
+                        <p className="text-zinc-200 mt-0.5 break-words">{m.text}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <form
+                onSubmit={handleSendSpaceChat}
+                className="px-4 py-3 border-t border-zinc-900 flex items-center gap-2 shrink-0"
+              >
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Send a message to the Space..."
+                  className="flex-1 px-4 py-2.5 rounded-full bg-zinc-900 border border-zinc-800 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-[#7856ff]"
+                />
+                <button
+                  type="submit"
+                  disabled={!chatInput.trim()}
+                  className="w-9 h-9 rounded-full bg-[#7856ff] hover:bg-[#6a45ff] disabled:opacity-40 text-white flex items-center justify-center shrink-0"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ── SPEAKER MODERATION ACTION POPUP (Host / Co-Host only) ────────── */}
+        {selectedSpeakerForAction && canManage && (
+          <div
+            onClick={() => setSelectedSpeakerForAction(null)}
+            className="absolute inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-xs bg-zinc-950 border border-zinc-800 rounded-t-3xl sm:rounded-3xl p-5 shadow-2xl space-y-3 text-white animate-in slide-in-from-bottom"
+            >
+              <div className="flex items-center gap-3 border-b border-zinc-800 pb-3">
                 <img
                   src={selectedSpeakerForAction.avatar}
                   alt={selectedSpeakerForAction.name}
@@ -685,54 +1203,75 @@ export const AudioSpaceModal: React.FC = () => {
                 />
                 <div className="min-w-0">
                   <h4 className="font-bold text-sm truncate">{selectedSpeakerForAction.name}</h4>
-                  <span className="text-[10px] font-mono text-purple-400 uppercase">
-                    Current Role: {selectedSpeakerForAction.role}
+                  <span className="text-[11px] text-zinc-400 capitalize">
+                    {selectedSpeakerForAction.role}
                   </span>
                 </div>
               </div>
 
               <div className="space-y-1.5 text-xs">
-                <button
-                  type="button"
-                  onClick={() => handleSetRole(selectedSpeakerForAction.id, 'co-host')}
-                  className="w-full p-2.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/40 text-purple-200 font-bold flex items-center gap-2 transition-colors"
-                >
-                  <Shield className="w-4 h-4 text-purple-400" />
-                  <span>Promote to Co-Host</span>
-                </button>
+                {isCreator && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setParticipantRole(
+                        selectedSpeakerForAction.id,
+                        selectedSpeakerForAction.role === 'co-host' ? 'speaker' : 'co-host'
+                      );
+                      setSelectedSpeakerForAction(null);
+                    }}
+                    className="w-full p-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-100 font-semibold flex items-center gap-2.5 transition-colors"
+                  >
+                    <Shield className="w-4 h-4 text-[#8b6cff]" />
+                    <span>
+                      {selectedSpeakerForAction.role === 'co-host'
+                        ? 'Remove Co-host'
+                        : 'Make Co-host'}
+                    </span>
+                  </button>
+                )}
 
                 <button
                   type="button"
-                  onClick={() => handleSetRole(selectedSpeakerForAction.id, 'sponsor')}
-                  className="w-full p-2.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-200 font-bold flex items-center gap-2 transition-colors"
+                  onClick={() => {
+                    setParticipantRole(selectedSpeakerForAction.id, 'sponsor');
+                    setSelectedSpeakerForAction(null);
+                  }}
+                  className="w-full p-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-100 font-semibold flex items-center gap-2.5 transition-colors"
                 >
                   <Gem className="w-4 h-4 text-emerald-400" />
-                  <span>Designate as Official Sponsor</span>
+                  <span>Feature as Sponsor</span>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => handleToggleSpeakerMute(selectedSpeakerForAction.id)}
-                  className="w-full p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white font-bold flex items-center gap-2 transition-colors"
+                  onClick={() => {
+                    toggleParticipantMute(selectedSpeakerForAction.id);
+                    setSelectedSpeakerForAction(null);
+                  }}
+                  className="w-full p-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-100 font-semibold flex items-center gap-2.5 transition-colors"
                 >
                   <MicOff className="w-4 h-4 text-amber-400" />
-                  <span>{selectedSpeakerForAction.isMuted ? 'Unmute Speaker' : 'Mute Speaker'}</span>
+                  <span>{selectedSpeakerForAction.isMuted ? 'Unmute mic' : 'Mute mic'}</span>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => handleRemoveFromStage(selectedSpeakerForAction.id)}
-                  className="w-full p-2.5 rounded-xl bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 font-bold flex items-center gap-2 transition-colors"
+                  onClick={() => {
+                    removeFromStage(selectedSpeakerForAction.id);
+                    setSelectedSpeakerForAction(null);
+                  }}
+                  className="w-full p-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold flex items-center gap-2.5 transition-colors"
                 >
-                  <UserX className="w-4 h-4 text-rose-400" />
-                  <span>Move to Audience</span>
+                  <UserX className="w-4 h-4" />
+                  <span>Move to audience</span>
                 </button>
               </div>
 
               <button
                 type="button"
                 onClick={() => setSelectedSpeakerForAction(null)}
-                className="w-full py-2 text-xs font-bold text-slate-400 hover:text-white"
+                className="w-full py-2 text-xs font-semibold text-zinc-400 hover:text-white"
               >
                 Cancel
               </button>

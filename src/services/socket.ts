@@ -109,9 +109,13 @@ export const emitGroupInviteResponse = (payload: {
 };
 
 // 3. Audio Spaces / Street Radio
-export const joinSpaceRoom = (spaceId: string, user: { id: string; name: string; avatar?: string }) => {
+export const joinSpaceRoom = (
+  spaceId: string,
+  user: { id: string; name: string; avatar?: string; isAnonymous?: boolean },
+  spaceMeta?: { hostId?: string; hostPhone?: string; hostName?: string; hostAvatar?: string; speakers?: any[]; pinnedNote?: string }
+) => {
   const s = getSocket();
-  s?.emit('join_space', { spaceId, user });
+  s?.emit('join_space', { spaceId, user, spaceMeta });
 };
 
 export const leaveSpaceRoom = (spaceId: string, userId: string) => {
@@ -122,9 +126,54 @@ export const leaveSpaceRoom = (spaceId: string, userId: string) => {
 export const joinLiveSpace = joinSpaceRoom;
 export const leaveLiveSpace = leaveSpaceRoom;
 
-export const emitSpaceSpeaking = (spaceId: string, userId: string, isSpeaking: boolean) => {
+export const emitSpaceSpeaking = (spaceId: string, userId: string, isSpeaking: boolean, audioLevel?: number) => {
   const s = getSocket();
-  s?.emit('space_speaking', { spaceId, userId, isSpeaking });
+  s?.emit('space_speaking', { spaceId, userId, isSpeaking, audioLevel });
+};
+
+export const emitSpaceReaction = (spaceId: string, userId: string, userName: string, emoji: string, id?: number) => {
+  const s = getSocket();
+  s?.emit('space_reaction', { spaceId, userId, userName, emoji, id });
+};
+
+export const emitSpaceRaiseHand = (spaceId: string, user: { id: string; name: string; avatar?: string }, raised: boolean) => {
+  const s = getSocket();
+  s?.emit('space_raise_hand', { spaceId, user, raised });
+};
+
+export const emitSpaceStageAction = (
+  spaceId: string,
+  actorId: string,
+  action: string,
+  targetUserId?: string,
+  value?: any
+) => {
+  const s = getSocket();
+  s?.emit('space_stage_action', { spaceId, actorId, action, targetUserId, value });
+};
+
+export const emitSpaceChatMessage = (
+  spaceId: string,
+  message: { id: string; userId: string; userName: string; userAvatar?: string; text: string; timestamp: string }
+) => {
+  const s = getSocket();
+  s?.emit('space_chat_message', { spaceId, message });
+};
+
+export const emitSpaceWebRTCSignal = (spaceId: string, event: string, data: any) => {
+  const s = getSocket();
+  s?.emit('space_webrtc_signal', { spaceId, event, data });
+};
+
+export const emitEndSpace = (
+  spaceId: string,
+  actorId: string,
+  durationFormatted?: string,
+  peakListeners?: number,
+  actorPhone?: string
+) => {
+  const s = getSocket();
+  s?.emit('space_ended', { spaceId, actorId, actorPhone, durationFormatted, peakListeners });
 };
 
 // 4. WebRTC Video/Voice Calling

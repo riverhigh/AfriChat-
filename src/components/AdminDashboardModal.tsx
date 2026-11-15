@@ -49,7 +49,7 @@ import {
   Terminal,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { FeatureFlags, CmsAnnouncement, CmsFaqItem, EscrowOrder } from '../types';
+import { FeatureFlags, CmsAnnouncement, CmsFaqItem, EscrowOrder, SponsoredStatusAd } from '../types';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { getSocket } from '../services/socket';
 import { AdminAuditDrawer, AdminAuditEntry, AdminWebhookLog } from './admin/AdminAuditDrawer';
@@ -318,6 +318,11 @@ export const AdminDashboardModal: React.FC = () => {
   const [cmsMarqueeSaved, setCmsMarqueeSaved] = useState(false);
   const [cmsGuidelines, setCmsGuidelines] = useState('');
   const [cmsSaved, setCmsSaved] = useState(false);
+  const [adBrandDraft, setAdBrandDraft] = useState('');
+  const [adMediaDraft, setAdMediaDraft] = useState('');
+  const [adCaptionDraft, setAdCaptionDraft] = useState('');
+  const [adCtaDraft, setAdCtaDraft] = useState('Shop Now');
+  const [adTargetUrlDraft, setAdTargetUrlDraft] = useState('');
 
   const notify = (text: string, tone: 'ok' | 'err' = 'ok') => {
     setActionNotice({ text, tone });
@@ -3396,6 +3401,142 @@ export const AdminDashboardModal: React.FC = () => {
                         {cmsSaved ? 'Guidelines Saved!' : 'Save Community Rules'}
                       </button>
                     </div>
+                  </div>
+
+                  {/* Sponsored Status Ads (Updates Feed) */}
+                  <div className="p-5 rounded-2xl bg-zinc-900/50 border border-amber-500/30 space-y-3 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-white flex items-center gap-2">
+                        <BadgeCheck className="w-4 h-4 text-amber-400" />
+                        <span>Sponsored Status Ads (24h Updates Feed)</span>
+                      </span>
+                      <span className="font-mono text-amber-400">
+                        {(cmsData?.sponsoredStatuses || []).filter((a) => a.active).length} active
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        value={adBrandDraft}
+                        onChange={(e) => setAdBrandDraft(e.target.value)}
+                        placeholder="Vendor / Brand name..."
+                        className="px-3 py-2 rounded-xl border border-zinc-800 bg-zinc-950 text-white"
+                      />
+                      <input
+                        type="url"
+                        value={adMediaDraft}
+                        onChange={(e) => setAdMediaDraft(e.target.value)}
+                        placeholder="Image URL (https://...)"
+                        className="px-3 py-2 rounded-xl border border-zinc-800 bg-zinc-950 text-white"
+                      />
+                      <input
+                        type="text"
+                        value={adCaptionDraft}
+                        onChange={(e) => setAdCaptionDraft(e.target.value)}
+                        placeholder="Promo caption / offer..."
+                        className="px-3 py-2 rounded-xl border border-zinc-800 bg-zinc-950 text-white sm:col-span-2"
+                      />
+                      <input
+                        type="text"
+                        value={adCtaDraft}
+                        onChange={(e) => setAdCtaDraft(e.target.value)}
+                        placeholder="CTA button (e.g. Shop Now)"
+                        className="px-3 py-2 rounded-xl border border-zinc-800 bg-zinc-950 text-white"
+                      />
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={adTargetUrlDraft}
+                          onChange={(e) => setAdTargetUrlDraft(e.target.value)}
+                          placeholder="Target URL or #market / #creator"
+                          className="flex-1 px-3 py-2 rounded-xl border border-zinc-800 bg-zinc-950 text-white"
+                        />
+                        <button
+                          type="button"
+                          disabled={!adBrandDraft.trim() || !adMediaDraft.trim()}
+                          onClick={async () => {
+                            const newAd: SponsoredStatusAd = {
+                              id: `ad_${Date.now()}`,
+                              brandName: adBrandDraft.trim(),
+                              mediaUrl: adMediaDraft.trim(),
+                              avatarUrl: adMediaDraft.trim(),
+                              caption: adCaptionDraft.trim() || `Explore ${adBrandDraft.trim()}`,
+                              ctaLabel: adCtaDraft.trim() || 'Learn More',
+                              targetUrl: adTargetUrlDraft.trim() || '#market',
+                              active: true,
+                              clicksCount: 0,
+                              createdAt: new Date().toISOString(),
+                            };
+                            const ok = await updateCmsData({
+                              sponsoredStatuses: [newAd, ...(cmsData?.sponsoredStatuses || [])],
+                            });
+                            if (ok) {
+                              notify('Sponsored Status Ad published');
+                            }
+                            setAdBrandDraft('');
+                            setAdMediaDraft('');
+                            setAdCaptionDraft('');
+                            setAdTargetUrlDraft('');
+                          }}
+                          className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-bold whitespace-nowrap flex items-center gap-1"
+                        >
+                          <PlusCircle className="w-3.5 h-3.5" />
+                          <span>Publish Ad</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {(cmsData?.sponsoredStatuses || []).length > 0 && (
+                      <div className="divide-y divide-zinc-800/70 pt-1">
+                        {(cmsData?.sponsoredStatuses || []).map((ad, idx) => (
+                          <div key={ad.id || idx} className="py-2.5 flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-10 h-10 rounded-full p-0.5 bg-gradient-to-tr from-amber-500 via-violet-600 to-indigo-600 shrink-0">
+                                <img
+                                  src={ad.mediaUrl}
+                                  alt={ad.brandName}
+                                  className="w-full h-full rounded-full object-cover"
+                                />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-semibold text-white flex items-center gap-1.5">
+                                  <span className="truncate">{ad.brandName}</span>
+                                  <span className="px-1.5 py-0.2 rounded bg-amber-500 text-black text-[9px] font-black">
+                                    AD
+                                  </span>
+                                </div>
+                                <p className="text-zinc-400 truncate mt-0.5">{ad.caption}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = [...(cmsData?.sponsoredStatuses || [])];
+                                  updated[idx] = { ...updated[idx], active: !updated[idx].active };
+                                  updateCmsData({ sponsoredStatuses: updated });
+                                }}
+                                className="px-2 py-1 rounded bg-zinc-800 text-zinc-200 text-[11px]"
+                              >
+                                {ad.active ? 'Live' : 'Paused'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateCmsData({
+                                    sponsoredStatuses: (cmsData?.sponsoredStatuses || []).filter((_, i) => i !== idx),
+                                  })
+                                }
+                                className="p-1 text-rose-400 hover:bg-rose-950/40 rounded"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

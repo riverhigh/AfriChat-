@@ -413,6 +413,8 @@ export function mapAudioSpaceRow(row: Record<string, any>): AudioSpace {
     title,
     topic: (row.topic as string) || '',
     category,
+    hostId: row.host_id ? String(row.host_id) : undefined,
+    hostPhone: row.host_phone ? String(row.host_phone) : undefined,
     hostName,
     hostAvatar,
     listenersCount: Number(row.listeners_count ?? 0),
@@ -427,7 +429,7 @@ export function mapAudioSpaceRow(row: Record<string, any>): AudioSpace {
             name: hostName,
             avatar: hostAvatar,
             role: 'host',
-            isSpeaking: true,
+            isSpeaking: false,
             isMuted: false,
           },
         ],
@@ -927,5 +929,61 @@ export function subscribeToXoGamesInChat(
 
   return channel;
 }
+
+// ─── Status Feed & Sponsored Ad Analytics ────────────────────────────────────
+
+export async function fetchStatusFeedWithAds(limit = 200) {
+  const now = new Date().toISOString();
+
+  // Primary table: user_statuses (supports both organic and sponsored statuses)
+  const { data: userStatusesData, error: userStatusesErr } = await supabase
+    .from('user_statuses')
+    .select('*')
+    .gte('expires_at', now)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  // Also check `statuses` table if used for promoted vendor ads
+  let sponsoredFromStatuses: any[] = [];
+  try {
+    const { data: promotedData, error: promotedErr } = await supabase
+      .from('statuses')
+      .select('*, profiles(username, avatar_url)')
+      .gt('expires_at', now)
+      .eq('is_sponsored', true)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (!promotedErr && Array.isArray(promotedData)) {
+      sponsoredFromStatuses = promotedData;
+    }
+  } catch (_) {}
+
+  const organicRows = !userStatusesErr && Array.isArray(userStatusesData) ? userStatusesData : [];
+  const combined = [...sponsoredFromStatuses, ...organicRows];
+  combined.sort((a, b) => Number(Boolean(b?.is_sponsored)) - Number(Boolean(a?.is_sponsored)));
+  return { data: combined, error: userStatusesErr };
+}
+
+export async function trackAdClickInDb(statusId: string, targetUrl?: string, clickedBy?: string) {
+  if (!statusId) return;
+  try {
+    if (isSupabaseConfigured) {
+      await supabase.from('ad_clicks').insert({
+        status_id: statusId,
+        target_url: targetUrl || null,
+        clicked_by: clickedBy || null,
+        clicked_at: new Date().toISOString(),
+      });
+    }
+  } catch (_) {}
+  try {
+    await fetch('/api/statuses/ad-click', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ statusId, targetUrl, clickedBy }),
+    });
+  } catch (_) {}
+}
+
 
 

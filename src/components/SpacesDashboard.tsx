@@ -270,7 +270,7 @@ export const SpacesDashboard: React.FC<SpacesDashboardProps> = ({
           setIsScheduled(false);
           setShowStartModal(true);
         }}
-        className="w-full bg-violet-600 hover:bg-violet-500 text-white font-bold py-4 px-6 rounded-2xl shadow-[4px_4px_0px_#4c1d95] border border-violet-400 flex items-center justify-center gap-2 mb-8 transition active:translate-x-1 active:translate-y-1 active:shadow-none"
+        className="w-full bg-[#7856ff] hover:bg-[#6a45ff] text-white font-bold py-3.5 px-6 rounded-full shadow-lg shadow-[#7856ff]/25 flex items-center justify-center gap-2 mb-8 transition active:scale-[0.99]"
       >
         <Plus className="w-5 h-5" />
         <span>Start a Space</span>
@@ -296,39 +296,62 @@ export const SpacesDashboard: React.FC<SpacesDashboardProps> = ({
                 No active spaces right now. Be the first to start one!
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-3">
                 {liveRooms.map((room) => (
                   <div
                     key={room.id}
                     onClick={() => joinAudioSpace(room)}
-                    className="bg-zinc-900/90 border border-zinc-800/80 rounded-2xl p-4 flex flex-col justify-between hover:border-violet-500/50 transition cursor-pointer"
+                    className="bg-gradient-to-br from-[#23144d] via-[#150d2b] to-[#0b0914] border border-violet-500/30 rounded-2xl p-4 flex flex-col justify-between hover:border-[#7856ff] transition cursor-pointer"
                   >
                     <div>
-                      <div className="flex items-center gap-1.5 text-xs text-violet-400 mb-1 font-medium">
-                        <span className="w-1.5 h-1.5 rounded-full bg-violet-500 animate-pulse shrink-0" />
-                        <span className="truncate">{room.hostName} hosts</span>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-1.5 text-[11px] font-extrabold tracking-wider uppercase text-[#a88bff]">
+                          <span className="w-2 h-2 rounded-full bg-[#7856ff] animate-pulse shrink-0" />
+                          <span>LIVE</span>
+                          <span className="text-zinc-500">·</span>
+                          <span className="text-zinc-300 font-medium normal-case tracking-normal">
+                            {room.listenersCount || 1} listening
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-medium text-zinc-400 bg-black/40 px-2 py-0.5 rounded-full">
+                          {room.category}
+                        </span>
                       </div>
-                      <h3 className="text-white font-extrabold text-base mb-4 line-clamp-2">
+                      <h3 className="text-white font-extrabold text-base mb-3 line-clamp-2 leading-snug">
                         {room.title}
                       </h3>
                     </div>
 
-                    <div className="flex items-center justify-between pt-2 border-t border-zinc-800/50">
-                      <div className="flex -space-x-2 overflow-hidden">
-                        {room.hostAvatar ? (
-                          <img
-                            src={room.hostAvatar}
-                            alt={room.hostName}
-                            className="inline-block h-6 w-6 rounded-full ring-2 ring-zinc-900 object-cover"
-                          />
-                        ) : (
-                          <div className="inline-block h-6 w-6 rounded-full ring-2 ring-zinc-900 bg-zinc-700 flex items-center justify-center text-[10px] font-bold">
-                            {(room.hostName || 'H').charAt(0).toUpperCase()}
-                          </div>
-                        )}
+                    <div className="flex items-center justify-between pt-2.5 border-t border-white/10">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="flex -space-x-2 overflow-hidden shrink-0">
+                          {(room.speakers && room.speakers.length > 0
+                            ? room.speakers.slice(0, 3)
+                            : [{ id: 'h', name: room.hostName, avatar: room.hostAvatar }]
+                          ).map((sp, i) =>
+                            sp.avatar ? (
+                              <img
+                                key={sp.id || i}
+                                src={sp.avatar}
+                                alt={sp.name}
+                                className="inline-block h-6 w-6 rounded-full ring-2 ring-[#150d2b] object-cover"
+                              />
+                            ) : (
+                              <div
+                                key={sp.id || i}
+                                className="inline-block h-6 w-6 rounded-full ring-2 ring-[#150d2b] bg-zinc-700 flex items-center justify-center text-[10px] font-bold"
+                              >
+                                {(sp.name || 'H').charAt(0).toUpperCase()}
+                              </div>
+                            )
+                          )}
+                        </div>
+                        <span className="text-xs text-zinc-300 font-medium truncate">
+                          {room.hostName}
+                        </span>
                       </div>
-                      <span className="text-[11px] text-zinc-400 font-medium">
-                        +{room.listenersCount || 0} listening
+                      <span className="text-[11px] font-bold text-[#a88bff] shrink-0">
+                        Listen →
                       </span>
                     </div>
                   </div>

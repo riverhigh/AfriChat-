@@ -66,7 +66,14 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: '5mb' }));
+app.use(
+  express.json({
+    limit: '5mb',
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 
 // ── CUSTOM APPLICATION FIREWALL (WAF) & THREAT INSPECTION ──────────────────
 const SQLI_REGEX = /(union\s+select|select\s+.*\s+from|insert\s+into|drop\s+table|update\s+.*\s+set|delete\s+from|sleep\(\d+\)|benchmark\(|waitfor\s+delay|;\s*--|\/\*|\*\/|;\s*drop|'\s*or\s*['\d]=['\d])/i;
@@ -393,6 +400,9 @@ interface RegisteredUser {
   kycStatus?: 'unverified' | 'pending' | 'verified' | 'rejected';
   kycType?: 'BVN' | 'NIN';
   walletBalanceNgn?: number;
+  username?: string;
+  adminWalletAdjustedAt?: string;
+  updatedAt?: string;
   lastSeen?: string;
   isOnline?: boolean;
   deviceInfo?: string;
@@ -585,6 +595,7 @@ const SUPABASE_ANON_KEY =
   envSupabaseKey && !envSupabaseKey.includes('your-anon-key')
     ? envSupabaseKey
     : DEFAULT_SUPABASE_ANON_KEY;
+const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 
 const ADMIN_SYS_CONFIG_KEY = '__agc_sys_config__';
 const ADMIN_SYS_CMS_KEY = '__agc_sys_cms__';
@@ -1168,17 +1179,625 @@ app.get('/api/users/check-phone', (req: Request, res: Response) => {
   return res.json({ registered: false });
 });
 
+const RESERVED_USERNAMES = new Set([
+  'admin', 'administrator', 'agc', 'africhat', 'support', 'help', 'official',
+  'system', 'root', 'moderator', 'mod', 'paystack', 'escrow', 'staff',
+]);
+
+function normalizeUsernameHandle(raw: string): string {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_.]/g, '');
+}
+
 // REST: Check if username is already taken (unique handle verification)
-app.get('/api/users/check-username', (req: Request, res: Response) => {
-  const rawUsername = (req.query.username as string || '').trim().toLowerCase().replace(/^@/, '');
-  if (!rawUsername) return res.status(400).json({ error: 'Username required' });
+app.get('/api/users/check-username', async (req: Request, res: Response) => {
+  const clean = normalizeUsernameHandle((req.query.username as string) || '');
+  const excludePhone = ((req.query.excludePhone as string) || '').replace(/\D/g, '');
+  if (!clean || clean.length < 3) {
+    return res.status(400).json({ error: 'Username must be at least 3 characters', taken: false });
+  }
+  if (RESERVED_USERNAMES.has(clean)) {
+    return res.json({ taken: true, username: clean, reason: 'reserved' });
+  }
+
+  const isSameAccount = (userPhone?: string) => {
+    if (!excludePhone || !userPhone) return false;
+    const uClean = userPhone.replace(/\D/g, '');
+    return Boolean(
+      uClean &&
+      (uClean === excludePhone ||
+        (uClean.length >= 9 && excludePhone.length >= 9 && uClean.slice(-9) === excludePhone.slice(-9)))
+    );
+  };
+
   for (const user of usersByPhone.values()) {
-    const uName = (user.fullName || '').toLowerCase().replace(/^@/, '').trim();
-    if (uName === rawUsername) {
-      return res.json({ taken: true, username: rawUsername });
+    if (isSameAccount(user.phoneNumber || user.cleanPhone)) continue;
+    const uName = normalizeUsernameHandle(user.fullName || '');
+    const handle = normalizeUsernameHandle((user as any).username || '');
+    if (uName === clean || (handle && handle === clean)) {
+      return res.json({ taken: true, username: clean });
     }
   }
-  return res.json({ taken: false, username: rawUsername });
+
+  // Also check Supabase agc_phone_registry if configured
+  if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+    try {
+      const sbRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/agc_phone_registry?select=username,full_phone,phone_digits&or=(username.ilike.${encodeURIComponent(clean)},username.ilike.${encodeURIComponent('@' + clean)})&limit=3`,
+        {
+          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+          signal: AbortSignal.timeout(3500),
+        }
+      );
+      if (sbRes.ok) {
+        const rows = await sbRes.json();
+        if (Array.isArray(rows)) {
+          const conflict = rows.find((r: any) => !isSameAccount(r.full_phone || r.phone_digits));
+          if (conflict) {
+            return res.json({ taken: true, username: clean });
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  return res.json({ taken: false, username: clean });
+});
+
+// REST: Update username / about / avatar safely (NEVER permits wallet balance or role tampering)
+app.patch('/api/users/profile', async (req: Request, res: Response) => {
+  try {
+    const { phoneNumber, username, about, avatarUrl } = req.body || {};
+    if (!phoneNumber) {
+      return res.status(400).json({ success: false, error: 'Phone number is required' });
+    }
+    const cleanPhone = String(phoneNumber).replace(/\D/g, '');
+    const cleanHandle = username !== undefined ? normalizeUsernameHandle(String(username)) : undefined;
+
+    if (cleanHandle !== undefined) {
+      if (cleanHandle.length < 3 || cleanHandle.length > 24) {
+        return res.status(400).json({
+          success: false,
+          error: 'Username must be between 3 and 24 characters (letters, numbers, _ or .).',
+        });
+      }
+      if (RESERVED_USERNAMES.has(cleanHandle)) {
+        return res.status(409).json({
+          success: false,
+          error: `@${cleanHandle} is a reserved handle. Please choose another username.`,
+        });
+      }
+
+      const isSelf = (candidatePhone?: string) => {
+        const c = String(candidatePhone || '').replace(/\D/g, '');
+        return Boolean(c && cleanPhone && (c === cleanPhone || c.slice(-9) === cleanPhone.slice(-9)));
+      };
+
+      for (const u of usersByPhone.values()) {
+        if (isSelf(u.phoneNumber || u.cleanPhone)) continue;
+        if (
+          normalizeUsernameHandle(u.fullName || '') === cleanHandle ||
+          normalizeUsernameHandle((u as any).username || '') === cleanHandle
+        ) {
+          return res.status(409).json({
+            success: false,
+            error: `Username @${cleanHandle} is already taken.`,
+          });
+        }
+      }
+    }
+
+    const match = await ensureUserEntry(String(phoneNumber), { phoneNumber: String(phoneNumber) });
+    if (!match) {
+      return res.status(404).json({ success: false, error: 'Account not found' });
+    }
+    const { key, user } = match;
+    if (cleanHandle !== undefined) {
+      user.fullName = cleanHandle;
+      (user as any).username = cleanHandle;
+    }
+    if (about !== undefined) {
+      user.about = String(about).slice(0, 180);
+    }
+    if (avatarUrl !== undefined && typeof avatarUrl === 'string' && avatarUrl.length <= 150000) {
+      user.avatarUrl = avatarUrl;
+    }
+    (user as any).updatedAt = new Date().toISOString();
+    usersByPhone.set(key, user);
+    saveUsersFile();
+
+    // Sync handle change to Supabase agc_phone_registry
+    if (SUPABASE_URL && (SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY)) {
+      const sbKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+      const last9 = cleanPhone.slice(-9);
+      if (last9) {
+        fetch(`${SUPABASE_URL}/rest/v1/agc_phone_registry?on_conflict=phone_digits`, {
+          method: 'POST',
+          headers: {
+            apikey: sbKey,
+            Authorization: `Bearer ${sbKey}`,
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=merge-duplicates,return=minimal',
+          },
+          body: JSON.stringify({
+            phone_digits: last9,
+            full_phone: user.phoneNumber,
+            username: user.fullName,
+            ...(user.avatarUrl ? { avatar_url: user.avatarUrl } : {}),
+            updated_at: new Date().toISOString(),
+          }),
+          signal: AbortSignal.timeout(4000),
+        }).catch(() => {});
+      }
+    }
+
+    io.emit('user_updated', user);
+    return res.json({ success: true, user });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to update profile' });
+  }
+});
+
+// ── Authoritative Server Wallet Ledger & Anti-Tampering Engine ──────────────
+const WALLETS_FILE = path.join(__dirname, 'data_wallets.json');
+interface ServerWalletTx {
+  id: string;
+  type: 'topup' | 'escrow_lock' | 'escrow_release' | 'withdrawal' | 'transfer_delayed' | 'payroll_debit' | 'transfer_in' | 'transfer_out';
+  title: string;
+  amount: number;
+  currency: 'NGN' | 'KES' | 'GHS' | 'ZAR';
+  timestamp: string;
+  status: 'completed' | 'pending' | 'failed';
+  reference: string;
+  channel: 'paystack' | 'wallet' | 'bank_transfer';
+}
+interface ServerWalletRecord {
+  phoneKey: string;
+  phoneNumber: string;
+  availableBalance: number;
+  escrowLockedBalance: number;
+  currency: 'NGN' | 'KES' | 'GHS' | 'ZAR';
+  transactions: ServerWalletTx[];
+  updatedAt: string;
+}
+
+const serverWallets = new Map<string, ServerWalletRecord>();
+const processedPaymentRefs = new Set<string>();
+
+try {
+  if (fs.existsSync(WALLETS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(WALLETS_FILE, 'utf8'));
+    if (raw && typeof raw === 'object') {
+      if (Array.isArray(raw.usedReferences)) {
+        raw.usedReferences.forEach((r: string) => r && processedPaymentRefs.add(String(r)));
+      }
+      if (raw.wallets && typeof raw.wallets === 'object') {
+        for (const [k, w] of Object.entries<any>(raw.wallets)) {
+          if (w && typeof w === 'object') {
+            serverWallets.set(k, {
+              phoneKey: k,
+              phoneNumber: w.phoneNumber || `+${k}`,
+              availableBalance: Math.max(0, Number(w.availableBalance) || 0),
+              escrowLockedBalance: Math.max(0, Number(w.escrowLockedBalance) || 0),
+              currency: w.currency || 'NGN',
+              transactions: Array.isArray(w.transactions) ? w.transactions.slice(0, 100) : [],
+              updatedAt: w.updatedAt || new Date().toISOString(),
+            });
+          }
+        }
+      }
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading server wallet ledger:', e);
+}
+
+function saveWalletsFile() {
+  try {
+    const walletsObj: Record<string, ServerWalletRecord> = {};
+    for (const [k, w] of serverWallets.entries()) {
+      walletsObj[k] = w;
+    }
+    fs.writeFileSync(
+      WALLETS_FILE,
+      JSON.stringify(
+        {
+          wallets: walletsObj,
+          usedReferences: Array.from(processedPaymentRefs).slice(-5000),
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      )
+    );
+  } catch (e) {
+    console.warn('Notice saving server wallet ledger:', e);
+  }
+}
+
+function getOrCreateServerWallet(phoneOrId: string): ServerWalletRecord {
+  const match = findUserEntry(phoneOrId);
+  const cleanKey = canonicalAdminPhoneKey(match?.user.phoneNumber || phoneOrId) || phoneOrId.replace(/\D/g, '') || phoneOrId;
+  const existing = serverWallets.get(cleanKey);
+  if (existing) {
+    // Keep in sync with any higher/admin-adjusted balance on user record
+    if (match?.user.adminWalletAdjustedAt && typeof match.user.walletBalanceNgn === 'number') {
+      const adjTs = new Date(match.user.adminWalletAdjustedAt).getTime();
+      const walTs = new Date(existing.updatedAt || 0).getTime();
+      if (adjTs > walTs) {
+        existing.availableBalance = Math.max(0, match.user.walletBalanceNgn);
+        existing.updatedAt = match.user.adminWalletAdjustedAt;
+        saveWalletsFile();
+      }
+    }
+    return existing;
+  }
+
+  const initialBal = Math.max(0, Number(match?.user.walletBalanceNgn) || 0);
+  const record: ServerWalletRecord = {
+    phoneKey: cleanKey,
+    phoneNumber: match?.user.phoneNumber || phoneOrId,
+    availableBalance: initialBal,
+    escrowLockedBalance: 0,
+    currency: 'NGN',
+    transactions: [],
+    updatedAt: new Date().toISOString(),
+  };
+  serverWallets.set(cleanKey, record);
+  saveWalletsFile();
+  return record;
+}
+
+async function syncVerifiedCreditToSupabase(
+  userId: string | undefined,
+  reference: string,
+  amount: number,
+  fee: number,
+  currency: string,
+  title: string,
+  metadata: Record<string, any>
+) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !userId || !UUID_REGEX.test(userId)) return;
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/rpc/credit_wallet_from_verified_webhook`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        p_user_id: userId,
+        p_reference: reference,
+        p_amount: amount,
+        p_fee: fee,
+        p_currency: currency || 'NGN',
+        p_title: title,
+        p_metadata: metadata,
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (_) {}
+}
+
+function creditAuthoritativeWallet(params: {
+  phoneOrId: string;
+  amount: number;
+  fee?: number;
+  reference: string;
+  title: string;
+  currency?: 'NGN' | 'KES' | 'GHS' | 'ZAR';
+  verifiedBy: string;
+  metadata?: Record<string, any>;
+}): { alreadyProcessed: boolean; wallet: ServerWalletRecord } {
+  const { phoneOrId, amount, fee = 0, reference, title, currency = 'NGN', verifiedBy, metadata = {} } = params;
+  const wallet = getOrCreateServerWallet(phoneOrId);
+
+  if (processedPaymentRefs.has(reference)) {
+    return { alreadyProcessed: true, wallet };
+  }
+
+  processedPaymentRefs.add(reference);
+  wallet.availableBalance = Math.max(0, Number(wallet.availableBalance || 0) + Number(amount || 0));
+  wallet.updatedAt = new Date().toISOString();
+  const tx: ServerWalletTx = {
+    id: `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
+    type: 'topup',
+    title,
+    amount,
+    currency,
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    status: 'completed',
+    reference,
+    channel: 'paystack',
+  };
+  wallet.transactions = [tx, ...wallet.transactions].slice(0, 100);
+  serverWallets.set(wallet.phoneKey, wallet);
+  saveWalletsFile();
+
+  const match = findUserEntry(phoneOrId);
+  if (match) {
+    match.user.walletBalanceNgn = wallet.availableBalance;
+    (match.user as any).updatedAt = wallet.updatedAt;
+    usersByPhone.set(match.key, match.user);
+    saveUsersFile();
+    pushAdminUserOverrideToSupabase(match.user);
+    syncVerifiedCreditToSupabase(match.user.id, reference, amount, fee, currency, title, {
+      ...metadata,
+      verifiedBy,
+    });
+    const cleanPhoneDigits = (match.user.cleanPhone || match.key).replace(/\D/g, '');
+    io.to(`phone:${cleanPhoneDigits}`).emit('wallet_updated', {
+      balance: wallet.availableBalance,
+      escrowLockedBalance: wallet.escrowLockedBalance,
+      transactions: wallet.transactions,
+      note: title,
+      reference,
+    });
+  }
+
+  return { alreadyProcessed: false, wallet };
+}
+
+// REST: Read authoritative server wallet state (never trusts browser balance)
+app.get('/api/wallet/:phone', (req: Request, res: Response) => {
+  const rawPhone = decodeURIComponent(req.params.phone || '');
+  if (!rawPhone) return res.status(400).json({ error: 'Phone number required' });
+  const wallet = getOrCreateServerWallet(rawPhone);
+  return res.json({
+    success: true,
+    wallet: {
+      availableBalance: wallet.availableBalance,
+      escrowLockedBalance: wallet.escrowLockedBalance,
+      currency: wallet.currency,
+      transactions: wallet.transactions,
+    },
+    source: 'server_authoritative',
+  });
+});
+
+// REST: Verify Paystack checkout server-side via Paystack API or prior signed webhook (NEVER trusts client amount)
+app.post('/api/wallet/verify-paystack', async (req: Request, res: Response) => {
+  try {
+    const { phoneNumber, reference } = req.body || {};
+    if (!phoneNumber || !reference || String(reference).trim().length < 4) {
+      return res.status(400).json({ success: false, error: 'Phone number and valid Paystack reference required' });
+    }
+    const ref = String(reference).trim();
+    const wallet = getOrCreateServerWallet(String(phoneNumber));
+
+    // If the background Paystack webhook already verified and credited this exact reference, return current state idempotently
+    if (processedPaymentRefs.has(ref)) {
+      return res.json({
+        success: true,
+        alreadyProcessed: true,
+        verifiedBy: 'paystack_webhook',
+        wallet: {
+          availableBalance: wallet.availableBalance,
+          escrowLockedBalance: wallet.escrowLockedBalance,
+          currency: wallet.currency,
+          transactions: wallet.transactions,
+        },
+      });
+    }
+
+    const secret = (process.env.PAYSTACK_SECRET_KEY || '').trim();
+    if (!secret) {
+      return res.status(403).json({
+        success: false,
+        code: 'SERVER_VERIFICATION_REQUIRED',
+        message:
+          'Client-side wallet credits are disabled for security. Configure PAYSTACK_SECRET_KEY or deliver a signed Paystack webhook to credit funds.',
+      });
+    }
+
+    const verifyResp = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(ref)}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${secret}`,
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+
+    const verifyJson: any = await verifyResp.json().catch(() => ({}));
+    if (!verifyResp.ok || !verifyJson?.status || verifyJson?.data?.status !== 'success') {
+      return res.status(402).json({
+        success: false,
+        code: 'PAYSTACK_VERIFICATION_FAILED',
+        message: verifyJson?.data?.gateway_response || verifyJson?.message || 'Paystack transaction could not be verified.',
+      });
+    }
+
+    // Authoritative math comes ONLY from Paystack's verified response (never from client body)
+    const paidMajor = Math.round((Number(verifyJson.data.amount) || 0) / 100);
+    if (paidMajor <= 0) {
+      return res.status(400).json({ success: false, message: 'Verified transaction amount must be positive.' });
+    }
+    const fee = Math.min(Math.round(paidMajor * 0.01), 2000);
+    const metaCredit = Number(verifyJson.data?.metadata?.creditedAmountNgn || 0);
+    const creditedAmount = metaCredit > 0 && metaCredit <= paidMajor ? metaCredit : Math.max(1, paidMajor - fee);
+
+    const result = creditAuthoritativeWallet({
+      phoneOrId: String(phoneNumber),
+      amount: creditedAmount,
+      fee,
+      reference: ref,
+      currency: (verifyJson.data.currency || 'NGN') as any,
+      title: `Verified Paystack Top-up (Fee: ₦${fee.toLocaleString()})`,
+      verifiedBy: 'paystack_api',
+      metadata: { grossPaid: paidMajor, gateway: verifyJson.data.channel },
+    });
+
+    appendAuditEntry({
+      refId: ref,
+      actor: 'Paystack Verify API',
+      actorRole: 'Payment Gateway',
+      action: 'Wallet Top-up Verified',
+      target: String(phoneNumber),
+      details: `Credited ₦${creditedAmount.toLocaleString()} (Fee ₦${fee.toLocaleString()})`,
+    });
+
+    return res.json({
+      success: true,
+      alreadyProcessed: result.alreadyProcessed,
+      verifiedBy: 'paystack_api',
+      amountCredited: creditedAmount,
+      fee,
+      reference: ref,
+      wallet: {
+        availableBalance: result.wallet.availableBalance,
+        escrowLockedBalance: result.wallet.escrowLockedBalance,
+        currency: result.wallet.currency,
+        transactions: result.wallet.transactions,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Server Paystack verification failed' });
+  }
+});
+
+// REST: Server-validated withdrawal (never trusts browser balance state)
+app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
+  const { phoneNumber, amount, bankName, accountNumber, accountName } = req.body || {};
+  const numericAmt = Number(amount);
+  if (!phoneNumber || !Number.isFinite(numericAmt) || numericAmt <= 0) {
+    return res.status(400).json({ success: false, message: 'Valid phone number and positive amount required.' });
+  }
+  const wallet = getOrCreateServerWallet(String(phoneNumber));
+  if (numericAmt > wallet.availableBalance) {
+    return res.status(400).json({
+      success: false,
+      message: 'Insufficient verified server wallet balance for this withdrawal.',
+      availableBalance: wallet.availableBalance,
+    });
+  }
+
+  const ref = `WDR_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+  wallet.availableBalance = Math.max(0, wallet.availableBalance - numericAmt);
+  wallet.updatedAt = new Date().toISOString();
+  const tx: ServerWalletTx = {
+    id: `tx_${Date.now()}`,
+    type: 'withdrawal',
+    title: `Payout to ${String(bankName || 'Bank')} (${String(accountNumber || '0000').slice(-4)})`,
+    amount: numericAmt,
+    currency: wallet.currency,
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    status: 'completed',
+    reference: ref,
+    channel: 'bank_transfer',
+  };
+  wallet.transactions = [tx, ...wallet.transactions].slice(0, 100);
+  serverWallets.set(wallet.phoneKey, wallet);
+  saveWalletsFile();
+
+  const match = findUserEntry(String(phoneNumber));
+  if (match) {
+    match.user.walletBalanceNgn = wallet.availableBalance;
+    (match.user as any).updatedAt = wallet.updatedAt;
+    usersByPhone.set(match.key, match.user);
+    saveUsersFile();
+    pushAdminUserOverrideToSupabase(match.user);
+  }
+
+  return res.json({
+    success: true,
+    reference: ref,
+    message: `Withdrawal of ₦${numericAmt.toLocaleString()} to ${String(accountName || 'recipient')} processed.`,
+    wallet: {
+      availableBalance: wallet.availableBalance,
+      escrowLockedBalance: wallet.escrowLockedBalance,
+      currency: wallet.currency,
+      transactions: wallet.transactions,
+    },
+  });
+});
+
+// REST: Server-validated atomic P2P transfer
+app.post('/api/wallet/transfer', (req: Request, res: Response) => {
+  const { fromPhone, toPhone, amount, note } = req.body || {};
+  const numericAmt = Number(amount);
+  if (!fromPhone || !toPhone || !Number.isFinite(numericAmt) || numericAmt <= 0) {
+    return res.status(400).json({ success: false, message: 'Valid sender, recipient, and positive amount required.' });
+  }
+  const senderWallet = getOrCreateServerWallet(String(fromPhone));
+  const recipientWallet = getOrCreateServerWallet(String(toPhone));
+  if (senderWallet.phoneKey === recipientWallet.phoneKey) {
+    return res.status(400).json({ success: false, message: 'Cannot transfer to your own wallet.' });
+  }
+  if (numericAmt > senderWallet.availableBalance) {
+    return res.status(400).json({
+      success: false,
+      message: 'Insufficient verified server balance.',
+      availableBalance: senderWallet.availableBalance,
+    });
+  }
+
+  const ref = `TRF_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+  const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const nowIso = new Date().toISOString();
+
+  senderWallet.availableBalance -= numericAmt;
+  senderWallet.updatedAt = nowIso;
+  senderWallet.transactions = [
+    {
+      id: `tx_${Date.now()}_out`,
+      type: 'transfer_out' as const,
+      title: String(note || `Transfer to ${toPhone}`),
+      amount: numericAmt,
+      currency: senderWallet.currency,
+      timestamp: nowStr,
+      status: 'completed' as const,
+      reference: ref,
+      channel: 'wallet' as const,
+    },
+    ...senderWallet.transactions,
+  ].slice(0, 100);
+
+  recipientWallet.availableBalance += numericAmt;
+  recipientWallet.updatedAt = nowIso;
+  recipientWallet.transactions = [
+    {
+      id: `tx_${Date.now()}_in`,
+      type: 'transfer_in' as const,
+      title: String(note || `Transfer from ${fromPhone}`),
+      amount: numericAmt,
+      currency: recipientWallet.currency,
+      timestamp: nowStr,
+      status: 'completed' as const,
+      reference: `${ref}_R`,
+      channel: 'wallet' as const,
+    },
+    ...recipientWallet.transactions,
+  ].slice(0, 100);
+
+  serverWallets.set(senderWallet.phoneKey, senderWallet);
+  serverWallets.set(recipientWallet.phoneKey, recipientWallet);
+  saveWalletsFile();
+
+  const recipientMatch = findUserEntry(String(toPhone));
+  if (recipientMatch) {
+    const cleanRec = (recipientMatch.user.cleanPhone || recipientMatch.key).replace(/\D/g, '');
+    io.to(`phone:${cleanRec}`).emit('wallet_updated', {
+      balance: recipientWallet.availableBalance,
+      escrowLockedBalance: recipientWallet.escrowLockedBalance,
+      transactions: recipientWallet.transactions,
+      note: `Received ₦${numericAmt.toLocaleString()}`,
+    });
+  }
+
+  return res.json({
+    success: true,
+    reference: ref,
+    wallet: {
+      availableBalance: senderWallet.availableBalance,
+      escrowLockedBalance: senderWallet.escrowLockedBalance,
+      currency: senderWallet.currency,
+      transactions: senderWallet.transactions,
+    },
+  });
 });
 
 // REST: User lookup by phone number
@@ -1275,6 +1894,19 @@ app.post('/api/statuses', (req: Request, res: Response) => {
   saveStatusesFile();
   io.emit('new_status', { status: st });
   res.json({ success: true, status: st });
+});
+
+app.post('/api/statuses/ad-click', (req: Request, res: Response) => {
+  const { statusId, targetUrl, clickedBy } = req.body || {};
+  if (!statusId) return res.status(400).json({ error: 'statusId required' });
+  const existing = statusesMap.get(statusId);
+  if (existing) {
+    existing.adClicksCount = (existing.adClicksCount || 0) + 1;
+    statusesMap.set(statusId, existing);
+    saveStatusesFile();
+  }
+  console.log(`📣 [Ad Click]: status=${statusId} by=${clickedBy || 'guest'} url=${targetUrl || ''}`);
+  res.json({ success: true, statusId, clicks: existing?.adClicksCount ?? 1 });
 });
 
 // ── REST: LIVE DISPATCH ORDERS WITH 5% PLATFORM FEE ──────────────────────────
@@ -1655,27 +2287,46 @@ app.post('/api/admin/escrow/resolve', (req: Request, res: Response) => {
   res.json({ success: true, auditEntry: audit, webhookLog: wh });
 });
 
-// Paystack Webhook Receiver with HMAC-SHA512 Verification
+// Paystack Webhook Receiver with Strict Cryptographic HMAC-SHA512 Verification & Idempotency
 app.post('/api/webhooks/paystack', (req: Request, res: Response) => {
-  const signature = (req.headers['x-paystack-signature'] as string) || '';
-  const secret = process.env.PAYSTACK_SECRET_KEY || '';
-  let hmacVerified = true;
-  if (secret && signature) {
-    const expected = crypto.createHmac('sha512', secret).update(JSON.stringify(req.body)).digest('hex');
-    hmacVerified = expected === signature;
-  }
-  const event = req.body?.event || 'charge.success';
-  const ref = req.body?.data?.reference || `PSK_${Date.now()}`;
+  const signature = ((req.headers['x-paystack-signature'] as string) || '').trim();
+  const secret = (process.env.PAYSTACK_SECRET_KEY || '').trim();
+  const rawPayload = (req as any).rawBody
+    ? Buffer.isBuffer((req as any).rawBody)
+      ? (req as any).rawBody
+      : Buffer.from(String((req as any).rawBody))
+    : Buffer.from(JSON.stringify(req.body || {}));
+
+  const event = req.body?.event || 'unknown';
+  const ref = String(req.body?.data?.reference || `PSK_${Date.now()}`);
   const amountNgn = Math.round((Number(req.body?.data?.amount) || 0) / 100);
   const ip = getClientIp(req);
 
+  let hmacVerified = false;
+  if (secret && signature) {
+    try {
+      const expectedHex = crypto.createHmac('sha512', secret).update(rawPayload).digest('hex');
+      const sigBuf = Buffer.from(signature, 'utf8');
+      const expBuf = Buffer.from(expectedHex, 'utf8');
+      hmacVerified = sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf);
+    } catch (_) {
+      hmacVerified = false;
+    }
+  }
+
   if (!hmacVerified) {
+    const reason = !secret
+      ? 'Rejected webhook: PAYSTACK_SECRET_KEY not configured on server'
+      : !signature
+      ? `Rejected webhook: missing x-paystack-signature header for ref ${ref}`
+      : `Invalid Paystack HMAC signature for ref ${ref}`;
+
     const secEvt = recordSecurityEvent({
       type: 'webhook_mismatch',
       severity: 'critical',
       ip,
       path: '/api/webhooks/paystack',
-      reason: `Invalid Paystack HMAC signature for ref ${ref}`,
+      reason,
     });
     const wh: WebhookLog = {
       id: `wh_${Date.now()}`,
@@ -1685,13 +2336,44 @@ app.post('/api/webhooks/paystack', (req: Request, res: Response) => {
       status: 'mismatch',
       hmacVerified: false,
       ip,
-      payloadSummary: 'Rejected: HMAC-SHA512 signature mismatch',
+      payloadSummary: reason,
       timestamp: new Date().toISOString(),
     };
     webhookLogs.unshift(wh);
     saveAdminAuditFile();
     io.emit('admin_security_updated', { securityEvent: secEvt, webhookLog: wh });
-    return res.status(401).json({ error: 'Invalid Paystack signature' });
+    return res.status(401).json({ error: 'Invalid or missing Paystack signature' });
+  }
+
+  // Only credit wallet on verified charge.success events with positive verified amount and unused reference
+  let creditedNote = `Webhook verified (${event})`;
+  if (event === 'charge.success' && req.body?.data?.status === 'success' && amountNgn > 0) {
+    const meta = req.body?.data?.metadata || {};
+    const targetPhone =
+      meta.phoneNumber ||
+      meta.phone ||
+      meta.userId ||
+      (req.body?.data?.customer?.email ? String(req.body.data.customer.email).split('@')[0] : '');
+
+    if (targetPhone) {
+      const fee = Math.min(Math.round(amountNgn * 0.01), 2000);
+      const metaCredit = Number(meta.creditedAmountNgn || 0);
+      const creditedAmount = metaCredit > 0 && metaCredit <= amountNgn ? metaCredit : Math.max(1, amountNgn - fee);
+
+      const creditRes = creditAuthoritativeWallet({
+        phoneOrId: String(targetPhone),
+        amount: creditedAmount,
+        fee,
+        reference: ref,
+        currency: (req.body?.data?.currency || 'NGN') as any,
+        title: `Verified Paystack Top-up (Fee: ₦${fee.toLocaleString()})`,
+        verifiedBy: 'paystack_webhook',
+        metadata: { grossPaid: amountNgn, event },
+      });
+      creditedNote = creditRes.alreadyProcessed
+        ? `Duplicate webhook ignored cleanly (ref ${ref} already credited)`
+        : `HMAC Verified & Credited ₦${creditedAmount.toLocaleString()} to ${targetPhone}`;
+    }
   }
 
   const wh: WebhookLog = {
@@ -1699,10 +2381,10 @@ app.post('/api/webhooks/paystack', (req: Request, res: Response) => {
     event,
     reference: ref,
     amountNgn,
-    status: 'verified',
+    status: 'processed',
     hmacVerified: true,
     ip,
-    payloadSummary: `Webhook received & HMAC verified (${event})`,
+    payloadSummary: creditedNote,
     timestamp: new Date().toISOString(),
   };
   webhookLogs.unshift(wh);
@@ -1713,7 +2395,7 @@ app.post('/api/webhooks/paystack', (req: Request, res: Response) => {
     actorRole: 'Webhook',
     action: `Webhook: ${event}`,
     target: ref,
-    details: `HMAC Verified · ₦${amountNgn.toLocaleString()}`,
+    details: creditedNote,
   });
   io.emit('admin_audit_appended', { webhookLog: wh });
   res.json({ success: true, webhookLog: wh });
@@ -2112,6 +2794,14 @@ app.post('/api/admin/users/:phone/adjust-wallet', async (req: Request, res: Resp
       (user as any).updatedAt = nowIso;
       usersByPhone.set(key, user);
       saveUsersFile();
+
+      // Sync authoritative server wallet ledger with admin adjustment
+      const srvWal = getOrCreateServerWallet(user.phoneNumber || cleanKey);
+      srvWal.availableBalance = balance;
+      srvWal.updatedAt = nowIso;
+      serverWallets.set(srvWal.phoneKey, srvWal);
+      saveWalletsFile();
+
       pushAdminUserOverrideToSupabase(user);
       appendAuditEntry({
         refId: `WAL_${cleanKey}_${Date.now()}`,
@@ -2124,6 +2814,8 @@ app.post('/api/admin/users/:phone/adjust-wallet', async (req: Request, res: Resp
       io.emit('user_updated', user);
       io.to(`phone:${cleanKey}`).emit('wallet_updated', {
         balance,
+        escrowLockedBalance: srvWal.escrowLockedBalance,
+        transactions: srvWal.transactions,
         note: note || 'Adjusted by administrator',
       });
       return res.json({ success: true, user, balance });
@@ -2216,6 +2908,44 @@ const io = new Server(httpServer, {
 
 // Connected users mapping: socket.id -> userId
 const onlineUsers = new Map<string, { userId: string; userName: string; avatar?: string }>();
+
+// Live Audio Space Rooms State (authoritative stage, listeners, raised hands, chat & creator guard)
+interface SpaceRoomState {
+  spaceId: string;
+  hostId: string;
+  hostPhone?: string;
+  hostName: string;
+  pinnedNote: string;
+  speakers: any[];
+  listeners: Map<string, { id: string; name: string; avatar: string; isAnonymous?: boolean; socketId: string }>;
+  raisedHands: { id: string; name: string; avatar: string; time: string }[];
+  chatMessages: { id: string; userId: string; userName: string; userAvatar?: string; text: string; timestamp: string }[];
+  peakListeners: number;
+}
+const spaceRooms = new Map<string, SpaceRoomState>();
+
+function serializeSpaceRoom(room: SpaceRoomState) {
+  const listenersArr = Array.from(room.listeners.values()).map(({ socketId: _s, ...rest }) => rest);
+  const uniquePeople = new Set([
+    ...room.speakers.map((s) => s.id),
+    ...listenersArr.map((l) => l.id),
+  ]);
+  const listenersCount = Math.max(1, uniquePeople.size);
+  room.peakListeners = Math.max(room.peakListeners, listenersCount);
+  return {
+    spaceId: room.spaceId,
+    hostId: room.hostId,
+    hostPhone: room.hostPhone,
+    hostName: room.hostName,
+    pinnedNote: room.pinnedNote,
+    speakers: room.speakers,
+    listeners: listenersArr,
+    raisedHands: room.raisedHands,
+    chatMessages: room.chatMessages.slice(-60),
+    listenersCount,
+    peakListeners: room.peakListeners,
+  };
+}
 
 // Real-Time Socket Connection Handlers
 io.on('connection', (socket: Socket) => {
@@ -2497,22 +3227,235 @@ io.on('connection', (socket: Socket) => {
   });
 
   // 4. Live Audio Spaces / Street Radio
-  socket.on('join_space', (payload: { spaceId: string; user: { id: string; name: string; avatar?: string } }) => {
-    const { spaceId, user } = payload;
+  socket.on('join_space', (payload: { spaceId: string; user: { id: string; name: string; avatar?: string; isAnonymous?: boolean }; spaceMeta?: { hostId?: string; hostPhone?: string; hostName?: string; hostAvatar?: string; speakers?: any[]; pinnedNote?: string } }) => {
+    const { spaceId, user, spaceMeta } = payload || {};
+    if (!spaceId || !user?.id) return;
     socket.join(`space:${spaceId}`);
-    console.log(`📻 User ${user.name} joined space:${spaceId}`);
+    (socket as any)._activeSpaceId = spaceId;
+    (socket as any)._spaceUserId = user.id;
+
+    let room = spaceRooms.get(spaceId);
+    if (!room) {
+      const initialSpeakers = Array.isArray(spaceMeta?.speakers) && spaceMeta.speakers.length > 0
+        ? spaceMeta.speakers.map((s) => ({ ...s }))
+        : [{
+            id: spaceMeta?.hostId || user.id,
+            name: spaceMeta?.hostName || user.name || 'Host',
+            avatar: spaceMeta?.hostAvatar || user.avatar || '',
+            role: 'host',
+            isSpeaking: false,
+            isMuted: false,
+          }];
+      room = {
+        spaceId,
+        hostId: spaceMeta?.hostId || initialSpeakers.find((s) => s.role === 'host')?.id || user.id,
+        hostPhone: spaceMeta?.hostPhone,
+        hostName: spaceMeta?.hostName || initialSpeakers.find((s) => s.role === 'host')?.name || user.name || 'Host',
+        pinnedNote: spaceMeta?.pinnedNote || '',
+        speakers: initialSpeakers,
+        listeners: new Map(),
+        raisedHands: [],
+        chatMessages: [],
+        peakListeners: 1,
+      };
+      spaceRooms.set(spaceId, room);
+    } else if (!room.hostPhone && spaceMeta?.hostPhone) {
+      room.hostPhone = spaceMeta.hostPhone;
+    }
+
+    const isOnStage = room.speakers.some((s) => s.id === user.id);
+    if (!isOnStage) {
+      room.listeners.set(user.id, {
+        id: user.id,
+        name: user.isAnonymous ? 'Anonymous listener' : (user.name || 'Listener'),
+        avatar: user.isAnonymous ? '' : (user.avatar || ''),
+        isAnonymous: Boolean(user.isAnonymous),
+        socketId: socket.id,
+      });
+    }
+
+    const snapshot = serializeSpaceRoom(room);
+    console.log(`📻 User ${user.name} joined space:${spaceId} (${snapshot.listenersCount} listening)`);
+    io.to(`space:${spaceId}`).emit('space_state_sync', snapshot);
     io.to(`space:${spaceId}`).emit('space_user_joined', { spaceId, user, socketId: socket.id });
   });
 
   socket.on('leave_space', (payload: { spaceId: string; userId: string }) => {
-    const { spaceId, userId } = payload;
+    const { spaceId, userId } = payload || {};
+    if (!spaceId) return;
     socket.leave(`space:${spaceId}`);
+    if ((socket as any)._activeSpaceId === spaceId) {
+      delete (socket as any)._activeSpaceId;
+    }
+    const room = spaceRooms.get(spaceId);
+    if (room && userId) {
+      room.listeners.delete(userId);
+      room.raisedHands = room.raisedHands.filter((h) => h.id !== userId);
+      room.speakers = room.speakers.filter((s) => s.id !== userId || s.role === 'host' || s.id === room.hostId);
+      io.to(`space:${spaceId}`).emit('space_state_sync', serializeSpaceRoom(room));
+    }
     io.to(`space:${spaceId}`).emit('space_user_left', { spaceId, userId, socketId: socket.id });
   });
 
-  socket.on('space_speaking', (payload: { spaceId: string; userId: string; isSpeaking: boolean }) => {
-    const { spaceId, userId, isSpeaking } = payload;
-    socket.to(`space:${spaceId}`).emit('space_speaker_active', { userId, isSpeaking });
+  socket.on('space_speaking', (payload: { spaceId: string; userId: string; isSpeaking: boolean; audioLevel?: number }) => {
+    const { spaceId, userId, isSpeaking, audioLevel } = payload || {};
+    if (!spaceId || !userId) return;
+    const room = spaceRooms.get(spaceId);
+    if (room) {
+      room.speakers = room.speakers.map((s) =>
+        s.id === userId ? { ...s, isSpeaking: Boolean(isSpeaking) } : s
+      );
+    }
+    socket.to(`space:${spaceId}`).emit('space_speaker_active', { userId, isSpeaking, audioLevel: audioLevel ?? (isSpeaking ? 0.6 : 0) });
+  });
+
+  socket.on('space_reaction', (payload: { spaceId: string; userId: string; userName?: string; emoji: string; id?: number }) => {
+    const { spaceId, userId, userName, emoji, id } = payload || {};
+    if (!spaceId || !emoji) return;
+    io.to(`space:${spaceId}`).emit('space_reaction', {
+      spaceId,
+      userId,
+      userName,
+      emoji,
+      id: id || Date.now() + Math.random(),
+    });
+  });
+
+  socket.on('space_raise_hand', (payload: { spaceId: string; user: { id: string; name: string; avatar?: string }; raised: boolean }) => {
+    const { spaceId, user, raised } = payload || {};
+    if (!spaceId || !user?.id) return;
+    const room = spaceRooms.get(spaceId);
+    if (!room) return;
+    if (raised) {
+      if (!room.raisedHands.some((h) => h.id === user.id) && !room.speakers.some((s) => s.id === user.id)) {
+        room.raisedHands.push({
+          id: user.id,
+          name: user.name || 'Listener',
+          avatar: user.avatar || '',
+          time: 'Just now',
+        });
+      }
+    } else {
+      room.raisedHands = room.raisedHands.filter((h) => h.id !== user.id);
+    }
+    io.to(`space:${spaceId}`).emit('space_state_sync', serializeSpaceRoom(room));
+  });
+
+  socket.on('space_stage_action', (payload: { spaceId: string; actorId: string; action: string; targetUserId?: string; value?: any }) => {
+    const { spaceId, actorId, action, targetUserId, value } = payload || {};
+    if (!spaceId || !action) return;
+    const room = spaceRooms.get(spaceId);
+    if (!room) return;
+
+    const actorSpeaker = room.speakers.find((s) => s.id === actorId);
+    const isActorCreator = room.hostId === actorId || actorSpeaker?.role === 'host';
+    const isActorModerator = isActorCreator || actorSpeaker?.role === 'co-host';
+
+    if (action === 'toggle_self_mute') {
+      room.speakers = room.speakers.map((s) =>
+        s.id === actorId ? { ...s, isMuted: value !== undefined ? Boolean(value) : !s.isMuted, isSpeaking: false } : s
+      );
+      io.to(`space:${spaceId}`).emit('space_state_sync', serializeSpaceRoom(room));
+      return;
+    }
+
+    if (!isActorModerator) return;
+
+    if (action === 'approve_hand' && targetUserId) {
+      const hand = room.raisedHands.find((h) => h.id === targetUserId);
+      const listener = room.listeners.get(targetUserId);
+      const person = hand || listener;
+      if (person && !room.speakers.some((s) => s.id === targetUserId)) {
+        room.speakers.push({
+          id: targetUserId,
+          name: person.name || 'Speaker',
+          avatar: person.avatar || '',
+          role: 'speaker',
+          isSpeaking: false,
+          isMuted: true,
+        });
+      }
+      room.listeners.delete(targetUserId);
+      room.raisedHands = room.raisedHands.filter((h) => h.id !== targetUserId);
+    } else if (action === 'decline_hand' && targetUserId) {
+      room.raisedHands = room.raisedHands.filter((h) => h.id !== targetUserId);
+    } else if (action === 'promote_cohost' && targetUserId && isActorCreator) {
+      room.speakers = room.speakers.map((s) =>
+        s.id === targetUserId ? { ...s, role: 'co-host' } : s
+      );
+    } else if (action === 'demote_speaker' && targetUserId && isActorCreator) {
+      room.speakers = room.speakers.map((s) =>
+        s.id === targetUserId && s.role !== 'host' ? { ...s, role: 'speaker' } : s
+      );
+    } else if (action === 'set_sponsor' && targetUserId && isActorCreator) {
+      room.speakers = room.speakers.map((s) =>
+        s.id === targetUserId && s.role !== 'host' ? { ...s, role: 'sponsor' } : s
+      );
+    } else if ((action === 'mute_speaker' || action === 'unmute_speaker') && targetUserId) {
+      const nextMuted = action === 'mute_speaker';
+      room.speakers = room.speakers.map((s) =>
+        s.id === targetUserId && (s.role !== 'host' || isActorCreator)
+          ? { ...s, isMuted: nextMuted, isSpeaking: nextMuted ? false : s.isSpeaking }
+          : s
+      );
+    } else if (action === 'remove_from_stage' && targetUserId) {
+      const target = room.speakers.find((s) => s.id === targetUserId);
+      if (target && target.role !== 'host') {
+        room.speakers = room.speakers.filter((s) => s.id !== targetUserId);
+        room.listeners.set(targetUserId, {
+          id: target.id,
+          name: target.name,
+          avatar: target.avatar,
+          socketId: '',
+        });
+      }
+    } else if (action === 'mute_all') {
+      room.speakers = room.speakers.map((s) =>
+        s.role === 'host' ? s : { ...s, isMuted: true, isSpeaking: false }
+      );
+    } else if (action === 'update_pin') {
+      room.pinnedNote = String(value || '').trim();
+    }
+
+    io.to(`space:${spaceId}`).emit('space_state_sync', serializeSpaceRoom(room));
+  });
+
+  socket.on('space_chat_message', (payload: { spaceId: string; message: { id: string; userId: string; userName: string; userAvatar?: string; text: string; timestamp: string } }) => {
+    const { spaceId, message } = payload || {};
+    if (!spaceId || !message?.text) return;
+    const room = spaceRooms.get(spaceId);
+    if (room) {
+      room.chatMessages.push(message);
+      if (room.chatMessages.length > 100) room.chatMessages.shift();
+    }
+    io.to(`space:${spaceId}`).emit('space_chat_message', { spaceId, message });
+  });
+
+  socket.on('space_webrtc_signal', (payload: { spaceId: string; event: string; data: any }) => {
+    const { spaceId, event, data } = payload || {};
+    if (!spaceId || !event) return;
+    socket.to(`space:${spaceId}`).emit('space_webrtc_signal', { spaceId, event, data });
+  });
+
+  socket.on('space_ended', (payload: { spaceId: string; actorId?: string; actorPhone?: string; durationFormatted?: string; peakListeners?: number }) => {
+    const { spaceId, actorId, actorPhone, durationFormatted, peakListeners } = payload || {};
+    if (!spaceId) return;
+    const room = spaceRooms.get(spaceId);
+    // Strict creator enforcement: only the host/creator can end a Space for everyone
+    if (room) {
+      const idMatches = Boolean(room.hostId && actorId && room.hostId === actorId);
+      const cleanHostPhone = (room.hostPhone || '').replace(/\D/g, '');
+      const cleanActorPhone = (actorPhone || (socket as any)._agcPhone || '').replace(/\D/g, '');
+      const phoneMatches = Boolean(cleanHostPhone && cleanActorPhone && cleanHostPhone.slice(-10) === cleanActorPhone.slice(-10));
+      if (!idMatches && !phoneMatches) {
+        socket.emit('space_error', { spaceId, message: 'Only the Space creator can end this Space.' });
+        return;
+      }
+    }
+    const finalPeak = Math.max(peakListeners || 1, room?.peakListeners || 1);
+    spaceRooms.delete(spaceId);
+    io.to(`space:${spaceId}`).emit('space_ended', { spaceId, durationFormatted, peakListeners: finalPeak });
+    io.emit('space_ended', { spaceId, durationFormatted, peakListeners: finalPeak });
   });
 
   // 5. Direct Phone Calling Relay (supports phone variants + multi-participant targets)
@@ -2585,6 +3528,18 @@ io.on('connection', (socket: Socket) => {
   socket.on('disconnect', () => {
     onlineUsers.delete(socket.id);
     io.emit('presence_update', Array.from(onlineUsers.values()));
+
+    const activeSpaceId = (socket as any)._activeSpaceId;
+    const spaceUserId = (socket as any)._spaceUserId;
+    if (activeSpaceId && spaceUserId) {
+      const room = spaceRooms.get(activeSpaceId);
+      if (room) {
+        room.listeners.delete(spaceUserId);
+        room.raisedHands = room.raisedHands.filter((h) => h.id !== spaceUserId);
+        io.to(`space:${activeSpaceId}`).emit('space_state_sync', serializeSpaceRoom(room));
+      }
+      io.to(`space:${activeSpaceId}`).emit('space_user_left', { spaceId: activeSpaceId, userId: spaceUserId, socketId: socket.id });
+    }
 
     const clean = (socket as any)._userCleanPhone || (socket as any)._agcPhone;
     if (clean && usersByPhone.has(clean)) {
