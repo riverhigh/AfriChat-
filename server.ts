@@ -2512,11 +2512,22 @@ io.on('connection', (socket: Socket) => {
     socket.to(`space:${spaceId}`).emit('space_speaker_active', { userId, isSpeaking });
   });
 
-  // 5. Direct Phone Calling Relay
-  socket.on('phone_call_signal', (payload: { targetPhone: string; data: any; event?: string }) => {
-    const cleanTarget = payload.targetPhone.replace(/\D/g, '');
-    const eventName = payload.event || 'incoming_call';
-    io.to(`phone:${cleanTarget}`).emit(eventName, payload.data);
+  // 5. Direct Phone Calling Relay (supports phone variants + multi-participant targets)
+  socket.on('phone_call_signal', (payload: { targetPhone?: string; targetPhones?: string[]; data: any; event?: string }) => {
+    const eventName = payload?.event || 'incoming_call';
+    const targets: string[] = [];
+    if (payload?.targetPhone) targets.push(payload.targetPhone);
+    if (Array.isArray(payload?.targetPhones)) targets.push(...payload.targetPhones);
+
+    const seenVariants = new Set<string>();
+    for (const rawTarget of targets) {
+      if (!rawTarget) continue;
+      const variants = getPhoneVariants(rawTarget);
+      const primary = variants[0] || rawTarget.replace(/\D/g, '');
+      if (!primary || seenVariants.has(primary)) continue;
+      variants.forEach((v) => seenVariants.add(v));
+      emitToPhoneVariantsOnce(rawTarget, eventName, payload.data);
+    }
   });
 
   socket.on('register_phone', (payload: string | { phone: string; sessionToken?: string }) => {
@@ -2534,10 +2545,17 @@ io.on('connection', (socket: Socket) => {
 
   // 6. WebRTC Call Room Signaling Relay
   socket.on('join_call_room', (roomId: string) => {
+    if (!roomId) return;
     socket.join(`call:${roomId}`);
   });
 
+  socket.on('leave_call_room', (roomId: string) => {
+    if (!roomId) return;
+    socket.leave(`call:${roomId}`);
+  });
+
   socket.on('call_signal', (payload: { roomId: string; event: string; data: any }) => {
+    if (!payload?.roomId) return;
     socket.to(`call:${payload.roomId}`).emit('call_signal', payload);
   });
 

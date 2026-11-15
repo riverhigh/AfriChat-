@@ -522,7 +522,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 type="button"
                 onClick={() => {
                   onClose();
-                  startCall(chat.name, contactPhone!, chat.avatar, 'voice');
+                  startCall(chat.name, contactPhone || chat.phoneNumber || chat.phone || '', chat.avatar, 'voice', undefined, true, { chatId: chat.id });
                 }}
                 className="flex flex-col items-center justify-center py-3 px-2 bg-[#1c1c1e] hover:bg-[#252528] active:scale-95 transition-all rounded-2xl border border-neutral-800/80"
               >
@@ -534,7 +534,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 type="button"
                 onClick={() => {
                   onClose();
-                  startCall(chat.name, contactPhone!, chat.avatar, 'video');
+                  startCall(chat.name, contactPhone || chat.phoneNumber || chat.phone || '', chat.avatar, 'video', undefined, true, { chatId: chat.id });
                 }}
                 className="flex flex-col items-center justify-center py-3 px-2 bg-[#1c1c1e] hover:bg-[#252528] active:scale-95 transition-all rounded-2xl border border-neutral-800/80"
               >

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   Phone,
   PhoneOff,
@@ -95,13 +95,15 @@ export const IncomingCallModal: React.FC = () => {
         </div>
 
         <h3 className="text-sm font-semibold uppercase tracking-wider text-purple-300/80 pt-1">
-          Incoming {isVideo ? 'Video' : 'Voice'} Call
+          Incoming {incomingCall.isGroupCall ? 'Group ' : ''}{isVideo ? 'Video' : 'Voice'} Call
         </h3>
         <h2 className="text-3xl font-black font-display text-white">
-          {incomingCall.callerName}
+          {incomingCall.isGroupCall && incomingCall.groupName ? incomingCall.groupName : incomingCall.callerName}
         </h2>
         <p className="text-sm font-mono text-white/50">
-          {incomingCall.callerPhone}
+          {incomingCall.isGroupCall
+            ? `From ${incomingCall.callerName} · ${incomingCall.callerPhone}`
+            : incomingCall.callerPhone}
         </p>
       </div>
 

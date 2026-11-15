@@ -7,6 +7,7 @@ import {
   emitGroupInvite,
   emitGroupInviteResponse,
   emitPhoneCallSignal,
+  emitCallSignal,
   joinLiveSpace,
   leaveLiveSpace,
   registerSocketUser,
@@ -372,6 +373,9 @@ export interface ActiveCallState {
   isSpeaker: boolean;
   roomId?: string;
   isInitiator?: boolean;
+  isGroupCall?: boolean;
+  participantPhones?: string[];
+  chatId?: string;
 }
 
 interface AppContextType {
@@ -466,7 +470,19 @@ interface AppContextType {
   releaseEscrowFunds: (orderId: string, enteredPin: string) => { success: boolean; message: string };
   openChatWithProduct: (chatId: string, product: Product) => void;
   activeCall: ActiveCallState | null;
-  startCall: (name: string, phone: string, avatar?: string, type?: 'voice' | 'video', roomId?: string, isInitiator?: boolean) => void;
+  startCall: (
+    name: string,
+    phone: string,
+    avatar?: string,
+    type?: 'voice' | 'video',
+    roomId?: string,
+    isInitiator?: boolean,
+    options?: {
+      isGroupCall?: boolean;
+      participantPhones?: string[];
+      chatId?: string;
+    }
+  ) => void;
   endCall: () => void;
   toggleCallMute: () => void;
   toggleCallSpeaker: () => void;
@@ -476,6 +492,9 @@ interface AppContextType {
     callerPhone: string;
     callerAvatar?: string;
     type: 'voice' | 'video';
+    isGroupCall?: boolean;
+    groupName?: string;
+    participantPhones?: string[];
   } | null;
   acceptIncomingCall: () => void;
   declineIncomingCall: () => void;
@@ -2488,7 +2507,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     callerPhone: string;
     callerAvatar?: string;
     type: 'voice' | 'video';
+    isGroupCall?: boolean;
+    groupName?: string;
+    participantPhones?: string[];
   } | null>(null);
+  const activeCallRef = useRef<ActiveCallState | null>(null);
+  const incomingCallRef = useRef<typeof incomingCall>(null);
+  const callRingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const callSignalHandlersRef = useRef<{
+    onIncomingCall: (payload: any) => void;
+    onCallTerminated: (payload: any, eventName?: string) => void;
+  }>({ onIncomingCall: () => {}, onCallTerminated: () => {} });
+  useEffect(() => {
+    activeCallRef.current = activeCall;
+  }, [activeCall]);
+  useEffect(() => {
+    incomingCallRef.current = incomingCall;
+  }, [incomingCall]);
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     try {
@@ -4172,18 +4207,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [isDarkMode]);
 
-  // Active call timer
+  // Active call timer (depends only on active room identity, never recreates every second)
+  const activeCallRoomKey = activeCall?.roomId || (activeCall ? activeCall.phone : '');
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (activeCall) {
-      interval = setInterval(() => {
-        setActiveCall((prev) =>
-          prev ? { ...prev, durationSeconds: prev.durationSeconds + 1 } : null
-        );
-      }, 1000);
-    }
+    if (!activeCallRoomKey) return;
+    const interval = setInterval(() => {
+      setActiveCall((prev) =>
+        prev ? { ...prev, durationSeconds: prev.durationSeconds + 1 } : null
+      );
+    }, 1000);
     return () => clearInterval(interval);
-  }, [activeCall]);
+  }, [activeCallRoomKey]);
 
   const toggleDarkMode = () => {
     setIsDarkMode((prev) => !prev);
@@ -4608,31 +4642,214 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     publishStatusLive(newStatus);
   };
 
-  // ── Multi-Transport Incoming Call Listener (Socket.io + BroadcastChannel + Supabase)
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
+  const deviceContactsRef = useRef(deviceContacts);
+  deviceContactsRef.current = deviceContacts;
+
+  // Helper: broadcast call control signals (incoming_call / call_declined / call_ended)
+  // to every target participant phone across Socket.IO, BroadcastChannel, and Supabase Realtime
+  const sendCallControlSignal = useCallback(
+    (
+      targetPhones: string[],
+      event: 'incoming_call' | 'call_declined' | 'call_ended',
+      payload: any
+    ) => {
+      const myPhone = currentUserRef.current?.phoneNumber || '';
+      const seenNorm = new Set<string>();
+      const cleanTargets: string[] = [];
+
+      targetPhones.forEach((raw) => {
+        if (!raw) return;
+        const digits = raw.replace(/\D/g, '');
+        if (digits.length < 7) return;
+        if (myPhone && phonesMatch(raw, myPhone)) return;
+        const norm = normalizePhoneDigits(raw) || digits;
+        if (seenNorm.has(norm)) return;
+        seenNorm.add(norm);
+        cleanTargets.push(raw);
+      });
+
+      if (cleanTargets.length === 0) return;
+
+      cleanTargets.forEach((targetPhone) => {
+        const rawClean = targetPhone.replace(/\D/g, '');
+        const norm = normalizePhoneDigits(targetPhone) || rawClean;
+        const variants = Array.from(new Set([rawClean, norm].filter(Boolean)));
+
+        // 1. Socket.io (server uses emitToPhoneVariantsOnce)
+        try {
+          emitPhoneCallSignal(targetPhone, payload, event);
+        } catch (_) {}
+
+        // 2. BroadcastChannel (same-browser multi-tab)
+        try {
+          const bc = new BroadcastChannel('AGC_phone_calls');
+          bc.postMessage({
+            targetPhone: norm,
+            targetVariants: variants,
+            event,
+            data: payload,
+          });
+          setTimeout(() => {
+            try { bc.close(); } catch (_) {}
+          }, 1500);
+        } catch (_) {}
+
+        // 3. Supabase Realtime (phone_call_* and inbox_* for both raw & normalized phone)
+        if (isSupabaseConfigured) {
+          variants.forEach((v) => {
+            ['phone_call_', 'inbox_'].forEach((prefix) => {
+              try {
+                const ch = supabase.channel(`${prefix}${v}`, {
+                  config: { broadcast: { self: false } },
+                });
+                ch.subscribe((status) => {
+                  if (status === 'SUBSCRIBED') {
+                    ch.send({
+                      type: 'broadcast',
+                      event,
+                      payload,
+                    })
+                      .catch(() => {})
+                      .finally(() => {
+                        setTimeout(() => {
+                          try {
+                            ch.unsubscribe();
+                            supabase.removeChannel(ch);
+                          } catch (_) {}
+                        }, 1500);
+                      });
+                  }
+                });
+              } catch (_) {}
+            });
+          });
+        }
+      });
+    },
+    []
+  );
+
+  // Helper: broadcast webrtc_end directly into the call room across all transports
+  const emitRoomEndSignal = useCallback((roomId: string, extraData: Record<string, any> = {}) => {
+    if (!roomId) return;
+    const payload = {
+      roomId,
+      endedBy: currentUserRef.current?.phoneNumber || '',
+      timestamp: Date.now(),
+      _sigId: `ctx_end_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      ...extraData,
+    };
+
+    try {
+      emitCallSignal(roomId, 'webrtc_end', payload);
+    } catch (_) {}
+
+    try {
+      const bc = new BroadcastChannel(`AGC_call_${roomId}`);
+      bc.postMessage({ event: 'webrtc_end', payload, id: payload._sigId, roomId });
+      setTimeout(() => {
+        try { bc.close(); } catch (_) {}
+      }, 1500);
+    } catch (_) {}
+
+    if (isSupabaseConfigured) {
+      try {
+        const ch = supabase.channel(`call_room_${roomId}`, {
+          config: { broadcast: { self: false } },
+        });
+        ch.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            ch.send({
+              type: 'broadcast',
+              event: 'webrtc_end',
+              payload,
+            })
+              .catch(() => {})
+              .finally(() => {
+                setTimeout(() => {
+                  try {
+                    ch.unsubscribe();
+                    supabase.removeChannel(ch);
+                  } catch (_) {}
+                }, 1500);
+              });
+          }
+        });
+      } catch (_) {}
+    }
+  }, []);
+
+  // ── Multi-Transport Incoming Call & Call Termination Listener ────────────────
+  // Depends ONLY on currentUser.phoneNumber so listeners never tear down mid-call
   useEffect(() => {
-    const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '');
-    if (!myCleanPhone) return;
+    const rawCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    const normCleanPhone = normalizePhoneDigits(currentUser.phoneNumber) || '';
+    if (!rawCleanPhone && !normCleanPhone) return;
+
+    const myVariants = Array.from(new Set([rawCleanPhone, normCleanPhone].filter(Boolean)));
 
     const handleIncomingCall = (payload: any) => {
-      if (!activeCall && payload?.roomId) {
-        setIncomingCall(payload);
-        showLocalNotification(
-          `📞 Incoming AGC ${payload.type === 'video' ? 'Video' : 'Voice'} Call`,
-          `${payload.callerName || 'Someone'} is calling you on AGC...`,
-          payload.callerAvatar || '/icon-192.png'
-        );
+      if (!payload?.roomId) return;
+      if (payload.callerPhone && currentUserRef.current?.phoneNumber && phonesMatch(payload.callerPhone, currentUserRef.current.phoneNumber)) {
+        return;
+      }
+      if (payload.timestamp && Date.now() - Number(payload.timestamp) > 60_000) {
+        return;
+      }
+      if (activeCallRef.current) return;
+      if (incomingCallRef.current?.roomId === payload.roomId) return;
+
+      incomingCallRef.current = payload;
+      setIncomingCall(payload);
+      showLocalNotification(
+        `📞 Incoming AGC ${payload.type === 'video' ? 'Video' : 'Voice'} Call`,
+        payload.isGroupCall
+          ? `${payload.callerName || 'Someone'} invited you to a group call (${payload.groupName || 'Group'})`
+          : `${payload.callerName || 'Someone'} is calling you on AGC...`,
+        payload.callerAvatar || '/icon-192.png'
+      );
+    };
+
+    const handleCallTerminated = (payload: any, eventName: string = 'call_ended') => {
+      const targetRoomId = payload?.roomId;
+
+      if (incomingCallRef.current) {
+        if (!targetRoomId || incomingCallRef.current.roomId === targetRoomId) {
+          incomingCallRef.current = null;
+          setIncomingCall(null);
+        }
+      }
+
+      const currentActive = activeCallRef.current;
+      if (currentActive) {
+        const roomMatches = !targetRoomId || currentActive.roomId === targetRoomId;
+        if (roomMatches) {
+          const shouldTerminateActive =
+            !currentActive.isGroupCall ||
+            eventName === 'call_ended' ||
+            Boolean(payload?.isHostCancel);
+          if (shouldTerminateActive) {
+            if (callRingTimeoutRef.current) {
+              clearTimeout(callRingTimeoutRef.current);
+              callRingTimeoutRef.current = null;
+            }
+            activeCallRef.current = null;
+            setActiveCall(null);
+          }
+        }
       }
     };
 
-    const handleCallDeclined = () => {
-      setActiveCall(null);
-      setIncomingCall(null);
+    callSignalHandlersRef.current = {
+      onIncomingCall: handleIncomingCall,
+      onCallTerminated: handleCallTerminated,
     };
 
     // 1. Socket.io Phone channel listener
     const socket = getSocket();
 
-    // 🔒 Multi-transport single-device session enforcement
     const triggerForceLogout = () => {
       console.warn('⚠️ AGC force_logout executed: signed in on another device');
       localStorage.setItem('AGC_is_authenticated', 'false');
@@ -4644,51 +4861,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }, 300);
     };
 
-    socket?.on('force_logout', triggerForceLogout);
+    const onSocketDeclined = (payload: any) => handleCallTerminated(payload, 'call_declined');
+    const onSocketEnded = (payload: any) => handleCallTerminated(payload, 'call_ended');
 
+    socket?.on('force_logout', triggerForceLogout);
     socket?.on('incoming_call', handleIncomingCall);
-    socket?.on('call_declined', handleCallDeclined);
+    socket?.on('call_declined', onSocketDeclined);
+    socket?.on('call_ended', onSocketEnded);
 
     // 2. BroadcastChannel for same-browser multi-tab calling
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel('AGC_phone_calls');
       bc.onmessage = (e) => {
-        if (e.data?.targetPhone === myCleanPhone) {
-          if (e.data?.event === 'call_declined') {
-            handleCallDeclined();
-          } else if (e.data?.data) {
-            handleIncomingCall(e.data.data);
-          }
+        const targetMatch =
+          phonesMatch(e.data?.targetPhone, currentUserRef.current?.phoneNumber) ||
+          (Array.isArray(e.data?.targetVariants) &&
+            e.data.targetVariants.some((v: string) => phonesMatch(v, currentUserRef.current?.phoneNumber)));
+        if (!targetMatch) return;
+
+        if (e.data?.event === 'call_declined' || e.data?.event === 'call_ended') {
+          handleCallTerminated(e.data?.data, e.data.event);
+        } else if (e.data?.data) {
+          handleIncomingCall(e.data.data);
         }
       };
     } catch (_) {}
 
-    // 3. Supabase Realtime channel listener (calls + session force_logout)
-    const channelName = `phone_call_${myCleanPhone}`;
-    const channel = supabase.channel(channelName, {
-      config: { broadcast: { self: false } },
-    });
+    // 3. Supabase Realtime channel listeners (supports all phone variants + session force_logout)
+    const sbChannels: Array<ReturnType<typeof supabase.channel>> = [];
+    if (isSupabaseConfigured) {
+      myVariants.forEach((variant) => {
+        const channel = supabase.channel(`phone_call_${variant}`, {
+          config: { broadcast: { self: false } },
+        });
+        channel
+          .on('broadcast', { event: 'incoming_call' }, ({ payload }) => {
+            handleIncomingCall(payload);
+          })
+          .on('broadcast', { event: 'call_declined' }, ({ payload }) => {
+            handleCallTerminated(payload, 'call_declined');
+          })
+          .on('broadcast', { event: 'call_ended' }, ({ payload }) => {
+            handleCallTerminated(payload, 'call_ended');
+          })
+          .on('broadcast', { event: 'force_logout' }, ({ payload }: any) => {
+            const myToken = localStorage.getItem('AGC_session_token');
+            if (payload?.sessionToken && myToken && payload.sessionToken !== myToken) {
+              triggerForceLogout();
+            }
+          })
+          .subscribe();
+        sbChannels.push(channel);
+      });
+    }
 
-    channel
-      .on('broadcast', { event: 'incoming_call' }, ({ payload }) => {
-        handleIncomingCall(payload);
-      })
-      .on('broadcast', { event: 'call_declined' }, () => {
-        handleCallDeclined();
-      })
-      .on('broadcast', { event: 'force_logout' }, ({ payload }: any) => {
-        const myToken = localStorage.getItem('AGC_session_token');
-        if (payload?.sessionToken && myToken && payload.sessionToken !== myToken) {
-          triggerForceLogout();
-        }
-      })
-      .subscribe();
-
-    // 4. Polling heartbeat for session enforcement across remote devices (zero-waste, tab-aware)
+    // 4. Polling heartbeat for session enforcement across remote devices
     const sessionHeartbeat = setInterval(async () => {
       if (!isSupabaseConfigured || !currentUser?.phoneNumber) return;
-      if (typeof document !== 'undefined' && document.hidden) return; // Pause when tab is inactive
+      if (typeof document !== 'undefined' && document.hidden) return;
       const myToken = localStorage.getItem('AGC_session_token');
       if (!myToken) return;
       try {
@@ -4704,169 +4935,238 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 60000);
 
     return () => {
+      socket?.off('force_logout', triggerForceLogout);
       socket?.off('incoming_call', handleIncomingCall);
-      socket?.off('call_declined', handleCallDeclined);
+      socket?.off('call_declined', onSocketDeclined);
+      socket?.off('call_ended', onSocketEnded);
       if (bc) bc.close();
-      channel.unsubscribe();
+      sbChannels.forEach((ch) => {
+        try {
+          ch.unsubscribe();
+          supabase.removeChannel(ch);
+        } catch (_) {}
+      });
       clearInterval(sessionHeartbeat);
     };
-  }, [currentUser.phoneNumber, activeCall]);
+  }, [currentUser.phoneNumber]);
 
-  const startCall = (
-    name: string,
-    phone: string,
-    avatar?: string,
-    type: 'voice' | 'video' = 'voice',
-    roomId?: string,
-    isInitiator: boolean = true
-  ) => {
-    const generatedRoomId = roomId || `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    setActiveCall({
-      name,
-      phone,
-      avatar,
-      durationSeconds: 0,
-      type,
-      isMuted: false,
-      isSpeaker: false,
-      roomId: generatedRoomId,
-      isInitiator,
-    });
+  const startCall = useCallback(
+    (
+      name: string,
+      phone: string,
+      avatar?: string,
+      type: 'voice' | 'video' = 'voice',
+      roomId?: string,
+      isInitiator: boolean = true,
+      options?: {
+        isGroupCall?: boolean;
+        participantPhones?: string[];
+        chatId?: string;
+      }
+    ) => {
+      const generatedRoomId = roomId || `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const me = currentUserRef.current;
+      const myPhone = me?.phoneNumber || '';
 
-    // Multi-transport broadcast: Socket.io + BroadcastChannel + Supabase
-    const cleanTargetPhone = phone.replace(/\D/g, '');
-    const callPayload = {
-      roomId: generatedRoomId,
-      callerName: currentUser.fullName,
-      callerPhone: currentUser.phoneNumber,
-      callerAvatar: currentUser.avatarUrl,
-      type,
-      timestamp: Date.now(),
-    };
+      // Resolve all target participant phones (supports DMs + Groups + Channels)
+      const collectedPhones: string[] = [];
+      if (Array.isArray(options?.participantPhones)) {
+        collectedPhones.push(...options.participantPhones);
+      }
 
-    if (cleanTargetPhone && isInitiator) {
-      // 1. Socket.io
-      emitPhoneCallSignal(cleanTargetPhone, callPayload);
+      const targetChat = options?.chatId
+        ? chatsRef.current.find((c) => c.id === options.chatId)
+        : undefined;
 
-      // 2. BroadcastChannel
-      try {
-        const bc = new BroadcastChannel('AGC_phone_calls');
-        bc.postMessage({ targetPhone: cleanTargetPhone, event: 'incoming_call', data: callPayload });
-        setTimeout(() => { try { bc.close(); } catch (_) {} }, 4000);
-      } catch (_) {}
-
-      // 3. Supabase Realtime
-      const targetChannel = supabase.channel(`phone_call_${cleanTargetPhone}`);
-      targetChannel.subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          targetChannel.send({
-            type: 'broadcast',
-            event: 'incoming_call',
-            payload: callPayload,
+      if (targetChat) {
+        if (Array.isArray(targetChat.memberPhones)) {
+          collectedPhones.push(...targetChat.memberPhones);
+        }
+        if (Array.isArray(targetChat.members)) {
+          targetChat.members.forEach((mem) => {
+            if (!mem) return;
+            const memDigits = mem.replace(/\D/g, '');
+            if (memDigits.length >= 7) {
+              collectedPhones.push(mem);
+              return;
+            }
+            const contactMatch = deviceContactsRef.current.find(
+              (dc) => dc.name === mem || phonesMatch(dc.normalizedPhoneNumber, mem) || phonesMatch(dc.rawPhoneNumber, mem)
+            );
+            if (contactMatch) {
+              collectedPhones.push(contactMatch.normalizedPhoneNumber || contactMatch.rawPhoneNumber);
+            }
           });
         }
+        if (!targetChat.isGroup && !targetChat.isChannel) {
+          if (targetChat.phoneNumber) collectedPhones.push(targetChat.phoneNumber);
+          if (targetChat.phone) collectedPhones.push(targetChat.phone);
+          if (targetChat.id.startsWith('dm_')) {
+            const parts = targetChat.id.replace('dm_', '').split('_');
+            parts.forEach((p) => {
+              if (p && p !== 'self' && p.replace(/\D/g, '').length >= 7) {
+                collectedPhones.push(p);
+              }
+            });
+          }
+        }
+      }
+
+      const isGroupCall = Boolean(options?.isGroupCall || targetChat?.isGroup || targetChat?.isChannel);
+      const isCallRoomSlug = phone.startsWith('afri_') || phone.startsWith('call_') || phone === '+234 800 000 0000';
+      if (phone && !isCallRoomSlug && phone.replace(/\D/g, '').length >= 7) {
+        collectedPhones.push(phone);
+      }
+
+      const seenNorm = new Set<string>();
+      const uniqueTargets: string[] = [];
+      collectedPhones.forEach((raw) => {
+        if (!raw) return;
+        const digits = raw.replace(/\D/g, '');
+        if (digits.length < 7) return;
+        if (myPhone && phonesMatch(raw, myPhone)) return;
+        const norm = normalizePhoneDigits(raw) || digits;
+        if (seenNorm.has(norm)) return;
+        seenNorm.add(norm);
+        uniqueTargets.push(raw);
       });
-    }
 
-    const newCallItem: CallLogItem = {
-      id: `call_${Date.now()}`,
-      name,
-      phone,
-      avatar: avatar || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-      type,
-      direction: 'outgoing',
-      time: 'Just now',
-    };
-    setCalls((prev) => [newCallItem, ...prev]);
+      const resolvedDisplayPhone =
+        isGroupCall
+          ? `${uniqueTargets.length + 1} participants`
+          : uniqueTargets[0] || phone || '';
 
-    // Auto-cancel outgoing call after 45 seconds if still ringing / not answered
-    if (isInitiator) {
-      const ringSafeTimeout = setTimeout(() => {
-        setActiveCall((current) => {
-          if (!current) return null; // already ended
-          // Only cancel if we're still in the same call room
-          if (current.roomId !== generatedRoomId) return current;
-          return null; // hang up
-        });
-        // Log as missed for the other side
-        try {
-          setCalls((prev) => {
-            const idx = prev.findIndex((c) => c.id === newCallItem.id);
-            if (idx === -1) return prev;
-            const updated = [...prev];
-            updated[idx] = { ...updated[idx], direction: 'missed' };
-            return updated;
-          });
-        } catch (_) {}
-      }, 45_000);
-      return () => clearTimeout(ringSafeTimeout);
-    }
-  };
+      const nextActiveCall: ActiveCallState = {
+        name,
+        phone: resolvedDisplayPhone,
+        avatar,
+        durationSeconds: 0,
+        type,
+        isMuted: false,
+        isSpeaker: false,
+        roomId: generatedRoomId,
+        isInitiator,
+        isGroupCall: isGroupCall || uniqueTargets.length > 1,
+        participantPhones: uniqueTargets,
+        chatId: options?.chatId,
+      };
 
-  const acceptIncomingCall = () => {
-    if (!incomingCall) return;
-    const { callerName, callerPhone, callerAvatar, type, roomId } = incomingCall;
+      activeCallRef.current = nextActiveCall;
+      setActiveCall(nextActiveCall);
+
+      if (isInitiator && uniqueTargets.length > 0) {
+        const callPayload = {
+          roomId: generatedRoomId,
+          callerName: me?.fullName || 'AGC User',
+          callerPhone: myPhone,
+          callerAvatar: me?.avatarUrl,
+          type,
+          isGroupCall: nextActiveCall.isGroupCall,
+          groupName: nextActiveCall.isGroupCall ? name : undefined,
+          participantPhones: [myPhone, ...uniqueTargets].filter(Boolean),
+          timestamp: Date.now(),
+        };
+        sendCallControlSignal(uniqueTargets, 'incoming_call', callPayload);
+      }
+
+      const newCallItem: CallLogItem = {
+        id: `call_${Date.now()}`,
+        name,
+        phone: resolvedDisplayPhone,
+        avatar: avatar || DEFAULT_AVATAR_SVG,
+        type,
+        direction: isInitiator ? 'outgoing' : 'incoming',
+        time: 'Just now',
+      };
+      setCalls((prev) => [newCallItem, ...prev]);
+
+      if (callRingTimeoutRef.current) {
+        clearTimeout(callRingTimeoutRef.current);
+        callRingTimeoutRef.current = null;
+      }
+    },
+    [sendCallControlSignal]
+  );
+
+  const acceptIncomingCall = useCallback(() => {
+    const inc = incomingCallRef.current;
+    if (!inc) return;
+    const { callerName, callerPhone, callerAvatar, type, roomId, isGroupCall, groupName, participantPhones } = inc;
+    incomingCallRef.current = null;
     setIncomingCall(null);
-    startCall(callerName, callerPhone, callerAvatar, type, roomId, false);
-  };
+    startCall(
+      isGroupCall && groupName ? groupName : callerName,
+      callerPhone,
+      callerAvatar,
+      type,
+      roomId,
+      false,
+      {
+        isGroupCall,
+        participantPhones: participantPhones || (callerPhone ? [callerPhone] : []),
+      }
+    );
+  }, [startCall]);
 
-  const declineIncomingCall = () => {
-    if (!incomingCall) return;
-    const cleanCallerPhone = incomingCall.callerPhone?.replace(/\D/g, '');
-    if (cleanCallerPhone) {
-      // 1. Socket.io
-      const socket = getSocket();
-      socket?.emit('phone_call_signal', { targetPhone: cleanCallerPhone, event: 'call_declined', data: { roomId: incomingCall.roomId } });
+  const declineIncomingCall = useCallback(() => {
+    const inc = incomingCallRef.current;
+    if (!inc) return;
 
-      // 2. BroadcastChannel
-      try {
-        const bc = new BroadcastChannel('AGC_phone_calls');
-        bc.postMessage({ targetPhone: cleanCallerPhone, event: 'call_declined', data: { roomId: incomingCall.roomId } });
-        setTimeout(() => { try { bc.close(); } catch (_) {} }, 3000);
-      } catch (_) {}
-
-      // 3. Supabase Realtime
-      const channel = supabase.channel(`phone_call_${cleanCallerPhone}`);
-      channel.subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          channel.send({
-            type: 'broadcast',
-            event: 'call_declined',
-            payload: { roomId: incomingCall.roomId },
-          });
-          channel.unsubscribe();
-        }
+    if (inc.callerPhone) {
+      sendCallControlSignal([inc.callerPhone], 'call_declined', {
+        roomId: inc.roomId,
+        declinedBy: currentUserRef.current?.phoneNumber || '',
+        isGroupCall: Boolean(inc.isGroupCall),
       });
     }
 
     const missedItem: CallLogItem = {
       id: `call_${Date.now()}`,
-      name: incomingCall.callerName,
-      phone: incomingCall.callerPhone,
-      avatar: incomingCall.callerAvatar || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-      type: incomingCall.type,
+      name: inc.isGroupCall && inc.groupName ? inc.groupName : inc.callerName,
+      phone: inc.callerPhone,
+      avatar: inc.callerAvatar || DEFAULT_AVATAR_SVG,
+      type: inc.type,
       direction: 'missed',
       time: 'Just now',
     };
     setCalls((prev) => [missedItem, ...prev]);
+    incomingCallRef.current = null;
     setIncomingCall(null);
-  };
+  }, [sendCallControlSignal]);
 
-  const endCall = () => {
-    if (activeCall?.phone) {
-      const cleanPhone = activeCall.phone.replace(/\D/g, '');
-      if (cleanPhone) {
-        const socket = getSocket();
-        socket?.emit('phone_call_signal', { targetPhone: cleanPhone, event: 'call_declined', data: { roomId: activeCall.roomId } });
-        try {
-          const bc = new BroadcastChannel('AGC_phone_calls');
-          bc.postMessage({ targetPhone: cleanPhone, event: 'call_declined', data: { roomId: activeCall.roomId } });
-          bc.close();
-        } catch (_) {}
-      }
+  const endCall = useCallback(() => {
+    if (callRingTimeoutRef.current) {
+      clearTimeout(callRingTimeoutRef.current);
+      callRingTimeoutRef.current = null;
     }
+
+    const current = activeCallRef.current;
+    if (!current) return;
+
+    activeCallRef.current = null;
     setActiveCall(null);
-  };
+
+    const targets = [
+      ...(current.participantPhones || []),
+      ...(current.phone && current.phone.replace(/\D/g, '').length >= 7 ? [current.phone] : []),
+    ];
+
+    const endPayload = {
+      roomId: current.roomId,
+      endedBy: currentUserRef.current?.phoneNumber || '',
+      isHostCancel: Boolean(current.isInitiator),
+      isGroupCall: Boolean(current.isGroupCall),
+    };
+
+    if (targets.length > 0) {
+      sendCallControlSignal(targets, 'call_ended', endPayload);
+    }
+    if (current.roomId) {
+      emitRoomEndSignal(current.roomId, {
+        isHostCancel: Boolean(current.isInitiator),
+      });
+    }
+  }, [emitRoomEndSignal, sendCallControlSignal]);
 
   const toggleCallMute = () => {
     setActiveCall((prev) => (prev ? { ...prev, isMuted: !prev.isMuted } : null));
@@ -11072,6 +11372,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .on('broadcast', { event: 'friend_request_accepted' }, ({ payload }: any) => {
           handleFriendRequestAccepted(payload);
         })
+        .on('broadcast', { event: 'incoming_call' }, ({ payload }: any) => {
+          callSignalHandlersRef.current.onIncomingCall(payload);
+        })
+        .on('broadcast', { event: 'call_declined' }, ({ payload }: any) => {
+          callSignalHandlersRef.current.onCallTerminated(payload, 'call_declined');
+        })
+        .on('broadcast', { event: 'call_ended' }, ({ payload }: any) => {
+          callSignalHandlersRef.current.onCallTerminated(payload, 'call_ended');
+        })
         .subscribe();
 
       if (normPhone !== myCleanPhone) {
@@ -11111,6 +11420,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           })
           .on('broadcast', { event: 'friend_request_accepted' }, ({ payload }: any) => {
             handleFriendRequestAccepted(payload);
+          })
+          .on('broadcast', { event: 'incoming_call' }, ({ payload }: any) => {
+            callSignalHandlersRef.current.onIncomingCall(payload);
+          })
+          .on('broadcast', { event: 'call_declined' }, ({ payload }: any) => {
+            callSignalHandlersRef.current.onCallTerminated(payload, 'call_declined');
+          })
+          .on('broadcast', { event: 'call_ended' }, ({ payload }: any) => {
+            callSignalHandlersRef.current.onCallTerminated(payload, 'call_ended');
           })
           .subscribe();
       }

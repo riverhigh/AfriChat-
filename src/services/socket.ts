@@ -133,14 +133,19 @@ export const joinWebRTCCallRoom = (roomId: string) => {
   s?.emit('join_call_room', roomId);
 };
 
+export const leaveWebRTCCallRoom = (roomId: string) => {
+  const s = getSocket();
+  s?.emit('leave_call_room', roomId);
+};
+
 export const emitCallSignal = (roomId: string, event: string, data: any) => {
   const s = getSocket();
   s?.emit('call_signal', { roomId, event, data });
 };
 
-export const emitPhoneCallSignal = (targetPhone: string, data: any) => {
+export const emitPhoneCallSignal = (targetPhone: string, data: any, event: string = 'incoming_call') => {
   const s = getSocket();
-  s?.emit('phone_call_signal', { targetPhone, data });
+  s?.emit('phone_call_signal', { targetPhone, event, data });
 };
 
 export const registerSocketPhone = (cleanPhone: string) => {

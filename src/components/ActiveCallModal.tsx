@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   PhoneOff,
   Mic,
@@ -9,14 +9,83 @@ import {
   VideoOff,
   SwitchCamera,
   Share2,
-  Copy,
   Check,
   ShieldCheck,
   Radio,
+  Users,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
-import { useWebRTC } from '../hooks/useWebRTC';
-import { ActiveCallState } from '../context/AppContext';
+import { useApp, ActiveCallState } from '../context/AppContext';
+import { useWebRTC, RemotePeerMedia } from '../hooks/useWebRTC';
+
+interface RemoteStreamAudioProps {
+  stream: MediaStream | null;
+}
+
+const RemoteStreamAudio: React.FC<RemoteStreamAudioProps> = ({ stream }) => {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (el && stream) {
+      el.srcObject = stream;
+      el.play().catch(() => {});
+    }
+  }, [stream]);
+
+  return <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />;
+};
+
+interface RemotePeerTileProps {
+  peer: RemotePeerMedia;
+  isVideoMode: boolean;
+}
+
+const RemotePeerTile: React.FC<RemotePeerTileProps> = ({ peer, isVideoMode }) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const hasVideoTrack = Boolean(peer.stream && peer.stream.getVideoTracks().length > 0);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (el && peer.stream) {
+      el.srcObject = peer.stream;
+      el.play().catch(() => {});
+    }
+  }, [peer.stream]);
+
+  return (
+    <div className="relative rounded-2xl overflow-hidden bg-white/5 border border-white/10 aspect-[3/4] flex flex-col items-center justify-center">
+      {isVideoMode && hasVideoTrack ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-full object-cover"
+        />
+      ) : (
+        <div className="flex flex-col items-center justify-center gap-2 p-3">
+          {peer.avatar ? (
+            <img
+              src={peer.avatar}
+              alt={peer.name}
+              className="w-16 h-16 rounded-full object-cover border-2 border-purple-500/60"
+            />
+          ) : (
+            <div className="w-16 h-16 rounded-full bg-purple-700/40 border-2 border-purple-500/60 flex items-center justify-center text-lg font-bold">
+              {(peer.name || 'P').charAt(0).toUpperCase()}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between px-2 py-1 rounded-lg bg-black/60 backdrop-blur-sm text-[11px]">
+        <span className="font-semibold truncate">{peer.name}</span>
+        <span className="text-[10px] text-emerald-400 font-mono shrink-0 ml-1">
+          {peer.connectionState === 'connected' ? 'Live' : 'Connecting'}
+        </span>
+      </div>
+    </div>
+  );
+};
 
 interface ActiveCallSessionProps {
   activeCall: ActiveCallState;
@@ -24,14 +93,15 @@ interface ActiveCallSessionProps {
 }
 
 const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEndCall }) => {
+  const { currentUser } = useApp();
   const [copiedLink, setCopiedLink] = useState(false);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const {
     localStream,
     remoteStream,
+    remotePeers,
     connectionState,
     isMuted,
     isVideoOff,
@@ -42,72 +112,35 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
     toggleSpeaker,
     flipCamera,
     endCall: endWebRTCCall,
-    forceConnect,
   } = useWebRTC({
     roomId: activeCall.roomId || `call_${activeCall.phone.replace(/\D/g, '') || 'room'}`,
     callType: activeCall.type || 'voice',
     isInitiator: activeCall.isInitiator ?? true,
+    userPhone: currentUser?.phoneNumber,
+    userName: currentUser?.fullName,
+    userAvatar: currentUser?.avatarUrl,
+    isGroupCall: Boolean(activeCall.isGroupCall),
     onCallEnded: onEndCall,
     enabled: true,
   });
 
-  // Attach local stream to local video element
+  // Attach local stream to local video preview
   useEffect(() => {
     const el = localVideoRef.current;
     if (el && localStream) {
       el.srcObject = localStream;
-      el.play().catch(() => {
-        // Autoplay blocked; user interaction needed — muted so this usually succeeds
-      });
+      el.play().catch(() => {});
     }
   }, [localStream]);
 
-  // Attach remote stream to video element (video calls) + audio element (all calls)
+  // Attach primary remote stream to full-screen <video> when 1-on-1
   useEffect(() => {
-    if (!remoteStream) return;
-
-    // Video: attach to <video> element for video calls
     const videoEl = remoteVideoRef.current;
-    if (videoEl) {
+    if (videoEl && remoteStream) {
       videoEl.srcObject = remoteStream;
       videoEl.play().catch(() => {});
     }
-
-    // Audio: always attach remote stream to a dedicated <audio> element.
-    // This ensures sound plays on mobile browsers even when video element
-    // is not rendered (voice calls) or when autoplay policy blocks video.
-    const audioEl = remoteAudioRef.current;
-    if (audioEl) {
-      audioEl.srcObject = remoteStream;
-      audioEl.play().catch(() => {});
-    }
   }, [remoteStream]);
-
-  // RULE 3: Handle component unmounting safely — ensure all tracks are stopped when navigating away
-  useEffect(() => {
-    return () => {
-      if (localStream) {
-        localStream.getTracks().forEach((track) => {
-          try {
-            track.stop();
-            track.enabled = false;
-          } catch (e) {
-            console.warn('Error stopping local track on unmount:', e);
-          }
-        });
-      }
-      if (remoteStream) {
-        remoteStream.getTracks().forEach((track) => {
-          try {
-            track.stop();
-            track.enabled = false;
-          } catch (e) {
-            console.warn('Error stopping remote track on unmount:', e);
-          }
-        });
-      }
-    };
-  }, [localStream, remoteStream]);
 
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -131,36 +164,33 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
         setTimeout(() => setCopiedLink(false), 3000);
       }
     } catch {
-      await navigator.clipboard.writeText(callLink);
-      setCopiedLink(true);
-      setTimeout(() => setCopiedLink(false), 3000);
+      try {
+        await navigator.clipboard.writeText(callLink);
+        setCopiedLink(true);
+        setTimeout(() => setCopiedLink(false), 3000);
+      } catch (_) {}
     }
   };
 
   const isVideoMode = activeCall.type === 'video';
+  const isMultiPeer = remotePeers.length > 1;
+  const connectedCount = remotePeers.filter((p) => p.connectionState === 'connected' || p.stream).length;
+  const totalInvited = activeCall.participantPhones?.length || 0;
 
   const handleHangUp = () => {
-    // RULE 2: Explicitly stop all audio/video tracks when user finishes call
-    if (localStream) {
-      localStream.getTracks().forEach((track) => {
-        try {
-          track.stop();
-          track.enabled = false;
-        } catch (_) {}
-      });
-    }
     endWebRTCCall();
     onEndCall();
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-[#06060a] text-white flex flex-col justify-between overflow-hidden animate-in fade-in select-none">
-      {/* Background: Remote Video or Deep Dark Ambience */}
-      {isVideoMode && remoteStream ? (
+      {/* Background: 1-on-1 Remote Video or Deep Dark Ambience */}
+      {isVideoMode && !isMultiPeer && remoteStream ? (
         <video
           ref={remoteVideoRef}
           autoPlay
           playsInline
+          muted
           className="absolute inset-0 w-full h-full object-cover"
         />
       ) : (
@@ -178,12 +208,22 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/6 backdrop-blur-md border border-white/10 text-[11px] font-mono font-semibold text-purple-300">
           <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
           <span>End-to-End Encrypted</span>
+          {(activeCall.isGroupCall || isMultiPeer) && (
+            <span className="inline-flex items-center gap-1 ml-1 pl-1.5 border-l border-white/15 text-emerald-300">
+              <Users className="w-3 h-3" />
+              {connectedCount}/{Math.max(totalInvited, remotePeers.length)}
+            </span>
+          )}
         </div>
 
         <h2 className="text-2xl font-black font-display tracking-tight text-white mt-2">
           {activeCall.name}
         </h2>
-        <div className="text-xs font-mono text-white/50">{activeCall.phone}</div>
+        <div className="text-xs font-mono text-white/50">
+          {activeCall.isGroupCall
+            ? `Group Call · ${Math.max(totalInvited, remotePeers.length)} participant${Math.max(totalInvited, remotePeers.length) === 1 ? '' : 's'}`
+            : activeCall.phone}
+        </div>
 
         {/* Dynamic Status Pill */}
         <div className="pt-1">
@@ -200,7 +240,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
           )}
           {connectionState === 'connecting' && (
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-300 bg-indigo-500/10 px-3 py-1 rounded-full border border-indigo-500/20 animate-pulse">
-              Connecting...
+              Connecting media...
             </span>
           )}
           {connectionState === 'connected' && (
@@ -214,27 +254,19 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
               Call ended
             </span>
           )}
-
-          {(connectionState === 'ringing' || connectionState === 'connecting') && (
-            <div className="pt-2">
-              <button
-                type="button"
-                onClick={forceConnect}
-                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/30 transition-all active:scale-95 border border-emerald-400/40"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>Connect Live Call Now</span>
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Center Body: Caller Avatar or PiP Video Window */}
-      <div className="relative z-10 flex-1 flex flex-col items-center justify-center p-6">
-        {!isVideoMode || !remoteStream ? (
+      {/* Center Body: Group Mesh Grid or 1-on-1 Avatar */}
+      <div className="relative z-10 flex-1 flex flex-col items-center justify-center p-6 overflow-y-auto">
+        {isMultiPeer ? (
+          <div className="w-full max-w-md grid grid-cols-2 gap-3">
+            {remotePeers.map((peer) => (
+              <RemotePeerTile key={peer.peerId} peer={peer} isVideoMode={isVideoMode} />
+            ))}
+          </div>
+        ) : !isVideoMode || !remoteStream ? (
           <div className="relative flex items-center justify-center">
-            {/* Animated Pulsing Rings */}
             {connectionState === 'ringing' && (
               <>
                 <div className="absolute w-44 h-44 rounded-full border border-purple-500/30 animate-ping" />
@@ -243,16 +275,22 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
             )}
 
             <div className="w-28 h-28 rounded-full p-1 bg-gradient-to-tr from-purple-600 via-indigo-600 to-amber-500 shadow-2xl relative">
-              <img
-                src={activeCall.avatar}
-                alt={activeCall.name}
-                className="w-full h-full rounded-full object-cover"
-              />
+              {activeCall.avatar ? (
+                <img
+                  src={activeCall.avatar}
+                  alt={activeCall.name}
+                  className="w-full h-full rounded-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full rounded-full bg-[#150d26] flex items-center justify-center text-2xl font-black text-purple-200">
+                  {(activeCall.name || 'A').charAt(0).toUpperCase()}
+                </div>
+              )}
             </div>
           </div>
         ) : null}
 
-        {/* Link Share sheet trigger */}
+        {/* Link Share trigger */}
         <div className="mt-8">
           <button
             type="button"
@@ -284,18 +322,14 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
         </div>
       )}
 
-      {/* Hidden remote audio element — ensures voice plays on mobile for both voice & video calls */}
-      <audio
-        ref={remoteAudioRef}
-        autoPlay
-        playsInline
-        style={{ display: 'none' }}
-      />
+      {/* Hidden remote audio elements — plays live audio for EVERY connected remote participant */}
+      {remotePeers.map((peer) =>
+        peer.stream ? <RemoteStreamAudio key={`aud_${peer.peerId}`} stream={peer.stream} /> : null
+      )}
 
       {/* Bottom Floating Control Dock */}
       <div className="relative z-10 px-6 pt-4" style={{ paddingBottom: 'max(calc(env(safe-area-inset-bottom, 0px) + 24px), 32px)' }}>
         <div className="max-w-xs mx-auto flex items-center justify-center gap-3 bg-white/8 backdrop-blur-xl border border-white/10 rounded-full p-3 shadow-2xl">
-          {/* Mute Toggle */}
           <button
             type="button"
             onClick={toggleMute}
@@ -307,7 +341,6 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
             {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
           </button>
 
-          {/* Speaker Toggle */}
           <button
             type="button"
             onClick={toggleSpeaker}
@@ -319,7 +352,6 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
             {isSpeaker ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
           </button>
 
-          {/* Video Toggle (If video mode) */}
           {isVideoMode && (
             <>
               <button
@@ -344,7 +376,6 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
             </>
           )}
 
-          {/* End Call Button */}
           <button
             type="button"
             onClick={handleHangUp}
@@ -359,12 +390,11 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
   );
 };
 
-// RULE 1: Never initialize WebRTC or getUserMedia on page load!
-// Only mount the ActiveCallSession when an activeCall is actually present!
+// Only mount the ActiveCallSession when an activeCall is actually present
 export const ActiveCallModal: React.FC = () => {
   const { activeCall, endCall } = useApp();
 
   if (!activeCall) return null;
 
-  return <ActiveCallSession activeCall={activeCall} onEndCall={endCall} />;
+  return <ActiveCallSession key={activeCall.roomId || activeCall.phone} activeCall={activeCall} onEndCall={endCall} />;
 };

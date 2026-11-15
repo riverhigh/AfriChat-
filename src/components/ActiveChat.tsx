@@ -766,9 +766,16 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 onClick={() =>
                   startCall(
                     currentChat.name,
-                    currentChat.phone || '+234 800 000 0000',
+                    currentChat.phoneNumber || currentChat.phone || '',
                     currentChat.avatar,
-                    'video'
+                    'video',
+                    undefined,
+                    true,
+                    {
+                      isGroupCall: Boolean(currentChat.isGroup || currentChat.isChannel),
+                      participantPhones: currentChat.memberPhones,
+                      chatId: currentChat.id,
+                    }
                   )
                 }
                 className="p-2 hover:bg-white/10 rounded-full transition-colors"
@@ -782,9 +789,16 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 onClick={() =>
                   startCall(
                     currentChat.name,
-                    currentChat.phone || '+234 800 000 0000',
+                    currentChat.phoneNumber || currentChat.phone || '',
                     currentChat.avatar,
-                    'voice'
+                    'voice',
+                    undefined,
+                    true,
+                    {
+                      isGroupCall: Boolean(currentChat.isGroup || currentChat.isChannel),
+                      participantPhones: currentChat.memberPhones,
+                      chatId: currentChat.id,
+                    }
                   )
                 }
                 className="p-2 hover:bg-white/10 rounded-full transition-colors"
