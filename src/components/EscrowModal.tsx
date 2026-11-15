@@ -70,12 +70,16 @@ export const EscrowModal: React.FC = () => {
         <div className="p-4 space-y-3.5 text-xs">
           {/* Order Item */}
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-[#11101e] border border-slate-200/80 dark:border-slate-800 flex items-center gap-3">
-            <img
-              src={order.product.imageUrl}
-              alt={order.product.title}
-              referrerPolicy="no-referrer"
-              className="w-12 h-12 rounded-lg object-cover shrink-0"
-            />
+            {order.product.imageUrl &&
+              !order.product.id.startsWith('deal_') &&
+              !order.product.tags?.includes('Escrow') && (
+                <img
+                  src={order.product.imageUrl}
+                  alt={order.product.title}
+                  referrerPolicy="no-referrer"
+                  className="w-12 h-12 rounded-lg object-cover shrink-0"
+                />
+              )}
             <div className="flex-1 min-w-0">
               <h4 className="font-semibold text-slate-900 dark:text-slate-100 truncate">
                 {order.product.title}

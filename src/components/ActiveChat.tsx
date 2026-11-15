@@ -1703,35 +1703,49 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   );
                 })()}
                 {/* Product Card Message */}
-                {msg.type === 'product_card' && msg.product && (
-                  <div className="space-y-2 min-w-[240px]">
-                    <div className="rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800">
-                      <img
-                        src={msg.product.imageUrl}
-                        alt={msg.product.title}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-40 object-cover"
-                      />
-                    </div>
+                {msg.type === 'product_card' && msg.product && (() => {
+                  const isEscrowDeal =
+                    msg.product.id.startsWith('deal_') ||
+                    Boolean(msg.product.tags?.includes('Escrow'));
+                  const showProductImage = Boolean(msg.product.imageUrl) && !isEscrowDeal;
+                  return (
+                    <div className="space-y-2 min-w-[240px]">
+                      {showProductImage && (
+                        <div className="rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800">
+                          <img
+                            src={msg.product.imageUrl}
+                            alt={msg.product.title}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-40 object-cover"
+                          />
+                        </div>
+                      )}
 
-                    <div>
-                      <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                        {msg.product.title}
-                      </h4>
-                      <div className="text-sm font-bold font-mono text-indigo-600 dark:text-indigo-400 mt-0.5">
-                        {formatPrice(msg.product.price, msg.product.currency)}
+                      <div>
+                        {isEscrowDeal && (
+                          <div className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 mb-0.5">
+                            <Lock className="w-3 h-3" />
+                            <span>Escrow Deal</span>
+                          </div>
+                        )}
+                        <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                          {msg.product.title}
+                        </h4>
+                        <div className="text-sm font-bold font-mono text-indigo-600 dark:text-indigo-400 mt-0.5">
+                          {formatPrice(msg.product.price, msg.product.currency)}
+                        </div>
                       </div>
-                    </div>
 
-                    <button
-                      onClick={() => openCheckout(msg.product!)}
-                      className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm"
-                    >
-                      <Lock className="w-3.5 h-3.5" />
-                      <span>Buy with Escrow</span>
-                    </button>
-                  </div>
-                )}
+                      <button
+                        onClick={() => openCheckout(msg.product!)}
+                        className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                      >
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>Buy with Escrow</span>
+                      </button>
+                    </div>
+                  );
+                })()}
 
                 {/* Meme & Sticker Message */}
                 {msg.type === 'meme_sticker' && msg.memeSticker && (
@@ -2928,7 +2942,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     description: `Escrow-protected deal with ${currentChat.name}`,
                     price: amt,
                     currency,
-                    imageUrl: '/assets/aistudio/IMG_7069_4d0dd19c.jpeg',
+                    imageUrl: '',
                     category: 'fashion',
                     inStock: true,
                     stockCount: 1,
@@ -2959,7 +2973,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     description: `Direct Escrow payment to ${currentChat.name}`,
                     price: amt,
                     currency,
-                    imageUrl: '/assets/aistudio/IMG_7069_4d0dd19c.jpeg',
+                    imageUrl: '',
                     category: 'fashion',
                     inStock: true,
                     stockCount: 1,

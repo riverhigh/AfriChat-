@@ -69,11 +69,15 @@ export const EscrowDisputeModal: React.FC<EscrowDisputeModalProps> = ({
           {/* Left: Order & Escrow Evidence */}
           <div className="p-5 space-y-4">
             <div className="flex items-start gap-3">
-              <img
-                src={order.product.imageUrl}
-                alt={order.product.title}
-                className="w-16 h-16 rounded-xl object-cover border border-zinc-800 shrink-0"
-              />
+              {order.product.imageUrl &&
+                !order.product.id.startsWith('deal_') &&
+                !order.product.tags?.includes('Escrow') && (
+                  <img
+                    src={order.product.imageUrl}
+                    alt={order.product.title}
+                    className="w-16 h-16 rounded-xl object-cover border border-zinc-800 shrink-0"
+                  />
+                )}
               <div className="min-w-0 flex-1">
                 <h4 className="text-sm font-semibold text-white leading-snug">{order.product.title}</h4>
                 <p className="text-xs text-zinc-400 mt-0.5">Qty: {order.quantity} · Channel: {order.paymentMethod.toUpperCase()}</p>

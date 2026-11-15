@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   X,
   ShieldCheck,
@@ -150,12 +150,16 @@ export const CheckoutDrawer: React.FC = () => {
 
           {/* Product Summary */}
           <div className="flex gap-3 p-3 rounded-2xl bg-slate-50 dark:bg-[#11101e] border border-slate-200/80 dark:border-slate-800">
-            <img
-              src={activeCheckoutProduct.imageUrl}
-              alt={activeCheckoutProduct.title}
-              referrerPolicy="no-referrer"
-              className="w-16 h-16 rounded-xl object-cover shrink-0"
-            />
+            {activeCheckoutProduct.imageUrl &&
+              !activeCheckoutProduct.id.startsWith('deal_') &&
+              !activeCheckoutProduct.tags?.includes('Escrow') && (
+                <img
+                  src={activeCheckoutProduct.imageUrl}
+                  alt={activeCheckoutProduct.title}
+                  referrerPolicy="no-referrer"
+                  className="w-16 h-16 rounded-xl object-cover shrink-0"
+                />
+              )}
             <div className="flex-1 min-w-0">
               <h4 className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
                 {activeCheckoutProduct.title}
