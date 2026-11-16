@@ -38,7 +38,7 @@ import { DispatchModal } from './components/DispatchModal';
 import { JobBoardModal } from './components/JobBoardModal';
 import { SecurityModal } from './components/SecurityModal';
 import { ServicesBookingModal } from './components/ServicesBookingModal';
-import { DelayedTransferModal } from './components/DelayedTransferModal';
+import { SendBillModal } from './components/SendBillModal';
 import { PayrollModal } from './components/PayrollModal';
 import { ScanQrModal } from './components/ScanQrModal';
 import { HealthcareModal } from './components/HealthcareModal';
@@ -315,9 +315,9 @@ const AppContent: React.FC = () => {
         {isFeatureEnabled('jobs') && <JobBoardModal />}
         {isFeatureEnabled('securityPin') && <SecurityModal />}
 
-        {/* Services Booking, 1-2 Days Delayed Transfers & Payroll Auto-Debit */}
+        {/* Services Booking, Send My Bill & Payroll Auto-Debit */}
         {isFeatureEnabled('artisan') && <ServicesBookingModal />}
-        {isFeatureEnabled('delayedSend') && <DelayedTransferModal />}
+        {isFeatureEnabled('wallet') && <SendBillModal />}
         {isFeatureEnabled('payroll') && <PayrollModal />}
 
         {/* Scan QR & Unique UID Modal */}

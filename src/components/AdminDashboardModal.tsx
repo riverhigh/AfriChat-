@@ -47,9 +47,12 @@ import {
   UserCheck,
   Globe,
   Terminal,
+  Bot,
+  Sparkles,
+  Edit3,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { FeatureFlags, CmsAnnouncement, CmsFaqItem, EscrowOrder, SponsoredStatusAd } from '../types';
+import { FeatureFlags, CmsAnnouncement, CmsFaqItem, EscrowOrder, SponsoredStatusAd, AiKnowledgeEntry } from '../types';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { getSocket } from '../services/socket';
 import { AdminAuditDrawer, AdminAuditEntry, AdminWebhookLog } from './admin/AdminAuditDrawer';
@@ -64,7 +67,7 @@ import {
   upsertSupabaseAdminArtisanOverride,
 } from '../services/supabaseAdminSync';
 
-type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'comms' | 'ads' | 'security';
+type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'comms' | 'ads' | 'ai_datacenter' | 'security';
 type FinanceSubTab = 'escrows' | 'ledger' | 'disputes' | 'dispatch' | 'webhooks' | 'payouts';
 type UsersSubTab = 'directory' | 'kyc' | 'artisans';
 type CommsSubTab = 'nodes' | 'broadcast' | 'cms';
@@ -301,16 +304,29 @@ export const AdminDashboardModal: React.FC = () => {
   const [cfgEscrowComm, setCfgEscrowComm] = useState(2.5);
   const [cfgArtisanComm, setCfgArtisanComm] = useState(10);
   const [cfgCreatorComm, setCfgCreatorComm] = useState(15);
-  const [cfgMinTransfer, setCfgMinTransfer] = useState(100);
-  const [cfgMaxDailyTransfer, setCfgMaxDailyTransfer] = useState(500000);
-  const [cfgMaxWeeklyTransfer, setCfgMaxWeeklyTransfer] = useState(2000000);
   const [cfgSponsoredAdFee, setCfgSponsoredAdFee] = useState(2500);
-  const [cfgDelayMins, setCfgDelayMins] = useState(10);
   const [cfgSupportPhone, setCfgSupportPhone] = useState('');
   const [configSaved, setConfigSaved] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [featureStatusMsg, setFeatureStatusMsg] = useState<string | null>(null);
   const [badgeStatusMsg, setBadgeStatusMsg] = useState<string | null>(null);
+
+  // AI Bot Data Center state
+  const [aiEntries, setAiEntries] = useState<AiKnowledgeEntry[]>([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiEditingId, setAiEditingId] = useState<string | null>(null);
+  const [aiFormTitle, setAiFormTitle] = useState('');
+  const [aiFormCategory, setAiFormCategory] = useState<AiKnowledgeEntry['category']>('topic');
+  const [aiFormTopic, setAiFormTopic] = useState('');
+  const [aiFormContent, setAiFormContent] = useState('');
+  const [aiUrlInput, setAiUrlInput] = useState('');
+  const [aiUrlFetching, setAiUrlFetching] = useState(false);
+  const [aiNotice, setAiNotice] = useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
+  const [aiTestPrompt, setAiTestPrompt] = useState('');
+  const [aiTestReply, setAiTestReply] = useState<string | null>(null);
+  const [aiTestMatchedTopics, setAiTestMatchedTopics] = useState<string[]>([]);
+  const [aiTestLoading, setAiTestLoading] = useState(false);
 
   // Immutable Transaction Ledger Super-View state
   const [ledgerTxs, setLedgerTxs] = useState<any[]>([]);
@@ -925,17 +941,14 @@ export const AdminDashboardModal: React.FC = () => {
       setCfgEscrowComm(systemConfig.escrowCommissionPercent ?? 1.5);
       setCfgArtisanComm(systemConfig.artisanCommissionPercent ?? 2);
       setCfgCreatorComm(systemConfig.creatorCommissionPercent ?? 5);
-      setCfgMinTransfer(systemConfig.minTransferAmountNgn ?? 100);
-      setCfgMaxDailyTransfer(systemConfig.maxDailyTransferNgn ?? 500000);
-      setCfgMaxWeeklyTransfer(systemConfig.maxWeeklyTransferNgn ?? 2000000);
       setCfgSponsoredAdFee(systemConfig.sponsoredAdFeeNgn ?? 2500);
-      setCfgDelayMins(systemConfig.delayedSendHoldDurationMins ?? 15);
       setCfgSupportPhone(systemConfig.supportContactPhone ?? '');
     }
     if (cmsData) {
       if (cmsData.communityGuidelines !== undefined) setCmsGuidelines(cmsData.communityGuidelines);
       if (cmsData.marqueeBanner?.text !== undefined) setCmsMarqueeDraft(cmsData.marqueeBanner.text);
     }
+    fetchAiDataCenter();
   }, [isAdminModalOpen, systemConfig, cmsData]);
 
   // Synchronize selectedCustomer with live updates
@@ -1498,6 +1511,143 @@ export const AdminDashboardModal: React.FC = () => {
     }
   };
 
+  const showAiToast = (text: string, tone: 'ok' | 'err' = 'ok') => {
+    setAiNotice({ text, tone });
+    setTimeout(() => setAiNotice(null), 3500);
+  };
+
+  const fetchAiDataCenter = async () => {
+    setAiLoading(true);
+    try {
+      const res = await fetch('/api/ai/datacenter');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.entries)) {
+          setAiEntries(data.entries);
+        }
+      }
+    } catch (_) {
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleSaveAiEntry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!aiFormTitle.trim() || !aiFormContent.trim()) {
+      showAiToast('Title and training content are required.', 'err');
+      return;
+    }
+    setAiSaving(true);
+    try {
+      const url = aiEditingId ? `/api/ai/datacenter/${aiEditingId}` : '/api/ai/datacenter';
+      const method = aiEditingId ? 'PUT' : 'POST';
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: aiFormTitle.trim(),
+          category: aiFormCategory,
+          topic: aiFormTopic.trim() || 'AGC General',
+          content: aiFormContent.trim(),
+          sourceUrl: aiUrlInput.trim() || undefined,
+          enabled: true,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        showAiToast(data?.error || 'Failed to save training data.', 'err');
+        return;
+      }
+      if (aiEditingId) {
+        setAiEntries((prev) => prev.map((it) => (it.id === aiEditingId ? data.entry : it)));
+        showAiToast('Updated AI training entry.');
+      } else {
+        setAiEntries((prev) => [data.entry, ...prev]);
+        showAiToast('Added entry to AgcBot Data Center.');
+      }
+      setAiEditingId(null);
+      setAiFormTitle('');
+      setAiFormTopic('');
+      setAiFormContent('');
+      setAiUrlInput('');
+    } finally {
+      setAiSaving(false);
+    }
+  };
+
+  const handleFetchUrlForAi = async () => {
+    const cleanUrl = aiUrlInput.trim();
+    if (!cleanUrl) {
+      showAiToast('Enter a URL to fetch.', 'err');
+      return;
+    }
+    setAiUrlFetching(true);
+    try {
+      const res = await fetch('/api/ai/datacenter/fetch-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: cleanUrl }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        showAiToast(data?.error || 'Could not extract page content from URL.', 'err');
+        return;
+      }
+      setAiFormCategory('url');
+      if (data.title && !aiFormTitle.trim()) setAiFormTitle(data.title);
+      if (!aiFormTopic.trim()) setAiFormTopic('URL Knowledge');
+      if (data.content) setAiFormContent(data.content);
+      showAiToast('URL text extracted! Review and click Save Knowledge Entry.');
+    } finally {
+      setAiUrlFetching(false);
+    }
+  };
+
+  const handleToggleAiEntry = async (entry: AiKnowledgeEntry) => {
+    try {
+      const res = await fetch(`/api/ai/datacenter/${entry.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !entry.enabled }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
+        setAiEntries((prev) => prev.map((it) => (it.id === entry.id ? data.entry : it)));
+      }
+    } catch (_) {}
+  };
+
+  const handleDeleteAiEntry = async (id: string) => {
+    try {
+      const res = await fetch(`/api/ai/datacenter/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setAiEntries((prev) => prev.filter((it) => it.id !== id));
+        showAiToast('Deleted entry from Data Center.');
+      }
+    } catch (_) {}
+  };
+
+  const handleRunAiTest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!aiTestPrompt.trim()) return;
+    setAiTestLoading(true);
+    setAiTestReply(null);
+    setAiTestMatchedTopics([]);
+    try {
+      const res = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', content: aiTestPrompt.trim() }] }),
+      });
+      const data = await res.json().catch(() => null);
+      setAiTestReply(data?.reply || data?.error || 'No response received.');
+      setAiTestMatchedTopics(Array.isArray(data?.matchedTopics) ? data.matchedTopics : []);
+    } finally {
+      setAiTestLoading(false);
+    }
+  };
+
   const handleSaveConfig = async () => {
     setConfigError(null);
     const ok = await updateSystemConfig({
@@ -1509,11 +1659,7 @@ export const AdminDashboardModal: React.FC = () => {
       escrowCommissionPercent: cfgEscrowComm,
       artisanCommissionPercent: cfgArtisanComm,
       creatorCommissionPercent: cfgCreatorComm,
-      minTransferAmountNgn: cfgMinTransfer,
-      maxDailyTransferNgn: cfgMaxDailyTransfer,
-      maxWeeklyTransferNgn: cfgMaxWeeklyTransfer,
       sponsoredAdFeeNgn: cfgSponsoredAdFee,
-      delayedSendHoldDurationMins: cfgDelayMins,
       supportContactPhone: cfgSupportPhone,
     });
     if (ok) {
@@ -1583,6 +1729,7 @@ export const AdminDashboardModal: React.FC = () => {
       icon: Megaphone,
       badge: (cmsData?.sponsoredStatuses || []).filter((a: any) => a.approvalStatus === 'pending' || a.status === 'pending').length || null,
     },
+    { id: 'ai_datacenter', label: 'AI Data Center', icon: Bot, badge: aiEntries.filter((e) => e.enabled).length || null },
     { id: 'security', label: 'System & Security', icon: Shield, badge: securityEvents.length || null },
   ];
 
@@ -1593,6 +1740,7 @@ export const AdminDashboardModal: React.FC = () => {
     users: 'User & Artisan Directory',
     comms: 'Communication & Social Logs',
     ads: 'Sponsored Ads & Promotion Requests',
+    ai_datacenter: 'AI Bot Data Center & Guardrails',
     security: 'System & Security',
   };
 
@@ -4033,6 +4181,296 @@ export const AdminDashboardModal: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* ================================================================ */}
+          {/* AI BOT DATA CENTER (AGC-ONLY TRAINING & URL SCRAPER + SANDBOX)   */}
+          {/* ================================================================ */}
+          {activeSection === 'ai_datacenter' && (
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-2xl bg-violet-950/30 border border-violet-500/30">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-violet-600/20 border border-violet-500/40 flex items-center justify-center text-violet-300 shrink-0">
+                    <Bot className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <span>AgcBot AI Data Center</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        Strict AGC-Only Guardrail Active
+                      </span>
+                    </h3>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      Feed topics, FAQs, policies, or web URLs directly to AgcBot. Off-topic questions unrelated to AGC functions and Data Center entries are automatically refused.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchAiDataCenter}
+                  disabled={aiLoading}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-xs text-zinc-300 hover:text-white flex items-center gap-1.5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${aiLoading ? 'animate-spin' : ''}`} />
+                  <span>Refresh Entries</span>
+                </button>
+              </div>
+
+              {aiNotice && (
+                <div
+                  className={`p-3 rounded-xl text-xs font-semibold border ${
+                    aiNotice.tone === 'ok'
+                      ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300'
+                      : 'bg-rose-950/50 border-rose-500/40 text-rose-300'
+                  }`}
+                >
+                  {aiNotice.text}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                {/* Left Column: URL Trainer + Manual Entry Form */}
+                <div className="space-y-5">
+                  {/* Train from URL */}
+                  <div className="p-5 rounded-2xl bg-zinc-900/50 border border-zinc-800/90 space-y-3">
+                    <div className="flex items-center gap-2 text-xs font-bold text-white uppercase tracking-wider">
+                      <Globe className="w-4 h-4 text-sky-400" />
+                      <span>Feed Data from URL</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400">
+                      Fetch public documentation, help articles, or announcement URLs to extract clean text into the form below.
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        value={aiUrlInput}
+                        onChange={(e) => setAiUrlInput(e.target.value)}
+                        placeholder="https://example.com/agc-guide"
+                        className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleFetchUrlForAi}
+                        disabled={aiUrlFetching || !aiUrlInput.trim()}
+                        className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold whitespace-nowrap flex items-center gap-1.5"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>{aiUrlFetching ? 'Fetching...' : 'Fetch & Extract URL'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Manual Topic / Q&A / Policy Entry Form */}
+                  <form onSubmit={handleSaveAiEntry} className="p-5 rounded-2xl bg-zinc-900/50 border border-zinc-800/90 space-y-3.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-xs font-bold text-white uppercase tracking-wider">
+                        <PlusCircle className="w-4 h-4 text-violet-400" />
+                        <span>{aiEditingId ? 'Edit Knowledge Entry' : 'Add Knowledge / Topic Entry'}</span>
+                      </div>
+                      {aiEditingId && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAiEditingId(null);
+                            setAiFormTitle('');
+                            setAiFormTopic('');
+                            setAiFormContent('');
+                            setAiUrlInput('');
+                          }}
+                          className="text-[11px] text-zinc-400 hover:text-white"
+                        >
+                          Cancel Edit
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <label className="block text-zinc-400 mb-1">Entry Title</label>
+                        <input
+                          type="text"
+                          value={aiFormTitle}
+                          onChange={(e) => setAiFormTitle(e.target.value)}
+                          placeholder="e.g. How Send My Bill Works"
+                          required
+                          className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white focus:outline-none focus:border-violet-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-zinc-400 mb-1">Category</label>
+                        <select
+                          value={aiFormCategory}
+                          onChange={(e) => setAiFormCategory(e.target.value as AiKnowledgeEntry['category'])}
+                          className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white focus:outline-none focus:border-violet-500"
+                        >
+                          <option value="topic">Topic Guide</option>
+                          <option value="faq">Q&amp;A / FAQ</option>
+                          <option value="policy">Policy &amp; Rules</option>
+                          <option value="feature">AGC Feature</option>
+                          <option value="url">Web URL Source</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="text-xs">
+                      <label className="block text-zinc-400 mb-1">Topic Tag / Keywords</label>
+                      <input
+                        type="text"
+                        value={aiFormTopic}
+                        onChange={(e) => setAiFormTopic(e.target.value)}
+                        placeholder="e.g. escrow, whot, ludo, send my bill, billboard, contacts"
+                        className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white focus:outline-none focus:border-violet-500"
+                      />
+                    </div>
+
+                    <div className="text-xs">
+                      <label className="block text-zinc-400 mb-1">Knowledge Content / Instructions for AgcBot</label>
+                      <textarea
+                        rows={5}
+                        value={aiFormContent}
+                        onChange={(e) => setAiFormContent(e.target.value)}
+                        placeholder="Enter factual AGC product knowledge, fees, steps, or FAQ details..."
+                        required
+                        className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white focus:outline-none focus:border-violet-500 leading-relaxed"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={aiSaving}
+                      className="w-full py-2.5 px-4 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-bold flex items-center justify-center gap-2"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>{aiSaving ? 'Saving...' : aiEditingId ? 'Update Knowledge Entry' : 'Save Knowledge Entry'}</span>
+                    </button>
+                  </form>
+                </div>
+
+                {/* Right Column: Live Guardrail Test Sandbox + Knowledge Base List */}
+                <div className="space-y-5">
+                  {/* Live Guardrail Test Box */}
+                  <div className="p-5 rounded-2xl bg-zinc-900/50 border border-zinc-800/90 space-y-3">
+                    <div className="flex items-center gap-2 text-xs font-bold text-white uppercase tracking-wider">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span>Test AgcBot &amp; AGC-Only Guardrail</span>
+                    </div>
+                    <form onSubmit={handleRunAiTest} className="flex gap-2">
+                      <input
+                        type="text"
+                        value={aiTestPrompt}
+                        onChange={(e) => setAiTestPrompt(e.target.value)}
+                        placeholder="Ask about AGC (or test an off-topic question like 'recipe for jollof')"
+                        className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-amber-500"
+                      />
+                      <button
+                        type="submit"
+                        disabled={aiTestLoading || !aiTestPrompt.trim()}
+                        className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold whitespace-nowrap"
+                      >
+                        {aiTestLoading ? 'Asking...' : 'Test Bot'}
+                      </button>
+                    </form>
+                    {aiTestReply && (
+                      <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs space-y-2">
+                        <div className="text-zinc-200 whitespace-pre-wrap leading-relaxed">{aiTestReply}</div>
+                        {aiTestMatchedTopics.length > 0 && (
+                          <div className="pt-2 border-t border-zinc-800 text-[10px] font-mono text-violet-400">
+                            Matched Topics: {aiTestMatchedTopics.join(', ')}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Stored Entries List */}
+                  <div className="p-5 rounded-2xl bg-zinc-900/50 border border-zinc-800/90 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                        Trained Data Center Entries ({aiEntries.length})
+                      </h4>
+                      <span className="text-[11px] font-mono text-zinc-400">
+                        {aiEntries.filter((e) => e.enabled).length} active
+                      </span>
+                    </div>
+
+                    {aiEntries.length === 0 ? (
+                      <div className="py-8 text-center text-xs text-zinc-500">
+                        No training entries loaded yet. Add a topic or fetch a URL above.
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
+                        {aiEntries.map((entry) => (
+                          <div
+                            key={entry.id}
+                            className={`p-3.5 rounded-xl border text-xs space-y-2 ${
+                              entry.enabled
+                                ? 'bg-zinc-950/80 border-zinc-800'
+                                : 'bg-zinc-950/30 border-zinc-800/40 opacity-60'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="font-bold text-white truncate">{entry.title}</div>
+                                <div className="flex items-center gap-1.5 mt-0.5 text-[10px] font-mono text-violet-400">
+                                  <span className="uppercase">{entry.category}</span>
+                                  <span>·</span>
+                                  <span className="truncate">{entry.topic}</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleAiEntry(entry)}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                                    entry.enabled
+                                      ? 'bg-emerald-500/20 text-emerald-300'
+                                      : 'bg-zinc-800 text-zinc-400'
+                                  }`}
+                                >
+                                  {entry.enabled ? 'ACTIVE' : 'PAUSED'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAiEditingId(entry.id);
+                                    setAiFormTitle(entry.title);
+                                    setAiFormCategory(entry.category);
+                                    setAiFormTopic(entry.topic);
+                                    setAiFormContent(entry.content);
+                                    setAiUrlInput(entry.sourceUrl || '');
+                                  }}
+                                  className="p-1 text-zinc-400 hover:text-white"
+                                  title="Edit entry"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteAiEntry(entry.id)}
+                                  className="p-1 text-rose-400 hover:text-rose-300"
+                                  title="Delete entry"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                            <p className="text-[11px] text-zinc-300 line-clamp-3 leading-relaxed">
+                              {entry.content}
+                            </p>
+                            {entry.sourceUrl && (
+                              <div className="text-[10px] font-mono text-sky-400 truncate">
+                                Source: {entry.sourceUrl}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
                     {activeSection === 'security' && (
             <div className="space-y-5">
               <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-800/90 pb-3 overflow-x-auto">
@@ -4230,17 +4668,15 @@ export const AdminDashboardModal: React.FC = () => {
                     {
                       group: 'Core Finance & Vaults',
                       flags: [
-                        { key: 'wallet', label: 'Wallet (Master Switch)', desc: 'Paystack topup, balances & all monetary operations' },
-                        { key: 'p2pTransfers', label: 'P2P Transfers', desc: 'Direct phone-to-phone transfers' },
+                        { key: 'wallet', label: 'Wallet (Master Switch)', desc: 'Paystack topup, balances, bills & all monetary operations' },
                         { key: 'escrow', label: 'Escrow Vault', desc: 'Buyer-protected marketplace payments' },
                         { key: 'ajo', label: 'Ajo / Thrift Circle', desc: 'Rotating communal savings' },
                         { key: 'payroll', label: 'Payroll & Bulk Disbursements', desc: 'Scheduled salary payouts' },
-                        { key: 'delayedSend', label: 'Delayed Send (Anti-Fraud)', desc: 'Reversible hold window on transfers' },
                         { key: 'securityPin', label: 'Security PIN', desc: 'Mandatory PIN for transactions' },
                       ],
                     },
                     {
-                      group: 'Services & Dispatch (3-dot Menu)',
+                      group: 'Services & Dispatch (9-dot Menu)',
                       flags: [
                         { key: 'dispatch', label: 'Courier Dispatch (PickkR / Gokada)', desc: 'Doorstep courier bookings' },
                         { key: 'artisan', label: 'Artisan Hub', desc: 'Verified trade & craft bookings' },
@@ -4277,7 +4713,7 @@ export const AdminDashboardModal: React.FC = () => {
                           {flags.map(({ key, label, desc }) => {
                             const flagKey = key as keyof FeatureFlags;
                             const enabled = featureFlags[flagKey] !== false;
-                            const isWalletDependent = ['p2pTransfers', 'escrow', 'ajo', 'payroll', 'delayedSend', 'securityPin'].includes(
+                            const isWalletDependent = ['escrow', 'ajo', 'payroll', 'securityPin'].includes(
                               key as string
                             );
                             const isLocked = !featureFlags.wallet && isWalletDependent;
@@ -4430,33 +4866,6 @@ export const AdminDashboardModal: React.FC = () => {
                         step={0.5}
                         value={cfgCreatorComm}
                         onChange={(e) => setCfgCreatorComm(parseFloat(e.target.value) || 0)}
-                        className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-zinc-400 block mb-1">Min Instant Transfer (₦)</label>
-                      <input
-                        type="number"
-                        value={cfgMinTransfer}
-                        onChange={(e) => setCfgMinTransfer(parseInt(e.target.value, 10) || 0)}
-                        className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-zinc-400 block mb-1">Max Daily Limit (₦)</label>
-                      <input
-                        type="number"
-                        value={cfgMaxDailyTransfer}
-                        onChange={(e) => setCfgMaxDailyTransfer(parseInt(e.target.value, 10) || 0)}
-                        className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-zinc-400 block mb-1">Max Weekly Limit (₦)</label>
-                      <input
-                        type="number"
-                        value={cfgMaxWeeklyTransfer}
-                        onChange={(e) => setCfgMaxWeeklyTransfer(parseInt(e.target.value, 10) || 0)}
                         className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-white"
                       />
                     </div>

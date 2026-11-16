@@ -105,7 +105,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setIsAuthModalOpen,
     hideBalanceOnNav,
     toggleHideBalance,
-    setIsTransferModalOpen,
+    setIsSendBillModalOpen,
     setIsPayrollModalOpen,
     setIsScanQrModalOpen,
     fontSize,
@@ -980,13 +980,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <span>Manage Vault</span>
                   </button>
 
-                  {isFeatureEnabled('delayedSend') && (
+                  {isFeatureEnabled('wallet') && (
                     <button
-                      onClick={() => setIsTransferModalOpen(true)}
+                      onClick={() => setIsSendBillModalOpen(true)}
                       className="py-2 bg-white/20 hover:bg-white/25 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
                     >
                       <Send className="w-3.5 h-3.5 text-emerald-300" />
-                      <span>Instant Transfer</span>
+                      <span>Send My Bill</span>
                     </button>
                   )}
 

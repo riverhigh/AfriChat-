@@ -1,0 +1,24 @@
+{
+  "wallets": {
+    "032044777": {
+      "phoneKey": "032044777",
+      "phoneNumber": "+2347032044777",
+      "availableBalance": 61000,
+      "escrowLockedBalance": 0,
+      "currency": "NGN",
+      "transactions": [],
+      "updatedAt": "2026-11-16T23:19:45.441Z"
+    },
+    "transactions": {
+      "phoneKey": "transactions",
+      "phoneNumber": "transactions",
+      "availableBalance": 0,
+      "escrowLockedBalance": 0,
+      "currency": "NGN",
+      "transactions": [],
+      "updatedAt": "2026-11-16T23:19:45.448Z"
+    }
+  },
+  "usedReferences": [],
+  "updatedAt": "2026-11-16T23:19:45.448Z"
+}

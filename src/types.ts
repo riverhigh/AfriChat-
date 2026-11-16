@@ -50,7 +50,6 @@ export type WalletTransactionType =
   | 'escrow_lock'
   | 'escrow_release'
   | 'withdrawal'
-  | 'transfer_delayed'
   | 'payroll_debit'
   | 'transfer_in'
   | 'transfer_out'
@@ -59,6 +58,8 @@ export type WalletTransactionType =
   | 'store_purchase'
   | 'game_wager'
   | 'game_win'
+  | 'bill_paid'
+  | 'bill_received'
   | 'ad_payment'
   | 'store_subscription'
   | 'artisan_reg'
@@ -270,6 +271,122 @@ export interface TicTacToeGameState {
   updatedAt: string;
 }
 
+export type WhotShape = 'circle' | 'triangle' | 'cross' | 'square' | 'star' | 'whot';
+
+export interface WhotCard {
+  id: string;
+  shape: WhotShape;
+  number: number; // 1..14, or 20 for 'whot'
+}
+
+export interface WhotGameState {
+  id: string;
+  chatId: string;
+  gameType: 'whot';
+  challengerId: string;
+  challengerPhone: string;
+  challengerName: string;
+  challengerAvatar?: string;
+  opponentPhone?: string;
+  opponentName?: string;
+  opponentAvatar?: string;
+  mode: 'friendly' | 'bet';
+  betAmount: number;
+  currency: CurrencyCode;
+  challengerHand: WhotCard[];
+  opponentHand: WhotCard[];
+  deck: WhotCard[];
+  discardPile: WhotCard[];
+  topCard: WhotCard;
+  requestedShape?: WhotShape | null;
+  pendingDrawCount?: number;
+  currentTurnPhone: string;
+  currentTurnName: string;
+  lastActionNote?: string;
+  moveCount: number;
+  status: 'pending' | 'active' | 'won' | 'draw' | 'declined' | 'cancelled';
+  winnerPhone?: string;
+  winnerName?: string;
+  totalPot: number;
+  platformFeeRate: number;
+  platformFee: number;
+  winnerPayout: number;
+  settledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type LudoColor = 'purple' | 'amber';
+
+export interface LudoGameState {
+  id: string;
+  chatId: string;
+  gameType: 'ludo';
+  challengerId: string;
+  challengerPhone: string;
+  challengerName: string;
+  challengerAvatar?: string;
+  opponentPhone?: string;
+  opponentName?: string;
+  opponentAvatar?: string;
+  mode: 'friendly' | 'bet';
+  betAmount: number;
+  currency: CurrencyCode;
+  challengerTokens: number[];
+  opponentTokens: number[];
+  diceValue: number | null;
+  hasRolled: boolean;
+  currentTurnPhone: string;
+  currentTurnName: string;
+  lastActionNote?: string;
+  moveCount: number;
+  status: 'pending' | 'active' | 'won' | 'draw' | 'declined' | 'cancelled';
+  winnerPhone?: string;
+  winnerName?: string;
+  totalPot: number;
+  platformFeeRate: number;
+  platformFee: number;
+  winnerPayout: number;
+  settledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BillRequest {
+  id: string;
+  chatId: string;
+  title: string;
+  category: 'Utility / PHCN' | 'Rent' | 'Food' | 'Medical' | 'School' | 'Transport' | 'Custom';
+  amount: number;
+  currency: CurrencyCode;
+  note?: string;
+  requesterPhone: string;
+  requesterName: string;
+  requesterAvatar?: string;
+  recipientPhone: string;
+  recipientName: string;
+  status: 'pending' | 'paid' | 'declined';
+  paidByPhone?: string;
+  paidByName?: string;
+  paidAt?: string;
+  paymentReference?: string;
+  paymentChannel?: 'wallet' | 'paystack';
+  createdAt: string;
+}
+
+export interface AiKnowledgeEntry {
+  id: string;
+  title: string;
+  category: string;
+  topic: string;
+  sourceType: 'manual' | 'url';
+  sourceUrl?: string;
+  content: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AjoMember {
   id: string;
   name: string;
@@ -338,6 +455,9 @@ export interface ChatMessage {
     | 'ajo_update'
     | 'scam_warning'
     | 'game_xo'
+    | 'game_whot'
+    | 'game_ludo'
+    | 'bill_request'
     | 'location';
   imageUrl?: string;
   imageLoaded?: boolean;
@@ -354,6 +474,9 @@ export interface ChatMessage {
   ajoGroup?: AjoGroup;
   scamEntity?: ScamEntity;
   xoGame?: TicTacToeGameState;
+  whotGame?: WhotGameState;
+  ludoGame?: LudoGameState;
+  billRequest?: BillRequest;
   locationData?: LocationPinMeta;
   metadata?: Record<string, any>;
   timestamp: string;
@@ -412,6 +535,7 @@ export interface ChatThread {
   label?: string;
   isBot?: boolean;
   botModel?: string;
+  announceMode?: boolean;
 }
 
 export interface ContactRequest {
@@ -559,7 +683,8 @@ export interface DispatchDeliveryOrder {
   platformFee?: number;
   totalFee?: number;
   currency: CurrencyCode;
-  status: 'finding_rider' | 'rider_assigned' | 'in_transit' | 'delivered';
+  status: 'finding_rider' | 'rider_assigned' | 'picked_up' | 'in_transit' | 'delivered';
+  estimatedMinutes?: number;
   riderName?: string;
   riderPhone?: string;
   riderPlate?: string;
@@ -671,24 +796,6 @@ export interface ServiceBooking {
   isPaid: boolean;
   createdAt: string;
   bookingPin: string;
-}
-
-// 15. Money Transfer with 1-2 Days Delay (Anti-Fraud & Escrow Delay)
-export interface DelayedTransfer {
-  id: string;
-  senderId: string;
-  senderName: string;
-  recipientPhone: string;
-  recipientName: string;
-  amount: number;
-  currency: CurrencyCode;
-  note: string;
-  delayHours: number; // 24 or 48 hours
-  scheduledReleaseTime: string;
-  releaseTimestampMs: number;
-  status: 'pending_clearance' | 'cleared' | 'cancelled_by_sender';
-  createdAt: string;
-  securityReason: string;
 }
 
 // 16. Payroll & Recurring Auto-Debit System
@@ -1197,6 +1304,7 @@ export interface TutorProfile {
 export interface AdminUserRecord {
   id: string;
   fullName: string;
+  username?: string;
   phoneNumber: string;
   avatarUrl: string;
   role: 'user' | 'creator' | 'merchant' | 'admin';
@@ -1237,11 +1345,7 @@ export interface AdminSystemConfig {
   escrowCommissionPercent: number; // e.g. 1.5%
   artisanCommissionPercent: number; // e.g. 2%
   creatorCommissionPercent: number; // e.g. 5%
-  minTransferAmountNgn: number;
-  maxDailyTransferNgn: number;
-  maxWeeklyTransferNgn?: number;
   sponsoredAdFeeNgn?: number;
-  delayedSendHoldDurationMins: number;
   lowBandwidthDefault: boolean;
   supportContactPhone: string;
 }
@@ -1249,12 +1353,10 @@ export interface AdminSystemConfig {
 export interface FeatureFlags {
   // Master Financials
   wallet: boolean;          // Master dependency hub: if off, disables all money-related features
-  p2pTransfers?: boolean;
   escrow: boolean;          // requires wallet
-  delayedSend?: boolean;
   securityPin?: boolean;
 
-  // Services & 3-Dot Menu Hub
+  // Services & 9-Dot Menu Hub
   dispatch: boolean;        // independent
   artisan: boolean;         // requires wallet
   healthcare: boolean;      // independent

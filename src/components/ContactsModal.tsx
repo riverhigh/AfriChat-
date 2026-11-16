@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   X,
   Users,
@@ -17,6 +17,7 @@ import {
   Smartphone,
   BookUser,
   Bot,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
@@ -60,6 +61,120 @@ export const ContactsModal: React.FC = () => {
   const [selectedChannelMembers, setSelectedChannelMembers] = useState<{ name: string; phone: string }[]>([]);
 
   const [isCreatingGroupOrChannel, setIsCreatingGroupOrChannel] = useState(false);
+
+  const permissionStorageKey = `AGC_contacts_permission_status_${
+    (currentUser.phoneNumber || currentUser.id || 'default').replace(/\D/g, '') || 'default'
+  }`;
+  const [permissionStatus, setPermissionStatus] = useState<'unknown' | 'granted' | 'denied'>(() => {
+    try {
+      const saved = localStorage.getItem(permissionStorageKey);
+      if (saved === 'granted' || saved === 'denied') return saved;
+    } catch (_) {}
+    return 'unknown';
+  });
+  const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
+  const [isAutoDiscovering, setIsAutoDiscovering] = useState(false);
+  const [autoDiscoverySummary, setAutoDiscoverySummary] = useState<string | null>(null);
+
+  const autoFindAgcContacts = useCallback(async () => {
+    setIsAutoDiscovering(true);
+    try {
+      const serverDirectory = new Map<string, { name: string; phone: string; avatar?: string }>();
+      try {
+        const res = await fetch('/api/users');
+        if (res.ok) {
+          const payload = await res.json();
+          const list = Array.isArray(payload) ? payload : payload?.users;
+          if (Array.isArray(list)) {
+            for (const u of list) {
+              const digits = String(u.phoneNumber || u.phone || '').replace(/\D/g, '');
+              const last9 = digits.length >= 9 ? digits.slice(-9) : digits;
+              if (last9.length >= 7) {
+                serverDirectory.set(last9, {
+                  name: u.fullName || u.username || u.name || 'AGC User',
+                  phone: u.phoneNumber || u.phone || `+${digits}`,
+                  avatar: u.avatarUrl,
+                });
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      if (isSupabaseConfigured) {
+        try {
+          const { data } = await supabase
+            .from('agc_phone_registry')
+            .select('full_phone, phone_digits, username, avatar_url')
+            .limit(250);
+          if (Array.isArray(data)) {
+            for (const row of data) {
+              const digits = String(row.phone_digits || row.full_phone || '').replace(/\D/g, '');
+              const last9 = digits.length >= 9 ? digits.slice(-9) : digits;
+              if (last9.length >= 7 && !serverDirectory.has(last9)) {
+                serverDirectory.set(last9, {
+                  name: row.username || 'AGC User',
+                  phone: row.full_phone || `+${digits}`,
+                  avatar: row.avatar_url,
+                });
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      const myLast9 = (currentUser.phoneNumber || '').replace(/\D/g, '').slice(-9);
+      const toSync: { name: string; phone: string }[] = [];
+      let matchedExisting = 0;
+
+      for (const c of deviceContacts) {
+        const cDigits = (c.normalizedPhoneNumber || c.rawPhoneNumber || '').replace(/\D/g, '');
+        const cLast9 = cDigits.length >= 9 ? cDigits.slice(-9) : cDigits;
+        if (!cLast9 || (myLast9 && cLast9 === myLast9)) continue;
+        if (serverDirectory.has(cLast9)) {
+          matchedExisting += 1;
+          if (!c.isRegisteredOnAGC) {
+            toSync.push({
+              name: c.name || serverDirectory.get(cLast9)!.name,
+              phone: c.normalizedPhoneNumber || c.rawPhoneNumber,
+            });
+          }
+        }
+      }
+
+      // Also ensure registered directory users not yet in local contact list are checked/synced
+      for (const [last9, dirUser] of serverDirectory.entries()) {
+        if (myLast9 && last9 === myLast9) continue;
+        const already = deviceContacts.some((c) => {
+          const d = (c.normalizedPhoneNumber || c.rawPhoneNumber || '').replace(/\D/g, '');
+          return d.endsWith(last9);
+        });
+        if (!already && toSync.length < 30) {
+          toSync.push({ name: dirUser.name, phone: dirUser.phone });
+        }
+      }
+
+      let syncedFound = matchedExisting;
+      if (toSync.length > 0) {
+        syncedFound = await importDeviceContacts(toSync);
+      }
+
+      const totalFound = Math.max(syncedFound, matchedExisting);
+      setAutoDiscoverySummary(
+        totalFound > 0
+          ? `Found ${totalFound} contact${totalFound === 1 ? '' : 's'} with active AGC accounts`
+          : 'Synced device contacts — no new AGC accounts discovered yet'
+      );
+    } finally {
+      setIsAutoDiscovering(false);
+    }
+  }, [currentUser.phoneNumber, deviceContacts, importDeviceContacts]);
+
+  useEffect(() => {
+    if (isContactsModalOpen && permissionStatus === 'granted') {
+      autoFindAgcContacts();
+    }
+  }, [isContactsModalOpen, permissionStatus]);
 
   const handleCreateGroup = () => {
     const cleanName = groupName.trim();
@@ -421,12 +536,96 @@ export const ContactsModal: React.FC = () => {
           </div>
         )}
 
+        {/* Phone Contacts Permission Prompt Card */}
+        {(permissionStatus === 'unknown' || showPermissionPrompt) && (
+          <div className="mx-4 mt-3 p-3.5 rounded-2xl bg-gradient-to-br from-purple-600/15 via-indigo-600/10 to-purple-900/20 border border-purple-500/35 space-y-2.5 shrink-0 animate-in fade-in">
+            <div className="flex items-start gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0">
+                <ShieldCheck className="w-4 h-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h4 className="text-xs font-bold text-slate-900 dark:text-white">
+                  Allow AGC to access your phone contacts?
+                </h4>
+                <p className="text-[11px] text-slate-600 dark:text-purple-200/75 mt-0.5 leading-relaxed">
+                  AGC will scan your address book to automatically discover friends who already have an AGC account.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    localStorage.setItem(permissionStorageKey, 'granted');
+                  } catch (_) {}
+                  setPermissionStatus('granted');
+                  setShowPermissionPrompt(false);
+
+                  if (typeof navigator !== 'undefined' && 'contacts' in navigator && 'ContactsManager' in window) {
+                    try {
+                      const props = ['name', 'tel'];
+                      const opts = { multiple: true };
+                      const contacts = await (navigator as any).contacts.select(props, opts);
+                      if (contacts && contacts.length > 0) {
+                        const parsed = contacts
+                          .map((c: any) => ({
+                            name: Array.isArray(c.name) ? c.name[0] : c.name || 'Phone Contact',
+                            phone: Array.isArray(c.tel) ? c.tel[0] : c.tel || '',
+                          }))
+                          .filter((c: any) => c.phone);
+                        if (parsed.length > 0) {
+                          setIsImporting(true);
+                          const foundCount = await importDeviceContacts(parsed);
+                          setIsImporting(false);
+                          setInviteSentToast(`Synced ${parsed.length} contacts! (${foundCount} on AGC ✨)`);
+                          setTimeout(() => setInviteSentToast(null), 3500);
+                        }
+                      }
+                    } catch (err: any) {
+                      if (err?.name !== 'AbortError') {
+                        console.warn('Contact picker fallback:', err);
+                      }
+                    }
+                  } else {
+                    setShowImportModal(true);
+                    setShowCreateGroup(false);
+                    setShowCreateChannel(false);
+                    setShowAddContactForm(false);
+                  }
+                  await autoFindAgcContacts();
+                }}
+                className="flex-1 py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-colors shadow-xs"
+              >
+                Allow Access &amp; Find Friends
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    localStorage.setItem(permissionStorageKey, 'denied');
+                  } catch (_) {}
+                  setPermissionStatus('denied');
+                  setShowPermissionPrompt(false);
+                }}
+                className="px-3 py-2 rounded-xl bg-slate-200 dark:bg-purple-950/50 text-slate-700 dark:text-purple-200 text-xs font-semibold hover:bg-slate-300 dark:hover:bg-purple-900/50 transition-colors"
+              >
+                Not Now
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Top Quick Actions: Access Phone Contacts, New Group & New Channel */}
         <div className="px-4 pt-3 space-y-2 shrink-0">
           <button
             type="button"
-            disabled={isImporting}
+            disabled={isImporting || isAutoDiscovering}
             onClick={async () => {
+              if (permissionStatus !== 'granted') {
+                setShowPermissionPrompt(true);
+                return;
+              }
               if (typeof navigator !== 'undefined' && 'contacts' in navigator && 'ContactsManager' in window) {
                 try {
                   const props = ['name', 'tel'];
@@ -445,6 +644,7 @@ export const ContactsModal: React.FC = () => {
                       setIsImporting(false);
                       setInviteSentToast(`Synced ${parsed.length} contacts! (${foundCount} found on AGC ✨)`);
                       setTimeout(() => setInviteSentToast(null), 3500);
+                      await autoFindAgcContacts();
                       return;
                     }
                   }
@@ -454,6 +654,7 @@ export const ContactsModal: React.FC = () => {
                   }
                 }
               }
+              await autoFindAgcContacts();
               setShowImportModal(true);
               setShowCreateGroup(false);
               setShowCreateChannel(false);
@@ -467,15 +668,17 @@ export const ContactsModal: React.FC = () => {
               </div>
               <div className="min-w-0">
                 <div className="text-xs font-bold leading-tight">Access Phone Contacts</div>
-                <div className="text-[10px] text-purple-200">Find who uses AGC & message directly</div>
+                <div className="text-[10px] text-purple-200 truncate">
+                  {autoDiscoverySummary || 'Auto-find contacts who have an AGC account'}
+                </div>
               </div>
             </div>
             <span className="text-[10px] font-bold bg-white/20 px-2 py-0.5 rounded-full shrink-0">
-              {isImporting ? 'Syncing...' : 'Sync Contacts ✨'}
+              {isImporting || isAutoDiscovering ? 'Scanning...' : permissionStatus === 'granted' ? 'Auto-Find ✨' : 'Allow Access'}
             </span>
           </button>
 
-          {/* AfriBot AI Quick Chat */}
+          {/* AgcBot AI Quick Chat */}
           <button
             type="button"
             onClick={startAiChat}
@@ -487,10 +690,10 @@ export const ContactsModal: React.FC = () => {
               </div>
               <div className="min-w-0">
                 <div className="text-xs font-bold leading-tight flex items-center gap-1.5">
-                  <span>Chat with AfriBot AI</span>
-                  <span className="px-1.5 py-0.2 text-[8px] font-black uppercase bg-white/25 rounded-full">Groq LPU</span>
+                  <span>Chat with AgcBot AI</span>
+                  <span className="px-1.5 py-0.2 text-[8px] font-black uppercase bg-white/25 rounded-full">AGC Guide</span>
                 </div>
-                <div className="text-[10px] text-pink-200">Personal assistant • Ask anything or add to groups</div>
+                <div className="text-[10px] text-pink-200">Official AGC assistant · Features, escrow, games &amp; support</div>
               </div>
             </div>
             <span className="text-[10px] font-bold bg-white/20 px-2 py-0.5 rounded-full shrink-0">

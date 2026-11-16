@@ -16,10 +16,12 @@ import {
   ChevronRight,
   Megaphone,
   ExternalLink,
+  Flame,
 } from 'lucide-react';
 import { useApp, phonesMatch } from '../context/AppContext';
 import { UserStatus } from '../types';
 import { compressChatMediaImage } from '../utils/imageUtils';
+import { BillboardModal } from './BillboardModal';
 
 const THOUGHT_THEMES = [
   { name: 'Indigo Dusk', bg: 'from-indigo-600 via-purple-600 to-pink-600' },
@@ -107,6 +109,7 @@ export const StatusView: React.FC = () => {
 
   const [modalMode, setModalMode] = useState<'none' | 'device_photo' | 'device_video' | 'thought' | 'sponsored_ad'>('none');
   const [showAddStoryMenu, setShowAddStoryMenu] = useState(false);
+  const [showBillboardModal, setShowBillboardModal] = useState(false);
   const [showMyStoriesTray, setShowMyStoriesTray] = useState(false);
   const [isViewedExpanded, setIsViewedExpanded] = useState(true);
 
@@ -371,19 +374,30 @@ export const StatusView: React.FC = () => {
             24h Stories from your contacts, creators &amp; sponsors
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setStatusError(null);
-            setDeviceMediaPreview('');
-            setAdPaymentPin('');
-            setModalMode('sponsored_ad');
-          }}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 text-xs font-semibold transition-colors whitespace-nowrap"
-        >
-          <Megaphone className="w-3.5 h-3.5" />
-          <span>Promote Ad</span>
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowBillboardModal(true)}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-purple-600/15 text-purple-600 dark:text-purple-300 hover:bg-purple-600/25 text-xs font-semibold transition-colors whitespace-nowrap"
+            title="Discover Trends & Billboard"
+          >
+            <Flame className="w-3.5 h-3.5 text-purple-500 dark:text-purple-400" />
+            <span>Billboard</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setStatusError(null);
+              setDeviceMediaPreview('');
+              setAdPaymentPin('');
+              setModalMode('sponsored_ad');
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 text-xs font-semibold transition-colors whitespace-nowrap"
+          >
+            <Megaphone className="w-3.5 h-3.5" />
+            <span>Promote Ad</span>
+          </button>
+        </div>
       </div>
 
       {(adSubmittedNotice || myPendingAds.length > 0) && (
@@ -1451,6 +1465,10 @@ export const StatusView: React.FC = () => {
           </div>
         </div>
       )}
+      <BillboardModal
+        isOpen={showBillboardModal}
+        onClose={() => setShowBillboardModal(false)}
+      />
     </div>
   );
 };

@@ -68,7 +68,7 @@ export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
 
 export const getSavedUserCleanPhone = (): string => {
   try {
-    const s = localStorage.getItem('AGC_user_profile_v2');
+    const s = safeLocalStorage.getItem('AGC_user_profile_v2');
     if (s) {
       const p = JSON.parse(s);
       if (p?.phoneNumber) return normalizePhoneDigits(p.phoneNumber);
@@ -208,12 +208,31 @@ function loadPartitionedWallet(phoneNumber?: string): UserWallet {
 
 function persistPartitionedUserProfile(profile: UserProfile) {
   if (!profile) return;
+  const norm = normalizePhoneDigits(profile.phoneNumber);
   try {
     const serialized = JSON.stringify(profile);
-    localStorage.setItem('AGC_user_profile_v2', serialized);
-    const norm = normalizePhoneDigits(profile.phoneNumber);
+    safeLocalStorage.setItem('AGC_user_profile_v2', serialized);
     if (norm) {
-      localStorage.setItem(`AGC_user_profile_v2_${norm}`, serialized);
+      safeLocalStorage.setItem(`AGC_user_profile_v2_${norm}`, serialized);
+    }
+    // Verify native localStorage didn't silently reject due to quota (e.g. large base64 avatar)
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('AGC_user_profile_v2', serialized);
+      }
+    } catch {
+      const compactProfile: UserProfile = {
+        ...profile,
+        avatarUrl:
+          profile.avatarUrl && profile.avatarUrl.length > 8000 && profile.avatarUrl.startsWith('data:')
+            ? DEFAULT_AVATAR_SVG
+            : profile.avatarUrl,
+      };
+      const compactSerialized = JSON.stringify(compactProfile);
+      safeLocalStorage.setItem('AGC_user_profile_v2', compactSerialized);
+      if (norm) {
+        safeLocalStorage.setItem(`AGC_user_profile_v2_${norm}`, compactSerialized);
+      }
     }
   } catch (_) {}
 }
@@ -223,7 +242,7 @@ function loadPartitionedUserProfile(phoneNumber?: string): Partial<UserProfile> 
   const candidates = getCandidatePhoneKeys(targetPhone);
   for (const keySuffix of candidates) {
     try {
-      const raw = localStorage.getItem(`AGC_user_profile_v2_${keySuffix}`);
+      const raw = safeLocalStorage.getItem(`AGC_user_profile_v2_${keySuffix}`);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') return parsed;
@@ -231,15 +250,41 @@ function loadPartitionedUserProfile(phoneNumber?: string): Partial<UserProfile> 
     } catch (_) {}
   }
   try {
-    const allUsers: UserProfile[] = JSON.parse(localStorage.getItem('AGC_all_registered_users') || '[]');
+    const allUsers: UserProfile[] = JSON.parse(safeLocalStorage.getItem('AGC_all_registered_users') || '[]');
     const matched = allUsers.find((u) => phonesMatch(u.phoneNumber, targetPhone));
     if (matched) return matched;
   } catch (_) {}
   try {
-    const lastRaw = localStorage.getItem('AGC_user_profile_v2');
+    const lastRaw = safeLocalStorage.getItem('AGC_user_profile_v2');
     if (lastRaw) {
       const parsed = JSON.parse(lastRaw);
       if (parsed?.phoneNumber && phonesMatch(parsed.phoneNumber, targetPhone)) return parsed;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function recoverPersistedUserProfile(): UserProfile | null {
+  try {
+    const saved = safeLocalStorage.getItem('AGC_user_profile_v2');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && parsed.phoneNumber && parsed.id !== 'usr_chioma_adebayo' && parsed.fullName !== 'Chioma Adebayo') {
+        return { ...parsed, isPhoneVerified: true };
+      }
+    }
+  } catch (_) {}
+  try {
+    for (let i = 0; i < safeLocalStorage.length; i++) {
+      const k = safeLocalStorage.key(i);
+      if (k && k.startsWith('AGC_user_profile_v2_')) {
+        const raw = safeLocalStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.phoneNumber && parsed.id !== 'usr_chioma_adebayo' && parsed.fullName !== 'Chioma Adebayo') {
+          return { ...parsed, isPhoneVerified: true };
+        }
+      }
     }
   } catch (_) {}
   return null;
@@ -419,6 +464,11 @@ import {
   FinancialPoll,
   AjoGroup,
   TicTacToeGameState,
+  WhotShape,
+  WhotCard,
+  WhotGameState,
+  LudoGameState,
+  BillRequest,
   LocationPinMeta,
   UserProfile,
   DeviceContact,
@@ -431,7 +481,6 @@ import {
   SecuritySettings,
   ServiceProvider,
   ServiceBooking,
-  DelayedTransfer,
   PayrollEmployee,
   PayrollRunLog,
   AppFontSize,
@@ -489,7 +538,6 @@ import {
   MOCK_JOB_POSTINGS,
   MOCK_SERVICE_PROVIDERS,
   MOCK_SERVICE_BOOKINGS,
-  MOCK_DELAYED_TRANSFERS,
   MOCK_PAYROLL_EMPLOYEES,
   MOCK_PAYROLL_LOGS,
   MOCK_TOWN_COMMUNITIES,
@@ -744,6 +792,44 @@ interface AppContextType {
     game: TicTacToeGameState,
     cellIndex: number
   ) => Promise<{ success: boolean; message?: string }>;
+  // 6c. Real-Time Multiplayer Whot! & Ludo Games
+  sendWhotChallenge: (
+    chatId: string,
+    mode: 'friendly' | 'bet',
+    betAmount: number
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: WhotGameState }>;
+  acceptWhotChallenge: (
+    game: WhotGameState
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }>;
+  declineWhotChallenge: (
+    game: WhotGameState
+  ) => Promise<{ success: boolean; message?: string }>;
+  playWhotCard: (
+    game: WhotGameState,
+    cardId: string,
+    requestedShape?: WhotShape
+  ) => Promise<{ success: boolean; message?: string }>;
+  drawWhotCard: (
+    game: WhotGameState
+  ) => Promise<{ success: boolean; message?: string }>;
+  sendLudoChallenge: (
+    chatId: string,
+    mode: 'friendly' | 'bet',
+    betAmount: number
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: LudoGameState }>;
+  acceptLudoChallenge: (
+    game: LudoGameState
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }>;
+  declineLudoChallenge: (
+    game: LudoGameState
+  ) => Promise<{ success: boolean; message?: string }>;
+  rollLudoDice: (
+    game: LudoGameState
+  ) => Promise<{ success: boolean; message?: string }>;
+  moveLudoToken: (
+    game: LudoGameState,
+    tokenIndex: number
+  ) => Promise<{ success: boolean; message?: string }>;
   // 7. Ajo / Esusu Group Savings
   activeAjoGroup: AjoGroup | null;
   setActiveAjoGroup: (group: AjoGroup | null) => void;
@@ -770,7 +856,8 @@ interface AppContextType {
     fullName: string,
     avatarUrl?: string,
     about?: string,
-    role?: 'user' | 'admin' | 'creator' | 'merchant'
+    role?: 'user' | 'admin' | 'creator' | 'merchant',
+    email?: string
   ) => void;
   logoutUser: () => void;
   updateUserProfile: (updates: Partial<UserProfile>) => void;
@@ -863,20 +950,23 @@ interface AppContextType {
   registerAsServiceProvider: (
     provider: Omit<ServiceProvider, 'id' | 'rating' | 'reviewCount' | 'isVerified'>
   ) => void;
-  // 15. Instant P2P Money Transfer with Daily & Weekly Limits
-  delayedTransfers: DelayedTransfer[];
-  isTransferModalOpen: boolean;
-  setIsTransferModalOpen: (val: boolean) => void;
-  getTransferLimitsUsage: () => { dailyUsed: number; dailyLimit: number; weeklyUsed: number; weeklyLimit: number };
-  sendDelayedTransfer: (
-    recipientPhone: string,
-    recipientName: string,
-    amount: number,
-    note: string,
-    delayHours?: number
-  ) => Promise<{ success: boolean; transfer?: DelayedTransfer; message?: string }>;
-  cancelDelayedTransfer: (transferId: string) => { success: boolean; message: string };
-  fastForwardTransferRelease: (transferId: string) => { success: boolean; message: string };
+  // 15. Send My Bill (Pay on Behalf)
+  isSendBillModalOpen: boolean;
+  setIsSendBillModalOpen: (val: boolean) => void;
+  sendBillRequest: (params: {
+    recipientPhone: string;
+    recipientName: string;
+    recipientAvatar?: string;
+    title: string;
+    category: BillRequest['category'];
+    amount: number;
+    note?: string;
+  }) => Promise<{ success: boolean; message?: string; bill?: BillRequest }>;
+  payBillOnBehalf: (
+    bill: BillRequest,
+    channel?: 'wallet' | 'paystack',
+    paystackRef?: string
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }>;
   // 16. Payroll & Recurring Auto-Debit
   payrollEmployees: PayrollEmployee[];
   payrollLogs: PayrollRunLog[];
@@ -1232,11 +1322,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     escrowCommissionPercent: 1.5,
     artisanCommissionPercent: 2,
     creatorCommissionPercent: 5,
-    minTransferAmountNgn: 100,
-    maxDailyTransferNgn: 70000,
-    maxWeeklyTransferNgn: 900000,
     sponsoredAdFeeNgn: 2500,
-    delayedSendHoldDurationMins: 15,
     lowBandwidthDefault: false,
     supportContactPhone: '+234800000000',
   };
@@ -1279,7 +1365,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       {
         id: 'faq_safety',
         question: 'How do I avoid scammers on P2P payments?',
-        answer: 'Use the Scam Shield tool in the 3-dot menu before sending funds. Never release escrow funds until you inspect items physically.',
+        answer: 'Use the Scam Shield tool in the 9-dot menu before sending funds. Never release escrow funds until you inspect items physically.',
         category: 'security',
         published: true,
       },
@@ -1298,9 +1384,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
     wallet: true,
-    p2pTransfers: true,
     escrow: true,
-    delayedSend: true,
     securityPin: true,
     dispatch: true,
     artisan: true,
@@ -1345,7 +1429,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const isFeatureEnabled = (key: keyof FeatureFlags): boolean => {
     if (key === 'wallet') return Boolean(featureFlags.wallet);
     const WALLET_DEPENDENTS: (keyof FeatureFlags)[] = [
-      'market', 'artisan', 'errands', 'ajo', 'payroll', 'writers', 'creator', 'escrow', 'tutor', 'p2pTransfers', 'storeTiers', 'delayedSend', 'securityPin'
+      'market', 'artisan', 'errands', 'ajo', 'payroll', 'writers', 'creator', 'escrow', 'tutor', 'storeTiers', 'securityPin'
     ];
     if (WALLET_DEPENDENTS.includes(key)) {
       return Boolean(featureFlags.wallet && featureFlags[key] !== false);
@@ -2831,20 +2915,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 23. Anti-Fraud Referral & Invite System
   const [referralProgram, setReferralProgram] = useState<ReferralProgram>(() => {
+    const fallback: ReferralProgram = {
+      referralCode: '',
+      referralLink: 'https://agc.app/join',
+      totalInvited: 0,
+      activeVerifiedCount: 0,
+      pendingCount: 0,
+      totalEarned: 0,
+      availableBonus: 0,
+      rewardPerActiveUser: 500,
+      referredList: [],
+    };
     try {
       const saved = localStorage.getItem('AGC_referral_program');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            ...fallback,
+            ...parsed,
+            referredList: Array.isArray(parsed.referredList) ? parsed.referredList : [],
+          };
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse referral program:', e);
     }
-    return {
-      referralCode: '',
-      totalEarned: 0,
-      availableBonus: 0,
-      invitedCount: 0,
-      pendingPayout: 0,
-      invitedContacts: [],
-    };
+    return fallback;
   });
   const [isReferralModalOpen, setIsReferralModalOpen] = useState(false);
 
@@ -3199,17 +3296,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 8. Phone Number OTP Authentication & Identity State
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
-    try {
-      const saved = localStorage.getItem('AGC_user_profile_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && parsed.phoneNumber && parsed.id !== 'usr_chioma_adebayo' && parsed.fullName !== 'Chioma Adebayo') {
-          return { ...parsed, isPhoneVerified: true };
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to parse user profile:', e);
-    }
+    const recovered = recoverPersistedUserProfile();
+    if (recovered) return recovered;
     return {
       id: '',
       phoneNumber: '',
@@ -3229,6 +3317,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const loadedPhoneForWalletRef = useRef<string>(getSavedUserCleanPhone());
   const isHydratingWalletRef = useRef<boolean>(false);
   const chatBackupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastLoginAtRef = useRef<number>(0);
+  const baselineDbSessionTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     chatsRef.current = chats;
@@ -3240,26 +3330,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     try {
       // Clean legacy mock service providers and other caches
-      const sp = localStorage.getItem('AGC_service_providers_v2');
+      const sp = safeLocalStorage.getItem('AGC_service_providers_v2');
       if (sp && sp.includes('sp_tunde_mechanic')) {
-        localStorage.removeItem('AGC_service_providers_v2');
+        safeLocalStorage.removeItem('AGC_service_providers_v2');
       }
-      const st = localStorage.getItem('AGC_artisan_station_v2');
+      const st = safeLocalStorage.getItem('AGC_artisan_station_v2');
       if (st && st.includes('st_kofi_workshop')) {
-        localStorage.removeItem('AGC_artisan_station_v2');
+        safeLocalStorage.removeItem('AGC_artisan_station_v2');
       }
     } catch (e) {}
   }, []);
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     try {
-      const profile = localStorage.getItem('AGC_user_profile_v2');
-      const isAuth = localStorage.getItem('AGC_is_authenticated');
-      if (isAuth === 'true' && profile) {
-        const parsed = JSON.parse(profile);
-        if (parsed && parsed.phoneNumber && parsed.id !== 'usr_chioma_adebayo' && parsed.fullName !== 'Chioma Adebayo') {
-          return true;
-        }
+      const isAuth = safeLocalStorage.getItem('AGC_is_authenticated');
+      const recovered = recoverPersistedUserProfile();
+      if (isAuth === 'true' && recovered?.phoneNumber) {
+        return true;
       }
     } catch (e) {
       return false;
@@ -4827,17 +4914,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isServicesModalOpen, setIsServicesModalOpen] = useState(false);
   const [selectedServiceProvider, setSelectedServiceProvider] = useState<ServiceProvider | null>(null);
 
-  // 15. Money Transfer with 1-2 Days Security Delay State
-  const [delayedTransfers, setDelayedTransfers] = useState<DelayedTransfer[]>(() => {
-    try {
-      const saved = localStorage.getItem('AGC_delayed_transfers');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      console.warn('Failed to parse delayed transfers:', e);
-    }
-    return [];
-  });
-  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  // 15. Send My Bill (Pay on Behalf) Modal State
+  const [isSendBillModalOpen, setIsSendBillModalOpen] = useState(false);
 
   // 16. Payroll & Recurring Auto-Debit State
   const [payrollEmployees, setPayrollEmployees] = useState<PayrollEmployee[]>(() => {
@@ -5777,17 +5855,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         name: currentUserRef.current?.fullName || 'AGC User',
         avatar: currentUserRef.current?.avatarUrl,
         phone: currentUserRef.current?.phoneNumber,
+        sessionToken: safeLocalStorage.getItem('AGC_session_token') || undefined,
       });
 
-    const triggerForceLogout = () => {
-      console.warn('⚠️ AGC force_logout executed: signed in on another device');
-      localStorage.setItem('AGC_is_authenticated', 'false');
-      localStorage.removeItem('AGC_session_token');
+    const triggerForceLogout = (payload?: any) => {
+      const myToken = safeLocalStorage.getItem('AGC_session_token');
+      const mySockId = getSocket()?.id;
+      if (payload?.sessionToken && myToken && payload.sessionToken === myToken) {
+        return;
+      }
+      if (payload?.excludeSocketId && mySockId && payload.excludeSocketId === mySockId) {
+        return;
+      }
+      if (payload?.reason !== 'admin_kick' && Date.now() - lastLoginAtRef.current < 5000) {
+        return;
+      }
+      console.warn('⚠️ AGC force_logout executed:', payload?.reason || 'signed in on another device');
+      safeLocalStorage.setItem('AGC_is_authenticated', 'false');
+      safeLocalStorage.removeItem('AGC_session_token');
+      setIsKickedOut(true);
       setIsAuthenticated(false);
-      setTimeout(() => {
-        alert('⚠️ AGC Security Alert\n\nYour account was just signed in on another device.\nYou have been logged out from this device for security.');
-        window.location.reload();
-      }, 300);
     };
 
     const onSocketDeclined = (payload: any) => handleCallTerminated(payload, 'call_declined');
@@ -5835,9 +5922,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             handleCallTerminated(payload, 'call_ended');
           })
           .on('broadcast', { event: 'force_logout' }, ({ payload }: any) => {
-            const myToken = localStorage.getItem('AGC_session_token');
+            const myToken = safeLocalStorage.getItem('AGC_session_token');
             if (payload?.sessionToken && myToken && payload.sessionToken !== myToken) {
-              triggerForceLogout();
+              triggerForceLogout(payload);
             }
           })
           .subscribe();
@@ -5845,11 +5932,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
-    // 4. Polling heartbeat for session enforcement across remote devices
+    // 4. Polling heartbeat for session enforcement across remote devices (captures baseline so stale DB column never self-kicks)
+    let baselineCaptured = false;
+    if (isSupabaseConfigured && currentUser?.phoneNumber) {
+      supabase
+        .from('profiles')
+        .select('session_token')
+        .eq('phone_number', currentUser.phoneNumber)
+        .maybeSingle()
+        .then(
+          ({ data }) => {
+            baselineDbSessionTokenRef.current = data?.session_token || null;
+            baselineCaptured = true;
+          },
+          () => {
+            baselineCaptured = true;
+          }
+        );
+    }
     const sessionHeartbeat = setInterval(async () => {
-      if (!isSupabaseConfigured || !currentUser?.phoneNumber) return;
+      if (!isSupabaseConfigured || !currentUser?.phoneNumber || !baselineCaptured) return;
       if (typeof document !== 'undefined' && document.hidden) return;
-      const myToken = localStorage.getItem('AGC_session_token');
+      const myToken = safeLocalStorage.getItem('AGC_session_token');
       if (!myToken) return;
       try {
         const { data } = await supabase
@@ -5857,8 +5961,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .select('session_token')
           .eq('phone_number', currentUser.phoneNumber)
           .maybeSingle();
-        if (data?.session_token && data.session_token !== myToken) {
-          triggerForceLogout();
+        if (
+          data?.session_token &&
+          data.session_token !== myToken &&
+          data.session_token !== baselineDbSessionTokenRef.current
+        ) {
+          triggerForceLogout({ reason: 'new_device_login', sessionToken: data.session_token });
         }
       } catch (_) {}
     }, 60000);
@@ -9009,6 +9117,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 6b. Real-Time Supabase Multiplayer X/O (Tic-Tac-Toe) & Location Pin Modal State
   const [isGameXoModalOpen, setIsGameXoModalOpen] = useState(false);
   const [isShareLocationModalOpen, setIsShareLocationModalOpen] = useState(false);
+  const inFlightGameSettlesRef = useRef<Set<string>>(new Set());
 
   const getXoLockedStorageKey = (phone?: string) =>
     getUserStorageKey('AGC_xo_locked_ids', phone || currentUser.phoneNumber);
@@ -9033,6 +9142,108 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem(storageKey, JSON.stringify([...arr.slice(-150), gameId]));
       }
     } catch (_) {}
+  };
+
+  const applyAuthoritativeServerWallet = useCallback((srvWallet: any, phoneOverride?: string) => {
+    if (!srvWallet) return;
+    const phone = phoneOverride || currentUserRef.current?.phoneNumber || '';
+    const nextWallet: UserWallet = {
+      availableBalance: Math.max(0, Number(srvWallet.availableBalance) || 0),
+      escrowLockedBalance: Math.max(0, Number(srvWallet.escrowLockedBalance) || 0),
+      currency: srvWallet.currency || walletRef.current.currency || 'NGN',
+      transactions: Array.isArray(srvWallet.transactions)
+        ? srvWallet.transactions
+        : walletRef.current.transactions,
+    };
+    isHydratingWalletRef.current = true;
+    setWallet(nextWallet);
+    walletRef.current = nextWallet;
+    if (phone) persistPartitionedWallet(nextWallet, phone);
+    isHydratingWalletRef.current = false;
+  }, []);
+
+  const lockGameBetOnServer = async (params: {
+    gameId: string;
+    gameType: 'xo' | 'whot' | 'ludo';
+    role: 'challenger' | 'opponent';
+    playerPhone: string;
+    playerName?: string;
+    opponentPhone?: string;
+    opponentName?: string;
+    betAmount: number;
+    currency: CurrencyCode;
+    title: string;
+  }): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }> => {
+    try {
+      const resp = await fetch('/api/games/bet/lock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.success) {
+        if (data?.insufficientFunds) {
+          refreshWalletFromServer().catch(() => {});
+        }
+        return {
+          success: false,
+          insufficientFunds: Boolean(data?.insufficientFunds),
+          message: data?.message || 'Unable to lock bet stake in server escrow.',
+        };
+      }
+      if (data.wallet) {
+        applyAuthoritativeServerWallet(data.wallet, params.playerPhone);
+      }
+      setXoFlag(getXoLockedStorageKey(params.playerPhone), params.gameId);
+      return { success: true };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err?.message || 'Network error verifying bet stake with server.',
+      };
+    }
+  };
+
+  const settleGameBetOnServer = async (params: {
+    gameId: string;
+    gameType: 'xo' | 'whot' | 'ludo';
+    status: 'won' | 'draw' | 'declined' | 'cancelled';
+    winnerPhone?: string;
+    winnerName?: string;
+    challengerPhone: string;
+    opponentPhone?: string;
+    betAmount: number;
+    currency: CurrencyCode;
+  }): Promise<boolean> => {
+    const myPhone = currentUserRef.current?.phoneNumber || '';
+    const settleKey = getXoSettledStorageKey(myPhone);
+    if (inFlightGameSettlesRef.current.has(params.gameId)) return true;
+    inFlightGameSettlesRef.current.add(params.gameId);
+    try {
+      const resp = await fetch('/api/games/bet/settle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...params,
+          requesterPhone: myPhone || params.winnerPhone || params.challengerPhone,
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data?.success) {
+        if (data.wallet) {
+          applyAuthoritativeServerWallet(data.wallet, myPhone);
+        } else {
+          await refreshWalletFromServer();
+        }
+        if (myPhone) setXoFlag(settleKey, params.gameId);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      inFlightGameSettlesRef.current.delete(params.gameId);
+    }
   };
 
   const XO_WIN_LINES_CLIENT: number[][] = [
@@ -9197,7 +9408,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return updated;
       });
 
-      // Idempotent Wallet Settlement on Terminal States (won / draw / declined / cancelled)
+      // Authoritative Idempotent Server Wallet Settlement on Terminal States
       if (
         isParticipant &&
         incomingGame.mode === 'bet' &&
@@ -9207,79 +9418,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           incomingGame.status === 'declined' ||
           incomingGame.status === 'cancelled')
       ) {
-        const lockKey = getXoLockedStorageKey(myPhone);
         const settleKey = getXoSettledStorageKey(myPhone);
-        const wasLockedByMe = hasXoFlag(lockKey, incomingGame.id);
-        const alreadySettled = hasXoFlag(settleKey, incomingGame.id);
-
-        if (!alreadySettled && wasLockedByMe) {
-          setXoFlag(settleKey, incomingGame.id);
-          const stake = Number(incomingGame.betAmount || 0);
-          const payout = Number(incomingGame.winnerPayout || 0);
-          const fee = Number(incomingGame.platformFee || 0);
-
-          if (incomingGame.status === 'won') {
-            const iWon = phonesMatch(myPhone, incomingGame.winnerPhone);
-            const settleTx = recordLedgerTransaction(
-              iWon
-                ? {
-                    id: `tx_xo_win_${incomingGame.id}`,
-                    type: 'game_win',
-                    title: `X/O Win Payout (1% fee: ${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${fee.toLocaleString()})`,
-                    description: `Won X/O wager match`,
-                    amount: payout,
-                    fee,
-                    balanceAfter: walletRef.current.availableBalance + payout,
-                    currency: incomingGame.currency || 'NGN',
-                    referenceId: `XO_${incomingGame.id}`,
-                    channel: 'wallet',
-                  }
-                : {
-                    id: `tx_xo_loss_${incomingGame.id}`,
-                    type: 'escrow_release',
-                    title: `X/O Match Settled (${incomingGame.winnerName || 'Opponent'} won)`,
-                    description: `X/O match settled (${incomingGame.winnerName || 'Opponent'} won)`,
-                    amount: stake,
-                    fee: 0,
-                    balanceAfter: walletRef.current.availableBalance,
-                    currency: incomingGame.currency || 'NGN',
-                    referenceId: `XO_${incomingGame.id}`,
-                    channel: 'wallet',
-                  }
-            );
-            setWallet((prev) => ({
-              ...prev,
-              availableBalance: iWon ? prev.availableBalance + payout : prev.availableBalance,
-              escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - stake),
-              transactions: [settleTx, ...prev.transactions],
-            }));
-          } else {
-            // Draw, Declined, or Cancelled -> full stake refund from escrow
-            const refTx = recordLedgerTransaction({
-              id: `tx_xo_ref_${incomingGame.id}`,
-              type: 'refund',
-              title:
-                incomingGame.status === 'draw'
-                  ? 'X/O Match Draw (Stake Refunded)'
-                  : 'X/O Challenge Cancelled (Stake Refunded)',
-              description:
-                incomingGame.status === 'draw'
-                  ? 'X/O match draw stake refunded'
-                  : 'X/O challenge cancelled stake refunded',
-              amount: stake,
-              fee: 0,
-              balanceAfter: walletRef.current.availableBalance + stake,
-              currency: incomingGame.currency || 'NGN',
-              referenceId: `XO_${incomingGame.id}`,
-              channel: 'wallet',
-            });
-            setWallet((prev) => ({
-              ...prev,
-              availableBalance: prev.availableBalance + stake,
-              escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - stake),
-              transactions: [refTx, ...prev.transactions],
-            }));
-          }
+        if (!hasXoFlag(settleKey, incomingGame.id)) {
+          void settleGameBetOnServer({
+            gameId: incomingGame.id,
+            gameType: 'xo',
+            status: incomingGame.status,
+            winnerPhone: incomingGame.winnerPhone,
+            winnerName: incomingGame.winnerName,
+            challengerPhone: incomingGame.challengerPhone,
+            opponentPhone: incomingGame.opponentPhone,
+            betAmount: Number(incomingGame.betAmount || 0),
+            currency: incomingGame.currency || 'NGN',
+          });
         }
       }
     },
@@ -9365,25 +9516,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     if (mode === 'bet' && cleanBet > 0) {
-      setXoFlag(getXoLockedStorageKey(myPhone), gameId);
-      const wagerTx = recordLedgerTransaction({
-        id: `tx_xo_lock_${gameId}`,
-        type: 'game_wager',
-        title: `X/O Bet Escrow Lock (${targetChat?.name || 'Match'})`,
-        description: `X/O challenge wager (${targetChat?.name || 'Match'})`,
-        amount: cleanBet,
-        fee: 0,
-        balanceAfter: wallet.availableBalance - cleanBet,
+      const lockRes = await lockGameBetOnServer({
+        gameId,
+        gameType: 'xo',
+        role: 'challenger',
+        playerPhone: myPhone,
+        playerName: currentUser.fullName || 'AGC Player',
+        opponentPhone: opponentPhone || undefined,
+        opponentName: !targetChat?.isGroup ? targetChat?.name : undefined,
+        betAmount: cleanBet,
         currency: newGame.currency,
-        referenceId: `XO_${gameId}`,
-        channel: 'wallet',
+        title: `X/O Bet Escrow Lock (${targetChat?.name || 'Match'})`,
       });
-      setWallet((prev) => ({
-        ...prev,
-        availableBalance: prev.availableBalance - cleanBet,
-        escrowLockedBalance: prev.escrowLockedBalance + cleanBet,
-        transactions: [wagerTx, ...prev.transactions],
-      }));
+      if (!lockRes.success) {
+        return {
+          success: false,
+          insufficientFunds: lockRes.insufficientFunds,
+          message: lockRes.message || `Insufficient wallet balance for bet.`,
+        };
+      }
     }
 
     setMessages((prev) => {
@@ -9464,30 +9615,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString(),
     };
 
+    if (acceptedGame.mode === 'bet' && acceptedGame.betAmount > 0) {
+      const lockRes = await lockGameBetOnServer({
+        gameId: acceptedGame.id,
+        gameType: 'xo',
+        role: 'opponent',
+        playerPhone: myPhone,
+        playerName: currentUser.fullName || 'Player O',
+        opponentPhone: acceptedGame.challengerPhone,
+        opponentName: acceptedGame.challengerName,
+        betAmount: acceptedGame.betAmount,
+        currency: acceptedGame.currency || 'NGN',
+        title: `X/O Match Bet Stake (${acceptedGame.challengerName})`,
+      });
+      if (!lockRes.success) {
+        return {
+          success: false,
+          insufficientFunds: lockRes.insufficientFunds,
+          message: lockRes.message || 'Insufficient wallet balance to accept bet.',
+        };
+      }
+    }
+
     const persisted = await upsertXoGameInSupabase(acceptedGame);
     const finalGame = persisted.game || acceptedGame;
-
-    if (finalGame.mode === 'bet' && finalGame.betAmount > 0 && !hasXoFlag(getXoLockedStorageKey(myPhone), finalGame.id)) {
-      setXoFlag(getXoLockedStorageKey(myPhone), finalGame.id);
-      const acceptTx = recordLedgerTransaction({
-        id: `tx_xo_acc_${finalGame.id}`,
-        type: 'game_wager',
-        title: `X/O Match Bet Stake (${finalGame.challengerName})`,
-        description: `Accepted X/O wager from ${finalGame.challengerName}`,
-        amount: finalGame.betAmount,
-        fee: 0,
-        balanceAfter: wallet.availableBalance - finalGame.betAmount,
-        currency: finalGame.currency || 'NGN',
-        referenceId: `XO_${finalGame.id}`,
-        channel: 'wallet',
-      });
-      setWallet((prev) => ({
-        ...prev,
-        availableBalance: prev.availableBalance - finalGame.betAmount,
-        escrowLockedBalance: prev.escrowLockedBalance + finalGame.betAmount,
-        transactions: [acceptTx, ...prev.transactions],
-      }));
-    }
 
     applyXoGameUpdate(finalGame);
     const chatObj = chats.find((c) => c.id === finalGame.chatId);
@@ -9514,6 +9665,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       settledAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+
+    if (declinedGame.mode === 'bet' && declinedGame.betAmount > 0) {
+      await settleGameBetOnServer({
+        gameId: declinedGame.id,
+        gameType: 'xo',
+        status: declinedGame.status as 'declined' | 'cancelled',
+        challengerPhone: declinedGame.challengerPhone,
+        opponentPhone: declinedGame.opponentPhone,
+        betAmount: declinedGame.betAmount,
+        currency: declinedGame.currency || 'NGN',
+      });
+    }
 
     const persisted = await upsertXoGameInSupabase(declinedGame);
     const finalGame = persisted.game || declinedGame;
@@ -9602,6 +9765,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
+    if (
+      nextGame.mode === 'bet' &&
+      nextGame.betAmount > 0 &&
+      (nextGame.status === 'won' || nextGame.status === 'draw')
+    ) {
+      await settleGameBetOnServer({
+        gameId: nextGame.id,
+        gameType: 'xo',
+        status: nextGame.status,
+        winnerPhone: nextGame.winnerPhone,
+        winnerName: nextGame.winnerName,
+        challengerPhone: nextGame.challengerPhone,
+        opponentPhone: nextGame.opponentPhone,
+        betAmount: nextGame.betAmount,
+        currency: nextGame.currency || 'NGN',
+      });
+    }
+
     // Optimistic local update + broadcast + Supabase DB persistence
     applyXoGameUpdate(nextGame);
     const chatObj = chats.find((c) => c.id === nextGame.chatId);
@@ -9609,6 +9790,1160 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await upsertXoGameInSupabase(nextGame);
 
     return { success: true };
+  };
+
+  // ── 6c. Lightweight Whot! & Ludo Multiplayer Games + Send My Bill (Pay on Behalf) ──
+  const createWhotDeck = (): WhotCard[] => {
+    const deck: WhotCard[] = [];
+    const circleTriNums = [1, 2, 3, 4, 5, 7, 8, 10, 11, 12, 13, 14];
+    const crossSquareNums = [1, 2, 3, 5, 7, 10, 11, 13, 14];
+    const starNums = [1, 2, 3, 4, 5, 7, 8];
+    let seq = 1;
+    circleTriNums.forEach((n) => {
+      deck.push({ id: `wc_${seq++}`, shape: 'circle', number: n });
+      deck.push({ id: `wc_${seq++}`, shape: 'triangle', number: n });
+    });
+    crossSquareNums.forEach((n) => {
+      deck.push({ id: `wc_${seq++}`, shape: 'cross', number: n });
+      deck.push({ id: `wc_${seq++}`, shape: 'square', number: n });
+    });
+    starNums.forEach((n) => {
+      deck.push({ id: `wc_${seq++}`, shape: 'star', number: n });
+    });
+    for (let i = 0; i < 4; i++) {
+      deck.push({ id: `wc_${seq++}`, shape: 'whot', number: 20 });
+    }
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+  };
+
+  const broadcastGamePayload = useCallback(
+    (eventName: 'whot_game_update' | 'ludo_game_update' | 'bill_request_update', payloadData: any, chatId: string, extraPhones: string[] = []) => {
+      try {
+        const bc = new BroadcastChannel('AGC_chats_sync');
+        bc.postMessage({ type: eventName, payload: payloadData, senderId: currentUser.id });
+        bc.close();
+      } catch (_) {}
+
+      if (isSupabaseConfigured) {
+        try {
+          const getOrSub = (name: string): ReturnType<typeof supabase.channel> => {
+            const existing = inboxChannelRefsRef.current.get(name);
+            if (existing) return existing;
+            const ch = supabase.channel(name, { config: { broadcast: { self: false } } });
+            ch.subscribe();
+            inboxChannelRefsRef.current.set(name, ch);
+            return ch;
+          };
+          getOrSub(`chat_${chatId}`)
+            .send({ type: 'broadcast', event: eventName, payload: { payload: payloadData, senderId: currentUser.id } })
+            .catch(() => {});
+
+          const phoneSet = new Set<string>();
+          extraPhones.filter(Boolean).forEach((p) => {
+            const rawDigits = String(p).replace(/\D/g, '');
+            const norm = normalizePhoneDigits(String(p));
+            if (rawDigits) phoneSet.add(rawDigits);
+            if (norm) phoneSet.add(norm);
+          });
+          phoneSet.forEach((p) => {
+            getOrSub(`inbox_${p}`)
+              .send({ type: 'broadcast', event: eventName, payload: { payload: payloadData, senderId: currentUser.id } })
+              .catch(() => {});
+          });
+        } catch (_) {}
+      }
+    },
+    [currentUser.id]
+  );
+
+  const settleBetGameEscrowIfNeeded = (params: {
+    gameId: string;
+    gameType?: 'xo' | 'whot' | 'ludo';
+    label: string;
+    mode: 'friendly' | 'bet';
+    betAmount: number;
+    currency: CurrencyCode;
+    status: 'won' | 'draw' | 'declined' | 'cancelled' | 'pending' | 'active';
+    winnerPhone?: string;
+    winnerName?: string;
+    challengerPhone?: string;
+    opponentPhone?: string;
+    winnerPayout: number;
+    platformFee: number;
+    isParticipant: boolean;
+  }) => {
+    if (
+      !params.isParticipant ||
+      params.mode !== 'bet' ||
+      params.betAmount <= 0 ||
+      (params.status !== 'won' && params.status !== 'draw' && params.status !== 'declined' && params.status !== 'cancelled')
+    ) {
+      return;
+    }
+    const myPhone = currentUser.phoneNumber || '';
+    const settleKey = getXoSettledStorageKey(myPhone);
+    if (hasXoFlag(settleKey, params.gameId)) return;
+
+    void settleGameBetOnServer({
+      gameId: params.gameId,
+      gameType:
+        params.gameType ||
+        (params.label.toLowerCase().includes('ludo')
+          ? 'ludo'
+          : params.label.toLowerCase().includes('whot')
+          ? 'whot'
+          : 'xo'),
+      status: params.status,
+      winnerPhone: params.winnerPhone,
+      winnerName: params.winnerName,
+      challengerPhone: params.challengerPhone || myPhone,
+      opponentPhone: params.opponentPhone,
+      betAmount: Number(params.betAmount || 0),
+      currency: params.currency || 'NGN',
+    });
+  };
+
+  const applyWhotGameUpdate = useCallback(
+    (incomingGame: WhotGameState) => {
+      if (!incomingGame?.id || !incomingGame?.chatId) return;
+      const myPhone = currentUser.phoneNumber || '';
+      const isParticipant =
+        phonesMatch(myPhone, incomingGame.challengerPhone) ||
+        phonesMatch(myPhone, incomingGame.opponentPhone);
+
+      setMessages((prev) => {
+        let targetCid = incomingGame.chatId;
+        if (targetCid.startsWith('dm_') && myPhone) {
+          const parts = targetCid.replace('dm_', '').split('_');
+          const other = phonesMatch(parts[0], myPhone) ? parts[1] : parts[0];
+          if (other) targetCid = getDirectChatId(myPhone, other) || targetCid;
+        }
+        const resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
+        const list = prev[resolvedCid] || [];
+        const existingIdx = list.findIndex((m) => m.whotGame?.id === incomingGame.id);
+
+        let nextList: ChatMessage[];
+        if (existingIdx >= 0) {
+          const cur = list[existingIdx]?.whotGame;
+          if (cur) {
+            const curRank = getXoStatusRank(cur.status);
+            const incRank = getXoStatusRank(incomingGame.status);
+            if (incRank < curRank) return prev;
+            if (incRank === curRank && curRank === 3) return prev;
+            if (incRank === curRank && (incomingGame.moveCount || 0) < (cur.moveCount || 0)) return prev;
+            if (incRank === curRank && (incomingGame.moveCount || 0) === (cur.moveCount || 0) && (incomingGame.updatedAt || '') <= (cur.updatedAt || '')) return prev;
+          }
+          nextList = list.map((m, i) => (i === existingIdx ? { ...m, whotGame: incomingGame } : m));
+        } else {
+          const newCard: ChatMessage = {
+            id: `msg_whot_${incomingGame.id}`,
+            chatId: resolvedCid,
+            sender: phonesMatch(myPhone, incomingGame.challengerPhone) ? 'user' : 'other',
+            senderName: incomingGame.challengerName,
+            senderPhone: incomingGame.challengerPhone,
+            senderAvatar: incomingGame.challengerAvatar,
+            type: 'game_whot',
+            whotGame: incomingGame,
+            text:
+              incomingGame.mode === 'bet'
+                ? `🃏 Whot! Challenge (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
+                : '🃏 Friendly Whot! Challenge',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            status: 'delivered',
+          };
+          nextList = [...list, newCard];
+        }
+        const updated = { ...prev, [resolvedCid]: nextList };
+        try {
+          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
+      });
+
+      settleBetGameEscrowIfNeeded({
+        gameId: incomingGame.id,
+        gameType: 'whot',
+        label: 'Whot!',
+        mode: incomingGame.mode,
+        betAmount: incomingGame.betAmount,
+        currency: incomingGame.currency,
+        status: incomingGame.status,
+        winnerPhone: incomingGame.winnerPhone,
+        winnerName: incomingGame.winnerName,
+        challengerPhone: incomingGame.challengerPhone,
+        opponentPhone: incomingGame.opponentPhone,
+        winnerPayout: incomingGame.winnerPayout,
+        platformFee: incomingGame.platformFee,
+        isParticipant,
+      });
+    },
+    [currentUser.phoneNumber, CURRENCY_SYMBOLS]
+  );
+
+  const applyLudoGameUpdate = useCallback(
+    (incomingGame: LudoGameState) => {
+      if (!incomingGame?.id || !incomingGame?.chatId) return;
+      const myPhone = currentUser.phoneNumber || '';
+      const isParticipant =
+        phonesMatch(myPhone, incomingGame.challengerPhone) ||
+        phonesMatch(myPhone, incomingGame.opponentPhone);
+
+      setMessages((prev) => {
+        let targetCid = incomingGame.chatId;
+        if (targetCid.startsWith('dm_') && myPhone) {
+          const parts = targetCid.replace('dm_', '').split('_');
+          const other = phonesMatch(parts[0], myPhone) ? parts[1] : parts[0];
+          if (other) targetCid = getDirectChatId(myPhone, other) || targetCid;
+        }
+        const resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
+        const list = prev[resolvedCid] || [];
+        const existingIdx = list.findIndex((m) => m.ludoGame?.id === incomingGame.id);
+
+        let nextList: ChatMessage[];
+        if (existingIdx >= 0) {
+          const cur = list[existingIdx]?.ludoGame;
+          if (cur) {
+            const curRank = getXoStatusRank(cur.status);
+            const incRank = getXoStatusRank(incomingGame.status);
+            if (incRank < curRank) return prev;
+            if (incRank === curRank && curRank === 3) return prev;
+            if (incRank === curRank && (incomingGame.moveCount || 0) < (cur.moveCount || 0)) return prev;
+            if (incRank === curRank && (incomingGame.moveCount || 0) === (cur.moveCount || 0) && (incomingGame.updatedAt || '') <= (cur.updatedAt || '')) return prev;
+          }
+          nextList = list.map((m, i) => (i === existingIdx ? { ...m, ludoGame: incomingGame } : m));
+        } else {
+          const newCard: ChatMessage = {
+            id: `msg_ludo_${incomingGame.id}`,
+            chatId: resolvedCid,
+            sender: phonesMatch(myPhone, incomingGame.challengerPhone) ? 'user' : 'other',
+            senderName: incomingGame.challengerName,
+            senderPhone: incomingGame.challengerPhone,
+            senderAvatar: incomingGame.challengerAvatar,
+            type: 'game_ludo',
+            ludoGame: incomingGame,
+            text:
+              incomingGame.mode === 'bet'
+                ? `🎲 Ludo Challenge (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
+                : '🎲 Friendly Ludo Challenge',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            status: 'delivered',
+          };
+          nextList = [...list, newCard];
+        }
+        const updated = { ...prev, [resolvedCid]: nextList };
+        try {
+          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
+      });
+
+      settleBetGameEscrowIfNeeded({
+        gameId: incomingGame.id,
+        gameType: 'ludo',
+        label: 'Ludo',
+        mode: incomingGame.mode,
+        betAmount: incomingGame.betAmount,
+        currency: incomingGame.currency,
+        status: incomingGame.status,
+        winnerPhone: incomingGame.winnerPhone,
+        winnerName: incomingGame.winnerName,
+        challengerPhone: incomingGame.challengerPhone,
+        opponentPhone: incomingGame.opponentPhone,
+        winnerPayout: incomingGame.winnerPayout,
+        platformFee: incomingGame.platformFee,
+        isParticipant,
+      });
+    },
+    [currentUser.phoneNumber, CURRENCY_SYMBOLS]
+  );
+
+  const applyBillRequestUpdate = useCallback(
+    (incomingBill: BillRequest) => {
+      if (!incomingBill?.id || !incomingBill?.chatId) return;
+      const myPhone = currentUser.phoneNumber || '';
+      setMessages((prev) => {
+        let targetCid = incomingBill.chatId;
+        if (targetCid.startsWith('dm_') && myPhone) {
+          const parts = targetCid.replace('dm_', '').split('_');
+          const other = phonesMatch(parts[0], myPhone) ? parts[1] : parts[0];
+          if (other) targetCid = getDirectChatId(myPhone, other) || targetCid;
+        }
+        const resolvedCid = prev[targetCid] ? targetCid : (prev[incomingBill.chatId] ? incomingBill.chatId : targetCid);
+        const list = prev[resolvedCid] || [];
+        const existingIdx = list.findIndex((m) => m.billRequest?.id === incomingBill.id);
+        if (existingIdx < 0) return prev;
+        const curBill = list[existingIdx].billRequest;
+        if (curBill?.status === 'paid' && incomingBill.status !== 'paid') return prev;
+        const nextList = list.map((m, i) => (i === existingIdx ? { ...m, billRequest: incomingBill } : m));
+        const updated = { ...prev, [resolvedCid]: nextList };
+        try {
+          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
+      });
+    },
+    [currentUser.phoneNumber]
+  );
+
+  const sendWhotChallenge = async (
+    chatId: string,
+    mode: 'friendly' | 'bet',
+    betAmount: number
+  ): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: WhotGameState }> => {
+    const cleanBet = mode === 'bet' ? Math.round(Number(betAmount) || 0) : 0;
+    if (mode === 'bet' && cleanBet < 50) {
+      return { success: false, message: `Minimum bet amount is ${CURRENCY_SYMBOLS[currency || 'NGN']}50.` };
+    }
+    if (mode === 'bet' && wallet.availableBalance < cleanBet) {
+      return {
+        success: false,
+        insufficientFunds: true,
+        message: `Insufficient wallet balance for ${CURRENCY_SYMBOLS[currency || 'NGN']}${cleanBet.toLocaleString()} bet.`,
+      };
+    }
+
+    const targetChat = chats.find((c) => c.id === chatId);
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    let opponentPhone = !targetChat?.isGroup && !targetChat?.isChannel ? (targetChat?.phoneNumber || targetChat?.phone || '') : '';
+    if (!opponentPhone && chatId.startsWith('dm_')) {
+      const parts = chatId.replace('dm_', '').split('_');
+      opponentPhone = parts.find((p) => !phonesMatch(p, myPhone)) || '';
+    }
+
+    const deck = createWhotDeck();
+    const challengerHand = deck.splice(0, 5);
+    const opponentHand = deck.splice(0, 5);
+    let topIdx = deck.findIndex((c) => c.shape !== 'whot' && ![1, 2, 14].includes(c.number));
+    if (topIdx < 0) topIdx = 0;
+    const [topCard] = deck.splice(topIdx, 1);
+
+    const nowIso = new Date().toISOString();
+    const gameId = `whot_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const totalPot = mode === 'bet' ? cleanBet * 2 : 0;
+    const platformFee = mode === 'bet' ? Math.round(totalPot * 0.01) : 0;
+    const winnerPayout = totalPot - platformFee;
+
+    const newGame: WhotGameState = {
+      id: gameId,
+      chatId,
+      gameType: 'whot',
+      challengerId: currentUser.id,
+      challengerPhone: myPhone,
+      challengerName: currentUser.fullName || 'Player 1',
+      challengerAvatar: currentUser.avatarUrl,
+      opponentPhone: opponentPhone || undefined,
+      opponentName: !targetChat?.isGroup ? targetChat?.name : undefined,
+      opponentAvatar: !targetChat?.isGroup ? targetChat?.avatar : undefined,
+      mode,
+      betAmount: cleanBet,
+      currency: currency || 'NGN',
+      challengerHand,
+      opponentHand,
+      deck,
+      discardPile: [topCard],
+      topCard,
+      requestedShape: null,
+      pendingDrawCount: 0,
+      currentTurnPhone: myPhone,
+      currentTurnName: currentUser.fullName || 'Player 1',
+      moveCount: 0,
+      status: 'pending',
+      totalPot,
+      platformFeeRate: 0.01,
+      platformFee,
+      winnerPayout,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const sym = CURRENCY_SYMBOLS[newGame.currency] || '₦';
+    const cardMsg: ChatMessage = {
+      id: `msg_whot_${gameId}`,
+      chatId,
+      sender: 'user',
+      senderName: currentUser.fullName || 'AGC Player',
+      senderPhone: myPhone,
+      senderAvatar: currentUser.avatarUrl,
+      type: 'game_whot',
+      whotGame: newGame,
+      text: mode === 'bet' ? `🃏 Whot! Challenge (${sym}${cleanBet.toLocaleString()} bet)` : '🃏 Friendly Whot! Challenge',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'sent',
+    };
+
+    if (mode === 'bet' && cleanBet > 0) {
+      const lockRes = await lockGameBetOnServer({
+        gameId,
+        gameType: 'whot',
+        role: 'challenger',
+        playerPhone: myPhone,
+        playerName: currentUser.fullName || 'Player 1',
+        opponentPhone: opponentPhone || undefined,
+        opponentName: !targetChat?.isGroup ? targetChat?.name : undefined,
+        betAmount: cleanBet,
+        currency: newGame.currency,
+        title: `Whot! Bet Escrow Lock (${targetChat?.name || 'Match'})`,
+      });
+      if (!lockRes.success) {
+        return {
+          success: false,
+          insufficientFunds: lockRes.insufficientFunds,
+          message: lockRes.message || `Insufficient wallet balance for bet.`,
+        };
+      }
+    }
+
+    setMessages((prev) => {
+      const updated = { ...prev, [chatId]: [...(prev[chatId] || []), cardMsg] };
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
+      return updated;
+    });
+    setChats((prev) => {
+      const updated = prev.map((c) =>
+        c.id === chatId ? { ...c, lastMessage: cardMsg.text || '🃏 Whot! Challenge', lastMessageTime: cardMsg.timestamp } : c
+      );
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
+
+    broadcastLiveMessage(chatId, cardMsg);
+    broadcastGamePayload('whot_game_update', newGame, chatId, [myPhone, opponentPhone, ...(targetChat?.memberPhones || [])]);
+    return { success: true, game: newGame, message: 'Whot! Challenge sent!' };
+  };
+
+  const acceptWhotChallenge = async (game: WhotGameState) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (phonesMatch(myPhone, game.challengerPhone)) {
+      return { success: false, message: 'Waiting for your opponent to accept.' };
+    }
+    if (game.mode === 'bet' && game.betAmount > 0 && wallet.availableBalance < game.betAmount) {
+      const sym = CURRENCY_SYMBOLS[game.currency || 'NGN'] || '₦';
+      return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+    }
+    if (game.status !== 'pending') {
+      return { success: false, message: `Challenge is already ${game.status}.` };
+    }
+    const accepted: WhotGameState = {
+      ...game,
+      opponentPhone: myPhone,
+      opponentName: currentUser.fullName || game.opponentName || 'Player 2',
+      opponentAvatar: currentUser.avatarUrl || game.opponentAvatar,
+      status: 'active',
+      moveCount: (game.moveCount || 0) + 1,
+      lastActionNote: `${game.challengerName} starts first`,
+      updatedAt: new Date().toISOString(),
+    };
+    if (accepted.mode === 'bet' && accepted.betAmount > 0) {
+      const lockRes = await lockGameBetOnServer({
+        gameId: accepted.id,
+        gameType: 'whot',
+        role: 'opponent',
+        playerPhone: myPhone,
+        playerName: currentUser.fullName || 'Player 2',
+        opponentPhone: accepted.challengerPhone,
+        opponentName: accepted.challengerName,
+        betAmount: accepted.betAmount,
+        currency: accepted.currency || 'NGN',
+        title: `Whot! Match Bet Stake (${accepted.challengerName})`,
+      });
+      if (!lockRes.success) {
+        return {
+          success: false,
+          insufficientFunds: lockRes.insufficientFunds,
+          message: lockRes.message || 'Insufficient wallet balance to accept bet.',
+        };
+      }
+    }
+    applyWhotGameUpdate(accepted);
+    broadcastGamePayload('whot_game_update', accepted, accepted.chatId, [accepted.challengerPhone, myPhone]);
+    return { success: true, message: 'Whot! match started!' };
+  };
+
+  const declineWhotChallenge = async (game: WhotGameState) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    const closed: WhotGameState = {
+      ...game,
+      status: phonesMatch(myPhone, game.challengerPhone) ? 'cancelled' : 'declined',
+      moveCount: (game.moveCount || 0) + 1,
+      settledAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    if (closed.mode === 'bet' && closed.betAmount > 0) {
+      await settleGameBetOnServer({
+        gameId: closed.id,
+        gameType: 'whot',
+        status: closed.status as 'declined' | 'cancelled',
+        challengerPhone: closed.challengerPhone,
+        opponentPhone: closed.opponentPhone,
+        betAmount: closed.betAmount,
+        currency: closed.currency || 'NGN',
+      });
+    }
+    applyWhotGameUpdate(closed);
+    broadcastGamePayload('whot_game_update', closed, closed.chatId, [closed.challengerPhone, closed.opponentPhone || '']);
+    return { success: true };
+  };
+
+  const playWhotCard = async (game: WhotGameState, cardId: string, requestedShape?: WhotShape) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (game.status !== 'active' || !phonesMatch(myPhone, game.currentTurnPhone)) {
+      return { success: false, message: 'Not your turn.' };
+    }
+    const isChallenger = phonesMatch(myPhone, game.challengerPhone);
+    const hand = isChallenger ? [...game.challengerHand] : [...game.opponentHand];
+    const oppHand = isChallenger ? [...game.opponentHand] : [...game.challengerHand];
+    const cardIdx = hand.findIndex((c) => c.id === cardId);
+    if (cardIdx < 0) return { success: false, message: 'Card not found in hand.' };
+
+    const card = hand[cardIdx];
+    const isValid =
+      card.shape === 'whot' ||
+      card.number === 20 ||
+      (game.requestedShape ? card.shape === game.requestedShape : card.shape === game.topCard.shape || card.number === game.topCard.number);
+    if (!isValid) return { success: false, message: 'Card does not match Call Card.' };
+
+    hand.splice(cardIdx, 1);
+    let nextDeck = [...game.deck];
+    const nextDiscard = [...game.discardPile, card];
+
+    const refillIfEmpty = () => {
+      if (nextDeck.length === 0 && nextDiscard.length > 1) {
+        const keepTop = nextDiscard.pop()!;
+        nextDeck = [...nextDiscard];
+        nextDiscard.length = 0;
+        nextDiscard.push(keepTop);
+      }
+    };
+
+    const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
+    const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
+    const myName = isChallenger ? game.challengerName : game.opponentName || 'Player 2';
+
+    let nextTurnPhone = oppPhone;
+    let nextTurnName = oppName;
+    let nextRequestedShape: WhotShape | null = null;
+    let actionNote = `${myName} played ${card.shape === 'whot' ? 'WHOT 20' : `${card.number} ${card.shape}`}`;
+
+    if (hand.length === 0) {
+      const wonGame: WhotGameState = {
+        ...game,
+        challengerHand: isChallenger ? hand : oppHand,
+        opponentHand: isChallenger ? oppHand : hand,
+        deck: nextDeck,
+        discardPile: nextDiscard,
+        topCard: card,
+        requestedShape: null,
+        status: 'won',
+        winnerPhone: myPhone,
+        winnerName: myName,
+        moveCount: (game.moveCount || 0) + 1,
+        settledAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      if (wonGame.mode === 'bet' && wonGame.betAmount > 0) {
+        await settleGameBetOnServer({
+          gameId: wonGame.id,
+          gameType: 'whot',
+          status: 'won',
+          winnerPhone: wonGame.winnerPhone,
+          winnerName: wonGame.winnerName,
+          challengerPhone: wonGame.challengerPhone,
+          opponentPhone: wonGame.opponentPhone,
+          betAmount: wonGame.betAmount,
+          currency: wonGame.currency || 'NGN',
+        });
+      }
+      applyWhotGameUpdate(wonGame);
+      broadcastGamePayload('whot_game_update', wonGame, wonGame.chatId, [wonGame.challengerPhone, wonGame.opponentPhone || '']);
+      return { success: true };
+    }
+
+    if (card.shape === 'whot' || card.number === 20) {
+      nextRequestedShape = requestedShape && requestedShape !== 'whot' ? requestedShape : 'circle';
+      actionNote = `${myName} played WHOT (20) & asked for ${nextRequestedShape.toUpperCase()}`;
+    } else if (card.number === 1) {
+      // Hold On: current player goes again
+      nextTurnPhone = myPhone;
+      nextTurnName = myName;
+      actionNote = `${myName} played Hold On (1) — plays again!`;
+    } else if (card.number === 2) {
+      // Pick Two: opponent draws 2 & loses turn
+      for (let k = 0; k < 2; k++) {
+        refillIfEmpty();
+        if (nextDeck.length > 0) oppHand.push(nextDeck.shift()!);
+      }
+      nextTurnPhone = myPhone;
+      nextTurnName = myName;
+      actionNote = `${myName} played Pick 2! ${oppName} picked 2 cards`;
+    } else if (card.number === 14) {
+      // General Market: opponent draws 1 & loses turn
+      refillIfEmpty();
+      if (nextDeck.length > 0) oppHand.push(nextDeck.shift()!);
+      nextTurnPhone = myPhone;
+      nextTurnName = myName;
+      actionNote = `${myName} played General Market (14)! ${oppName} picked 1`;
+    }
+
+    const updatedGame: WhotGameState = {
+      ...game,
+      challengerHand: isChallenger ? hand : oppHand,
+      opponentHand: isChallenger ? oppHand : hand,
+      deck: nextDeck,
+      discardPile: nextDiscard,
+      topCard: card,
+      requestedShape: nextRequestedShape,
+      pendingDrawCount: 0,
+      currentTurnPhone: nextTurnPhone,
+      currentTurnName: nextTurnName,
+      lastActionNote: actionNote,
+      moveCount: (game.moveCount || 0) + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    applyWhotGameUpdate(updatedGame);
+    broadcastGamePayload('whot_game_update', updatedGame, updatedGame.chatId, [updatedGame.challengerPhone, updatedGame.opponentPhone || '']);
+    return { success: true };
+  };
+
+  const drawWhotCard = async (game: WhotGameState) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (game.status !== 'active' || !phonesMatch(myPhone, game.currentTurnPhone)) {
+      return { success: false, message: 'Not your turn.' };
+    }
+    const isChallenger = phonesMatch(myPhone, game.challengerPhone);
+    const hand = isChallenger ? [...game.challengerHand] : [...game.opponentHand];
+    const oppHand = isChallenger ? [...game.opponentHand] : [...game.challengerHand];
+    let nextDeck = [...game.deck];
+    const nextDiscard = [...game.discardPile];
+    if (nextDeck.length === 0 && nextDiscard.length > 1) {
+      const top = nextDiscard.pop()!;
+      nextDeck = [...nextDiscard];
+      nextDiscard.length = 0;
+      nextDiscard.push(top);
+    }
+    if (nextDeck.length > 0) {
+      hand.push(nextDeck.shift()!);
+    }
+    const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
+    const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
+    const myName = isChallenger ? game.challengerName : game.opponentName || 'Player 2';
+
+    const updatedGame: WhotGameState = {
+      ...game,
+      challengerHand: isChallenger ? hand : oppHand,
+      opponentHand: isChallenger ? oppHand : hand,
+      deck: nextDeck,
+      discardPile: nextDiscard,
+      currentTurnPhone: oppPhone,
+      currentTurnName: oppName,
+      lastActionNote: `${myName} went to Market`,
+      moveCount: (game.moveCount || 0) + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    applyWhotGameUpdate(updatedGame);
+    broadcastGamePayload('whot_game_update', updatedGame, updatedGame.chatId, [updatedGame.challengerPhone, updatedGame.opponentPhone || '']);
+    return { success: true };
+  };
+
+  const sendLudoChallenge = async (
+    chatId: string,
+    mode: 'friendly' | 'bet',
+    betAmount: number
+  ): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: LudoGameState }> => {
+    const cleanBet = mode === 'bet' ? Math.round(Number(betAmount) || 0) : 0;
+    if (mode === 'bet' && cleanBet < 50) {
+      return { success: false, message: `Minimum bet amount is ${CURRENCY_SYMBOLS[currency || 'NGN']}50.` };
+    }
+    if (mode === 'bet' && wallet.availableBalance < cleanBet) {
+      return {
+        success: false,
+        insufficientFunds: true,
+        message: `Insufficient wallet balance for ${CURRENCY_SYMBOLS[currency || 'NGN']}${cleanBet.toLocaleString()} bet.`,
+      };
+    }
+
+    const targetChat = chats.find((c) => c.id === chatId);
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    let opponentPhone = !targetChat?.isGroup && !targetChat?.isChannel ? (targetChat?.phoneNumber || targetChat?.phone || '') : '';
+    if (!opponentPhone && chatId.startsWith('dm_')) {
+      const parts = chatId.replace('dm_', '').split('_');
+      opponentPhone = parts.find((p) => !phonesMatch(p, myPhone)) || '';
+    }
+
+    const nowIso = new Date().toISOString();
+    const gameId = `ludo_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const totalPot = mode === 'bet' ? cleanBet * 2 : 0;
+    const platformFee = mode === 'bet' ? Math.round(totalPot * 0.01) : 0;
+    const winnerPayout = totalPot - platformFee;
+
+    const newGame: LudoGameState = {
+      id: gameId,
+      chatId,
+      gameType: 'ludo',
+      challengerId: currentUser.id,
+      challengerPhone: myPhone,
+      challengerName: currentUser.fullName || 'Purple Player',
+      challengerAvatar: currentUser.avatarUrl,
+      opponentPhone: opponentPhone || undefined,
+      opponentName: !targetChat?.isGroup ? targetChat?.name : undefined,
+      opponentAvatar: !targetChat?.isGroup ? targetChat?.avatar : undefined,
+      mode,
+      betAmount: cleanBet,
+      currency: currency || 'NGN',
+      challengerTokens: [-1, -1, -1, -1],
+      opponentTokens: [-1, -1, -1, -1],
+      diceValue: null,
+      hasRolled: false,
+      currentTurnPhone: myPhone,
+      currentTurnName: currentUser.fullName || 'Purple Player',
+      moveCount: 0,
+      status: 'pending',
+      totalPot,
+      platformFeeRate: 0.01,
+      platformFee,
+      winnerPayout,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const sym = CURRENCY_SYMBOLS[newGame.currency] || '₦';
+    const cardMsg: ChatMessage = {
+      id: `msg_ludo_${gameId}`,
+      chatId,
+      sender: 'user',
+      senderName: currentUser.fullName || 'AGC Player',
+      senderPhone: myPhone,
+      senderAvatar: currentUser.avatarUrl,
+      type: 'game_ludo',
+      ludoGame: newGame,
+      text: mode === 'bet' ? `🎲 Ludo Challenge (${sym}${cleanBet.toLocaleString()} bet)` : '🎲 Friendly Ludo Challenge',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'sent',
+    };
+
+    if (mode === 'bet' && cleanBet > 0) {
+      const lockRes = await lockGameBetOnServer({
+        gameId,
+        gameType: 'ludo',
+        role: 'challenger',
+        playerPhone: myPhone,
+        playerName: currentUser.fullName || 'Purple Player',
+        opponentPhone: opponentPhone || undefined,
+        opponentName: !targetChat?.isGroup ? targetChat?.name : undefined,
+        betAmount: cleanBet,
+        currency: newGame.currency,
+        title: `Ludo Bet Escrow Lock (${targetChat?.name || 'Match'})`,
+      });
+      if (!lockRes.success) {
+        return {
+          success: false,
+          insufficientFunds: lockRes.insufficientFunds,
+          message: lockRes.message || `Insufficient wallet balance for bet.`,
+        };
+      }
+    }
+
+    setMessages((prev) => {
+      const updated = { ...prev, [chatId]: [...(prev[chatId] || []), cardMsg] };
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
+      return updated;
+    });
+    setChats((prev) => {
+      const updated = prev.map((c) =>
+        c.id === chatId ? { ...c, lastMessage: cardMsg.text || '🎲 Ludo Challenge', lastMessageTime: cardMsg.timestamp } : c
+      );
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
+
+    broadcastLiveMessage(chatId, cardMsg);
+    broadcastGamePayload('ludo_game_update', newGame, chatId, [myPhone, opponentPhone, ...(targetChat?.memberPhones || [])]);
+    return { success: true, game: newGame, message: 'Ludo Challenge sent!' };
+  };
+
+  const acceptLudoChallenge = async (game: LudoGameState) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (phonesMatch(myPhone, game.challengerPhone)) {
+      return { success: false, message: 'Waiting for your opponent to accept.' };
+    }
+    if (game.mode === 'bet' && game.betAmount > 0 && wallet.availableBalance < game.betAmount) {
+      const sym = CURRENCY_SYMBOLS[game.currency || 'NGN'] || '₦';
+      return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+    }
+    if (game.status !== 'pending') {
+      return { success: false, message: `Challenge is already ${game.status}.` };
+    }
+    const accepted: LudoGameState = {
+      ...game,
+      opponentPhone: myPhone,
+      opponentName: currentUser.fullName || game.opponentName || 'Amber Player',
+      opponentAvatar: currentUser.avatarUrl || game.opponentAvatar,
+      status: 'active',
+      moveCount: (game.moveCount || 0) + 1,
+      lastActionNote: `${game.challengerName} rolls first`,
+      updatedAt: new Date().toISOString(),
+    };
+    if (accepted.mode === 'bet' && accepted.betAmount > 0) {
+      const lockRes = await lockGameBetOnServer({
+        gameId: accepted.id,
+        gameType: 'ludo',
+        role: 'opponent',
+        playerPhone: myPhone,
+        playerName: currentUser.fullName || 'Amber Player',
+        opponentPhone: accepted.challengerPhone,
+        opponentName: accepted.challengerName,
+        betAmount: accepted.betAmount,
+        currency: accepted.currency || 'NGN',
+        title: `Ludo Match Bet Stake (${accepted.challengerName})`,
+      });
+      if (!lockRes.success) {
+        return {
+          success: false,
+          insufficientFunds: lockRes.insufficientFunds,
+          message: lockRes.message || 'Insufficient wallet balance to accept bet.',
+        };
+      }
+    }
+    applyLudoGameUpdate(accepted);
+    broadcastGamePayload('ludo_game_update', accepted, accepted.chatId, [accepted.challengerPhone, myPhone]);
+    return { success: true, message: 'Ludo match started!' };
+  };
+
+  const declineLudoChallenge = async (game: LudoGameState) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    const closed: LudoGameState = {
+      ...game,
+      status: phonesMatch(myPhone, game.challengerPhone) ? 'cancelled' : 'declined',
+      moveCount: (game.moveCount || 0) + 1,
+      settledAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    if (closed.mode === 'bet' && closed.betAmount > 0) {
+      await settleGameBetOnServer({
+        gameId: closed.id,
+        gameType: 'ludo',
+        status: closed.status as 'declined' | 'cancelled',
+        challengerPhone: closed.challengerPhone,
+        opponentPhone: closed.opponentPhone,
+        betAmount: closed.betAmount,
+        currency: closed.currency || 'NGN',
+      });
+    }
+    applyLudoGameUpdate(closed);
+    broadcastGamePayload('ludo_game_update', closed, closed.chatId, [closed.challengerPhone, closed.opponentPhone || '']);
+    return { success: true };
+  };
+
+  const rollLudoDice = async (game: LudoGameState) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (game.status !== 'active' || !phonesMatch(myPhone, game.currentTurnPhone) || game.hasRolled) {
+      return { success: false, message: 'Cannot roll right now.' };
+    }
+    const isChallenger = phonesMatch(myPhone, game.challengerPhone);
+    const myTokens = isChallenger ? game.challengerTokens : game.opponentTokens;
+    const myName = isChallenger ? game.challengerName : game.opponentName || 'Amber Player';
+    const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
+    const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
+
+    const rolled = Math.floor(Math.random() * 6) + 1;
+    const hasLegalMove = myTokens.some((s) => (s < 0 ? rolled === 6 : s < 56 && s + rolled <= 56));
+
+    const updated: LudoGameState = hasLegalMove
+      ? {
+          ...game,
+          diceValue: rolled,
+          hasRolled: true,
+          lastActionNote: `${myName} rolled ${rolled}`,
+          moveCount: (game.moveCount || 0) + 1,
+          updatedAt: new Date().toISOString(),
+        }
+      : {
+          ...game,
+          diceValue: rolled,
+          hasRolled: false,
+          currentTurnPhone: oppPhone,
+          currentTurnName: oppName,
+          lastActionNote: `${myName} rolled ${rolled} (no valid move — turn passed)`,
+          moveCount: (game.moveCount || 0) + 1,
+          updatedAt: new Date().toISOString(),
+        };
+
+    applyLudoGameUpdate(updated);
+    broadcastGamePayload('ludo_game_update', updated, updated.chatId, [updated.challengerPhone, updated.opponentPhone || '']);
+    return { success: true };
+  };
+
+  const moveLudoToken = async (game: LudoGameState, tokenIndex: number) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (game.status !== 'active' || !phonesMatch(myPhone, game.currentTurnPhone) || !game.hasRolled || !game.diceValue) {
+      return { success: false, message: 'Roll the dice first.' };
+    }
+    const isChallenger = phonesMatch(myPhone, game.challengerPhone);
+    const myTokens = [...(isChallenger ? game.challengerTokens : game.opponentTokens)];
+    const oppTokens = [...(isChallenger ? game.opponentTokens : game.challengerTokens)];
+    const curStep = myTokens[tokenIndex];
+    const dice = game.diceValue;
+
+    if (curStep === undefined || curStep >= 56) return { success: false, message: 'Token already finished.' };
+    if (curStep < 0 && dice !== 6) return { success: false, message: 'Need a 6 to exit yard.' };
+    if (curStep >= 0 && curStep + dice > 56) return { success: false, message: 'Exact roll needed to reach home.' };
+
+    const nextStep = curStep < 0 ? 0 : curStep + dice;
+    myTokens[tokenIndex] = nextStep;
+
+    const myName = isChallenger ? game.challengerName : game.opponentName || 'Amber Player';
+    const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
+    const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
+
+    // Check capture on main 52-cell track (steps 0..50, non-safe squares)
+    let captured = false;
+    const SAFE_TRACK = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
+    if (nextStep >= 0 && nextStep <= 50) {
+      const myOffset = isChallenger ? 0 : 26;
+      const oppOffset = isChallenger ? 26 : 0;
+      const myTrackIdx = (nextStep + myOffset) % 52;
+      if (!SAFE_TRACK.has(myTrackIdx)) {
+        for (let i = 0; i < oppTokens.length; i++) {
+          const os = oppTokens[i];
+          if (os >= 0 && os <= 50 && (os + oppOffset) % 52 === myTrackIdx) {
+            oppTokens[i] = -1;
+            captured = true;
+          }
+        }
+      }
+    }
+
+    const finishedNow = myTokens.every((s) => s >= 56);
+    const keepTurn = dice === 6 || captured;
+    const updated: LudoGameState = finishedNow
+      ? {
+          ...game,
+          challengerTokens: isChallenger ? myTokens : oppTokens,
+          opponentTokens: isChallenger ? oppTokens : myTokens,
+          diceValue: null,
+          hasRolled: false,
+          status: 'won',
+          winnerPhone: myPhone,
+          winnerName: myName,
+          lastActionNote: `${myName} finished all 4 tokens!`,
+          moveCount: (game.moveCount || 0) + 1,
+          settledAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+      : {
+          ...game,
+          challengerTokens: isChallenger ? myTokens : oppTokens,
+          opponentTokens: isChallenger ? oppTokens : myTokens,
+          diceValue: null,
+          hasRolled: false,
+          currentTurnPhone: keepTurn ? myPhone : oppPhone,
+          currentTurnName: keepTurn ? myName : oppName,
+          lastActionNote: captured
+            ? `${myName} captured a piece! Bonus roll!`
+            : dice === 6
+            ? `${myName} rolled 6 — bonus roll!`
+            : `${myName} moved token #${tokenIndex + 1}`,
+          moveCount: (game.moveCount || 0) + 1,
+          updatedAt: new Date().toISOString(),
+        };
+
+    if (finishedNow && updated.mode === 'bet' && updated.betAmount > 0) {
+      await settleGameBetOnServer({
+        gameId: updated.id,
+        gameType: 'ludo',
+        status: 'won',
+        winnerPhone: updated.winnerPhone,
+        winnerName: updated.winnerName,
+        challengerPhone: updated.challengerPhone,
+        opponentPhone: updated.opponentPhone,
+        betAmount: updated.betAmount,
+        currency: updated.currency || 'NGN',
+      });
+    }
+
+    applyLudoGameUpdate(updated);
+    broadcastGamePayload('ludo_game_update', updated, updated.chatId, [updated.challengerPhone, updated.opponentPhone || '']);
+    return { success: true };
+  };
+
+  // Send My Bill (Pay on Behalf) Handlers
+  const sendBillRequest = async (params: {
+    recipientPhone: string;
+    recipientName: string;
+    recipientAvatar?: string;
+    title: string;
+    category: BillRequest['category'];
+    amount: number;
+    note?: string;
+  }): Promise<{ success: boolean; message?: string; bill?: BillRequest }> => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (!params.recipientPhone || phonesMatch(myPhone, params.recipientPhone)) {
+      return { success: false, message: 'Select a valid recipient (cannot send a bill to yourself).' };
+    }
+    const numericAmt = Math.round(Number(params.amount) || 0);
+    if (!Number.isFinite(numericAmt) || numericAmt < 50) {
+      return { success: false, message: 'Minimum bill amount is 50.' };
+    }
+
+    const dmChatId = getDirectChatId(myPhone, params.recipientPhone);
+    const nowIso = new Date().toISOString();
+    const bill: BillRequest = {
+      id: `bill_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      chatId: dmChatId,
+      title: params.title.trim(),
+      category: params.category,
+      amount: numericAmt,
+      currency: currency || 'NGN',
+      note: params.note,
+      requesterPhone: myPhone,
+      requesterName: currentUser.fullName || 'AGC User',
+      requesterAvatar: currentUser.avatarUrl,
+      recipientPhone: params.recipientPhone,
+      recipientName: params.recipientName,
+      status: 'pending',
+      createdAt: nowIso,
+    };
+
+    const sym = CURRENCY_SYMBOLS[bill.currency] || '₦';
+    const msg: ChatMessage = {
+      id: `msg_bill_${bill.id}`,
+      chatId: dmChatId,
+      sender: 'user',
+      senderName: currentUser.fullName || 'AGC User',
+      senderPhone: myPhone,
+      senderAvatar: currentUser.avatarUrl,
+      type: 'bill_request',
+      billRequest: bill,
+      text: `🧾 Bill Request: ${bill.title} (${sym}${bill.amount.toLocaleString()})`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'sent',
+    };
+
+    // Ensure DM thread exists & is selected
+    setChats((prev) => {
+      const existingIdx = prev.findIndex(
+        (c) => c.id === dmChatId || (!c.isGroup && !c.isChannel && phonesMatch(c.phone || c.phoneNumber, params.recipientPhone))
+      );
+      if (existingIdx >= 0) {
+        const updated = prev.map((c, idx) =>
+          idx === existingIdx
+            ? { ...c, id: dmChatId, lastMessage: msg.text || '🧾 Bill Request', lastMessageTime: msg.timestamp }
+            : c
+        );
+        persistPartitionedChats(updated, currentUser.phoneNumber);
+        return updated;
+      }
+      const newThread: ChatThread = {
+        id: dmChatId,
+        name: params.recipientName || params.recipientPhone,
+        avatar: params.recipientAvatar || DEFAULT_AVATAR_SVG,
+        verifiedStore: false,
+        location: 'Direct Chat',
+        unreadCount: 0,
+        lastMessage: msg.text || '🧾 Bill Request',
+        lastMessageTime: msg.timestamp,
+        catalog: [],
+        isOnline: false,
+        phone: params.recipientPhone,
+        phoneNumber: params.recipientPhone,
+      };
+      const updated = [newThread, ...prev];
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
+
+    setMessages((prev) => {
+      const updated = { ...prev, [dmChatId]: [...(prev[dmChatId] || []), msg] };
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
+      return updated;
+    });
+
+    setActiveTab('chats');
+    setActiveChatId(dmChatId);
+    broadcastLiveMessage(dmChatId, msg);
+    broadcastGamePayload('bill_request_update', bill, dmChatId, [myPhone, params.recipientPhone]);
+
+    return { success: true, bill, message: 'Bill sent!' };
+  };
+
+  const payBillOnBehalf = async (
+    bill: BillRequest,
+    channel: 'wallet' | 'paystack' = 'wallet',
+    paystackRef?: string
+  ): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }> => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (bill.status === 'paid') {
+      return { success: false, message: 'This bill has already been paid.' };
+    }
+    if (phonesMatch(myPhone, bill.requesterPhone)) {
+      return { success: false, message: 'Only the recipient can pay this bill on behalf of the requester.' };
+    }
+    if (channel === 'wallet' && wallet.availableBalance < bill.amount) {
+      const sym = CURRENCY_SYMBOLS[bill.currency || 'NGN'] || '₦';
+      return {
+        success: false,
+        insufficientFunds: true,
+        message: `Insufficient wallet balance (${sym}${wallet.availableBalance.toLocaleString()}). Top up or pay with Paystack.`,
+      };
+    }
+
+    try {
+      const resp = await fetch('/api/wallet/pay-bill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          billId: bill.id,
+          payerPhone: myPhone,
+          payerName: currentUser.fullName || 'AGC User',
+          requesterPhone: bill.requesterPhone,
+          requesterName: bill.requesterName,
+          amount: bill.amount,
+          title: bill.title,
+          category: bill.category,
+          channel,
+          paystackRef,
+        }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (resp.ok && data?.success) {
+        if (data.wallet) {
+          const nextWallet: UserWallet = {
+            availableBalance: Number(data.wallet.availableBalance) || 0,
+            escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
+            currency: data.wallet.currency || 'NGN',
+            transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+          };
+          setWallet(nextWallet);
+          walletRef.current = nextWallet;
+          persistPartitionedWallet(nextWallet, currentUser.phoneNumber);
+        }
+        const paidBill: BillRequest = {
+          ...bill,
+          status: 'paid',
+          paidByPhone: myPhone,
+          paidByName: currentUser.fullName || 'AGC User',
+          paidAt: data.paidAt || new Date().toISOString(),
+          paymentReference: data.reference,
+          paymentChannel: channel,
+        };
+        applyBillRequestUpdate(paidBill);
+        broadcastGamePayload('bill_request_update', paidBill, bill.chatId, [bill.requesterPhone, myPhone]);
+        return { success: true, message: `Paid ${bill.title} for ${bill.requesterName}!` };
+      }
+
+      if (data?.insufficientFunds) {
+        return { success: false, insufficientFunds: true, message: data.message };
+      }
+      return { success: false, message: data?.message || 'Unable to settle bill on server.' };
+    } catch (_) {
+      return { success: false, message: 'Network error while paying bill.' };
+    }
   };
 
   // 7. Ajo / Esusu Group Savings Handlers
@@ -9956,12 +11291,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
 
-    // Sync to local Express gateway
+    // Sync to local Express gateway (never trigger single-session kick during profile hydration/updates)
     try {
       fetch('/api/users/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(userWithCompactAvatar),
+        body: JSON.stringify({
+          ...userWithCompactAvatar,
+          sessionToken: safeLocalStorage.getItem('AGC_session_token') || undefined,
+          socketId: getSocket()?.id,
+          skipSessionKick: true,
+        }),
       }).catch(() => {});
     } catch (_) {}
 
@@ -9983,13 +11323,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     fullName: string,
     avatarUrl?: string,
     about?: string,
-    role?: 'user' | 'admin' | 'creator' | 'merchant'
+    role?: 'user' | 'admin' | 'creator' | 'merchant',
+    email?: string
   ) => {
     const sessionToken = `${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
     const cleanPhone = phoneNumber.replace(/\D/g, '');
     const normPhone = normalizePhoneDigits(phoneNumber);
     const last9 = (normPhone || cleanPhone).length >= 9 ? (normPhone || cleanPhone).slice(-9) : (normPhone || cleanPhone);
 
+    lastLoginAtRef.current = Date.now();
+    setIsKickedOut(false);
     safeLocalStorage.setItem('AGC_session_token', sessionToken);
 
     // Load cached/partitioned profile for this phone so custom avatars, names, about, roles & badges are never lost
@@ -10043,6 +11386,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...(partitionedCached || {}),
       id: cachedId || `usr_${normPhone || cleanPhone || Date.now()}`,
       phoneNumber,
+      email: (email && email.trim()) || partitionedCached?.email,
       fullName: chosenName,
       avatarUrl: chosenAvatar,
       about: chosenAbout,
@@ -10111,7 +11455,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 2. Register with Socket.io Gateway
     try {
-      registerSocketUser(updatedUser);
+      registerSocketUser({ ...updatedUser, sessionToken });
       const sock = getSocket();
       if (sock) {
         sock.emit('register_phone', { phone: cleanPhone, sessionToken });
@@ -10149,7 +11493,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 3. Register with local server REST API and hydrate server-side badge/role/wallet
     try {
-      const registerPayload = JSON.stringify({ ...updatedUser, sessionToken });
+      const registerPayload = JSON.stringify({
+        ...updatedUser,
+        sessionToken,
+        socketId: getSocket()?.id,
+      });
       fetch('/api/users/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -10260,15 +11608,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
 
       try {
-        const ch = supabase.channel(`phone_call_${cleanPhone}`);
-        ch.subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-            ch.send({
-              type: 'broadcast',
-              event: 'force_logout',
-              payload: { sessionToken, targetPhone: cleanPhone },
-            });
-          }
+        sendSupabaseBroadcastOnce(`phone_call_${cleanPhone}`, 'force_logout', {
+          sessionToken,
+          targetPhone: cleanPhone,
         });
       } catch (_) {}
     }
@@ -11320,200 +12662,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         registrationFeePaid: true,
       }),
     }).catch(() => {});
-  };
-
-  // 15. Instant P2P Money Transfer with Rolling 24h Daily & 7d Weekly Limits
-  const getTransferLimitsUsage = () => {
-    const dailyLimit = systemConfigRef.current?.maxDailyTransferNgn ?? 70000;
-    const weeklyLimit = systemConfigRef.current?.maxWeeklyTransferNgn ?? 900000;
-    const nowMs = Date.now();
-    const dayCutoff = nowMs - 24 * 60 * 60 * 1000;
-    const weekCutoff = nowMs - 7 * 24 * 60 * 60 * 1000;
-
-    let dailyUsed = 0;
-    let weeklyUsed = 0;
-
-    (walletRef.current?.transactions || []).forEach((tx) => {
-      if (tx.type !== 'sent' && tx.type !== 'transfer_out' && tx.type !== 'transfer_delayed') return;
-      let ts = tx.createdAt ? Date.parse(tx.createdAt) : 0;
-      if (!ts && tx.id) {
-        const matchTs = tx.id.match(/(\d{13})/);
-        if (matchTs) ts = Number(matchTs[1]);
-      }
-      if (!ts) return;
-      const amt = Number(tx.amount) || 0;
-      if (ts >= weekCutoff) weeklyUsed += amt;
-      if (ts >= dayCutoff) dailyUsed += amt;
-    });
-
-    return { dailyUsed, dailyLimit, weeklyUsed, weeklyLimit };
-  };
-
-  const sendDelayedTransfer = async (
-    recipientPhone: string,
-    recipientName: string,
-    amount: number,
-    note: string
-  ): Promise<{ success: boolean; transfer?: DelayedTransfer; message?: string }> => {
-    const minAmt = systemConfigRef.current?.minTransferAmountNgn ?? 100;
-    if (amount < minAmt) {
-      return { success: false, message: `Minimum transfer amount is ₦${minAmt.toLocaleString()}.` };
-    }
-    if (wallet.availableBalance < amount) {
-      return {
-        success: false,
-        message: `Insufficient funds. Your available balance is ${CURRENCY_SYMBOLS.NGN}${wallet.availableBalance.toLocaleString()}.`,
-      };
-    }
-
-    const { dailyUsed, dailyLimit, weeklyUsed, weeklyLimit } = getTransferLimitsUsage();
-    if (dailyLimit > 0 && dailyUsed + amount > dailyLimit) {
-      return {
-        success: false,
-        message: `Daily transfer limit of ₦${dailyLimit.toLocaleString()} exceeded. Remaining today: ₦${Math.max(0, dailyLimit - dailyUsed).toLocaleString()}.`,
-      };
-    }
-    if (weeklyLimit > 0 && weeklyUsed + amount > weeklyLimit) {
-      return {
-        success: false,
-        message: `Weekly transfer limit of ₦${weeklyLimit.toLocaleString()} exceeded. Remaining this week: ₦${Math.max(0, weeklyLimit - weeklyUsed).toLocaleString()}.`,
-      };
-    }
-
-    try {
-      let serverHandled = false;
-      let transferRef = 	rf_;
-      try {
-        const resp = await fetch('/api/wallet/transfer', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fromPhone: currentUser.phoneNumber,
-            toPhone: recipientPhone,
-            recipientName,
-            amount,
-            note: note || 'Instant Transfer via AGC Wallet',
-            clientBalance: wallet.availableBalance,
-          }),
-        });
-        const data = await resp.json().catch(() => ({}));
-        if (resp.ok && data?.success) {
-          serverHandled = true;
-          transferRef = data.reference || transferRef;
-          if (data.wallet) {
-            const nextWallet: UserWallet = {
-              availableBalance: Number(data.wallet.availableBalance) || 0,
-              escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
-              currency: data.wallet.currency || 'NGN',
-              transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
-            };
-            setWallet(nextWallet);
-            walletRef.current = nextWallet;
-            persistPartitionedWallet(nextWallet, currentUser.phoneNumber);
-          }
-        }
-      } catch (_) {}
-
-      if (!serverHandled) {
-        const refTx = recordLedgerTransaction({
-          type: 'sent',
-          title: `Instant Transfer to ${recipientName}`,
-          description: `${note ? `${note} · ` : ''}Instant transfer to ${recipientName}`,
-          amount,
-          fee: 0,
-          balanceAfter: Math.max(0, wallet.availableBalance - amount),
-          currency: 'NGN',
-          referenceId: transferRef,
-          channel: 'wallet',
-        });
-        const nextWallet: UserWallet = {
-          ...wallet,
-          availableBalance: Math.max(0, wallet.availableBalance - amount),
-          transactions: [refTx, ...wallet.transactions],
-        };
-        setWallet(nextWallet);
-        walletRef.current = nextWallet;
-        persistPartitionedWallet(nextWallet, currentUser.phoneNumber);
-      }
-
-      const instantRecord: DelayedTransfer = {
-        id: data.reference || `trf_${Date.now()}`,
-        senderId: currentUser.id,
-        senderName: currentUser.fullName,
-        recipientPhone,
-        recipientName,
-        amount,
-        currency: 'NGN',
-        note: note || 'Instant P2P Transfer',
-        delayHours: 0,
-        scheduledReleaseTime: 'Settled Instantly',
-        releaseTimestampMs: Date.now(),
-        status: 'cleared',
-        createdAt: 'Just now',
-        securityReason: 'Instant settlement protected by Daily & Weekly Transfer Limits + Security PIN.',
-      };
-
-      setDelayedTransfers((prev) => {
-        const updated = [instantRecord, ...prev];
-        localStorage.setItem('AGC_delayed_transfers', JSON.stringify(updated));
-        return updated;
-      });
-
-      return {
-        success: true,
-        transfer: instantRecord,
-        message: `₦${amount.toLocaleString()} sent instantly to ${recipientName}!`,
-      };
-    } catch (err: any) {
-      return { success: false, message: err?.message || 'Unable to reach transfer server.' };
-    }
-  };
-
-  const cancelDelayedTransfer = (transferId: string) => {
-    const target = delayedTransfers.find((t) => t.id === transferId);
-    if (!target) return { success: false, message: 'Transfer not found.' };
-    if (target.status !== 'pending_clearance') {
-      return { success: false, message: 'Instant settled transfers cannot be cancelled.' };
-    }
-
-    const refTx = recordLedgerTransaction({
-      type: 'refund',
-      title: `Cancelled Transfer Refund: ${target.recipientName}`,
-      description: `Refunded cancelled transfer to ${target.recipientName}`,
-      amount: target.amount,
-      fee: 0,
-      balanceAfter: wallet.availableBalance + target.amount,
-      currency: target.currency,
-      referenceId: `CAN_${transferId}`,
-      channel: 'wallet',
-    });
-
-    setWallet((prev) => ({
-      ...prev,
-      availableBalance: prev.availableBalance + target.amount,
-      escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - target.amount),
-      transactions: [refTx, ...prev.transactions],
-    }));
-
-    setDelayedTransfers((prev) => {
-      const updated = prev.map((t) =>
-        t.id === transferId ? { ...t, status: 'cancelled_by_sender' as const } : t
-      );
-      localStorage.setItem('AGC_delayed_transfers', JSON.stringify(updated));
-      return updated;
-    });
-
-    return {
-      success: true,
-      message: `Transfer of ₦${target.amount.toLocaleString()} cancelled. Funds returned to your available wallet immediately.`,
-    };
-  };
-
-  const fastForwardTransferRelease = (_transferId: string) => {
-    return {
-      success: false,
-      message: 'All Paystack-backed wallet transfers now settle instantly.',
-    };
   };
 
   // 16. Payroll & Recurring Auto-Debit Handlers
@@ -12677,7 +13825,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const existingIdx = list.findIndex((m) => m.id === message.id);
         if (existingIdx >= 0) {
           isDuplicateMessage = true;
-          if (message.type === 'financial_poll' || message.type === 'ajo_update' || message.type === 'game_xo') {
+          if (
+            message.type === 'financial_poll' ||
+            message.type === 'ajo_update' ||
+            message.type === 'game_xo' ||
+            message.type === 'game_whot' ||
+            message.type === 'game_ludo' ||
+            message.type === 'bill_request'
+          ) {
             const updatedList = list.map((m, idx) => {
               if (idx !== existingIdx) return m;
               let nextPoll = m.financialPoll;
@@ -12706,6 +13861,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 financialPoll: nextPoll,
                 ajoGroup: message.ajoGroup ?? m.ajoGroup,
                 xoGame: nextXo,
+                whotGame: message.whotGame ?? m.whotGame,
+                ludoGame: message.ludoGame ?? m.ludoGame,
+                billRequest: message.billRequest ?? m.billRequest,
               };
             });
             const updated = { ...prev, [resolvedChatId]: updatedList };
@@ -13125,6 +14283,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           applyXoGameUpdate(e.data.game);
           return;
         }
+        if (e.data && e.data.type === 'whot_game_update' && e.data.payload) {
+          applyWhotGameUpdate(e.data.payload);
+          return;
+        }
+        if (e.data && e.data.type === 'ludo_game_update' && e.data.payload) {
+          applyLudoGameUpdate(e.data.payload);
+          return;
+        }
+        if (e.data && e.data.type === 'bill_request_update' && e.data.payload) {
+          applyBillRequestUpdate(e.data.payload);
+          return;
+        }
         if (e.data && e.data.type === 'group_invite' && e.data.invite) {
           const myPhone = latestUser.phoneNumber?.replace(/\D/g, '') || '';
           const target = (e.data.targetPhone || e.data.invite.invitedPhone || '').replace(/\D/g, '');
@@ -13194,6 +14364,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             applyXoGameUpdate(payload.game);
           }
         })
+        .on('broadcast', { event: 'whot_game_update' }, ({ payload }: any) => {
+          if (payload?.payload) {
+            applyWhotGameUpdate(payload.payload);
+          }
+        })
+        .on('broadcast', { event: 'ludo_game_update' }, ({ payload }: any) => {
+          if (payload?.payload) {
+            applyLudoGameUpdate(payload.payload);
+          }
+        })
+        .on('broadcast', { event: 'bill_request_update' }, ({ payload }: any) => {
+          if (payload?.payload) {
+            applyBillRequestUpdate(payload.payload);
+          }
+        })
         .on('broadcast', { event: 'group_created' }, ({ payload }: any) => {
           if (payload && payload.chat) {
             handleGroupCreated(payload);
@@ -13246,6 +14431,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .on('broadcast', { event: 'xo_game_update' }, ({ payload }: any) => {
             if (payload?.game) {
               applyXoGameUpdate(payload.game);
+            }
+          })
+          .on('broadcast', { event: 'whot_game_update' }, ({ payload }: any) => {
+            if (payload?.payload) {
+              applyWhotGameUpdate(payload.payload);
+            }
+          })
+          .on('broadcast', { event: 'ludo_game_update' }, ({ payload }: any) => {
+            if (payload?.payload) {
+              applyLudoGameUpdate(payload.payload);
+            }
+          })
+          .on('broadcast', { event: 'bill_request_update' }, ({ payload }: any) => {
+            if (payload?.payload) {
+              applyBillRequestUpdate(payload.payload);
             }
           })
           .on('broadcast', { event: 'group_created' }, ({ payload }: any) => {
@@ -13734,10 +14934,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
     const onKickEvent = (payload: any) => {
-      const target = payload?.phoneOrId || payload?.phoneNumber || '';
+      const myToken = safeLocalStorage.getItem('AGC_session_token');
+      const mySockId = getSocket()?.id;
+      if (payload?.sessionToken && myToken && payload.sessionToken === myToken) return;
+      if (payload?.excludeSocketId && mySockId && payload.excludeSocketId === mySockId) return;
+      if (payload?.reason !== 'admin_kick' && Date.now() - lastLoginAtRef.current < 5000) return;
+
+      const target = payload?.phoneOrId || payload?.phoneNumber || payload?.targetPhone || '';
       if (target && (currentUser.id === target || (currentUser.phoneNumber && phonesMatch(currentUser.phoneNumber, target)))) {
         setIsKickedOut(true);
-        try { localStorage.removeItem('AGC_is_authenticated'); } catch (_) {}
+        setIsAuthenticated(false);
+        try { safeLocalStorage.setItem('AGC_is_authenticated', 'false'); } catch (_) {}
       }
     };
 
@@ -13977,6 +15184,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .on('broadcast', { event: 'xo_game_update' }, ({ payload }) => {
         if (payload?.game) {
           applyXoGameUpdate(payload.game);
+        }
+      })
+      .on('broadcast', { event: 'whot_game_update' }, ({ payload }) => {
+        if (payload?.payload) {
+          applyWhotGameUpdate(payload.payload);
+        }
+      })
+      .on('broadcast', { event: 'ludo_game_update' }, ({ payload }) => {
+        if (payload?.payload) {
+          applyLudoGameUpdate(payload.payload);
+        }
+      })
+      .on('broadcast', { event: 'bill_request_update' }, ({ payload }) => {
+        if (payload?.payload) {
+          applyBillRequestUpdate(payload.payload);
         }
       })
       .subscribe();
@@ -14287,7 +15509,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const target = msg.phoneOrId || '';
           if (target && (currentUser?.id === target || (currentUser?.phoneNumber && phonesMatch(currentUser.phoneNumber, target)))) {
             setIsKickedOut(true);
-            try { localStorage.removeItem('AGC_is_authenticated'); } catch (_) {}
+            setIsAuthenticated(false);
+            try { safeLocalStorage.setItem('AGC_is_authenticated', 'false'); } catch (_) {}
           }
         }
       };
@@ -15066,6 +16289,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         acceptXoChallenge,
         declineXoChallenge,
         makeXoMove,
+        // 6c. Live Whot! & Ludo Games
+        sendWhotChallenge,
+        acceptWhotChallenge,
+        declineWhotChallenge,
+        playWhotCard,
+        drawWhotCard,
+        sendLudoChallenge,
+        acceptLudoChallenge,
+        declineLudoChallenge,
+        rollLudoDice,
+        moveLudoToken,
         // 7. Ajo / Esusu Group Savings
         activeAjoGroup,
         setActiveAjoGroup,
@@ -15158,14 +16392,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         cancelServiceBooking,
         completeServiceBooking,
         registerAsServiceProvider,
-        // 15. Instant P2P Money Transfer with Daily & Weekly Limits
-        delayedTransfers,
-        isTransferModalOpen,
-        setIsTransferModalOpen,
-        getTransferLimitsUsage,
-        sendDelayedTransfer,
-        cancelDelayedTransfer,
-        fastForwardTransferRelease,
+        // 15. Send My Bill (Pay on Behalf)
+        isSendBillModalOpen,
+        setIsSendBillModalOpen,
+        sendBillRequest,
+        payBillOnBehalf,
         // 16. Payroll & Recurring Auto-Debit
         payrollEmployees,
         payrollLogs,

@@ -3,7 +3,6 @@ import {
   GraduationCap,
   QrCode,
   Scan,
-  MoreVertical,
   Moon,
   Sun,
   Globe,
@@ -18,7 +17,7 @@ import {
   Briefcase,
   Users,
   Lock,
-  Clock,
+  Receipt,
   Repeat,
   Wrench,
   HeartPulse,
@@ -39,6 +38,7 @@ import {
   ShoppingBag,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { NineDotsIcon } from './NineDotsIcon';
 
 interface HeaderProps {
   onOpenLanguageModal: () => void;
@@ -64,7 +64,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
     setIsContactsModalOpen,
     setIsAuthModalOpen,
     setIsServicesModalOpen,
-    setIsTransferModalOpen,
+    setIsSendBillModalOpen,
     setIsPayrollModalOpen,
     setIsScanQrModalOpen,
     setIsHealthModalOpen,
@@ -123,15 +123,15 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
     >
       <div className="flex items-center justify-between px-3.5 py-2.5">
         <div className="flex items-center gap-2.5">
-          {/* Left Three Dots / Menu */}
+          {/* Left Nine Dots Menu */}
           <div className="relative">
             <button
               type="button"
               onClick={() => setShowMenu(!showMenu)}
               className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
-              aria-label="More options"
+              aria-label="Apps and options menu"
             >
-              <MoreVertical className="w-4 h-4" />
+              <NineDotsIcon className="w-4 h-4" />
             </button>
 
             {showMenu && (
@@ -198,7 +198,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                   {(() => {
                     const allTools: { label: string; sub: string; icon: React.ElementType; action: () => void; cat: 'finance' | 'services' | 'tools'; featureKey?: string }[] = [
                       { label: 'Wallet', sub: 'Paystack & Escrow', icon: Wallet, action: () => setIsWalletModalOpen(true), cat: 'finance', featureKey: 'wallet' },
-                      { label: 'Delayed Send', sub: 'Anti-Fraud Send', icon: Clock, action: () => setIsTransferModalOpen(true), cat: 'finance', featureKey: 'delayedSend' },
+                      { label: 'Send My Bill', sub: 'Pay on Behalf', icon: Receipt, action: () => setIsSendBillModalOpen(true), cat: 'finance', featureKey: 'wallet' },
                       { label: 'Artisan Hub', sub: '₦5k · Book Skill', icon: Wrench, action: () => setIsServicesModalOpen(true), cat: 'services', featureKey: 'artisan' },
                       { label: 'Errands', sub: 'Runners & Market', icon: ShoppingBag, action: () => setIsErrandsModalOpen(true), cat: 'services', featureKey: 'errands' },
                       { label: 'AfriHealth', sub: 'Queues & Telehealth', icon: HeartPulse, action: () => setIsHealthModalOpen(true), cat: 'services', featureKey: 'healthcare' },

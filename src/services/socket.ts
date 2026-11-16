@@ -2,7 +2,7 @@ import { io, Socket } from 'socket.io-client';
 import { ChatMessage } from '../types';
 
 let socket: Socket | null = null;
-let latestSocketUser: { id: string; name: string; avatar?: string; phone?: string } | undefined;
+let latestSocketUser: { id: string; name: string; avatar?: string; phone?: string; sessionToken?: string } | undefined;
 
 // Determine backend URL (same-origin on port 3000, or explicit VITE_SOCKET_URL override)
 export const getSocketUrl = (): string => {
@@ -13,7 +13,7 @@ export const getSocketUrl = (): string => {
   return '';
 };
 
-export const initSocket = (user?: { id: string; name: string; avatar?: string; phone?: string }): Socket => {
+export const initSocket = (user?: { id: string; name: string; avatar?: string; phone?: string; sessionToken?: string }): Socket => {
   if (user && (user.id || user.phone)) {
     latestSocketUser = user;
   }
@@ -36,10 +36,14 @@ export const initSocket = (user?: { id: string; name: string; avatar?: string; p
           userName: latestSocketUser.name,
           avatar: latestSocketUser.avatar,
           phoneNumber: latestSocketUser.phone,
+          sessionToken: latestSocketUser.sessionToken,
         });
         if (latestSocketUser.phone) {
           const cleanPhone = latestSocketUser.phone.replace(/\D/g, '');
-          socket?.emit('register_phone', cleanPhone);
+          socket?.emit('register_phone', {
+            phone: cleanPhone,
+            sessionToken: latestSocketUser.sessionToken,
+          });
         }
       }
     });
@@ -60,11 +64,21 @@ export const getSocket = (): Socket | null => {
   return socket;
 };
 
-export const registerSocketUser = (user: { id: string; fullName: string; phoneNumber: string; avatarUrl?: string; about?: string; role?: string }) => {
+export const registerSocketUser = (user: { id: string; fullName: string; phoneNumber: string; avatarUrl?: string; about?: string; role?: string; sessionToken?: string }) => {
+  latestSocketUser = {
+    id: user.id,
+    name: user.fullName,
+    avatar: user.avatarUrl,
+    phone: user.phoneNumber,
+    sessionToken: user.sessionToken,
+  };
   if (socket?.connected) {
     socket.emit('register_user', user);
     if (user.phoneNumber) {
-      socket.emit('register_phone', user.phoneNumber.replace(/\D/g, ''));
+      socket.emit('register_phone', {
+        phone: user.phoneNumber.replace(/\D/g, ''),
+        sessionToken: user.sessionToken,
+      });
     }
   }
 };

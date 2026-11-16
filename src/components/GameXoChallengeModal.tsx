@@ -7,8 +7,47 @@ import {
   AlertCircle,
   Send,
   Trophy,
+  Grid3X3,
+  Layers,
+  Dices,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+
+type SelectedGameType = 'xo' | 'whot' | 'ludo';
+
+const GAME_OPTIONS: {
+  id: SelectedGameType;
+  label: string;
+  tagline: string;
+  desc: string;
+  icon: React.ElementType;
+  accent: string;
+}[] = [
+  {
+    id: 'xo',
+    label: 'X / O',
+    tagline: 'Tic-Tac-Toe',
+    desc: 'Classic 3x3 Tic-Tac-Toe live in chat. You play as X (first move) and your opponent plays as O.',
+    icon: Grid3X3,
+    accent: 'text-purple-500',
+  },
+  {
+    id: 'whot',
+    label: 'Whot!',
+    tagline: 'Nigerian Cards',
+    desc: 'Lightweight classic Whot! card game. Match shapes or numbers, drop Hold On / Pick Two / General Market & Whot 20!',
+    icon: Layers,
+    accent: 'text-amber-500',
+  },
+  {
+    id: 'ludo',
+    label: 'Ludo',
+    tagline: '2-Player Board',
+    desc: 'Fast lightweight 2-player Ludo race with 2 tokens per player, roll-6 bonus, safe stars, captures & Home finish!',
+    icon: Dices,
+    accent: 'text-emerald-500',
+  },
+];
 
 export const GameXoChallengeModal: React.FC = () => {
   const {
@@ -21,9 +60,12 @@ export const GameXoChallengeModal: React.FC = () => {
     CURRENCY_SYMBOLS,
     formatPrice,
     sendXoChallenge,
+    sendWhotChallenge,
+    sendLudoChallenge,
     setIsWalletModalOpen,
   } = useApp();
 
+  const [selectedGame, setSelectedGame] = useState<SelectedGameType>('xo');
   const [mode, setMode] = useState<'friendly' | 'bet'>('friendly');
   const [betInput, setBetInput] = useState<string>('1000');
   const [errorMsg, setErrorMsg] = useState<{ text: string; insufficient?: boolean } | null>(null);
@@ -38,6 +80,7 @@ export const GameXoChallengeModal: React.FC = () => {
   );
   const resolvedChatId = currentChat?.id || activeChatId || '';
   const sym = CURRENCY_SYMBOLS[currency || 'NGN'] || '₦';
+  const activeGameMeta = GAME_OPTIONS.find((g) => g.id === selectedGame) || GAME_OPTIONS[0];
 
   const parsedBet = mode === 'bet' ? Math.round(Number(betInput) || 0) : 0;
   const totalPot = mode === 'bet' ? parsedBet * 2 : 0;
@@ -48,7 +91,7 @@ export const GameXoChallengeModal: React.FC = () => {
     e.preventDefault();
     setErrorMsg(null);
     if (!resolvedChatId) {
-      setErrorMsg({ text: 'Open a chat before sending an X/O challenge.' });
+      setErrorMsg({ text: 'Open a chat before sending a game challenge.' });
       return;
     }
     if (mode === 'bet' && parsedBet < 50) {
@@ -65,10 +108,16 @@ export const GameXoChallengeModal: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const res = await sendXoChallenge(resolvedChatId, mode, parsedBet);
+      const res =
+        selectedGame === 'whot'
+          ? await sendWhotChallenge(resolvedChatId, mode, parsedBet)
+          : selectedGame === 'ludo'
+          ? await sendLudoChallenge(resolvedChatId, mode, parsedBet)
+          : await sendXoChallenge(resolvedChatId, mode, parsedBet);
+
       if (!res.success) {
         setErrorMsg({
-          text: res.message || 'Unable to send X/O challenge.',
+          text: res.message || `Unable to send ${activeGameMeta.label} challenge.`,
           insufficient: res.insufficientFunds,
         });
         return;
@@ -98,10 +147,10 @@ export const GameXoChallengeModal: React.FC = () => {
             </div>
             <div>
               <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100 font-display">
-                Send X/O Game Challenge
+                Send {activeGameMeta.label} Challenge
               </h3>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Tic-Tac-Toe · Live Multiplayer · vs {currentChat?.name || 'Contact'}
+                {activeGameMeta.tagline} · Live Multiplayer · vs {currentChat?.name || 'Contact'}
               </p>
             </div>
           </div>
@@ -137,6 +186,47 @@ export const GameXoChallengeModal: React.FC = () => {
               )}
             </div>
           )}
+
+          {/* Game Selector */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+              Choose Lightweight Game
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {GAME_OPTIONS.map((opt) => {
+                const IconComp = opt.icon;
+                const active = selectedGame === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedGame(opt.id);
+                      setErrorMsg(null);
+                    }}
+                    className={`p-2.5 rounded-2xl border text-left transition-all flex flex-col gap-1 ${
+                      active
+                        ? 'border-purple-600 bg-purple-50 dark:bg-purple-950/40 shadow-xs'
+                        : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 hover:bg-slate-100 dark:hover:bg-slate-900'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <IconComp className={`w-4 h-4 ${opt.accent}`} />
+                      {active && (
+                        <span className="w-2 h-2 rounded-full bg-purple-600" />
+                      )}
+                    </div>
+                    <div className="font-bold text-slate-900 dark:text-white text-xs mt-0.5">
+                      {opt.label}
+                    </div>
+                    <div className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
+                      {opt.tagline}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           {/* Mode Segmented Selector */}
           <div>
@@ -180,10 +270,10 @@ export const GameXoChallengeModal: React.FC = () => {
           {mode === 'friendly' ? (
             <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-1.5">
               <div className="font-semibold text-slate-900 dark:text-slate-100">
-                Friendly X/O Match
+                Friendly {activeGameMeta.label} Match
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                Play 3x3 Tic-Tac-Toe live in chat with zero wager. You play as <strong>X</strong> (first move) and your opponent plays as <strong>O</strong> once they accept.
+                {activeGameMeta.desc}
               </p>
             </div>
           ) : (
@@ -289,8 +379,8 @@ export const GameXoChallengeModal: React.FC = () => {
                 {isSubmitting
                   ? 'Sending Challenge...'
                   : mode === 'bet'
-                  ? `Send Bet Challenge (${sym}${parsedBet.toLocaleString()})`
-                  : 'Send Friendly X/O Challenge'}
+                  ? `Send ${activeGameMeta.label} Bet (${sym}${parsedBet.toLocaleString()})`
+                  : `Send Friendly ${activeGameMeta.label}`}
               </span>
             </button>
           </div>

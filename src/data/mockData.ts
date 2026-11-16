@@ -17,7 +17,6 @@ import {
   JobPosting,
   ServiceProvider,
   ServiceBooking,
-  DelayedTransfer,
   PayrollEmployee,
   PayrollRunLog,
   TownCommunity,
@@ -324,8 +323,6 @@ export const MOCK_JOB_POSTINGS: JobPosting[] = [];
 export const MOCK_SERVICE_PROVIDERS: ServiceProvider[] = [];
 
 export const MOCK_SERVICE_BOOKINGS: ServiceBooking[] = [];
-
-export const MOCK_DELAYED_TRANSFERS: DelayedTransfer[] = [];
 
 export const MOCK_PAYROLL_EMPLOYEES: PayrollEmployee[] = [];
 

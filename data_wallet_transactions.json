@@ -1,0 +1,90 @@
+[
+  {
+    "id": "tx_1794870357971_br",
+    "userPhone": "2349990001111",
+    "userName": "Test Payer",
+    "type": "bill_received",
+    "title": "Bill Paid by Test Requester",
+    "description": "Data Bundle settled by Test Requester",
+    "amount": 1000,
+    "fee": 0,
+    "balanceAfter": 1000,
+    "currency": "NGN",
+    "timestamp": "11:05 PM",
+    "createdAt": "2026-11-16T23:05:57.971Z",
+    "status": "completed",
+    "reference": "BILL_1794870357971_3684_R",
+    "referenceId": "BILL_1794870357971_3684",
+    "channel": "wallet",
+    "metadata": {
+      "billId": "bill_test_2",
+      "payerPhone": "2349990002222"
+    }
+  },
+  {
+    "id": "tx_1794870357971_bp",
+    "userPhone": "2349990002222",
+    "userName": "Test Requester",
+    "type": "bill_paid",
+    "title": "Paid Bill: Data Bundle (for Test Payer)",
+    "description": "Paid bill on behalf of Test Payer · Utilities",
+    "amount": 1000,
+    "fee": 0,
+    "balanceAfter": 1500,
+    "currency": "NGN",
+    "timestamp": "11:05 PM",
+    "createdAt": "2026-11-16T23:05:57.971Z",
+    "status": "completed",
+    "reference": "BILL_1794870357971_3684",
+    "referenceId": "BILL_1794870357971_3684",
+    "channel": "wallet",
+    "metadata": {
+      "billId": "bill_test_2",
+      "requesterPhone": "2349990001111"
+    }
+  },
+  {
+    "id": "tx_1794870357963_br",
+    "userPhone": "2349990002222",
+    "userName": "Test Requester",
+    "type": "bill_received",
+    "title": "Bill Paid by Test Payer",
+    "description": "School Textbooks settled by Test Payer",
+    "amount": 2500,
+    "fee": 0,
+    "balanceAfter": 2500,
+    "currency": "NGN",
+    "timestamp": "11:05 PM",
+    "createdAt": "2026-11-16T23:05:57.963Z",
+    "status": "completed",
+    "reference": "TEST_PSK_REF_1_R",
+    "referenceId": "TEST_PSK_REF_1",
+    "channel": "paystack",
+    "metadata": {
+      "billId": "bill_test_1",
+      "payerPhone": "2349990001111"
+    }
+  },
+  {
+    "id": "tx_1794870357963_bp",
+    "userPhone": "2349990001111",
+    "userName": "Test Payer",
+    "type": "bill_paid",
+    "title": "Paid Bill: School Textbooks (for Test Requester)",
+    "description": "Paid bill on behalf of Test Requester · Education",
+    "amount": 2500,
+    "fee": 0,
+    "balanceAfter": 0,
+    "currency": "NGN",
+    "timestamp": "11:05 PM",
+    "createdAt": "2026-11-16T23:05:57.963Z",
+    "status": "completed",
+    "reference": "TEST_PSK_REF_1",
+    "referenceId": "TEST_PSK_REF_1",
+    "channel": "paystack",
+    "metadata": {
+      "billId": "bill_test_1",
+      "requesterPhone": "2349990002222"
+    }
+  }
+]

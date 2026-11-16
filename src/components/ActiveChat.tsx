@@ -1,10 +1,9 @@
-﻿import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { playSwooshSound, playAnimalSound, getNotificationSound } from '../utils/soundUtils';
 import {
   ArrowLeft,
   Phone,
   Video,
-  MoreVertical,
   Paperclip,
   Smile,
   Mic,
@@ -58,6 +57,7 @@ import {
   ZoomOut,
   RotateCcw,
   CornerUpRight,
+  Receipt,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
@@ -67,6 +67,10 @@ import { ContactProfileModal } from './ContactProfileModal';
 import { compressChatMediaImage } from '../utils/imageUtils';
 import { GroupInfoModal } from './GroupInfoModal';
 import { LocationMessageBubble } from './LocationMessageBubble';
+import { NineDotsIcon } from './NineDotsIcon';
+import { WhotGameCard } from './WhotGameCard';
+import { LudoGameCard } from './LudoGameCard';
+import { openPaystackPopup } from '../services/paystack';
 
 interface ActiveChatProps {
   onOpenVoiceRecorder: () => void;
@@ -107,6 +111,10 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     declineXoChallenge,
     makeXoMove,
     setIsWalletModalOpen,
+    setIsSendBillModalOpen,
+    payBillOnBehalf,
+    securitySettings,
+    verifyPaymentPinDetailed,
     setIsAjoModalOpen,
     setActiveAjoGroup,
     joinAudioSpace,
@@ -155,6 +163,10 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [pollCardErrors, setPollCardErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
   const [xoBusyId, setXoBusyId] = useState<string | null>(null);
   const [xoErrors, setXoErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
+  const [billBusyId, setBillBusyId] = useState<string | null>(null);
+  const [billErrors, setBillErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
+  const [billPinPromptId, setBillPinPromptId] = useState<string | null>(null);
+  const [billPinInput, setBillPinInput] = useState('');
   // Message Forwarding modal state
   const [forwardingMessage, setForwardingMessage] = useState<ChatMessage | null>(null);
   const [forwardSearch, setForwardSearch] = useState('');
@@ -1099,7 +1111,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
               title="Chat Options"
               aria-label="Chat Options"
             >
-              <MoreVertical className="w-5 h-5" />
+              <NineDotsIcon className="w-5 h-5" />
             </button>
 
             {showHeaderActionsMenu && (
@@ -2557,6 +2569,227 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   );
                 })()}
 
+                {/* Live Multiplayer Whot! Card Game */}
+                {msg.type === 'game_whot' && msg.whotGame && (
+                  <div
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onMouseUp={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <WhotGameCard game={msg.whotGame} />
+                  </div>
+                )}
+
+                {/* Live Multiplayer Ludo Board Game */}
+                {msg.type === 'game_ludo' && msg.ludoGame && (
+                  <div
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onMouseUp={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <LudoGameCard game={msg.ludoGame} />
+                  </div>
+                )}
+
+                {/* Send My Bill (Pay on Behalf) Interactive Card */}
+                {msg.type === 'bill_request' && msg.billRequest && (() => {
+                  const bill = msg.billRequest!;
+                  const bCur = bill.currency || 'NGN';
+                  const isRequester = samePhone(myPhoneRaw, bill.requesterPhone);
+                  const isPaid = bill.status === 'paid';
+                  const billErr = billErrors[bill.id];
+                  const isBusy = billBusyId === bill.id;
+                  const showingPin = billPinPromptId === bill.id;
+
+                  const executeWalletBillPay = async () => {
+                    if (securitySettings?.hasPaymentPin && !showingPin) {
+                      setBillPinPromptId(bill.id);
+                      setBillPinInput('');
+                      return;
+                    }
+                    if (securitySettings?.hasPaymentPin && showingPin) {
+                      const check = verifyPaymentPinDetailed(billPinInput);
+                      if (!check.success) {
+                        setBillErrors((prev) => ({
+                          ...prev,
+                          [bill.id]: { msg: check.message || 'Incorrect payment PIN.' },
+                        }));
+                        return;
+                      }
+                    }
+
+                    setBillBusyId(bill.id);
+                    setBillErrors((prev) => {
+                      const next = { ...prev };
+                      delete next[bill.id];
+                      return next;
+                    });
+                    try {
+                      const res = await payBillOnBehalf(bill, 'wallet');
+                      if (!res.success) {
+                        setBillErrors((prev) => ({
+                          ...prev,
+                          [bill.id]: {
+                            msg: res.message || 'Could not settle bill.',
+                            insufficient: res.insufficientFunds,
+                          },
+                        }));
+                      } else {
+                        setBillPinPromptId(null);
+                        setBillPinInput('');
+                      }
+                    } finally {
+                      setBillBusyId(null);
+                    }
+                  };
+
+                  const executePaystackBillPay = () => {
+                    const userEmail =
+                      currentUser.email ||
+                      `${(currentUser.phoneNumber || '2348000000000').replace(/\D/g, '')}@agc.africa`;
+                    setBillBusyId(bill.id);
+                    openPaystackPopup({
+                      email: userEmail,
+                      amount: bill.amount,
+                      currency: 'NGN',
+                      metadata: {
+                        type: 'bill_request',
+                        billId: bill.id,
+                        requesterPhone: bill.requesterPhone,
+                      },
+                      onSuccess: async (resp: { reference: string }) => {
+                        try {
+                          const res = await payBillOnBehalf(bill, 'paystack', resp.reference);
+                          if (!res.success) {
+                            setBillErrors((prev) => ({
+                              ...prev,
+                              [bill.id]: { msg: res.message || 'Payment verification failed.' },
+                            }));
+                          }
+                        } finally {
+                          setBillBusyId(null);
+                        }
+                      },
+                      onClose: () => {
+                        setBillBusyId(null);
+                      },
+                    });
+                  };
+
+                  return (
+                    <div
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseUp={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                      className="space-y-2.5 min-w-[260px] max-w-[300px] p-1 select-none"
+                    >
+                      <div className="flex items-center justify-between gap-2 pb-2 border-b border-black/10 dark:border-white/10">
+                        <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
+                          <Receipt className="w-4 h-4 text-emerald-500 shrink-0" />
+                          <span>Send My Bill</span>
+                        </div>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-purple-500/15 text-purple-600 dark:text-purple-300">
+                          {bill.category}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-slate-100 dark:bg-[#17142b] border border-slate-200 dark:border-white/10 space-y-1">
+                        <div className="text-xs font-bold text-slate-900 dark:text-white">
+                          {bill.title}
+                        </div>
+                        <div className="text-lg font-black font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+                          {formatPrice(bill.amount, bCur)}
+                        </div>
+                        {bill.note && (
+                          <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed pt-0.5">
+                            {bill.note}
+                          </p>
+                        )}
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400 pt-1">
+                          Requested by <strong>@{bill.requesterName}</strong>
+                        </div>
+                      </div>
+
+                      {isPaid ? (
+                        <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-1.5 truncate">
+                            <CheckCircle2 className="w-4 h-4 shrink-0" />
+                            <span className="truncate">Paid by @{bill.paidByName || 'Friend'}</span>
+                          </span>
+                          <span className="font-mono text-[10px] uppercase shrink-0">Settled</span>
+                        </div>
+                      ) : isRequester ? (
+                        <div className="px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-[11px] font-medium text-center">
+                          Waiting for @{bill.recipientName} to pay on your behalf
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {showingPin && (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="password"
+                                inputMode="numeric"
+                                maxLength={4}
+                                value={billPinInput}
+                                onChange={(e) => setBillPinInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                                placeholder="4-digit PIN"
+                                className="flex-1 px-2.5 py-2 rounded-xl bg-white dark:bg-[#17142b] border border-purple-500/40 text-xs font-mono text-slate-900 dark:text-white focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setBillPinPromptId(null)}
+                                className="px-2.5 py-2 rounded-xl bg-slate-200 dark:bg-white/10 text-[11px] font-semibold text-slate-700 dark:text-slate-200"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          )}
+
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={executeWalletBillPay}
+                            className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
+                          >
+                            <Receipt className="w-3.5 h-3.5" />
+                            <span>
+                              {isBusy
+                                ? 'Paying Bill...'
+                                : showingPin
+                                ? `Confirm PIN & Pay (${formatPrice(bill.amount, bCur)})`
+                                : `Pay Bill via Wallet (${formatPrice(bill.amount, bCur)})`}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={executePaystackBillPay}
+                            className="w-full py-2 px-3 rounded-xl bg-indigo-600/15 hover:bg-indigo-600/25 border border-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-[11px] font-bold transition-colors"
+                          >
+                            Pay via Card / Bank (Paystack)
+                          </button>
+                        </div>
+                      )}
+
+                      {billErr && (
+                        <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-[11px] flex items-center justify-between gap-2">
+                          <span>{billErr.msg}</span>
+                          {billErr.insufficient && (
+                            <button
+                              type="button"
+                              onClick={() => setIsWalletModalOpen(true)}
+                              className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold shrink-0 whitespace-nowrap"
+                            >
+                              Top Up
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Ajo / Esusu Update Message */}
                 {msg.type === 'ajo_update' && msg.ajoGroup && (
                   <div className="space-y-2 min-w-[250px] p-1">
@@ -2838,7 +3071,24 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </button>
           )}
 
-          {/* Send Game: Live Supabase X/O */}
+          {/* Send My Bill (Pay on Behalf) */}
+          {isFeatureEnabled('wallet') && !currentChat.isChannel && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                setIsSendBillModalOpen(true);
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-300 flex items-center justify-center mb-1">
+                <Receipt className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight">Send My Bill</span>
+            </button>
+          )}
+
+          {/* Send Game: Live X/O, Whot!, Ludo */}
           {!currentChat.isChannel && (
             <button
               type="button"

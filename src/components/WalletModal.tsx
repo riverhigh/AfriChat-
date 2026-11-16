@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Wallet,
@@ -9,6 +9,7 @@ import {
   Building2,
   CreditCard,
   RotateCcw,
+  Receipt,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { openPaystackPopup } from '../services/paystack';
@@ -18,6 +19,7 @@ export const WalletModal: React.FC = () => {
     wallet,
     isWalletModalOpen,
     setIsWalletModalOpen,
+    setIsSendBillModalOpen,
     refreshWalletFromServer,
     topUpWallet,
     withdrawWallet,
@@ -272,6 +274,18 @@ export const WalletModal: React.FC = () => {
                     <span>Withdraw to Bank</span>
                   </button>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsWalletModalOpen(false);
+                    setIsSendBillModalOpen(true);
+                  }}
+                  className="w-full py-2 px-3 bg-white/15 hover:bg-white/25 text-white rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <Receipt className="w-3.5 h-3.5 text-emerald-300" />
+                  <span>Send My Bill (Pay on Behalf)</span>
+                </button>
               </div>
 
               {/* Recent Activity Preview */}
@@ -283,18 +297,18 @@ export const WalletModal: React.FC = () => {
                     onClick={() => setWalletTab('history')}
                     className="font-mono text-[11px] normal-case text-indigo-600 dark:text-indigo-400 font-bold hover:underline"
                   >
-                    Full Payment History â†’
+                    Full Payment History →
                   </button>
                 </div>
 
                 <div className="bg-slate-50 dark:bg-[#11101e] rounded-2xl border border-slate-200/80 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800">
                   {wallet.transactions.length === 0 ? (
                     <div className="p-6 text-center text-xs text-slate-400">
-                      No wallet activity yet. Top up or transfer funds to record transactions.
+                      No wallet activity yet. Top up, fund escrow, or pay bills to record transactions.
                     </div>
                   ) : (
                     wallet.transactions.slice(0, 5).map((tx) => {
-                      const isIncoming = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release'].includes(tx.type);
+                      const isIncoming = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release', 'bill_received'].includes(tx.type);
                       const isEscrow = tx.type === 'escrow_lock';
                       return (
                         <div key={tx.id} className="p-3 flex items-center justify-between text-xs">
@@ -360,7 +374,7 @@ export const WalletModal: React.FC = () => {
                     Payment &amp; Activity History
                   </h4>
                   <p className="text-[11px] text-slate-400">
-                    Unified immutable ledger across transfers, Paystack, stores &amp; escrow
+                    Unified immutable ledger across Paystack, escrow, bills &amp; stores
                   </p>
                 </div>
                 <button
@@ -396,7 +410,7 @@ export const WalletModal: React.FC = () => {
               </div>
 
               {(() => {
-                const incomingTypes = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release'];
+                const incomingTypes = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release', 'bill_received'];
                 const escrowTypes = ['escrow_lock'];
                 const filteredTxs = wallet.transactions.filter((tx) => {
                   if (txFilter === 'incoming') return incomingTypes.includes(tx.type);

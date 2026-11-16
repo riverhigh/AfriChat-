@@ -1,0 +1,24 @@
+[
+  {
+    "id": "ai_kb_core_agc",
+    "title": "AGC Super-App Core Capabilities",
+    "category": "Platform",
+    "topic": "Overview & Modules",
+    "sourceType": "manual",
+    "content": "AGC (All Good Connects) is an African super-messaging and social commerce platform featuring: Encrypted Chat, 24h Stories/Updates & Billboard Discovery, Marketplace Stores with Escrow Vault protection, Send My Bill (pay on behalf), In-chat Games (X/O, Whot!, and Ludo with optional Escrow Bets), Ajo/Esusu communal savings, Gokada/PickkR Dispatch, Artisan Hubs, Street Radio Audio Spaces, Town Communities, Healthcare, Legal, Job Board, and Scam Checker.",
+    "enabled": true,
+    "createdAt": "2026-11-16T23:04:01.182Z",
+    "updatedAt": "2026-11-16T23:04:01.182Z"
+  },
+  {
+    "id": "ai_kb_finance_rules",
+    "title": "AGC Wallet, Escrow, Bills & Games",
+    "category": "Finance",
+    "topic": "Escrow & Pay on Behalf",
+    "sourceType": "manual",
+    "content": "AGC does not support direct peer-to-peer Send Money transfers. Users transact safely via Escrow Trade Protection (marketplace & artisans), Send My Bill (requesting another AGC user to pay a utility, rent, school, medical, or custom bill on their behalf), Paystack wallet top-ups/withdrawals, Ajo contributions, Payroll, and in-chat X/O, Whot!, or Ludo matches (Friendly or Escrow Bet with 1% platform fee).",
+    "enabled": true,
+    "createdAt": "2026-11-16T23:04:01.182Z",
+    "updatedAt": "2026-11-16T23:04:01.182Z"
+  }
+]

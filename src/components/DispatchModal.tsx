@@ -679,7 +679,7 @@ export const DispatchModal: React.FC = () => {
                         </span>
                       </div>
                       <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-200/60 dark:border-neutral-800 text-slate-500 dark:text-neutral-400 font-mono">
-                        <span>Total: ₦{ord.totalFee.toLocaleString()}</span>
+                        <span>Total: ₦{(ord.totalFee ?? ord.estimatedFee ?? 0).toLocaleString()}</span>
                         <button
                           type="button"
                           onClick={(e) => {

@@ -36,7 +36,6 @@ import {
   CreditCard,
   Bookmark,
   Send,
-  MoreVertical,
   Bell,
   Coins,
   ChevronRight,

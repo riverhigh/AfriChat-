@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { GoogleGenAI } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -421,6 +422,7 @@ const STATUSES_FILE = path.join(__dirname, 'data_statuses.json');
 const DISPATCH_FILE = path.join(__dirname, 'data_dispatch_orders.json');
 const CONFIG_FILE = path.join(__dirname, 'data_admin_config.json');
 const CMS_FILE = path.join(__dirname, 'data_admin_cms.json');
+const AI_DATACENTER_FILE = path.join(__dirname, 'data_ai_datacenter.json');
 
 const DEFAULT_SYSTEM_CONFIG = {
   maintenanceMode: false,
@@ -432,20 +434,14 @@ const DEFAULT_SYSTEM_CONFIG = {
   escrowCommissionPercent: 1.5,
   artisanCommissionPercent: 2,
   creatorCommissionPercent: 5,
-  minTransferAmountNgn: 100,
-  maxDailyTransferNgn: 500000,
-  maxWeeklyTransferNgn: 2000000,
   sponsoredAdFeeNgn: 2500,
-  delayedSendHoldDurationMins: 15,
   lowBandwidthDefault: false,
   supportContactPhone: '+234800000000',
 };
 
 const DEFAULT_FEATURE_FLAGS = {
   wallet: true,
-  p2pTransfers: true,
   escrow: true,
-  delayedSend: true,
   securityPin: true,
   dispatch: true,
   artisan: true,
@@ -509,7 +505,7 @@ const DEFAULT_CMS_DATA = {
     {
       id: 'faq_safety',
       question: 'How do I avoid scammers on P2P payments?',
-      answer: 'Use the Scam Shield tool in the 3-dot menu before sending funds. Never release escrow funds until you inspect items physically.',
+      answer: 'Use the Scam Shield tool in the 9-dot menu before sending funds. Never release escrow funds until you inspect items physically.',
       category: 'security' as const,
       published: true,
     },
@@ -1432,12 +1428,12 @@ app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
 
 // REST: Register user
 app.post('/api/users/register', (req: Request, res: Response) => {
-  const { id, fullName, phoneNumber, avatarUrl, about, role } = req.body;
+  const { id, fullName, phoneNumber, avatarUrl, about, role, email, sessionToken, socketId, skipSessionKick } = req.body || {};
   if (!phoneNumber) {
     return res.status(400).json({ error: 'Phone number required' });
   }
-  const cleanPhone = phoneNumber.replace(/\D/g, '');
-  const existingEntry = findUserEntry(phoneNumber);
+  const cleanPhone = String(phoneNumber).replace(/\D/g, '');
+  const existingEntry = findUserEntry(String(phoneNumber));
   const existingCheck = existingEntry?.user || usersByPhone.get(cleanPhone);
   const storeKey = existingEntry?.key || cleanPhone;
 
@@ -1454,7 +1450,7 @@ app.post('/api/users/register', (req: Request, res: Response) => {
       code: 'REGISTRATIONS_DISABLED',
     });
   }
-  const user: RegisteredUser = {
+  const user: RegisteredUser & { email?: string; sessionToken?: string } = {
     ...(existingCheck || {}),
     id: existingCheck?.id || id || `usr_${Date.now()}`,
     fullName: fullName || existingCheck?.fullName || 'AGC User',
@@ -1462,6 +1458,7 @@ app.post('/api/users/register', (req: Request, res: Response) => {
     cleanPhone: existingCheck?.cleanPhone || cleanPhone,
     avatarUrl: avatarUrl || existingCheck?.avatarUrl,
     about: about || existingCheck?.about || 'Available · Using AGC',
+    ...(email ? { email: String(email).trim() } : {}),
     registeredAt: existingCheck?.registeredAt || new Date().toISOString(),
     role: existingCheck?.role || role || 'user',
     status: existingCheck?.status || 'active',
@@ -1470,28 +1467,29 @@ app.post('/api/users/register', (req: Request, res: Response) => {
     isOnline: true,
     lastSeen: 'online',
   };
+  if (sessionToken) {
+    user.sessionToken = String(sessionToken);
+  }
   usersByPhone.set(storeKey, user);
   saveUsersFile();
   console.log(`✅ [User Registered]: ${user.fullName} (${user.phoneNumber})`);
   io.emit('user_registered', user);
 
-  // 🔒 Single-session: kick any existing socket for this phone
-  const { sessionToken } = req.body;
-  const existingSocketId = phoneToSocketId.get(cleanPhone);
-  if (existingSocketId) {
+  // 🔒 Single-session: only kick an existing socket if it explicitly belongs to an OLDER sessionToken (never self-kick!)
+  const existingSocketId = phoneToSocketId.get(cleanPhone) || phoneToSocketId.get(storeKey);
+  if (!skipSessionKick && sessionToken && existingSocketId && existingSocketId !== socketId) {
     const existingSocket = io.sockets.sockets.get(existingSocketId);
-    if (existingSocket) {
+    const existingSockToken = (existingSocket as any)?._sessionToken;
+    if (existingSocket && existingSockToken && existingSockToken !== sessionToken) {
       existingSocket.emit('force_logout', {
         reason: 'new_device_login',
+        sessionToken: String(sessionToken),
+        excludeSocketId: socketId,
+        targetPhone: cleanPhone,
         message: 'Your account was opened on another device.',
       });
       existingSocket.disconnect(true);
     }
-  }
-  // Store session token for validation
-  if (sessionToken) {
-    (user as any).sessionToken = sessionToken;
-    usersByPhone.set(storeKey, user);
   }
 
   res.json({ success: true, user, alreadyRegistered: Boolean(existingCheck) });
@@ -1692,9 +1690,59 @@ app.patch('/api/users/profile', async (req: Request, res: Response) => {
   }
 });
 
-// â”€â”€ Authoritative Server Wallet Ledger & Anti-Tampering Engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Authoritative Server Wallet Ledger & Anti-Tampering Engine ──────────────
 const WALLETS_FILE = path.join(__dirname, 'data_wallets.json');
 const WALLET_LEDGER_FILE = path.join(__dirname, 'data_wallet_transactions.json');
+const GAME_ESCROWS_FILE = path.join(__dirname, 'data_game_escrows.json');
+
+interface ServerGameEscrow {
+  gameId: string;
+  gameType: 'xo' | 'whot' | 'ludo';
+  betAmount: number;
+  currency: 'NGN' | 'KES' | 'GHS' | 'ZAR';
+  challengerPhone: string;
+  challengerName?: string;
+  opponentPhone?: string;
+  opponentName?: string;
+  challengerLocked: boolean;
+  opponentLocked: boolean;
+  settled: boolean;
+  settledStatus?: 'won' | 'draw' | 'declined' | 'cancelled';
+  winnerPhone?: string;
+  winnerName?: string;
+  winnerPayout?: number;
+  platformFee?: number;
+  createdAt: string;
+  updatedAt: string;
+  settledAt?: string;
+}
+
+const serverGameEscrows = new Map<string, ServerGameEscrow>();
+try {
+  if (fs.existsSync(GAME_ESCROWS_FILE)) {
+    const rawEscrows = JSON.parse(fs.readFileSync(GAME_ESCROWS_FILE, 'utf8'));
+    if (rawEscrows && typeof rawEscrows === 'object') {
+      for (const [gid, rec] of Object.entries<any>(rawEscrows)) {
+        if (rec && typeof rec === 'object' && rec.gameId) {
+          serverGameEscrows.set(gid, rec as ServerGameEscrow);
+        }
+      }
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading server game escrows:', e);
+}
+
+function saveGameEscrowsFile() {
+  try {
+    fs.writeFileSync(
+      GAME_ESCROWS_FILE,
+      JSON.stringify(Object.fromEntries(serverGameEscrows.entries()), null, 2)
+    );
+  } catch (e) {
+    console.warn('Notice saving server game escrows:', e);
+  }
+}
 
 interface ServerWalletTx {
   id: string;
@@ -1707,7 +1755,6 @@ interface ServerWalletTx {
     | 'escrow_lock'
     | 'escrow_release'
     | 'withdrawal'
-    | 'transfer_delayed'
     | 'payroll_debit'
     | 'transfer_in'
     | 'transfer_out'
@@ -1716,6 +1763,8 @@ interface ServerWalletTx {
     | 'store_purchase'
     | 'game_wager'
     | 'game_win'
+    | 'bill_paid'
+    | 'bill_received'
     | 'ad_payment'
     | 'store_subscription'
     | 'artisan_reg'
@@ -1928,6 +1977,40 @@ async function syncVerifiedCreditToSupabase(
   } catch (_) {}
 }
 
+function emitWalletUpdateToPhone(
+  phoneOrId: string,
+  wallet: ServerWalletRecord,
+  note?: string,
+  reference?: string
+) {
+  const variants = new Set<string>(getPhoneVariants(phoneOrId));
+  if (wallet.phoneNumber) {
+    getPhoneVariants(wallet.phoneNumber).forEach((v) => variants.add(v));
+  }
+  if (wallet.phoneKey) {
+    getPhoneVariants(wallet.phoneKey).forEach((v) => variants.add(v));
+  }
+  const sentSockets = new Set<string>();
+  const payload = {
+    balance: wallet.availableBalance,
+    availableBalance: wallet.availableBalance,
+    escrowLockedBalance: wallet.escrowLockedBalance,
+    currency: wallet.currency,
+    transactions: wallet.transactions,
+    note,
+    reference,
+  };
+  for (const v of variants) {
+    const room = io.sockets.adapter.rooms.get(`phone:${v}`);
+    if (!room) continue;
+    for (const sockId of room) {
+      if (sentSockets.has(sockId)) continue;
+      sentSockets.add(sockId);
+      io.to(sockId).emit('wallet_updated', payload);
+    }
+  }
+}
+
 function creditAuthoritativeWallet(params: {
   phoneOrId: string;
   amount: number;
@@ -1985,14 +2068,7 @@ function creditAuthoritativeWallet(params: {
       ...metadata,
       verifiedBy,
     });
-    const cleanPhoneDigits = (match.user.cleanPhone || match.key).replace(/\D/g, '');
-    io.to(`phone:${cleanPhoneDigits}`).emit('wallet_updated', {
-      balance: wallet.availableBalance,
-      escrowLockedBalance: wallet.escrowLockedBalance,
-      transactions: wallet.transactions,
-      note: title,
-      reference,
-    });
+    emitWalletUpdateToPhone(match.user.phoneNumber || match.key, wallet, title, reference);
   }
 
   return { alreadyProcessed: false, wallet };
@@ -2222,8 +2298,12 @@ app.post('/api/wallet/ledger', (req: Request, res: Response) => {
       metadata: body.metadata || {},
     };
     const saved = appendUnifiedLedgerTx(tx);
-    // Keep server wallet balance snapshot aligned on recorded client debits/credits when user matches
-    if (phoneStr && typeof body.balanceAfter === 'number') {
+    const isProtectedGameTx =
+      tx.type === 'game_wager' ||
+      tx.type === 'game_win' ||
+      Boolean(tx.metadata?.gameBetEscrow);
+    // Keep server wallet balance snapshot aligned on recorded non-game client debits/credits when user matches
+    if (!isProtectedGameTx && phoneStr && typeof body.balanceAfter === 'number') {
       const w = getOrCreateServerWallet(phoneStr);
       w.availableBalance = Math.max(0, Number(body.balanceAfter));
       w.transactions = [saved, ...w.transactions.filter((t) => t.id !== saved.id)].slice(0, 100);
@@ -2232,6 +2312,7 @@ app.post('/api/wallet/ledger', (req: Request, res: Response) => {
       saveWalletsFile();
       if (match) {
         match.user.walletBalanceNgn = w.availableBalance;
+        (match.user as any).updatedAt = w.updatedAt;
         usersByPhone.set(match.key, match.user);
         saveUsersFile();
       }
@@ -2239,6 +2320,473 @@ app.post('/api/wallet/ledger', (req: Request, res: Response) => {
     res.json({ success: true, transaction: saved });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to append ledger entry' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STRICT SERVER-AUTHORITATIVE GAME BET ESCROW ENGINE (X/O, WHOT!, LUDO)
+// ═══════════════════════════════════════════════════════════════════════════════
+app.post('/api/games/bet/lock', (req: Request, res: Response) => {
+  try {
+    const {
+      gameId,
+      gameType,
+      role,
+      playerPhone,
+      playerName,
+      opponentPhone,
+      opponentName,
+      betAmount,
+      currency,
+      title,
+    } = req.body || {};
+
+    const cleanGameId = String(gameId || '').trim();
+    const cleanPlayer = String(playerPhone || '').trim();
+    const stake = Math.round(Number(betAmount) || 0);
+    const playerRole: 'challenger' | 'opponent' = role === 'opponent' ? 'opponent' : 'challenger';
+    const gType: 'xo' | 'whot' | 'ludo' =
+      gameType === 'whot' ? 'whot' : gameType === 'ludo' ? 'ludo' : 'xo';
+
+    if (!cleanGameId || !cleanPlayer || !Number.isFinite(stake) || stake < 50) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid gameId, playerPhone, and minimum stake of 50 are required.',
+      });
+    }
+
+    const existingEscrow = serverGameEscrows.get(cleanGameId);
+    if (existingEscrow?.settled) {
+      return res.status(409).json({
+        success: false,
+        alreadyClosed: true,
+        message: `Match is already ${existingEscrow.settledStatus || 'closed'}.`,
+      });
+    }
+
+    const wallet = getOrCreateServerWallet(cleanPlayer);
+
+    // Idempotent check: if this player role already locked stake for this exact match
+    if (existingEscrow) {
+      const alreadyLocked =
+        playerRole === 'challenger' ? existingEscrow.challengerLocked : existingEscrow.opponentLocked;
+      if (alreadyLocked) {
+        return res.json({
+          success: true,
+          alreadyLocked: true,
+          escrow: existingEscrow,
+          wallet: {
+            availableBalance: wallet.availableBalance,
+            escrowLockedBalance: wallet.escrowLockedBalance,
+            currency: wallet.currency,
+            transactions: wallet.transactions,
+          },
+        });
+      }
+      if (playerRole === 'opponent') {
+        const challengerKey = canonicalAdminPhoneKey(existingEscrow.challengerPhone);
+        if (challengerKey && challengerKey === wallet.phoneKey) {
+          return res.status(400).json({ success: false, message: 'Cannot accept your own bet challenge.' });
+        }
+      }
+    }
+
+    if (wallet.availableBalance < stake) {
+      return res.status(400).json({
+        success: false,
+        insufficientFunds: true,
+        availableBalance: wallet.availableBalance,
+        message: `Insufficient wallet balance (${wallet.availableBalance.toLocaleString()} available; need ${stake.toLocaleString()}).`,
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const match = findUserEntry(cleanPlayer);
+    const label = gType === 'whot' ? 'Whot!' : gType === 'ludo' ? 'Ludo' : 'X/O';
+
+    wallet.availableBalance = Math.max(0, Number(wallet.availableBalance || 0) - stake);
+    wallet.escrowLockedBalance = Math.max(0, Number(wallet.escrowLockedBalance || 0) + stake);
+    wallet.updatedAt = nowIso;
+
+    const txId = `tx_${gType}_${playerRole === 'challenger' ? 'lock' : 'acc'}_${cleanGameId}`;
+    const refId = `${gType.toUpperCase()}_${cleanGameId}`;
+    const lockTx: ServerWalletTx = {
+      id: txId,
+      userId: match?.user.id,
+      userPhone: match?.user.phoneNumber || wallet.phoneNumber || cleanPlayer,
+      userName: match?.user.fullName || String(playerName || 'AGC Player'),
+      type: 'game_wager',
+      title: String(
+        title ||
+          (playerRole === 'challenger'
+            ? `${label} Bet Escrow Lock`
+            : `${label} Match Bet Stake`)
+      ),
+      description: `${label} bet stake locked in server escrow`,
+      amount: stake,
+      fee: 0,
+      balanceAfter: wallet.availableBalance,
+      currency: (currency || wallet.currency || 'NGN') as any,
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: refId,
+      referenceId: refId,
+      channel: 'wallet',
+      metadata: { gameBetEscrow: true, gameId: cleanGameId, gameType: gType, role: playerRole },
+    };
+
+    wallet.transactions = [lockTx, ...wallet.transactions.filter((t) => t.id !== txId)].slice(0, 100);
+    serverWallets.set(wallet.phoneKey, wallet);
+    saveWalletsFile();
+    appendUnifiedLedgerTx(lockTx);
+
+    if (match) {
+      match.user.walletBalanceNgn = wallet.availableBalance;
+      (match.user as any).updatedAt = nowIso;
+      usersByPhone.set(match.key, match.user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(match.user);
+    }
+
+    const updatedEscrow: ServerGameEscrow = existingEscrow
+      ? {
+          ...existingEscrow,
+          opponentPhone:
+            playerRole === 'opponent'
+              ? cleanPlayer
+              : existingEscrow.opponentPhone || (opponentPhone ? String(opponentPhone) : undefined),
+          opponentName:
+            playerRole === 'opponent'
+              ? String(playerName || existingEscrow.opponentName || 'Opponent')
+              : existingEscrow.opponentName || (opponentName ? String(opponentName) : undefined),
+          challengerLocked: existingEscrow.challengerLocked || playerRole === 'challenger',
+          opponentLocked: existingEscrow.opponentLocked || playerRole === 'opponent',
+          updatedAt: nowIso,
+        }
+      : {
+          gameId: cleanGameId,
+          gameType: gType,
+          betAmount: stake,
+          currency: (currency || 'NGN') as any,
+          challengerPhone: playerRole === 'challenger' ? cleanPlayer : String(opponentPhone || ''),
+          challengerName: playerRole === 'challenger' ? String(playerName || 'Challenger') : undefined,
+          opponentPhone: playerRole === 'opponent' ? cleanPlayer : opponentPhone ? String(opponentPhone) : undefined,
+          opponentName: opponentName ? String(opponentName) : undefined,
+          challengerLocked: playerRole === 'challenger',
+          opponentLocked: playerRole === 'opponent',
+          settled: false,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+
+    serverGameEscrows.set(cleanGameId, updatedEscrow);
+    saveGameEscrowsFile();
+
+    emitWalletUpdateToPhone(cleanPlayer, wallet, lockTx.title, refId);
+
+    return res.json({
+      success: true,
+      escrow: updatedEscrow,
+      wallet: {
+        availableBalance: wallet.availableBalance,
+        escrowLockedBalance: wallet.escrowLockedBalance,
+        currency: wallet.currency,
+        transactions: wallet.transactions,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to lock bet escrow' });
+  }
+});
+
+app.post('/api/games/bet/settle', (req: Request, res: Response) => {
+  try {
+    const {
+      gameId,
+      gameType,
+      status,
+      winnerPhone,
+      winnerName,
+      challengerPhone,
+      opponentPhone,
+      requesterPhone,
+      betAmount,
+      currency,
+    } = req.body || {};
+
+    const cleanGameId = String(gameId || '').trim();
+    const terminalStatus = status as 'won' | 'draw' | 'declined' | 'cancelled';
+    if (
+      !cleanGameId ||
+      !['won', 'draw', 'declined', 'cancelled'].includes(terminalStatus)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid gameId and terminal status (won/draw/declined/cancelled) required.',
+      });
+    }
+
+    const existingEscrow = serverGameEscrows.get(cleanGameId);
+    const reqPhoneStr = String(requesterPhone || winnerPhone || challengerPhone || opponentPhone || '').trim();
+
+    // Idempotent guard: already settled on server -> NEVER double-settle, return requester's authoritative wallet
+    if (existingEscrow?.settled) {
+      const reqWallet = reqPhoneStr ? getOrCreateServerWallet(reqPhoneStr) : null;
+      return res.json({
+        success: true,
+        alreadySettled: true,
+        escrow: existingEscrow,
+        wallet: reqWallet
+          ? {
+              availableBalance: reqWallet.availableBalance,
+              escrowLockedBalance: reqWallet.escrowLockedBalance,
+              currency: reqWallet.currency,
+              transactions: reqWallet.transactions,
+            }
+          : undefined,
+      });
+    }
+
+    const gType: 'xo' | 'whot' | 'ludo' =
+      existingEscrow?.gameType || (gameType === 'whot' ? 'whot' : gameType === 'ludo' ? 'ludo' : 'xo');
+    const label = gType === 'whot' ? 'Whot!' : gType === 'ludo' ? 'Ludo' : 'X/O';
+    const stake = Math.round(Number(existingEscrow?.betAmount || betAmount || 0));
+    const cur = (existingEscrow?.currency || currency || 'NGN') as 'NGN' | 'KES' | 'GHS' | 'ZAR';
+    const chalPhone = String(existingEscrow?.challengerPhone || challengerPhone || '').trim();
+    const oppPhone = String(existingEscrow?.opponentPhone || opponentPhone || '').trim();
+
+    if (stake <= 0 || !chalPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot settle bet escrow: missing bet stake or challenger details.',
+      });
+    }
+
+    const chalKey = canonicalAdminPhoneKey(chalPhone);
+    const oppKey = oppPhone ? canonicalAdminPhoneKey(oppPhone) : '';
+    const chalLocked = existingEscrow ? existingEscrow.challengerLocked : false;
+    const oppLocked = existingEscrow ? existingEscrow.opponentLocked : false;
+
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const refId = `${gType.toUpperCase()}_${cleanGameId}`;
+    const touchedPhones: { phone: string; wallet: ServerWalletRecord; note: string }[] = [];
+
+    const syncMatchedUserBalance = (phoneStr: string, wallet: ServerWalletRecord) => {
+      const m = findUserEntry(phoneStr);
+      if (m) {
+        m.user.walletBalanceNgn = wallet.availableBalance;
+        (m.user as any).updatedAt = nowIso;
+        usersByPhone.set(m.key, m.user);
+        pushAdminUserOverrideToSupabase(m.user);
+      }
+      return m;
+    };
+
+    let settledWinnerPayout = 0;
+    let settledPlatformFee = 0;
+
+    if (terminalStatus === 'won') {
+      const cleanWinPhone = String(winnerPhone || '').trim();
+      const winKey = canonicalAdminPhoneKey(cleanWinPhone);
+      if (!winKey || (winKey !== chalKey && winKey !== oppKey)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Winner must match challenger or opponent of this wager.',
+        });
+      }
+
+      const loserPhone = winKey === chalKey ? oppPhone : chalPhone;
+      const winnerHadLocked = winKey === chalKey ? chalLocked : oppLocked;
+      const loserHadLocked = winKey === chalKey ? oppLocked : chalLocked;
+
+      // Pot strictly comes from actual locked stakes
+      const totalPot = (winnerHadLocked ? stake : 0) + (loserHadLocked ? stake : 0);
+      settledPlatformFee = Math.round(totalPot * 0.01);
+      settledWinnerPayout = Math.max(0, totalPot - settledPlatformFee);
+
+      const winnerWallet = getOrCreateServerWallet(cleanWinPhone);
+      const winnerMatch = findUserEntry(cleanWinPhone);
+      if (winnerHadLocked) {
+        winnerWallet.escrowLockedBalance = Math.max(
+          0,
+          Number(winnerWallet.escrowLockedBalance || 0) - stake
+        );
+      }
+      winnerWallet.availableBalance = Math.max(
+        0,
+        Number(winnerWallet.availableBalance || 0) + settledWinnerPayout
+      );
+      winnerWallet.updatedAt = nowIso;
+
+      const winTxId = `tx_${gType}_win_${cleanGameId}`;
+      const winTx: ServerWalletTx = {
+        id: winTxId,
+        userId: winnerMatch?.user.id,
+        userPhone: winnerMatch?.user.phoneNumber || winnerWallet.phoneNumber || cleanWinPhone,
+        userName: winnerMatch?.user.fullName || String(winnerName || 'Winner'),
+        type: 'game_win',
+        title: `${label} Win Payout (1% fee: ${settledPlatformFee.toLocaleString()})`,
+        description: `Won ${label} bet match`,
+        amount: settledWinnerPayout,
+        fee: settledPlatformFee,
+        balanceAfter: winnerWallet.availableBalance,
+        currency: cur,
+        timestamp: nowStr,
+        createdAt: nowIso,
+        status: 'completed',
+        reference: refId,
+        referenceId: refId,
+        channel: 'wallet',
+        metadata: { gameBetEscrow: true, gameId: cleanGameId, gameType: gType, outcome: 'won' },
+      };
+      winnerWallet.transactions = [
+        winTx,
+        ...winnerWallet.transactions.filter((t) => t.id !== winTxId),
+      ].slice(0, 100);
+      serverWallets.set(winnerWallet.phoneKey, winnerWallet);
+      appendUnifiedLedgerTx(winTx);
+      syncMatchedUserBalance(cleanWinPhone, winnerWallet);
+      touchedPhones.push({ phone: cleanWinPhone, wallet: winnerWallet, note: winTx.title });
+
+      if (loserPhone && canonicalAdminPhoneKey(loserPhone) !== winnerWallet.phoneKey) {
+        const loserWallet = getOrCreateServerWallet(loserPhone);
+        const loserMatch = findUserEntry(loserPhone);
+        if (loserHadLocked) {
+          loserWallet.escrowLockedBalance = Math.max(
+            0,
+            Number(loserWallet.escrowLockedBalance || 0) - stake
+          );
+        }
+        // STRICT LOSS RULE: Loser's availableBalance is NEVER restored!
+        loserWallet.updatedAt = nowIso;
+
+        const lossTxId = `tx_${gType}_loss_${cleanGameId}`;
+        const lossTx: ServerWalletTx = {
+          id: lossTxId,
+          userId: loserMatch?.user.id,
+          userPhone: loserMatch?.user.phoneNumber || loserWallet.phoneNumber || loserPhone,
+          userName: loserMatch?.user.fullName || 'Opponent',
+          type: 'escrow_release',
+          title: `${label} Bet Lost (${winnerName || winnerMatch?.user.fullName || 'Opponent'} won)`,
+          description: `${label} wager permanently forfeited upon loss`,
+          amount: stake,
+          fee: 0,
+          balanceAfter: loserWallet.availableBalance,
+          currency: cur,
+          timestamp: nowStr,
+          createdAt: nowIso,
+          status: 'completed',
+          reference: refId,
+          referenceId: refId,
+          channel: 'wallet',
+          metadata: { gameBetEscrow: true, gameId: cleanGameId, gameType: gType, outcome: 'lost' },
+        };
+        loserWallet.transactions = [
+          lossTx,
+          ...loserWallet.transactions.filter((t) => t.id !== lossTxId),
+        ].slice(0, 100);
+        serverWallets.set(loserWallet.phoneKey, loserWallet);
+        appendUnifiedLedgerTx(lossTx);
+        syncMatchedUserBalance(loserPhone, loserWallet);
+        touchedPhones.push({ phone: loserPhone, wallet: loserWallet, note: lossTx.title });
+      }
+    } else {
+      // Draw, Declined, Cancelled -> strictly refund ONLY locked stakes
+      const refundParty = (partyPhone: string, tag: 'c' | 'o') => {
+        const w = getOrCreateServerWallet(partyPhone);
+        const m = findUserEntry(partyPhone);
+        w.escrowLockedBalance = Math.max(0, Number(w.escrowLockedBalance || 0) - stake);
+        w.availableBalance = Math.max(0, Number(w.availableBalance || 0) + stake);
+        w.updatedAt = nowIso;
+        const refTxId = `tx_${gType}_ref_${tag}_${cleanGameId}`;
+        const refTx: ServerWalletTx = {
+          id: refTxId,
+          userId: m?.user.id,
+          userPhone: m?.user.phoneNumber || w.phoneNumber || partyPhone,
+          userName: m?.user.fullName || 'AGC Player',
+          type: 'refund',
+          title:
+            terminalStatus === 'draw'
+              ? `${label} Match Draw (Stake Refunded)`
+              : `${label} Challenge Closed (Stake Refunded)`,
+          description: `${label} stake returned from escrow`,
+          amount: stake,
+          fee: 0,
+          balanceAfter: w.availableBalance,
+          currency: cur,
+          timestamp: nowStr,
+          createdAt: nowIso,
+          status: 'completed',
+          reference: refId,
+          referenceId: refId,
+          channel: 'wallet',
+          metadata: { gameBetEscrow: true, gameId: cleanGameId, gameType: gType, outcome: terminalStatus },
+        };
+        w.transactions = [refTx, ...w.transactions.filter((t) => t.id !== refTxId)].slice(0, 100);
+        serverWallets.set(w.phoneKey, w);
+        appendUnifiedLedgerTx(refTx);
+        syncMatchedUserBalance(partyPhone, w);
+        touchedPhones.push({ phone: partyPhone, wallet: w, note: refTx.title });
+      };
+
+      if (chalLocked && chalPhone) {
+        refundParty(chalPhone, 'c');
+      }
+      if (oppLocked && oppPhone && oppKey !== chalKey) {
+        refundParty(oppPhone, 'o');
+      }
+    }
+
+    const finalEscrow: ServerGameEscrow = {
+      gameId: cleanGameId,
+      gameType: gType,
+      betAmount: stake,
+      currency: cur,
+      challengerPhone: chalPhone,
+      challengerName: existingEscrow?.challengerName,
+      opponentPhone: oppPhone || existingEscrow?.opponentPhone,
+      opponentName: existingEscrow?.opponentName,
+      challengerLocked: chalLocked,
+      opponentLocked: oppLocked,
+      settled: true,
+      settledStatus: terminalStatus,
+      winnerPhone: terminalStatus === 'won' ? String(winnerPhone || '') : undefined,
+      winnerName: terminalStatus === 'won' ? String(winnerName || '') : undefined,
+      winnerPayout: settledWinnerPayout,
+      platformFee: settledPlatformFee,
+      createdAt: existingEscrow?.createdAt || nowIso,
+      updatedAt: nowIso,
+      settledAt: nowIso,
+    };
+
+    serverGameEscrows.set(cleanGameId, finalEscrow);
+    saveWalletsFile();
+    saveUsersFile();
+    saveGameEscrowsFile();
+
+    // Broadcast authoritative wallet updates to BOTH players in real-time
+    for (const entry of touchedPhones) {
+      emitWalletUpdateToPhone(entry.phone, entry.wallet, entry.note, refId);
+    }
+
+    const reqWallet = reqPhoneStr ? getOrCreateServerWallet(reqPhoneStr) : touchedPhones[0]?.wallet;
+    return res.json({
+      success: true,
+      escrow: finalEscrow,
+      wallet: reqWallet
+        ? {
+            availableBalance: reqWallet.availableBalance,
+            escrowLockedBalance: reqWallet.escrowLockedBalance,
+            currency: reqWallet.currency,
+            transactions: reqWallet.transactions,
+          }
+        : undefined,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to settle bet escrow' });
   }
 });
 
@@ -2259,157 +2807,504 @@ app.get('/api/admin/wallet-transactions', (req: Request, res: Response) => {
   res.json({ success: true, transactions: rows.slice(0, 500), total: rows.length });
 });
 
-// REST: Server-validated atomic INSTANT P2P transfer with Daily & Weekly Limits
-app.post('/api/wallet/transfer', (req: Request, res: Response) => {
-  const { fromPhone, toPhone, recipientName, amount, note } = req.body || {};
-  const numericAmt = Number(amount);
-  if (!fromPhone || !toPhone || !Number.isFinite(numericAmt) || numericAmt <= 0) {
-    return res.status(400).json({ success: false, message: 'Valid sender, recipient, and positive amount required.' });
-  }
-  const minAmt = systemConfig.minTransferAmountNgn ?? 100;
-  if (numericAmt < minAmt) {
-    return res.status(400).json({ success: false, message: `Minimum transfer amount is ₦${minAmt.toLocaleString()}.` });
-  }
+// REST: Atomic Send My Bill (Pay on Behalf) Settlement
+app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
+  const {
+    billId,
+    payerPhone,
+    payerName,
+    requesterPhone,
+    requesterName,
+    amount,
+    title,
+    category,
+    channel,
+    paystackRef,
+  } = req.body || {};
 
-  const senderWallet = getOrCreateServerWallet(String(fromPhone));
-  const recipientWallet = getOrCreateServerWallet(String(toPhone));
-  if (senderWallet.phoneKey === recipientWallet.phoneKey) {
-    return res.status(400).json({ success: false, message: 'Cannot transfer to your own wallet.' });
-  }
-
-  // Enforce rolling 24h Daily & 7d Weekly transfer limits
-  const nowMs = Date.now();
-  const dayCutoff = nowMs - 24 * 60 * 60 * 1000;
-  const weekCutoff = nowMs - 7 * 24 * 60 * 60 * 1000;
-  const senderDigits = senderWallet.phoneKey.replace(/\D/g, '').slice(-9);
-  const outgoingTransfers = unifiedLedger.filter((tx) => {
-    const txDigits = (tx.userPhone || '').replace(/\D/g, '').slice(-9);
-    return (
-      txDigits === senderDigits &&
-      (tx.type === 'sent' || tx.type === 'transfer_out' || tx.type === 'transfer_delayed')
-    );
-  });
-  const dailyUsed = outgoingTransfers
-    .filter((tx) => new Date(tx.createdAt || 0).getTime() >= dayCutoff)
-    .reduce((acc, tx) => acc + (Number(tx.amount) || 0), 0);
-  const weeklyUsed = outgoingTransfers
-    .filter((tx) => new Date(tx.createdAt || 0).getTime() >= weekCutoff)
-    .reduce((acc, tx) => acc + (Number(tx.amount) || 0), 0);
-
-  const maxDaily = systemConfig.maxDailyTransferNgn ?? 70000;
-  const maxWeekly = (systemConfig as any).maxWeeklyTransferNgn ?? 900000;
-  if (maxDaily > 0 && dailyUsed + numericAmt > maxDaily) {
-    const remainingDaily = Math.max(0, maxDaily - dailyUsed);
+  const numericAmt = Math.round(Number(amount) || 0);
+  if (!payerPhone || !requesterPhone || !Number.isFinite(numericAmt) || numericAmt < 50) {
     return res.status(400).json({
       success: false,
-      message: `Daily transfer limit of ₦${maxDaily.toLocaleString()} exceeded. Remaining today: ₦${remainingDaily.toLocaleString()}.`,
-    });
-  }
-  if (maxWeekly > 0 && weeklyUsed + numericAmt > maxWeekly) {
-    const remainingWeekly = Math.max(0, maxWeekly - weeklyUsed);
-    return res.status(400).json({
-      success: false,
-      message: `Weekly transfer limit of ₦${maxWeekly.toLocaleString()} exceeded. Remaining this week: ₦${remainingWeekly.toLocaleString()}.`,
+      message: 'Valid payer, requester, and bill amount (min 50) required.',
     });
   }
 
-  // Fallback sync check if client already funded locally
-  const senderMatch = findUserEntry(String(fromPhone));
-  const recipientMatch = findUserEntry(String(toPhone));
-  if (numericAmt > senderWallet.availableBalance) {
+  const payerWallet = getOrCreateServerWallet(String(payerPhone));
+  const requesterWallet = getOrCreateServerWallet(String(requesterPhone));
+  if (payerWallet.phoneKey === requesterWallet.phoneKey) {
+    return res.status(400).json({ success: false, message: 'Cannot pay your own bill.' });
+  }
+
+  const payChannel: 'wallet' | 'paystack' = channel === 'paystack' ? 'paystack' : 'wallet';
+  if (payChannel === 'wallet' && payerWallet.availableBalance < numericAmt) {
     return res.status(400).json({
       success: false,
-      message: 'Insufficient verified server balance.',
-      availableBalance: senderWallet.availableBalance,
+      insufficientFunds: true,
+      message: `Insufficient wallet balance. Need ${numericAmt.toLocaleString()} to pay this bill.`,
+      availableBalance: payerWallet.availableBalance,
     });
   }
 
-  const ref = `TRF_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+  const payerMatch = findUserEntry(String(payerPhone));
+  const reqMatch = findUserEntry(String(requesterPhone));
+  const ref = String(paystackRef || `BILL_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`);
   const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const nowIso = new Date().toISOString();
 
-  senderWallet.availableBalance -= numericAmt;
-  senderWallet.updatedAt = nowIso;
-  const senderTx: ServerWalletTx = {
-    id: `tx_${Date.now()}_out`,
-    userId: senderMatch?.user.id,
-    userPhone: senderMatch?.user.phoneNumber || String(fromPhone),
-    userName: senderMatch?.user.fullName || 'Sender',
-    type: 'sent',
-    title: `Instant Transfer to ${recipientName || recipientMatch?.user.fullName || toPhone}`,
-    description: `${note ? `${note} · ` : ''}Instant transfer to ${recipientName || toPhone}`,
+  if (payChannel === 'wallet') {
+    payerWallet.availableBalance -= numericAmt;
+  }
+  payerWallet.updatedAt = nowIso;
+
+  const payerTx: ServerWalletTx = {
+    id: `tx_${Date.now()}_bp`,
+    userId: payerMatch?.user.id,
+    userPhone: payerMatch?.user.phoneNumber || String(payerPhone),
+    userName: payerMatch?.user.fullName || String(payerName || 'Payer'),
+    type: 'bill_paid',
+    title: `Paid Bill: ${title || category || 'User Bill'} (for ${requesterName || requesterPhone})`,
+    description: `Paid bill on behalf of ${requesterName || requesterPhone}${category ? ` · ${category}` : ''}`,
     amount: numericAmt,
     fee: 0,
-    balanceAfter: senderWallet.availableBalance,
-    currency: senderWallet.currency,
+    balanceAfter: payerWallet.availableBalance,
+    currency: payerWallet.currency,
     timestamp: nowStr,
     createdAt: nowIso,
     status: 'completed',
     reference: ref,
     referenceId: ref,
-    channel: 'wallet',
+    channel: payChannel,
+    metadata: { billId, requesterPhone },
   };
-  senderWallet.transactions = [senderTx, ...senderWallet.transactions].slice(0, 100);
+  payerWallet.transactions = [payerTx, ...payerWallet.transactions].slice(0, 100);
 
-  recipientWallet.availableBalance += numericAmt;
-  recipientWallet.updatedAt = nowIso;
-  const receiverTx: ServerWalletTx = {
-    id: `tx_${Date.now()}_in`,
-    userId: recipientMatch?.user.id,
-    userPhone: recipientMatch?.user.phoneNumber || String(toPhone),
-    userName: recipientMatch?.user.fullName || String(recipientName || 'Recipient'),
-    type: 'received',
-    title: `Instant Transfer from ${senderMatch?.user.fullName || fromPhone}`,
-    description: `${note ? `${note} · ` : ''}Received from ${senderMatch?.user.fullName || fromPhone}`,
+  requesterWallet.availableBalance += numericAmt;
+  requesterWallet.updatedAt = nowIso;
+  const reqTx: ServerWalletTx = {
+    id: `tx_${Date.now()}_br`,
+    userId: reqMatch?.user.id,
+    userPhone: reqMatch?.user.phoneNumber || String(requesterPhone),
+    userName: reqMatch?.user.fullName || String(requesterName || 'Requester'),
+    type: 'bill_received',
+    title: `Bill Paid by ${payerName || payerMatch?.user.fullName || payerPhone}`,
+    description: `${title || 'Bill Request'} settled by ${payerName || payerPhone}`,
     amount: numericAmt,
     fee: 0,
-    balanceAfter: recipientWallet.availableBalance,
-    currency: recipientWallet.currency,
+    balanceAfter: requesterWallet.availableBalance,
+    currency: requesterWallet.currency,
     timestamp: nowStr,
     createdAt: nowIso,
     status: 'completed',
     reference: `${ref}_R`,
     referenceId: ref,
-    channel: 'wallet',
+    channel: payChannel,
+    metadata: { billId, payerPhone },
   };
-  recipientWallet.transactions = [receiverTx, ...recipientWallet.transactions].slice(0, 100);
+  requesterWallet.transactions = [reqTx, ...requesterWallet.transactions].slice(0, 100);
 
-  serverWallets.set(senderWallet.phoneKey, senderWallet);
-  serverWallets.set(recipientWallet.phoneKey, recipientWallet);
+  serverWallets.set(payerWallet.phoneKey, payerWallet);
+  serverWallets.set(requesterWallet.phoneKey, requesterWallet);
   saveWalletsFile();
-  appendUnifiedLedgerTx(senderTx);
-  appendUnifiedLedgerTx(receiverTx);
+  appendUnifiedLedgerTx(payerTx);
+  appendUnifiedLedgerTx(reqTx);
 
-  if (senderMatch) {
-    senderMatch.user.walletBalanceNgn = senderWallet.availableBalance;
-    usersByPhone.set(senderMatch.key, senderMatch.user);
+  if (payerMatch) {
+    payerMatch.user.walletBalanceNgn = payerWallet.availableBalance;
+    usersByPhone.set(payerMatch.key, payerMatch.user);
     saveUsersFile();
   }
-  if (recipientMatch) {
-    recipientMatch.user.walletBalanceNgn = recipientWallet.availableBalance;
-    usersByPhone.set(recipientMatch.key, recipientMatch.user);
+  if (reqMatch) {
+    reqMatch.user.walletBalanceNgn = requesterWallet.availableBalance;
+    usersByPhone.set(reqMatch.key, reqMatch.user);
     saveUsersFile();
-    const cleanRec = (recipientMatch.user.cleanPhone || recipientMatch.key).replace(/\D/g, '');
-    io.to(`phone:${cleanRec}`).emit('wallet_updated', {
-      balance: recipientWallet.availableBalance,
-      escrowLockedBalance: recipientWallet.escrowLockedBalance,
-      transactions: recipientWallet.transactions,
-      note: `Received ₦${numericAmt.toLocaleString()} from ${senderMatch?.user.fullName || fromPhone}`,
+    const cleanReq = (reqMatch.user.cleanPhone || reqMatch.key).replace(/\D/g, '');
+    io.to(`phone:${cleanReq}`).emit('wallet_updated', {
+      balance: requesterWallet.availableBalance,
+      escrowLockedBalance: requesterWallet.escrowLockedBalance,
+      transactions: requesterWallet.transactions,
+      note: `${payerName || 'Someone'} paid your bill (${title || 'Bill'})!`,
     });
   }
 
   return res.json({
     success: true,
     reference: ref,
-    dailyUsed: dailyUsed + numericAmt,
-    weeklyUsed: weeklyUsed + numericAmt,
+    paidAt: nowIso,
     wallet: {
-      availableBalance: senderWallet.availableBalance,
-      escrowLockedBalance: senderWallet.escrowLockedBalance,
-      currency: senderWallet.currency,
-      transactions: senderWallet.transactions,
+      availableBalance: payerWallet.availableBalance,
+      escrowLockedBalance: payerWallet.escrowLockedBalance,
+      currency: payerWallet.currency,
+      transactions: payerWallet.transactions,
     },
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AI BOT DATA CENTER & STRICT AGC-ONLY GEMINI ASSISTANT
+// ═══════════════════════════════════════════════════════════════════════════════
+interface ServerAiKnowledgeEntry {
+  id: string;
+  title: string;
+  category: string;
+  topic: string;
+  sourceType: 'manual' | 'url';
+  sourceUrl?: string;
+  content: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const DEFAULT_AI_KNOWLEDGE: ServerAiKnowledgeEntry[] = [
+  {
+    id: 'ai_kb_core_agc',
+    title: 'AGC Super-App Core Capabilities',
+    category: 'Platform',
+    topic: 'Overview & Modules',
+    sourceType: 'manual',
+    content:
+      'AGC (All Good Connects) is an African super-messaging and social commerce platform featuring: Encrypted Chat, 24h Stories/Updates & Billboard Discovery, Marketplace Stores with Escrow Vault protection, Send My Bill (pay on behalf), In-chat Games (X/O, Whot!, and Ludo with optional Escrow Bets), Ajo/Esusu communal savings, Gokada/PickkR Dispatch, Artisan Hubs, Street Radio Audio Spaces, Town Communities, Healthcare, Legal, Job Board, and Scam Checker.',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    id: 'ai_kb_finance_rules',
+    title: 'AGC Wallet, Escrow, Bills & Games',
+    category: 'Finance',
+    topic: 'Escrow & Pay on Behalf',
+    sourceType: 'manual',
+    content:
+      'AGC does not support direct peer-to-peer Send Money transfers. Users transact safely via Escrow Trade Protection (marketplace & artisans), Send My Bill (requesting another AGC user to pay a utility, rent, school, medical, or custom bill on their behalf), Paystack wallet top-ups/withdrawals, Ajo contributions, Payroll, and in-chat X/O, Whot!, or Ludo matches (Friendly or Escrow Bet with 1% platform fee).',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+];
+
+let aiKnowledgeEntries: ServerAiKnowledgeEntry[] = [...DEFAULT_AI_KNOWLEDGE];
+try {
+  if (fs.existsSync(AI_DATACENTER_FILE)) {
+    const parsed = JSON.parse(fs.readFileSync(AI_DATACENTER_FILE, 'utf8'));
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      aiKnowledgeEntries = parsed;
+    }
+  }
+} catch (err) {
+  console.warn('Failed loading data_ai_datacenter.json:', err);
+}
+
+function saveAiDataCenterFile() {
+  try {
+    fs.writeFileSync(AI_DATACENTER_FILE, JSON.stringify(aiKnowledgeEntries, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('Failed saving data_ai_datacenter.json:', err);
+  }
+}
+
+const AGC_DOMAIN_KEYWORDS = [
+  'agc', 'africhat', 'all good connects', 'agcbot', 'afribot',
+  'escrow', 'wallet', 'paystack', 'bill', 'send my bill', 'pay on behalf',
+  'ajo', 'esusu', 'thrift', 'marketplace', 'store', 'vendor', 'product',
+  'dispatch', 'gokada', 'pickkr', 'delivery', 'artisan', 'errand',
+  'town', 'community', 'status', 'update', 'story', 'stories', 'billboard',
+  'audio space', 'street radio', 'space', 'creator', 'writer', 'afribooks',
+  'tutor', 'course', 'health', 'afrihealth', 'legal', 'afrilaw', 'job', 'pet',
+  'scam', 'checker', 'shield', 'pin', 'security', 'verify', 'verification', 'badge',
+  'qr', 'contact', 'chat', 'group', 'channel', 'voice', 'call', 'sticker', 'meme',
+  'whot', 'ludo', 'tic tac toe', 'tic-tac-toe', 'x/o', 'xo', 'bet', 'wager',
+  'signup', 'sign up', 'login', 'otp', 'phone', 'email', 'username', 'account', 'profile',
+  'admin', 'feature', 'referral', 'invite', 'payroll', 'fee', 'commission',
+  'hi', 'hello', 'hey', 'greetings', 'how are you', 'good morning', 'good afternoon',
+  'good evening', 'thanks', 'thank you', 'help', 'who are you', 'what can you do',
+];
+
+function isSafeExternalHttpUrl(rawUrl: string): { valid: boolean; parsed?: URL; reason?: string } {
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { valid: false, reason: 'Only http:// or https:// URLs are allowed.' };
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host.endsWith('.local') ||
+      host.startsWith('10.') ||
+      host.startsWith('192.168.') ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+      host === '169.254.169.254'
+    ) {
+      return { valid: false, reason: 'Private or local network URLs are blocked.' };
+    }
+    return { valid: true, parsed };
+  } catch {
+    return { valid: false, reason: 'Invalid URL format.' };
+  }
+}
+
+function stripHtmlToText(html: string): { title: string; text: string } {
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = (titleMatch?.[1] || '').replace(/\s+/g, ' ').trim();
+  const cleaned = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return { title, text: cleaned.slice(0, 6000) };
+}
+
+app.get('/api/ai/datacenter', (_req: Request, res: Response) => {
+  res.json({ success: true, entries: aiKnowledgeEntries });
+});
+
+app.post('/api/ai/datacenter', (req: Request, res: Response) => {
+  const { title, category, topic, sourceType, sourceUrl, content, enabled } = req.body || {};
+  if (!title || !content) {
+    return res.status(400).json({ success: false, error: 'Title and knowledge content are required.' });
+  }
+  const nowIso = new Date().toISOString();
+  const entry: ServerAiKnowledgeEntry = {
+    id: `ai_kb_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    title: String(title).trim(),
+    category: String(category || 'Custom Topic').trim(),
+    topic: String(topic || 'General AGC Info').trim(),
+    sourceType: sourceType === 'url' ? 'url' : 'manual',
+    sourceUrl: sourceUrl ? String(sourceUrl).trim() : undefined,
+    content: String(content).trim().slice(0, 8000),
+    enabled: enabled !== false,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+  aiKnowledgeEntries = [entry, ...aiKnowledgeEntries];
+  saveAiDataCenterFile();
+  res.json({ success: true, entry, entries: aiKnowledgeEntries });
+});
+
+app.post('/api/ai/datacenter/fetch-url', async (req: Request, res: Response) => {
+  const { url } = req.body || {};
+  const check = isSafeExternalHttpUrl(String(url || ''));
+  if (!check.valid || !check.parsed) {
+    return res.status(400).json({ success: false, error: check.reason || 'Invalid URL' });
+  }
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const resp = await fetch(check.parsed.toString(), {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'AGC-Admin-Trainer/1.0' },
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) {
+      return res.status(400).json({ success: false, error: `Failed to fetch URL (HTTP ${resp.status}).` });
+    }
+    const rawBody = await resp.text();
+    const { title, text } = stripHtmlToText(rawBody);
+    if (!text) {
+      return res.status(400).json({ success: false, error: 'No readable text content found at that URL.' });
+    }
+    return res.json({
+      success: true,
+      title: title || check.parsed.hostname,
+      url: check.parsed.toString(),
+      content: text,
+    });
+  } catch (err: any) {
+    return res.status(400).json({
+      success: false,
+      error: err?.name === 'AbortError' ? 'Timed out fetching URL.' : (err?.message || 'Unable to fetch URL.'),
+    });
+  }
+});
+
+app.put('/api/ai/datacenter/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const idx = aiKnowledgeEntries.findIndex((e) => e.id === id);
+  if (idx < 0) {
+    return res.status(404).json({ success: false, error: 'Knowledge entry not found.' });
+  }
+  const prev = aiKnowledgeEntries[idx];
+  const patch = req.body || {};
+  aiKnowledgeEntries[idx] = {
+    ...prev,
+    ...(patch.title !== undefined ? { title: String(patch.title).trim() } : {}),
+    ...(patch.category !== undefined ? { category: String(patch.category).trim() } : {}),
+    ...(patch.topic !== undefined ? { topic: String(patch.topic).trim() } : {}),
+    ...(patch.content !== undefined ? { content: String(patch.content).trim().slice(0, 8000) } : {}),
+    ...(patch.sourceUrl !== undefined ? { sourceUrl: String(patch.sourceUrl).trim() } : {}),
+    ...(patch.enabled !== undefined ? { enabled: Boolean(patch.enabled) } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  saveAiDataCenterFile();
+  res.json({ success: true, entry: aiKnowledgeEntries[idx], entries: aiKnowledgeEntries });
+});
+
+app.delete('/api/ai/datacenter/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const next = aiKnowledgeEntries.filter((e) => e.id !== id);
+  if (next.length === aiKnowledgeEntries.length) {
+    return res.status(404).json({ success: false, error: 'Knowledge entry not found.' });
+  }
+  aiKnowledgeEntries = next;
+  saveAiDataCenterFile();
+  res.json({ success: true, entries: aiKnowledgeEntries });
+});
+
+const AGC_REFUSAL_MESSAGE =
+  "I can only answer questions about AGC (All Good Connects), its features, systems, or topics added by the AGC Admin in the AI Bot Data Center. Please ask me anything about AGC—such as Escrow Trade, Send My Bill, Wallet, Marketplace, Billboard, Whot!/Ludo/X-O games, Dispatch, or Town communities!";
+
+function buildAgcFallbackReply(userText: string, enabledEntries: ServerAiKnowledgeEntry[]): string {
+  const q = userText.toLowerCase().trim();
+  const matchesKnowledge = enabledEntries.some((entry) => {
+    const tokens = `${entry.title} ${entry.topic} ${entry.category} ${entry.content}`
+      .toLowerCase()
+      .split(/\W+/)
+      .filter((w) => w.length >= 4);
+    return tokens.some((tok) => q.includes(tok));
+  });
+  const matchesAgc = AGC_DOMAIN_KEYWORDS.some((kw) => q.includes(kw));
+
+  if (!matchesAgc && !matchesKnowledge) {
+    return AGC_REFUSAL_MESSAGE;
+  }
+
+  // Score Data Center entries (title + topic weighted highest so specific admin training ranks first)
+  let bestEntry: ServerAiKnowledgeEntry | null = null;
+  let bestScore = 0;
+  for (const entry of enabledEntries) {
+    const titleWords = new Set(entry.title.toLowerCase().split(/\W+/).filter((w) => w.length >= 3));
+    const topicWords = new Set(`${entry.topic} ${entry.category}`.toLowerCase().split(/\W+/).filter((w) => w.length >= 3));
+    const contentWords = new Set(entry.content.toLowerCase().split(/\W+/).filter((w) => w.length >= 4));
+    let score = 0;
+    titleWords.forEach((w) => {
+      if (w !== 'agc' && q.includes(w)) score += 4;
+    });
+    topicWords.forEach((w) => {
+      if (w !== 'agc' && q.includes(w)) score += 3;
+    });
+    contentWords.forEach((w) => {
+      if (w !== 'agc' && q.includes(w)) score += 1;
+    });
+    if (score > bestScore) {
+      bestScore = score;
+      bestEntry = entry;
+    }
+  }
+
+  if (bestEntry && bestScore >= 1) {
+    return `**${bestEntry.title}** (${bestEntry.topic})\n\n${bestEntry.content}`;
+  }
+
+  return "I am **AgcBot**, your dedicated AGC assistant! Ask me about AGC's Escrow Trade, Send My Bill (Pay on Behalf), Wallet, Marketplace, Updates Billboard, Contacts discovery, or playing X/O, Whot!, and Ludo in chat.";
+}
+
+app.post('/api/ai/chat', async (req: Request, res: Response) => {
+  const { messages, prompt, options } = req.body || {};
+  const msgList: Array<{ role: string; content: string }> = Array.isArray(messages)
+    ? messages
+    : typeof prompt === 'string' && prompt.trim()
+    ? [{ role: 'user', content: prompt.trim() }]
+    : [];
+  const latestUserMsg = [...msgList].reverse().find((m) => m.role === 'user')?.content?.trim() || '';
+  if (!latestUserMsg) {
+    return res.status(400).json({ success: false, error: 'Message content is required.' });
+  }
+
+  const enabledEntries = aiKnowledgeEntries.filter((e) => e.enabled);
+  const queryLower = latestUserMsg.toLowerCase();
+  const matchedTopics = enabledEntries
+    .filter((e) => {
+      const words = `${e.title} ${e.topic}`.toLowerCase().split(/[\s,;:|/]+/).filter((w) => w.length >= 3);
+      return words.some((w) => queryLower.includes(w));
+    })
+    .map((e) => e.title);
+
+  const knowledgeBlock = enabledEntries
+    .map(
+      (e, idx) =>
+        `[${idx + 1}] Title: ${e.title} | Category: ${e.category} | Topic: ${e.topic}${
+          e.sourceUrl ? ` | Source: ${e.sourceUrl}` : ''
+        }\n${e.content}`
+    )
+    .join('\n\n');
+
+  const systemInstruction = `You are AgcBot, the official assistant inside the AGC Super-App (All Good Connects).
+Never mention underlying external models, APIs, or infrastructure.
+
+STRICT DOMAIN GUARDRAIL (HIGHEST PRIORITY):
+You MUST ONLY answer questions that are directly related to:
+1) AGC (All Good Connects), its app features, systems, navigation, security, sign-up/login, wallet, Escrow Trade, Send My Bill (pay on behalf), Whot!/Ludo/X-O games, Contacts, Billboard Discovery, Town, Marketplace, Dispatch, Artisans, Creators, Ajo, Payroll, or Admin tools; OR
+2) Topics, URLs, FAQs, and knowledge entries explicitly listed in the Admin AI Bot Data Center below.
+
+If the user asks ANY question unrelated to AGC or its Admin AI Bot Data Center (for example: general trivia, coding help, politics, history, celebrities outside AGC, recipes, general math homework, external news, or creative writing unrelated to AGC), politely refuse using this exact guidance:
+"${AGC_REFUSAL_MESSAGE}"
+
+${options?.isGroup ? `[GROUP CONTEXT: Replying inside AGC group "${options.groupName || 'Community Group'}" to "${options.senderName || 'Member'}".]` : ''}
+${options?.systemPromptAddition ? `[EXTRA ADMIN CONTEXT]: ${options.systemPromptAddition}` : ''}
+
+ADMIN AI BOT DATA CENTER (LIVE TRAINED KNOWLEDGE):
+${knowledgeBlock || 'Use built-in AGC Super-App platform knowledge.'}`;
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.json({
+      success: true,
+      reply: buildAgcFallbackReply(latestUserMsg, enabledEntries),
+      matchedTopics,
+      mode: 'datacenter_guardrail',
+    });
+  }
+
+  try {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+    const transcript = msgList
+      .slice(-10)
+      .map((m) => `${m.role === 'assistant' ? 'AgcBot' : 'User'}: ${m.content}`)
+      .join('\n\n');
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      contents: transcript || latestUserMsg,
+      config: {
+        systemInstruction,
+      },
+    });
+
+    const replyText = response.text?.trim();
+    if (replyText) {
+      return res.json({ success: true, reply: replyText, matchedTopics, mode: 'gemini' });
+    }
+    return res.json({
+      success: true,
+      reply: buildAgcFallbackReply(latestUserMsg, enabledEntries),
+      matchedTopics,
+      mode: 'datacenter_guardrail',
+    });
+  } catch (err: any) {
+    console.warn('Gemini /api/ai/chat fallback:', err?.message || err);
+    return res.json({
+      success: true,
+      reply: buildAgcFallbackReply(latestUserMsg, enabledEntries),
+      matchedTopics,
+      mode: 'datacenter_guardrail',
+    });
+  }
 });
 
 // REST: User lookup by phone number
@@ -3859,12 +4754,15 @@ io.on('connection', (socket: Socket) => {
   }).catch(() => {});
 
   // User presence registration
-  socket.on('user_online', (userData: { userId: string; userName: string; avatar?: string; phoneNumber?: string; role?: string; deviceInfo?: string }) => {
+  socket.on('user_online', (userData: { userId: string; userName: string; avatar?: string; phoneNumber?: string; role?: string; deviceInfo?: string; sessionToken?: string }) => {
     onlineUsers.set(socket.id, {
       userId: userData.userId,
       userName: userData.userName,
       avatar: userData.avatar,
     });
+    if (userData?.sessionToken) {
+      (socket as any)._sessionToken = String(userData.sessionToken);
+    }
     if (userData?.phoneNumber) {
       const clean = userData.phoneNumber.replace(/\D/g, '');
       const existingMatch = findUserEntry(userData.phoneNumber) || findUserEntry(clean);
@@ -3925,10 +4823,15 @@ io.on('connection', (socket: Socket) => {
   // User registration event
   socket.on('register_user', (userData: any) => {
     if (!userData?.phoneNumber) return;
+    if (userData?.sessionToken) {
+      (socket as any)._sessionToken = String(userData.sessionToken);
+    }
     const clean = userData.phoneNumber.replace(/\D/g, '');
     const existingMatch = findUserEntry(userData.phoneNumber) || findUserEntry(clean);
     const storeKey = existingMatch?.key || clean;
     const existing = existingMatch?.user;
+    phoneToSocketId.set(clean, socket.id);
+    if (storeKey !== clean) phoneToSocketId.set(storeKey, socket.id);
     const reg: RegisteredUser = {
       ...(existing || {}),
       id: existing?.id || userData.id || `usr_${Date.now()}`,
@@ -4411,6 +5314,10 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('register_phone', (payload: string | { phone: string; sessionToken?: string }) => {
     const rawPhone = typeof payload === 'string' ? payload : payload.phone;
+    const sessTok = typeof payload === 'object' ? payload?.sessionToken : undefined;
+    if (sessTok) {
+      (socket as any)._sessionToken = String(sessTok);
+    }
     const clean = (rawPhone || '').replace(/\D/g, '');
     if (!clean) return;
 
@@ -4419,7 +5326,8 @@ io.on('connection', (socket: Socket) => {
       socket.join(`phone:${v}`);
     });
     (socket as any)._agcPhone = clean;
-    console.log(`📱 [Phone Registered]: ${clean} (joined ${variants.length} variant rooms) â†’ socket ${socket.id}`);
+    phoneToSocketId.set(clean, socket.id);
+    console.log(`📱 [Phone Registered]: ${clean} (joined ${variants.length} variant rooms) -> socket ${socket.id}`);
   });
 
   // 6. WebRTC Call Room Signaling Relay

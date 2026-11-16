@@ -20,6 +20,7 @@ import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { LegalComplianceModal } from './LegalComplianceModal';
 import { requestBackendOtp, verifyBackendOtp } from '../services/kudisms';
 import { compressAvatarImage, isPlaceholderAvatar } from '../utils/imageUtils';
+import { safeLocalStorage } from '../utils/safeStorage';
 
 interface CountryCode {
   name: string;
@@ -91,9 +92,9 @@ const findExistingAccount = (
     return false;
   };
 
-  // 1. Check AGC_registered_phones map in localStorage
+  // 1. Check AGC_registered_phones map in storage
   try {
-    const raw = localStorage.getItem('AGC_registered_phones');
+    const raw = safeLocalStorage.getItem('AGC_registered_phones');
     if (raw) {
       const reg = JSON.parse(raw);
       for (const [key, val] of Object.entries(reg) as [string, any][]) {
@@ -108,9 +109,9 @@ const findExistingAccount = (
     }
   } catch (_) {}
 
-  // 2. Check AGC_all_registered_users array in localStorage
+  // 2. Check AGC_all_registered_users array in storage
   try {
-    const raw = localStorage.getItem('AGC_all_registered_users');
+    const raw = safeLocalStorage.getItem('AGC_all_registered_users');
     if (raw) {
       const users: any[] = JSON.parse(raw);
       for (const u of users) {
@@ -125,9 +126,9 @@ const findExistingAccount = (
     }
   } catch (_) {}
 
-  // 3. Check active or last user profile (AGC_user_profile_v2) in localStorage
+  // 3. Check active or last user profile (AGC_user_profile_v2) in storage
   try {
-    const raw = localStorage.getItem('AGC_user_profile_v2');
+    const raw = safeLocalStorage.getItem('AGC_user_profile_v2');
     if (raw) {
       const u = JSON.parse(raw);
       if (u?.phoneNumber && matchesPhone(u.phoneNumber)) {
@@ -140,12 +141,12 @@ const findExistingAccount = (
     }
   } catch (_) {}
 
-  // 4. Exhaustive search across all other localStorage keys
+  // 4. Exhaustive search across all other keys
   try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
+    for (let i = 0; i < safeLocalStorage.length; i++) {
+      const k = safeLocalStorage.key(i);
       if (!k) continue;
-      const valStr = localStorage.getItem(k);
+      const valStr = safeLocalStorage.getItem(k);
       if (!valStr || !valStr.includes(inputLast9)) continue;
       try {
         const parsed = JSON.parse(valStr);
@@ -179,8 +180,8 @@ const findExistingAccount = (
 export const WhatsAppPhoneAuth: React.FC = () => {
   const { loginWithPhone, setIsAdminModalOpen, systemConfig } = useApp();
 
-  // Added 'device_conflict' step: shown when the number is active on another device
-  const [step, setStep] = useState<'phone' | 'confirm_dialog' | 'device_conflict' | 'otp' | 'profile' | 'initializing'>('phone');
+  // Added 'device_conflict' step (existing accounts) and 'email' step before 'profile' (new accounts only)
+  const [step, setStep] = useState<'phone' | 'confirm_dialog' | 'device_conflict' | 'otp' | 'email' | 'profile' | 'initializing'>('phone');
   const [selectedCountry, setSelectedCountry] = useState<CountryCode>(AFRICAN_COUNTRIES[0]);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [email, setEmail] = useState('');
@@ -235,8 +236,16 @@ export const WhatsAppPhoneAuth: React.FC = () => {
 
   const fullNormalizedNumber = formatFullNormalizedNumber(phoneNumber, selectedCountry.code);
 
-  // Step index for progress bar
-  const stepIndex = step === 'phone' || step === 'confirm_dialog' || step === 'device_conflict' ? 1 : step === 'otp' ? 2 : 3;
+  // Step index for progress bar (existing accounts only need Phone + OTP)
+  const totalSteps = isExistingAccount ? 2 : 4;
+  const stepIndex =
+    step === 'phone' || step === 'confirm_dialog' || step === 'device_conflict'
+      ? 1
+      : step === 'otp'
+      ? 2
+      : step === 'email'
+      ? 3
+      : totalSteps;
 
   // Countdown timer for OTP resend
   useEffect(() => {
@@ -593,7 +602,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     setOtpDigits(['', '', '', '', '', '']);
 
     try {
-      const res = await requestBackendOtp(fullNormalizedNumber, email.trim());
+      const res = await requestBackendOtp(fullNormalizedNumber);
       setIsSendingOtp(false);
 
       if (!res.success) {
@@ -743,9 +752,9 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         } catch (_) {}
       }
 
-      // Genuinely new user — proceed to username selection
+      // Genuinely new user — pop email entry step right before username selection
       setIsVerifying(false);
-      setStep('profile');
+      setStep('email');
     } catch (err: any) {
       setIsVerifying(false);
       setErrorMessage(err?.message || 'Verification error. Please try again.');
@@ -801,15 +810,15 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       return;
     }
 
-    // Persist unique username and phone claim — localStorage (same device)
+    // Persist unique username and phone claim — storage (same device)
     try {
-      const taken = JSON.parse(localStorage.getItem('AGC_taken_usernames') || '[]');
+      const taken = JSON.parse(safeLocalStorage.getItem('AGC_taken_usernames') || '[]');
       if (!taken.includes(cleanUser)) {
         taken.push(cleanUser);
-        localStorage.setItem('AGC_taken_usernames', JSON.stringify(taken));
+        safeLocalStorage.setItem('AGC_taken_usernames', JSON.stringify(taken));
       }
       const cleanPhone = fullNormalizedNumber.replace(/\D/g, '');
-      const reg = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
+      const reg = JSON.parse(safeLocalStorage.getItem('AGC_registered_phones') || '{}');
       const entry = { fullName: cleanUser, avatarUrl: selectedAvatar, phoneNumber: fullNormalizedNumber };
       reg[cleanPhone] = entry;
       reg[fullNormalizedNumber] = entry;
@@ -818,7 +827,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         reg[core] = entry;
         if (core.length >= 9) reg[core.slice(-9)] = entry;
       }
-      localStorage.setItem('AGC_registered_phones', JSON.stringify(reg));
+      safeLocalStorage.setItem('AGC_registered_phones', JSON.stringify(reg));
     } catch (_) {}
 
     // 🌍 Write to Supabase agc_phone_registry — cross-device persistent store
@@ -833,7 +842,9 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         fullNormalizedNumber,
         cleanUser,
         selectedAvatar,
-        'Available · Using AGC'
+        'Available · Using AGC',
+        undefined,
+        email.trim() || undefined
       );
     }, 1200);
   };
@@ -909,7 +920,9 @@ export const WhatsAppPhoneAuth: React.FC = () => {
               {step !== 'phone' && step !== 'initializing' ? (
                 <button
                   type="button"
-                  onClick={() => setStep(step === 'profile' ? 'otp' : 'phone')}
+                  onClick={() =>
+                    setStep(step === 'profile' ? 'email' : step === 'email' ? 'otp' : 'phone')
+                  }
                   className="w-8 h-8 rounded-full bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 flex items-center justify-center transition-colors mr-1"
                   title="Back"
                 >
@@ -939,15 +952,20 @@ export const WhatsAppPhoneAuth: React.FC = () => {
 
             <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold bg-purple-500/10 text-purple-300 border border-purple-500/20 px-2.5 py-1 rounded-full">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Step {stepIndex} of 3</span>
+              <span>Step {stepIndex} of {totalSteps}</span>
             </div>
           </div>
 
           {/* Segmented Step Indicator */}
-          <div className="grid grid-cols-3 gap-1.5 mt-4">
-            <div className={`h-1.5 rounded-full transition-all duration-300 ${stepIndex >= 1 ? 'bg-gradient-to-r from-purple-500 to-indigo-500' : 'bg-purple-950/40'}`} />
-            <div className={`h-1.5 rounded-full transition-all duration-300 ${stepIndex >= 2 ? 'bg-gradient-to-r from-purple-500 to-indigo-500' : 'bg-purple-950/40'}`} />
-            <div className={`h-1.5 rounded-full transition-all duration-300 ${stepIndex >= 3 ? 'bg-gradient-to-r from-purple-500 to-indigo-500' : 'bg-purple-950/40'}`} />
+          <div className={`grid gap-1.5 mt-4 ${totalSteps === 2 ? 'grid-cols-2' : 'grid-cols-4'}`}>
+            {Array.from({ length: totalSteps }).map((_, idx) => (
+              <div
+                key={idx}
+                className={`h-1.5 rounded-full transition-all duration-300 ${
+                  stepIndex >= idx + 1 ? 'bg-gradient-to-r from-purple-500 to-indigo-500' : 'bg-purple-950/40'
+                }`}
+              />
+            ))}
           </div>
         </header>
 
@@ -1028,27 +1046,9 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Email Address field (Optional / for direct OTP delivery) */}
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold uppercase tracking-wider text-purple-300/80 flex items-center justify-between">
-                    <span>Email Address</span>
-                    <span className="text-[10px] text-purple-400 font-normal lowercase">(for instant code)</span>
-                  </label>
-                  <div className="flex items-center gap-2.5 bg-[#140b2b] border border-purple-500/30 focus-within:border-purple-500 focus-within:ring-2 focus-within:ring-purple-500/30 rounded-2xl px-3.5 py-3 transition-all">
-                    <Mail className="w-4 h-4 text-purple-400 shrink-0" />
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="name@example.com (instant delivery)"
-                      className="w-full bg-transparent text-sm font-semibold text-white placeholder-purple-300/40 focus:outline-none tracking-wide"
-                    />
-                  </div>
-                </div>
-
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-purple-200/60 pt-1">
                   <Lock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span>Zero-knowledge phone privacy & end-to-end encryption</span>
+                  <span>Zero-knowledge phone privacy &amp; end-to-end encryption</span>
                 </div>
               </div>
             </div>
@@ -1252,17 +1252,8 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                   Enter 6-Digit Code
                 </h1>
                 <p className="text-xs text-purple-200/70 mt-1 leading-relaxed">
-                  {email ? (
-                    <>
-                      We sent your 6-digit code to{' '}
-                      <strong className="text-purple-300 font-semibold">{email}</strong>
-                    </>
-                  ) : (
-                    <>
-                      We sent an SMS code to{' '}
-                      <strong className="text-white font-mono">{fullNormalizedNumber}</strong>
-                    </>
-                  )}
+                  We sent an SMS code to{' '}
+                  <strong className="text-white font-mono">{fullNormalizedNumber}</strong>
                 </p>
                 <button
                   type="button"
@@ -1304,7 +1295,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                 </div>
               ) : (
                 <p className="text-xs text-purple-200/60 text-center">
-                  {email ? 'Enter the code sent to your email.' : 'Enter the code sent to your phone via SMS.'}
+                  Enter the code sent to your phone via SMS.
                 </p>
               )}
 
@@ -1360,7 +1351,80 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         )}
 
         {/* ========================================================================= */}
-        {/* STEP 3: USERNAME & AVATAR PICKER */}
+        {/* STEP 3 (NEW USERS ONLY): EMAIL ENTRY BEFORE USERNAME */}
+        {/* ========================================================================= */}
+        {step === 'email' && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const trimmed = email.trim();
+              if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+                setErrorMessage('Please enter a valid email address for receipts & recovery.');
+                return;
+              }
+              setErrorMessage(null);
+              setStep('profile');
+            }}
+            className="flex-1 flex flex-col justify-between p-6 overflow-y-auto"
+          >
+            <div className="space-y-6">
+              <div className="text-center pt-2">
+                <div className="w-14 h-14 rounded-3xl bg-gradient-to-br from-purple-600/20 to-indigo-600/20 text-purple-400 flex items-center justify-center mx-auto mb-3 border border-purple-500/30 shadow-inner">
+                  <Mail className="w-7 h-7" />
+                </div>
+                <h1 className="text-2xl font-black text-white tracking-tight font-display">
+                  Add Your Email
+                </h1>
+                <p className="text-xs text-purple-200/70 mt-1.5 leading-relaxed max-w-xs mx-auto">
+                  This looks like a new AGC number (<strong className="text-white font-mono">{fullNormalizedNumber}</strong>). Enter your email for escrow receipts &amp; account security before choosing your username.
+                </p>
+              </div>
+
+              {errorMessage && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs rounded-2xl animate-shake">
+                  {errorMessage}
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold uppercase tracking-wider text-purple-300/90">
+                  Email Address
+                </label>
+                <div className="flex items-center gap-2.5 bg-[#140b2b] border border-purple-500/30 focus-within:border-purple-500 focus-within:ring-2 focus-within:ring-purple-500/30 rounded-2xl px-3.5 py-3.5 transition-all">
+                  <Mail className="w-4 h-4 text-purple-400 shrink-0" />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (errorMessage) setErrorMessage(null);
+                    }}
+                    placeholder="you@example.com"
+                    autoFocus
+                    required
+                    className="w-full bg-transparent text-sm font-semibold text-white placeholder-purple-300/40 focus:outline-none tracking-wide"
+                  />
+                </div>
+                <p className="text-[11px] text-purple-200/50 pt-1">
+                  Existing users sign in with phone number &amp; SMS code only.
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-8">
+              <button
+                type="submit"
+                className="w-full py-4 bg-gradient-to-r from-purple-600 via-purple-700 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-sm rounded-2xl shadow-lg shadow-purple-700/30 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+              >
+                <span>Continue to Username</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* ========================================================================= */}
+        {/* STEP 4: USERNAME & AVATAR PICKER */}
         {/* ========================================================================= */}
         {step === 'profile' && (
           <form onSubmit={handleProfileSubmit} className="flex-1 flex flex-col justify-between p-6 overflow-y-auto">
