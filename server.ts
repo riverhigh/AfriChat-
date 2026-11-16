@@ -1082,7 +1082,7 @@ function saveUsersFile() {
   }
 }
 
-// ─── KUDISMS OTP VERIFICATION ENGINE ──────────────────────────────────────────
+// ─── AGC OTP VERIFICATION ENGINE (Termii + KudiSMS fallback) ──────────────────
 interface StoredOtpRecord {
   phone: string;
   code: string;
@@ -1104,7 +1104,7 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
-function normalizeKudiPhone(rawPhone: string): string {
+function normalizePhone(rawPhone: string): string {
   let clean = String(rawPhone || '').replace(/\D/g, '');
   if (!clean) return '';
   if (clean.startsWith('0') && clean.length === 11) {
@@ -1115,26 +1115,55 @@ function normalizeKudiPhone(rawPhone: string): string {
   return clean;
 }
 
-async function sendKudiSms(recipientPhone: string, code: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+// ── Termii SMS Provider ───────────────────────────────────────────────────────
+async function sendTermiiOtp(recipientPhone: string, code: string): Promise<{ success: boolean; messageId?: string; error?: string; provider?: string }> {
+  const apiKey = (process.env.TERMII_API_KEY || '').trim();
+  if (!apiKey) return { success: false, error: 'No TERMII_API_KEY configured', provider: 'termii' };
+
+  const cleanPhone = normalizePhone(recipientPhone);
+  try {
+    console.log(`[Termii] Dispatching OTP to ${cleanPhone}...`);
+    const resp = await fetch('https://v3.api.termii.com/api/sms/otp/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: apiKey,
+        message_type: 'NUMERIC',
+        to: cleanPhone,
+        from: 'N-Alert',
+        channel: 'generic',
+        pin_attempts: 5,
+        pin_time_to_live: 5,
+        pin_length: 6,
+        pin_placeholder: '<1234>',
+        message_text: `Your AGC code is <1234>. Valid 5 mins. Do not share.`,
+        pin_type: 'NUMERIC',
+      }),
+    });
+
+    const data = await resp.json().catch(() => ({}));
+    console.log(`[Termii Response] HTTP ${resp.status}:`, data);
+
+    if (resp.ok && data?.pinId) {
+      return { success: true, messageId: data.pinId, provider: 'termii' };
+    }
+    return { success: false, error: data?.message || data?.error || 'Termii rejected the request', provider: 'termii' };
+  } catch (err: any) {
+    console.error('[Termii Error]:', err?.message || err);
+    return { success: false, error: err?.message || 'Termii network error', provider: 'termii' };
+  }
+}
+
+// ── KudiSMS Fallback Provider ─────────────────────────────────────────────────
+async function sendKudiSms(recipientPhone: string, code: string): Promise<{ success: boolean; messageId?: string; error?: string; provider?: string }> {
   const apiKey = (process.env.KUDISMS_API_KEY || '').trim();
-  const rawSender = (process.env.KUDISMS_SENDER_ID || 'AGC').trim();
-  const senderId = rawSender.slice(0, 11) || 'AGC';
+  if (!apiKey) return { success: false, error: 'No KUDISMS_API_KEY configured', provider: 'kudisms' };
+
+  const senderId = (process.env.KUDISMS_SENDER_ID || 'AGC').trim().slice(0, 11);
+  const cleanPhone = normalizePhone(recipientPhone);
   const appnamecode = (process.env.KUDISMS_APP_NAME_CODE || '').trim();
   const templatecode = (process.env.KUDISMS_TEMPLATE_CODE || '').trim();
-  const cleanPhone = normalizeKudiPhone(recipientPhone);
-  const messageText = `Your AGC verification code is ${code}. Valid for 5 minutes. Do not share this code.`;
 
-  if (!apiKey) {
-    console.log(`\n======================================================`);
-    console.log(`📱 [KudiSMS Dev Mode] No KUDISMS_API_KEY configured.`);
-    console.log(`📱 Target Phone: ${cleanPhone || recipientPhone}`);
-    console.log(`📱 Verification Code: ${code} (Expires in 5 minutes)`);
-    console.log(`📱 Sender ID: ${senderId}`);
-    console.log(`======================================================\n`);
-    return { success: true, messageId: `dev_${Date.now()}` };
-  }
-
-  // ── Strategy 1: Official KudiSMS Dedicated OTP Endpoint (/api/otp) ──────────
   try {
     const formData = new FormData();
     formData.append('token', apiKey);
@@ -1144,72 +1173,58 @@ async function sendKudiSms(recipientPhone: string, code: string): Promise<{ succ
     if (appnamecode) formData.append('appnamecode', appnamecode);
     if (templatecode) formData.append('templatecode', templatecode);
 
-    console.log(`[KudiSMS] Dispatching to https://my.kudisms.net/api/otp for ${cleanPhone}...`);
-    const otpResp = await fetch('https://my.kudisms.net/api/otp', {
-      method: 'POST',
-      body: formData,
-    });
+    console.log(`[KudiSMS] Fallback dispatching OTP to ${cleanPhone}...`);
+    const resp = await fetch('https://my.kudisms.net/api/otp', { method: 'POST', body: formData });
+    const data = await resp.json().catch(() => ({}));
+    console.log(`[KudiSMS Response] HTTP ${resp.status}:`, data);
 
-    const otpText = await otpResp.text();
-    let otpParsed;
-    try {
-      otpParsed = JSON.parse(otpText);
-    } catch {
-      otpParsed = { raw: otpText };
+    if (resp.ok && (data?.status === 'success' || data?.code === 100 || data?.code === 200)) {
+      return { success: true, messageId: data.message_id || `kudi_${Date.now()}`, provider: 'kudisms' };
     }
-    console.log(`[KudiSMS /api/otp Response] HTTP ${otpResp.status}:`, otpParsed);
-
-    if (otpResp.ok && (!otpParsed.error || otpParsed.status === 'success' || otpParsed.code === 100 || otpParsed.code === 200)) {
-      return { success: true, messageId: otpParsed.message_id || otpParsed.id || `kudi_otp_${Date.now()}` };
-    }
+    return { success: false, error: data?.msg || data?.error || 'KudiSMS rejected the request', provider: 'kudisms' };
   } catch (err: any) {
-    console.warn('[KudiSMS /api/otp Notice]:', err?.message || err);
-  }
-
-  // ── Strategy 2: Direct Transactional SMS Route (/api/sms) ───────────────────
-  try {
-    const smsFormData = new FormData();
-    smsFormData.append('token', apiKey);
-    smsFormData.append('senderID', senderId);
-    smsFormData.append('recipients', cleanPhone);
-    smsFormData.append('message', messageText);
-    smsFormData.append('gateway', '2'); // OTP transactional gateway
-
-    console.log(`[KudiSMS] Fallback dispatching to https://my.kudisms.net/api/sms for ${cleanPhone}...`);
-    const smsResp = await fetch('https://my.kudisms.net/api/sms', {
-      method: 'POST',
-      body: smsFormData,
-    });
-
-    const smsText = await smsResp.text();
-    let smsParsed;
-    try {
-      smsParsed = JSON.parse(smsText);
-    } catch {
-      smsParsed = { raw: smsText };
-    }
-    console.log(`[KudiSMS /api/sms Response] HTTP ${smsResp.status}:`, smsParsed);
-
-    if (smsResp.ok && (!smsParsed.error || smsParsed.status === 'success' || smsParsed.code === 100 || smsParsed.code === 200)) {
-      return { success: true, messageId: smsParsed.message_id || smsParsed.id || `kudi_sms_${Date.now()}` };
-    }
-
-    const errorMsg = smsParsed?.msg || smsParsed?.error || otpParsed?.msg || otpParsed?.error || 'KudiSMS dispatch rejected.';
-    return { success: false, error: errorMsg, providerResponse: smsParsed || otpParsed };
-  } catch (err: any) {
-    console.error(`[KudiSMS Error] Failed to send SMS to ${cleanPhone}:`, err);
-    return { success: false, error: err?.message || 'Failed to dispatch SMS via KudiSMS' };
+    return { success: false, error: err?.message || 'KudiSMS network error', provider: 'kudisms' };
   }
 }
 
-// REST: Send OTP (Generates 6-digit code, 5 minute TTL, dispatches via KudiSMS)
+// ── Main SMS dispatcher: Termii first, KudiSMS fallback, then dev mode ────────
+async function sendOtpSms(recipientPhone: string, code: string): Promise<{ success: boolean; messageId?: string; error?: string; provider?: string }> {
+  const hasTermii = Boolean(process.env.TERMII_API_KEY?.trim());
+  const hasKudi = Boolean(process.env.KUDISMS_API_KEY?.trim());
+
+  if (!hasTermii && !hasKudi) {
+    // Dev mode — log to console
+    console.log(`\n${'='.repeat(54)}`);
+    console.log(`📱 [AGC Dev Mode] No SMS provider configured.`);
+    console.log(`📱 Phone: ${normalizePhone(recipientPhone)}`);
+    console.log(`📱 OTP Code: ${code}  (expires in 5 minutes)`);
+    console.log(`${'='.repeat(54)}\n`);
+    return { success: true, messageId: `dev_${Date.now()}`, provider: 'dev' };
+  }
+
+  // Try Termii first
+  if (hasTermii) {
+    const result = await sendTermiiOtp(recipientPhone, code);
+    if (result.success) return result;
+    console.warn(`[OTP] Termii failed: ${result.error} — trying KudiSMS fallback...`);
+  }
+
+  // Fallback to KudiSMS
+  if (hasKudi) {
+    return sendKudiSms(recipientPhone, code);
+  }
+
+  return { success: false, error: 'All SMS providers failed.' };
+}
+
+// REST: Send OTP (Generates 6-digit code, 5 minute TTL, dispatches via Termii/KudiSMS)
 app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
   try {
     const { phone } = req.body;
     if (!phone) {
       return res.status(400).json({ success: false, error: 'Phone number is required.' });
     }
-    const clean = normalizeKudiPhone(phone);
+    const clean = normalizePhone(phone);
     if (!clean || clean.length < 7) {
       return res.status(400).json({ success: false, error: 'Please enter a valid phone number.' });
     }
@@ -1239,27 +1254,27 @@ app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
       lastSentAt: now,
     });
 
-    const smsResult = await sendKudiSms(clean, code);
-    const hasApiKey = Boolean(process.env.KUDISMS_API_KEY?.trim());
+    const smsResult = await sendOtpSms(clean, code);
+    const isDevMode = smsResult.provider === 'dev';
 
-    if (hasApiKey && !smsResult.success) {
+    if (!isDevMode && !smsResult.success) {
       return res.status(400).json({
         success: false,
-        error: `KudiSMS Delivery Error: ${smsResult.error || 'Failed to dispatch SMS'}. Please check your Sender ID at my.kudisms.net/user/senderid.`,
+        error: `SMS Delivery Error: ${smsResult.error || 'Failed to dispatch SMS'}. Please try again or contact support.`,
         smsResult,
       });
     }
 
     return res.json({
       success: true,
-      message: hasApiKey
-        ? `Verification code dispatched to ${phone}.`
-        : `Verification code generated (Test Mode). Code: ${code}`,
+      message: isDevMode
+        ? `Verification code generated (Dev Mode). Code: ${code}`
+        : `Verification code sent to ${phone}.`,
       expiresInSeconds: 300,
       expiresAt,
-      isTestMode: !hasApiKey,
-      ...(!hasApiKey ? { devCode: code } : {}),
-      smsResult,
+      isTestMode: isDevMode,
+      ...(isDevMode ? { devCode: code } : {}),
+      provider: smsResult.provider,
     });
   } catch (err) {
     console.error('Error in /api/auth/send-otp:', err);
@@ -1274,7 +1289,7 @@ app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
     if (!phone || !code) {
       return res.status(400).json({ success: false, error: 'Phone number and verification code are required.' });
     }
-    const clean = normalizeKudiPhone(phone);
+    const clean = normalizePhone(phone);
     const record = otpStore.get(clean);
 
     if (!record) {
