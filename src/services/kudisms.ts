@@ -1,8 +1,7 @@
 /**
- * KudiSMS OTP Verification Service for AGC
- * Backend-generated 6-digit numeric OTP with 5-minute TTL (300 seconds),
- * rate limiting, and SMS delivery via KudiSMS API.
- * Includes seamless local fallback when testing without a live backend.
+ * AGC OTP Verification Service
+ * Backend-generated 6-digit OTP with 5-minute TTL.
+ * Delivered via Email (Resend) — works without any SMS sender registration.
  */
 
 export interface RequestOtpResponse {
@@ -12,6 +11,7 @@ export interface RequestOtpResponse {
   expiresAt?: number;
   isTestMode?: boolean;
   devCode?: string;
+  deliveredTo?: string;
   error?: string;
 }
 
@@ -32,16 +32,12 @@ const getBaseApiUrl = (): string => {
   return '';
 };
 
-// Client-side fallback storage in case backend server is unreachable (e.g. static Vercel preview)
+// Client-side fallback storage
 const LOCAL_OTP_STORAGE_KEY = 'AGC_active_client_otp';
 
 function storeLocalFallbackOtp(phone: string, code: string, expiresAt: number) {
   try {
-    const cleanPhone = phone.replace(/\D/g, '');
-    sessionStorage.setItem(
-      LOCAL_OTP_STORAGE_KEY,
-      JSON.stringify({ phone: cleanPhone, code, expiresAt })
-    );
+    sessionStorage.setItem(LOCAL_OTP_STORAGE_KEY, JSON.stringify({ phone: phone.replace(/\D/g, ''), code, expiresAt }));
   } catch (_) {}
 }
 
@@ -59,21 +55,15 @@ function getLocalFallbackOtp(phone: string): { code: string; expiresAt: number }
 }
 
 function clearLocalFallbackOtp() {
-  try {
-    sessionStorage.removeItem(LOCAL_OTP_STORAGE_KEY);
-  } catch (_) {}
+  try { sessionStorage.removeItem(LOCAL_OTP_STORAGE_KEY); } catch (_) {}
 }
 
 /**
- * Request backend to generate a 6-digit OTP (5-minute TTL)
- * and dispatch it via KudiSMS to the given phone number.
+ * Request backend to generate a 6-digit OTP and deliver it via email.
  */
-export async function requestBackendOtp(phoneNumber: string): Promise<RequestOtpResponse> {
+export async function requestBackendOtp(phoneNumber: string, email?: string): Promise<RequestOtpResponse> {
   if (!phoneNumber || phoneNumber.trim().length < 7) {
-    return {
-      success: false,
-      error: 'Please enter a valid phone number.',
-    };
+    return { success: false, error: 'Please enter a valid phone number.' };
   }
 
   const baseUrl = getBaseApiUrl();
@@ -82,10 +72,8 @@ export async function requestBackendOtp(phoneNumber: string): Promise<RequestOtp
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ phone: phoneNumber }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: phoneNumber, email: email || '' }),
     });
 
     const contentType = response.headers.get('content-type') || '';
@@ -102,25 +90,21 @@ export async function requestBackendOtp(phoneNumber: string): Promise<RequestOtp
           expiresAt: data.expiresAt || (Date.now() + 300 * 1000),
           isTestMode: Boolean(data.isTestMode),
           devCode: data.devCode,
+          deliveredTo: data.deliveredTo,
         };
       } else if (data && data.error) {
-        return {
-          success: false,
-          error: data.error,
-        };
+        return { success: false, error: data.error };
       }
     }
   } catch (err) {
-    console.warn('[KudiSMS] Backend /api/auth/send-otp unreachable, activating client fallback mode:', err);
+    console.warn('[AGC OTP] Backend unreachable, using client fallback:', err);
   }
 
-  // Graceful fallback for standalone/Vercel client environments:
-  // Generate 6-digit OTP locally with 5-minute lifespan (300 seconds)
+  // Graceful fallback
   const fallbackCode = `${Math.floor(100000 + Math.random() * 900000)}`;
   const expiresAt = Date.now() + 5 * 60 * 1000;
   storeLocalFallbackOtp(phoneNumber, fallbackCode, expiresAt);
-
-  console.log(`\n📱 [KudiSMS Fallback Mode] Verification code generated for ${phoneNumber}: ${fallbackCode} (Expires in 5 minutes)\n`);
+  console.log(`\n📱 [AGC Dev] OTP for ${phoneNumber}: ${fallbackCode}\n`);
 
   return {
     success: true,
@@ -134,22 +118,15 @@ export async function requestBackendOtp(phoneNumber: string): Promise<RequestOtp
 
 /**
  * Verify the user-entered OTP against the backend store.
- * Validates expiration (5-minute window), max attempts, and single-use invalidation.
  */
 export async function verifyBackendOtp(phoneNumber: string, code: string): Promise<VerifyOtpResponse> {
   if (!phoneNumber || !code) {
-    return {
-      success: false,
-      error: 'Phone number and verification code are required.',
-    };
+    return { success: false, error: 'Phone number and verification code are required.' };
   }
 
   const cleanCode = code.trim();
   if (cleanCode.length !== 6) {
-    return {
-      success: false,
-      error: 'Verification code must be 6 digits.',
-    };
+    return { success: false, error: 'Verification code must be 6 digits.' };
   }
 
   const baseUrl = getBaseApiUrl();
@@ -158,13 +135,8 @@ export async function verifyBackendOtp(phoneNumber: string, code: string): Promi
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        phone: phoneNumber,
-        code: cleanCode,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: phoneNumber, code: cleanCode }),
     });
 
     const contentType = response.headers.get('content-type') || '';
@@ -172,21 +144,14 @@ export async function verifyBackendOtp(phoneNumber: string, code: string): Promi
       const data = await response.json();
       if (response.ok && data.success) {
         clearLocalFallbackOtp();
-        return {
-          success: true,
-          message: data.message || 'Phone number verified successfully.',
-        };
+        return { success: true, message: data.message || 'Verified successfully.' };
       }
       if (data && data.error) {
-        return {
-          success: false,
-          error: data.error,
-          expired: Boolean(data.expired),
-        };
+        return { success: false, error: data.error, expired: Boolean(data.expired) };
       }
     }
   } catch (err) {
-    console.warn('[KudiSMS] Backend /api/auth/verify-otp unreachable, checking local fallback record:', err);
+    console.warn('[AGC OTP] Backend verify unreachable, checking local fallback:', err);
   }
 
   // Check client fallback record
@@ -194,31 +159,13 @@ export async function verifyBackendOtp(phoneNumber: string, code: string): Promi
   if (local) {
     if (Date.now() > local.expiresAt) {
       clearLocalFallbackOtp();
-      return {
-        success: false,
-        error: 'Verification code has expired (codes expire after 5 minutes). Please request a new code.',
-        expired: true,
-      };
+      return { success: false, error: 'Code expired. Please request a new one.', expired: true };
     }
-    if (local.code === cleanCode || cleanCode === '123456') {
+    if (local.code === cleanCode) {
       clearLocalFallbackOtp();
-      return {
-        success: true,
-        message: 'Phone number verified successfully.',
-      };
+      return { success: true, message: 'Verified successfully.' };
     }
   }
 
-  // Fallback demo acceptance for '123456'
-  if (cleanCode === '123456') {
-    return {
-      success: true,
-      message: 'Demo verification successful.',
-    };
-  }
-
-  return {
-    success: false,
-    error: 'Incorrect verification code. Please check and try again.',
-  };
+  return { success: false, error: 'Incorrect verification code. Please check and try again.' };
 }

@@ -182,6 +182,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   const [step, setStep] = useState<'phone' | 'confirm_dialog' | 'device_conflict' | 'otp' | 'profile' | 'initializing'>('phone');
   const [selectedCountry, setSelectedCountry] = useState<CountryCode>(AFRICAN_COUNTRIES[0]);
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [email, setEmail] = useState('');
   const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
   const [generatedOtp, setGeneratedOtp] = useState('');
   const [resendTimer, setResendTimer] = useState(30);
@@ -591,7 +592,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     setOtpDigits(['', '', '', '', '', '']);
 
     try {
-      const res = await requestBackendOtp(fullNormalizedNumber);
+      const res = await requestBackendOtp(fullNormalizedNumber, email.trim());
       setIsSendingOtp(false);
 
       if (!res.success) {
@@ -978,6 +979,24 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                       placeholder="803 123 4567"
                       autoFocus
                       className="w-full bg-transparent text-sm font-mono font-semibold text-white placeholder-purple-300/40 focus:outline-none tracking-wider"
+                    />
+                  </div>
+                </div>
+
+                {/* Email Address field (Optional / for direct OTP delivery) */}
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-purple-300/80 flex items-center justify-between">
+                    <span>Email Address</span>
+                    <span className="text-[10px] text-purple-400 font-normal lowercase">(for instant code)</span>
+                  </label>
+                  <div className="flex items-center gap-2.5 bg-[#140b2b] border border-purple-500/30 focus-within:border-purple-500 focus-within:ring-2 focus-within:ring-purple-500/30 rounded-2xl px-3.5 py-3 transition-all">
+                    <Mail className="w-4 h-4 text-purple-400 shrink-0" />
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="name@example.com (instant delivery)"
+                      className="w-full bg-transparent text-sm font-semibold text-white placeholder-purple-300/40 focus:outline-none tracking-wide"
                     />
                   </div>
                 </div>
