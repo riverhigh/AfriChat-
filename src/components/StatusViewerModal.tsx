@@ -463,12 +463,12 @@ export const StatusViewerModal: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60 py-2">
-              {status.viewers.length === 0 ? (
+              {(status.viewers || []).length === 0 ? (
                 <div className="text-center py-8 text-xs text-slate-400">
                   No views yet. Your contacts will appear here once they see this status.
                 </div>
               ) : (
-                status.viewers.map((viewer) => (
+                (status.viewers || []).map((viewer) => (
                   <div key={viewer.id} className="py-2.5 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <img

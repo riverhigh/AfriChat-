@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import {
   X,
   Wallet,
@@ -62,7 +62,7 @@ export const WalletModal: React.FC = () => {
     setFeedback(null);
 
     const userEmail = currentUser.email || `${currentUser.phoneNumber.replace(/[^0-9]/g, '')}@AGC.africa`;
-    const fee = Math.min(Math.round(topUpAmount * 0.01), Math.round(2000 * rate));
+    const fee = Math.min(Math.round(topUpAmount * 0.01), Math.round(3000 * rate));
     const totalCharge = topUpAmount + fee;
 
     openPaystackPopup({
@@ -88,7 +88,7 @@ export const WalletModal: React.FC = () => {
         } else {
           setFeedback({
             type: 'error',
-            text: res.message || `Payment received (Ref: ${response.reference}) — awaiting signed Paystack webhook verification.`,
+            text: res.message || `Payment received (Ref: ${response.reference}) â€” awaiting signed Paystack webhook verification.`,
           });
           setWalletTab('overview');
         }
@@ -220,7 +220,7 @@ export const WalletModal: React.FC = () => {
                 onClick={() => setFeedback(null)}
                 className="text-slate-400 hover:text-slate-600 text-xs font-bold px-1"
               >
-                ✕
+                âœ•
               </button>
             </div>
           )}
@@ -283,7 +283,7 @@ export const WalletModal: React.FC = () => {
                     onClick={() => setWalletTab('history')}
                     className="font-mono text-[11px] normal-case text-indigo-600 dark:text-indigo-400 font-bold hover:underline"
                   >
-                    Full Payment History →
+                    Full Payment History â†’
                   </button>
                 </div>
 
@@ -318,7 +318,7 @@ export const WalletModal: React.FC = () => {
                                 {tx.description || tx.title}
                               </div>
                               <div className="text-[10px] text-slate-400 font-mono truncate">
-                                {tx.createdAt ? new Date(tx.createdAt).toLocaleString() : tx.timestamp} · {tx.referenceId || tx.reference}
+                                {tx.createdAt ? new Date(tx.createdAt).toLocaleString() : tx.timestamp} Â· {tx.referenceId || tx.reference}
                               </div>
                             </div>
                           </div>
@@ -333,12 +333,12 @@ export const WalletModal: React.FC = () => {
                                   : 'text-rose-600 dark:text-rose-400'
                               }`}
                             >
-                              {isIncoming ? '+' : isEscrow ? '🔒 ' : '-'}
+                              {isIncoming ? '+' : isEscrow ? 'ðŸ”’ ' : '-'}
                               {formatPrice(Math.abs(tx.amount), tx.currency || 'NGN')}
                             </div>
                             {typeof tx.balanceAfter === 'number' && (
                               <span className="text-[9px] text-slate-400 font-mono block">
-                                Bal: ₦{tx.balanceAfter.toLocaleString()}
+                                Bal: â‚¦{tx.balanceAfter.toLocaleString()}
                               </span>
                             )}
                           </div>
@@ -444,7 +444,7 @@ export const WalletModal: React.FC = () => {
                               <div className="text-[10px] text-slate-400 font-mono flex flex-wrap gap-2 mt-0.5">
                                 <span>Ref: {tx.referenceId || tx.reference}</span>
                                 {typeof tx.fee === 'number' && tx.fee > 0 && (
-                                  <span>· Fee: ₦{tx.fee.toLocaleString()}</span>
+                                  <span>Â· Fee: â‚¦{tx.fee.toLocaleString()}</span>
                                 )}
                               </div>
                             </div>
@@ -460,7 +460,7 @@ export const WalletModal: React.FC = () => {
                                   : 'text-rose-600 dark:text-rose-400'
                               }`}
                             >
-                              {isIncoming ? '+' : isEscrow ? '🔒 ' : '-'}
+                              {isIncoming ? '+' : isEscrow ? 'ðŸ”’ ' : '-'}
                               {formatPrice(Math.abs(tx.amount), tx.currency || 'NGN')}
                             </div>
                             <span className="text-[9px] uppercase font-semibold text-slate-400 block">
@@ -468,7 +468,7 @@ export const WalletModal: React.FC = () => {
                             </span>
                             {typeof tx.balanceAfter === 'number' && (
                               <span className="text-[9px] text-slate-400 font-mono block">
-                                Bal: ₦{tx.balanceAfter.toLocaleString()}
+                                Bal: â‚¦{tx.balanceAfter.toLocaleString()}
                               </span>
                             )}
                           </div>
@@ -524,9 +524,9 @@ export const WalletModal: React.FC = () => {
                 />
               </div>
 
-              {/* Top-up Fee Breakdown: 1% with ₦2,000 max cap */}
+              {/* Top-up Fee Breakdown: 1% with â‚¦3,000 max cap */}
               {(() => {
-                const fee = Math.min(Math.round(topUpAmount * 0.01), 2000);
+                const fee = Math.min(Math.round(topUpAmount * 0.01), 3000);
                 const totalCharge = topUpAmount + fee;
                 return (
                   <div className="p-3 bg-slate-50 dark:bg-slate-900/80 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-2 text-xs">
@@ -539,7 +539,7 @@ export const WalletModal: React.FC = () => {
                     <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
                       <span className="flex items-center gap-1">
                         <span>Top-up Fee (1%)</span>
-                        {topUpAmount * 0.01 > 2000 && (
+                        {topUpAmount * 0.01 > 3000 && (
                           <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.2 rounded-full">
                             Platform Protected
                           </span>
@@ -582,7 +582,7 @@ export const WalletModal: React.FC = () => {
                     <>
                       <CreditCard className="w-4 h-4" />
                       <span>
-                        Pay {CURRENCY_SYMBOLS[currency]}{(topUpAmount + Math.min(Math.round(topUpAmount * 0.01), Math.round(2000 * rate))).toLocaleString()} with Paystack
+                        Pay {CURRENCY_SYMBOLS[currency]}{(topUpAmount + Math.min(Math.round(topUpAmount * 0.01), Math.round(3000 * rate))).toLocaleString()} with Paystack
                       </span>
                     </>
                   )}
@@ -675,7 +675,7 @@ export const WalletModal: React.FC = () => {
                   disabled={isProcessing || withdrawAmount > wallet.availableBalance}
                   className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 shadow-md disabled:opacity-50"
                 >
-                  {isProcessing ? 'Processing Payout...' : `Withdraw ₦${withdrawAmount.toLocaleString()}`}
+                  {isProcessing ? 'Processing Payout...' : `Withdraw â‚¦${withdrawAmount.toLocaleString()}`}
                 </button>
               </div>
             </form>
@@ -685,4 +685,5 @@ export const WalletModal: React.FC = () => {
     </div>
   );
 };
+
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ShieldCheck,
   Check,
@@ -64,7 +64,7 @@ import {
   upsertSupabaseAdminArtisanOverride,
 } from '../services/supabaseAdminSync';
 
-type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'comms' | 'security';
+type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'comms' | 'ads' | 'security';
 type FinanceSubTab = 'escrows' | 'ledger' | 'disputes' | 'dispatch' | 'webhooks' | 'payouts';
 type UsersSubTab = 'directory' | 'kyc' | 'artisans';
 type CommsSubTab = 'nodes' | 'broadcast' | 'cms';
@@ -291,7 +291,7 @@ export const AdminDashboardModal: React.FC = () => {
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
 
-  // Config form local state (mirrors systemConfig — hydrated only on open, never overwritten mid-edit)
+  // Config form local state (mirrors systemConfig â€” hydrated only on open, never overwritten mid-edit)
   const wasAdminOpenRef = useRef(false);
   const [cfgMaintenanceMode, setCfgMaintenanceMode] = useState(false);
   const [cfgMaintenanceMsg, setCfgMaintenanceMsg] = useState('');
@@ -1046,8 +1046,8 @@ export const AdminDashboardModal: React.FC = () => {
       items.push({
         id: `act_esc_${o.id}`,
         refId: o.paystackRef || o.id,
-        title: `Escrow · ${o.product.title}`,
-        subtitle: `${o.buyerName} → ${o.sellerName} (${o.status.replace('_', ' ')})`,
+        title: `Escrow Â· ${o.product.title}`,
+        subtitle: `${o.buyerName} â†’ ${o.sellerName} (${o.status.replace('_', ' ')})`,
         amountNgn: o.totalAmount,
         type: 'escrow',
         timestamp: o.updatedAt || o.createdAt || new Date().toISOString(),
@@ -1059,8 +1059,8 @@ export const AdminDashboardModal: React.FC = () => {
       items.push({
         id: `act_disp_${d.id}`,
         refId: d.trackingCode || d.id,
-        title: `Dispatch · ${String(d.provider || 'courier').toUpperCase()}`,
-        subtitle: `${d.packageDescription || 'Parcel'} → ${d.recipientName}`,
+        title: `Dispatch Â· ${String(d.provider || 'courier').toUpperCase()}`,
+        subtitle: `${d.packageDescription || 'Parcel'} â†’ ${d.recipientName}`,
         amountNgn: d.totalFee ?? d.estimatedFee ?? 0,
         type: 'dispatch',
         timestamp: d.createdAt || new Date().toISOString(),
@@ -1071,7 +1071,7 @@ export const AdminDashboardModal: React.FC = () => {
       items.push({
         id: `act_wh_${w.id}`,
         refId: w.reference,
-        title: `Paystack · ${w.event}`,
+        title: `Paystack Â· ${w.event}`,
         subtitle: w.payloadSummary,
         amountNgn: w.amountNgn,
         type: 'webhook',
@@ -1084,7 +1084,7 @@ export const AdminDashboardModal: React.FC = () => {
         id: `act_aud_${a.id}`,
         refId: a.refId,
         title: a.action,
-        subtitle: `${a.target} · ${a.details}`,
+        subtitle: `${a.target} Â· ${a.details}`,
         type: 'audit',
         timestamp: a.timestamp,
       });
@@ -1186,7 +1186,7 @@ export const AdminDashboardModal: React.FC = () => {
       setDualApprovalRequest({
         isOpen: true,
         actionLabel: action === 'release_to_seller' ? 'Escrow Force-Release' : 'Escrow Refund Buyer',
-        targetSummary: `#${order.id} · ${order.buyerName} → ${order.sellerName}`,
+        targetSummary: `#${order.id} Â· ${order.buyerName} â†’ ${order.sellerName}`,
         amountNgn: order.totalAmount,
         errorMsg: null,
         isSubmitting: false,
@@ -1230,7 +1230,7 @@ export const AdminDashboardModal: React.FC = () => {
         await adjustUserWallet(p.phoneOrId, p.delta, false);
         setPayoutAmount('');
         setPayoutNote('');
-        setPayoutFeedback(`Disbursed ₦${p.delta.toLocaleString()} to ${p.userName} (Co-signed by ${secondaryName}).`);
+        setPayoutFeedback(`Disbursed â‚¦${p.delta.toLocaleString()} to ${p.userName} (Co-signed by ${secondaryName}).`);
       }
       setDualApprovalRequest({
         isOpen: false,
@@ -1280,7 +1280,7 @@ export const AdminDashboardModal: React.FC = () => {
     setPayoutNote('');
     try {
       await adjustUserWallet(payoutTargetPhone, amountNum, false);
-      setPayoutFeedback(`Manual payout of ₦${amountNum.toLocaleString()} applied to ${targetName}.`);
+      setPayoutFeedback(`Manual payout of â‚¦${amountNum.toLocaleString()} applied to ${targetName}.`);
       fetchLiveMetrics();
     } finally {
       setPayoutBusy(false);
@@ -1571,6 +1571,12 @@ export const AdminDashboardModal: React.FC = () => {
     { id: 'stores', label: 'Vendors & Stores', icon: Store, badge: mergedStores.length || null },
     { id: 'users', label: 'Users & Artisans', icon: Users, badge: mergedUsers.length || null },
     { id: 'comms', label: 'Comms & Social', icon: Radio, badge: systemBroadcast?.active ? 'LIVE' : null },
+    {
+      id: 'ads',
+      label: 'Ads & Promotions',
+      icon: Megaphone,
+      badge: (cmsData?.sponsoredStatuses || []).filter((a: any) => a.approvalStatus === 'pending' || a.status === 'pending').length || null,
+    },
     { id: 'security', label: 'System & Security', icon: Shield, badge: securityEvents.length || null },
   ];
 
@@ -1580,6 +1586,7 @@ export const AdminDashboardModal: React.FC = () => {
     stores: 'Vendor & Store Tiers',
     users: 'User & Artisan Directory',
     comms: 'Communication & Social Logs',
+    ads: 'Sponsored Ads & Promotion Requests',
     security: 'System & Security',
   };
 
@@ -1595,9 +1602,9 @@ export const AdminDashboardModal: React.FC = () => {
         />
       )}
 
-      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {/* LEFT PERSISTENT SIDEBAR                                                  */}
-      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <aside
         className={`fixed lg:static inset-y-0 left-0 z-40 flex flex-col border-r border-zinc-800/90 bg-zinc-950/95 backdrop-blur-xl transition-all duration-200 shrink-0 ${
           sidebarCollapsed ? 'lg:w-[72px]' : 'lg:w-[260px]'
@@ -1672,7 +1679,7 @@ export const AdminDashboardModal: React.FC = () => {
             <div className="p-2.5 rounded-xl bg-zinc-900/50 border border-zinc-800/80 space-y-1">
               <div className="flex items-center justify-between">
                 <span className="text-zinc-500">Node</span>
-                <span className="text-zinc-200 tabular-nums">:3000 · {liveMetrics?.serverMemoryMb ?? 48} MB</span>
+                <span className="text-zinc-200 tabular-nums">:3000 Â· {liveMetrics?.serverMemoryMb ?? 48} MB</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-zinc-500">Uptime</span>
@@ -1689,9 +1696,9 @@ export const AdminDashboardModal: React.FC = () => {
         </div>
       </aside>
 
-      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {/* MAIN COLUMN: TOP UTILITY BAR + DYNAMIC WORKSPACE                         */}
-      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#09090b]">
         {/* Top Global Utility Bar */}
         <header className="pt-safe-admin border-b border-zinc-800/90 bg-zinc-950/80 backdrop-blur-md shrink-0">
@@ -1851,7 +1858,7 @@ export const AdminDashboardModal: React.FC = () => {
                   <div className="pb-2.5 border-b border-zinc-800">
                     <div className="font-semibold text-white">{currentUser?.fullName || 'Super Admin'}</div>
                     <div className="text-[11px] font-mono text-zinc-400 mt-0.5">
-                      Role: Super Admin · Multi-Admin RBAC
+                      Role: Super Admin Â· Multi-Admin RBAC
                     </div>
                   </div>
                   <div className="space-y-1.5">
@@ -1927,9 +1934,9 @@ export const AdminDashboardModal: React.FC = () => {
 
         {/* Dynamic Workspace */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
           {/* SECTION 1: OVERVIEW (DASHBOARD)                                    */}
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
           {activeSection === 'overview' && (
             <div className="space-y-6">
               {/* Top Metric Grid (4 Cards) */}
@@ -1940,10 +1947,10 @@ export const AdminDashboardModal: React.FC = () => {
                     <DollarSign className="w-4 h-4 text-violet-400" />
                   </div>
                   <div className="text-2xl font-bold font-mono tabular-nums text-white">
-                    ₦{totalPlatformVolumeNgn.toLocaleString()}
+                    â‚¦{totalPlatformVolumeNgn.toLocaleString()}
                   </div>
                   <div className="text-xs font-mono text-emerald-400 tabular-nums">
-                    +₦{totalDispatchCommission.toLocaleString()} courier fees · {activeOrders.length + escrowOrders.length} txns
+                    +â‚¦{totalDispatchCommission.toLocaleString()} courier fees Â· {activeOrders.length + escrowOrders.length} txns
                   </div>
                 </div>
 
@@ -1953,7 +1960,7 @@ export const AdminDashboardModal: React.FC = () => {
                     <Lock className="w-4 h-4 text-amber-400" />
                   </div>
                   <div className="text-2xl font-bold font-mono tabular-nums text-white">
-                    ₦{totalEscrowLockedNgn.toLocaleString()}
+                    â‚¦{totalEscrowLockedNgn.toLocaleString()}
                   </div>
                   <div className="text-xs font-mono text-zinc-400 tabular-nums">
                     {escrowOrders.filter((o) => o.status === 'escrow_secured' || o.status === 'disputed').length} orders held in vault
@@ -1969,7 +1976,7 @@ export const AdminDashboardModal: React.FC = () => {
                     {pendingDisputesCount}
                   </div>
                   <div className="text-xs font-mono text-zinc-400 tabular-nums">
-                    {escrowOrders.filter((o) => o.status === 'disputed').length} disputes · {securityEvents.length} security alerts
+                    {escrowOrders.filter((o) => o.status === 'disputed').length} disputes Â· {securityEvents.length} security alerts
                   </div>
                 </div>
 
@@ -1983,7 +1990,7 @@ export const AdminDashboardModal: React.FC = () => {
                     <span className="text-sm font-normal text-zinc-400">/ {mergedUsers.length}</span>
                   </div>
                   <div className="text-xs font-mono text-zinc-400 tabular-nums">
-                    {mergedStores.length} stores · {mergedArtisans.length} artisans
+                    {mergedStores.length} stores Â· {mergedArtisans.length} artisans
                   </div>
                 </div>
               </div>
@@ -2002,7 +2009,7 @@ export const AdminDashboardModal: React.FC = () => {
                       onClick={() => setActiveSection('finance')}
                       className="text-xs font-medium text-violet-400 hover:text-violet-300 whitespace-nowrap"
                     >
-                      Open Ledger →
+                      Open Ledger â†’
                     </button>
                   </div>
 
@@ -2035,7 +2042,7 @@ export const AdminDashboardModal: React.FC = () => {
                           <div className="text-right shrink-0">
                             {item.amountNgn !== undefined && (
                               <div className="text-xs font-mono font-semibold text-emerald-400 tabular-nums">
-                                ₦{item.amountNgn.toLocaleString()}
+                                â‚¦{item.amountNgn.toLocaleString()}
                               </div>
                             )}
                             <div className="text-[11px] font-mono text-zinc-500 tabular-nums">
@@ -2063,7 +2070,7 @@ export const AdminDashboardModal: React.FC = () => {
                       }}
                       className="text-xs font-medium text-violet-400 hover:text-violet-300 whitespace-nowrap"
                     >
-                      Security →
+                      Security â†’
                     </button>
                   </div>
 
@@ -2126,7 +2133,7 @@ export const AdminDashboardModal: React.FC = () => {
                     <div className="pt-2 border-t border-zinc-800 flex items-center justify-between text-xs">
                       <span className="text-zinc-400">Aggregated User Wallet Pool</span>
                       <span className="font-mono font-semibold text-white tabular-nums">
-                        ₦{totalWalletPoolNgn.toLocaleString()}
+                        â‚¦{totalWalletPoolNgn.toLocaleString()}
                       </span>
                     </div>
                   </div>
@@ -2135,9 +2142,9 @@ export const AdminDashboardModal: React.FC = () => {
             </div>
           )}
 
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
           {/* SECTION 2: ESCROW & FINANCE CENTER                                 */}
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
           {activeSection === 'finance' && (
             <div className="space-y-5">
               {/* Sub-tab Toolbar */}
@@ -2167,7 +2174,7 @@ export const AdminDashboardModal: React.FC = () => {
                 </div>
 
                 <span className="text-[11px] font-mono text-zinc-400">
-                  Dual-Admin PIN required ≥ ₦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}
+                  Dual-Admin PIN required â‰¥ â‚¦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}
                 </span>
               </div>
 
@@ -2192,7 +2199,7 @@ export const AdminDashboardModal: React.FC = () => {
                       ))}
                     </div>
                     <div className="text-xs font-mono text-zinc-400 tabular-nums">
-                      Vault Locked: <strong className="text-emerald-400">₦{totalEscrowLockedNgn.toLocaleString()}</strong>
+                      Vault Locked: <strong className="text-emerald-400">â‚¦{totalEscrowLockedNgn.toLocaleString()}</strong>
                     </div>
                   </div>
 
@@ -2203,7 +2210,7 @@ export const AdminDashboardModal: React.FC = () => {
                           <th className="py-3 px-4">Transaction Ref</th>
                           <th className="py-3 px-4">Buyer</th>
                           <th className="py-3 px-4">Vendor</th>
-                          <th className="py-3 px-4 text-right">Amount Held (₦)</th>
+                          <th className="py-3 px-4 text-right">Amount Held (â‚¦)</th>
                           <th className="py-3 px-4">Status</th>
                           <th className="py-3 px-4 text-right">Actions</th>
                         </tr>
@@ -2384,7 +2391,7 @@ export const AdminDashboardModal: React.FC = () => {
                                 </td>
                                 <td className="py-3 px-4">
                                   <div className="text-zinc-200 font-medium">{tx.userName || 'AGC User'}</div>
-                                  <div className="text-[11px] font-mono text-zinc-500">{tx.userPhone || '—'}</div>
+                                  <div className="text-[11px] font-mono text-zinc-500">{tx.userPhone || 'â€”'}</div>
                                 </td>
                                 <td className="py-3 px-4">
                                   <span
@@ -2410,14 +2417,14 @@ export const AdminDashboardModal: React.FC = () => {
                                         : 'text-rose-400'
                                     }`}
                                   >
-                                    {isIncoming ? '+' : isEscrow ? '🔒 ' : '-'}₦{Math.abs(Number(tx.amount) || 0).toLocaleString()}
+                                    {isIncoming ? '+' : isEscrow ? 'ðŸ”’ ' : '-'}â‚¦{Math.abs(Number(tx.amount) || 0).toLocaleString()}
                                   </div>
                                   {Number(tx.fee) > 0 && (
-                                    <div className="text-[10px] text-zinc-500">Fee: ₦{Number(tx.fee).toLocaleString()}</div>
+                                    <div className="text-[10px] text-zinc-500">Fee: â‚¦{Number(tx.fee).toLocaleString()}</div>
                                   )}
                                 </td>
                                 <td className="py-3 px-4 text-right font-mono text-zinc-200 tabular-nums">
-                                  {typeof tx.balanceAfter === 'number' ? `₦${tx.balanceAfter.toLocaleString()}` : '—'}
+                                  {typeof tx.balanceAfter === 'number' ? `â‚¦${tx.balanceAfter.toLocaleString()}` : 'â€”'}
                                 </td>
                               </tr>
                             );
@@ -2455,7 +2462,7 @@ export const AdminDashboardModal: React.FC = () => {
                             </div>
                             <div className="text-sm font-medium text-zinc-100 truncate">{order.product.title}</div>
                             <div className="text-xs text-zinc-400">
-                              {order.buyerName} ↔ {order.sellerName} · PIN #{order.escrowPin}
+                              {order.buyerName} â†” {order.sellerName} Â· PIN #{order.escrowPin}
                             </div>
                           </div>
                         </div>
@@ -2491,10 +2498,10 @@ export const AdminDashboardModal: React.FC = () => {
                         Platform Commission ({systemConfig?.dispatchCommissionPercent ?? 5}% Fee)
                       </span>
                       <div className="text-2xl font-bold font-mono tabular-nums text-white mt-0.5">
-                        ₦{totalDispatchCommission.toLocaleString()} Earned
+                        â‚¦{totalDispatchCommission.toLocaleString()} Earned
                       </div>
                       <p className="text-xs text-zinc-400">
-                        Total courier volume: ₦{totalDispatchVolume.toLocaleString()} across {activeOrders.length} orders
+                        Total courier volume: â‚¦{totalDispatchVolume.toLocaleString()} across {activeOrders.length} orders
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 text-xs">
@@ -2551,13 +2558,13 @@ export const AdminDashboardModal: React.FC = () => {
                                 </td>
                                 <td className="py-3 px-4">
                                   <div className="text-zinc-200 font-medium">{ord.packageDescription}</div>
-                                  <div className="text-[11px] text-zinc-500">{ord.recipientName} · {ord.recipientAddress}</div>
+                                  <div className="text-[11px] text-zinc-500">{ord.recipientName} Â· {ord.recipientAddress}</div>
                                 </td>
                                 <td className="py-3 px-4 text-zinc-300">
                                   {ord.riderName || 'Assigning'} {ord.riderPlate ? `(${ord.riderPlate})` : ''}
                                 </td>
                                 <td className="py-3 px-4 text-right font-mono text-emerald-400 tabular-nums">
-                                  +₦{comm.toLocaleString()}
+                                  +â‚¦{comm.toLocaleString()}
                                 </td>
                                 <td className="py-3 px-4 font-mono uppercase text-[11px] text-zinc-300">
                                   {String(ord.status || '').replace('_', ' ')}
@@ -2636,7 +2643,7 @@ export const AdminDashboardModal: React.FC = () => {
                                 </span>
                               </td>
                               <td className="py-3 px-4 text-right font-mono tabular-nums text-white">
-                                ₦{(w.amountNgn || 0).toLocaleString()}
+                                â‚¦{(w.amountNgn || 0).toLocaleString()}
                               </td>
                               <td className="py-3 px-4 text-zinc-300">{w.payloadSummary}</td>
                               <td className="py-3 px-4 text-right font-mono text-zinc-500 tabular-nums">
@@ -2660,7 +2667,7 @@ export const AdminDashboardModal: React.FC = () => {
                   <div>
                     <h3 className="text-sm font-semibold text-white">Manual Treasury Payout / Adjustment</h3>
                     <p className="text-zinc-400 mt-0.5">
-                      Disbursements ≥ ₦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()} require Secondary Admin PIN verification.
+                      Disbursements â‰¥ â‚¦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()} require Secondary Admin PIN verification.
                     </p>
                   </div>
 
@@ -2676,13 +2683,13 @@ export const AdminDashboardModal: React.FC = () => {
                         <option value="">Select registered user...</option>
                         {mergedUsers.map((u) => (
                           <option key={u.id} value={u.phoneNumber || u.id}>
-                            {u.fullName} ({u.phoneNumber || u.id}) — ₦{(u.walletBalanceNgn || 0).toLocaleString()}
+                            {u.fullName} ({u.phoneNumber || u.id}) â€” â‚¦{(u.walletBalanceNgn || 0).toLocaleString()}
                           </option>
                         ))}
                       </select>
                     </div>
                     <div>
-                      <label className="text-zinc-300 font-medium block mb-1.5">Amount (₦ NGN)</label>
+                      <label className="text-zinc-300 font-medium block mb-1.5">Amount (â‚¦ NGN)</label>
                       <input
                         type="number"
                         required
@@ -2725,9 +2732,9 @@ export const AdminDashboardModal: React.FC = () => {
             </div>
           )}
 
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
           {/* SECTION 3: VENDOR & STORE MANAGEMENT                               */}
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
           {activeSection === 'stores' && (
             <div className="space-y-4">
               {/* Toolbar */}
@@ -2881,9 +2888,9 @@ export const AdminDashboardModal: React.FC = () => {
             </div>
           )}
 
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
           {/* SECTION 4: USER & ARTISAN DIRECTORY                                */}
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
           {activeSection === 'users' && (
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/90 pb-3">
@@ -2958,7 +2965,7 @@ export const AdminDashboardModal: React.FC = () => {
                       <tr className="border-b border-zinc-800 text-zinc-400 font-medium bg-zinc-950/60">
                         <th className="py-3 px-4">User & Phone</th>
                         <th className="py-3 px-4">Role / Status</th>
-                        <th className="py-3 px-4 text-right">Wallet (₦)</th>
+                        <th className="py-3 px-4 text-right">Wallet (â‚¦)</th>
                         <th className="py-3 px-4">Presence</th>
                         <th className="py-3 px-4">Verification Badge</th>
                         <th className="py-3 px-4 text-right">Dossier</th>
@@ -3012,7 +3019,7 @@ export const AdminDashboardModal: React.FC = () => {
                             </div>
                           </td>
                           <td className="py-3 px-4 text-right font-mono tabular-nums text-white font-semibold">
-                            ₦{(user.walletBalanceNgn || 0).toLocaleString()}
+                            â‚¦{(user.walletBalanceNgn || 0).toLocaleString()}
                           </td>
                           <td className="py-3 px-4 font-mono text-[11px]">
                             <span className={user.isOnline ? 'text-emerald-400' : 'text-zinc-500'}>
@@ -3091,7 +3098,7 @@ export const AdminDashboardModal: React.FC = () => {
                             <div className="text-[11px] font-mono text-zinc-400">{user.phoneNumber || user.id}</div>
                           </td>
                           <td className="py-3 px-4 font-mono text-[11px]">
-                            <span className="text-zinc-300">{user.kycType || 'BVN'} · </span>
+                            <span className="text-zinc-300">{user.kycType || 'BVN'} Â· </span>
                             <span
                               className={
                                 user.kycStatus === 'verified'
@@ -3219,9 +3226,9 @@ export const AdminDashboardModal: React.FC = () => {
             </div>
           )}
 
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
           {/* SECTION 5: COMMUNICATION & SOCIAL LOGS                             */}
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
           {activeSection === 'comms' && (
             <div className="space-y-5">
               <div className="flex items-center gap-1.5 border-b border-zinc-800/90 pb-3">
@@ -3727,7 +3734,7 @@ export const AdminDashboardModal: React.FC = () => {
                                     </span>
                                     {ad.paidAmount ? (
                                       <span className="text-[10px] font-mono text-zinc-400">
-                                        · ₦{Number(ad.paidAmount).toLocaleString()} paid
+                                        Â· â‚¦{Number(ad.paidAmount).toLocaleString()} paid
                                       </span>
                                     ) : null}
                                   </div>
@@ -3795,10 +3802,232 @@ export const AdminDashboardModal: React.FC = () => {
             </div>
           )}
 
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
           {/* SECTION 6: SYSTEM & SECURITY                                       */}
-          {/* ══════════════════════════════════════════════════════════════════ */}
-          {activeSection === 'security' && (
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ════════════════════════════════════════════════════════════════════════ */}
+          {/* SECTION: SPONSORED ADS & PROMOTION REQUESTS MANAGEMENT                  */}
+          {/* ════════════════════════════════════════════════════════════════════════ */}
+          {activeSection === 'ads' && (
+            <div className="space-y-6">
+              {/* Top Banner & Ad Pricing Settings */}
+              <div className="p-5 rounded-2xl bg-gradient-to-r from-violet-950/40 via-purple-950/30 to-zinc-900 border border-violet-500/30 space-y-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-bold text-white flex items-center gap-2">
+                      <Megaphone className="w-5 h-5 text-violet-400" />
+                      <span>Sponsored Ads &amp; Promotion Settings</span>
+                    </h3>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      Set pricing per 24h sponsored status story and review advertiser promotion requests
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 self-stretch sm:self-auto">
+                    <div className="flex items-center gap-2 bg-zinc-900/90 border border-zinc-700/80 rounded-xl px-3 py-1.5">
+                      <span className="text-xs text-zinc-400 font-mono">Price (₦):</span>
+                      <input
+                        type="number"
+                        value={cfgSponsoredAdFee}
+                        onChange={(e) => setCfgSponsoredAdFee(parseInt(e.target.value, 10) || 0)}
+                        className="w-24 bg-transparent text-sm font-mono font-bold text-white focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await updateSystemConfig({ sponsoredAdFeeNgn: cfgSponsoredAdFee });
+                        notify(`Ad price updated to ₦${cfgSponsoredAdFee.toLocaleString()}`);
+                      }}
+                      className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold transition-colors shadow-md shadow-violet-600/30 whitespace-nowrap"
+                    >
+                      Save Ad Price
+                    </button>
+                  </div>
+                </div>
+
+                {/* Metrics */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800/80">
+                    <div className="text-[11px] text-zinc-400">Total Requests</div>
+                    <div className="text-lg font-bold font-mono text-white">
+                      {(cmsData?.sponsoredStatuses || []).length}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800/80">
+                    <div className="text-[11px] text-amber-400 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                      <span>Pending Review</span>
+                    </div>
+                    <div className="text-lg font-bold font-mono text-amber-400">
+                      {(cmsData?.sponsoredStatuses || []).filter((a: any) => a.approvalStatus === 'pending' || a.status === 'pending').length}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800/80">
+                    <div className="text-[11px] text-emerald-400">Active Live Ads</div>
+                    <div className="text-lg font-bold font-mono text-emerald-400">
+                      {(cmsData?.sponsoredStatuses || []).filter((a: any) => a.approvalStatus === 'approved' && a.active !== false).length}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800/80">
+                    <div className="text-[11px] text-purple-400">Ad Fee Rate</div>
+                    <div className="text-lg font-bold font-mono text-purple-300">
+                      ₦{(systemConfig?.sponsoredAdFeeNgn ?? cfgSponsoredAdFee ?? 2500).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Ad Requests List */}
+              <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-5 space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>Advertiser Promotion Submissions</span>
+                    <span className="text-xs font-mono font-normal text-zinc-400">
+                      ({(cmsData?.sponsoredStatuses || []).length})
+                    </span>
+                  </h4>
+                </div>
+
+                {(!cmsData?.sponsoredStatuses || cmsData.sponsoredStatuses.length === 0) ? (
+                  <div className="py-12 text-center text-zinc-500 text-xs">
+                    No sponsored promotion requests yet. When users submit ads in the Updates tab, their media, brand details, and review actions will appear here.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {cmsData.sponsoredStatuses.map((ad: any, idx: number) => {
+                      const isPending = ad.approvalStatus === 'pending' || ad.status === 'pending';
+                      const isApproved = ad.approvalStatus === 'approved';
+                      const isRejected = ad.approvalStatus === 'rejected';
+
+                      return (
+                        <div
+                          key={ad.id || idx}
+                          className="rounded-2xl border border-zinc-800/90 bg-zinc-950/70 p-4 space-y-3.5 flex flex-col justify-between"
+                        >
+                          <div className="space-y-3">
+                            {/* Media thumbnail + Brand Header */}
+                            <div className="flex items-start gap-3">
+                              {ad.mediaUrl ? (
+                                <img
+                                  src={ad.mediaUrl}
+                                  alt={ad.brandName || ad.brand || 'Ad'}
+                                  className="w-16 h-16 rounded-xl object-cover border border-zinc-800 shrink-0"
+                                />
+                              ) : (
+                                <div className="w-16 h-16 rounded-xl bg-violet-950/50 border border-violet-800/40 flex items-center justify-center text-violet-400 shrink-0 font-bold text-lg">
+                                  {(ad.brandName || ad.brand || 'AD').charAt(0)}
+                                </div>
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center justify-between gap-1">
+                                  <h5 className="text-sm font-bold text-white truncate">
+                                    {ad.brandName || ad.brand || 'Sponsored Brand'}
+                                  </h5>
+                                  <span
+                                    className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase shrink-0 ${
+                                      isApproved
+                                        ? 'bg-emerald-950/70 text-emerald-400 border border-emerald-800'
+                                        : isRejected
+                                        ? 'bg-rose-950/70 text-rose-400 border border-rose-800'
+                                        : 'bg-amber-950/70 text-amber-300 border border-amber-800 animate-pulse'
+                                    }`}
+                                  >
+                                    {ad.approvalStatus || ad.status || 'pending'}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-zinc-400 truncate mt-0.5 font-mono">
+                                  By: {ad.submittedByName || 'User'} · {ad.submittedByPhone || 'No Phone'}
+                                </div>
+                                <div className="text-[10px] text-zinc-500 font-mono mt-0.5">
+                                  {ad.createdAt ? new Date(ad.createdAt).toLocaleString() : 'Recent'} · Ref: {ad.paymentReference || ad.id}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Caption & Target Link */}
+                            <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800/60 text-xs space-y-1.5">
+                              <p className="text-zinc-200 leading-relaxed line-clamp-3">
+                                &ldquo;{ad.caption || ad.text || 'No caption provided'}&rdquo;
+                              </p>
+                              {ad.targetUrl && (
+                                <div className="flex items-center gap-2 pt-1 border-t border-zinc-800/60 text-[11px]">
+                                  <span className="text-zinc-400 font-mono">CTA ({ad.ctaLabel || 'Shop Now'}):</span>
+                                  <a
+                                    href={ad.targetUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-violet-400 hover:underline truncate font-mono"
+                                  >
+                                    {ad.targetUrl}
+                                  </a>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Review & Management Actions */}
+                          <div className="pt-2 border-t border-zinc-800/60 flex items-center justify-between gap-2">
+                            {isPending ? (
+                              <div className="flex items-center gap-2 w-full">
+                                <button
+                                  type="button"
+                                  disabled={adReviewBusyId === ad.id}
+                                  onClick={() => handleReviewSponsoredAd(ad.id, 'approve')}
+                                  className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors shadow-sm disabled:opacity-50 flex items-center justify-center gap-1.5"
+                                >
+                                  <Check className="w-4 h-4" />
+                                  <span>Approve &amp; Go Live</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={adReviewBusyId === ad.id}
+                                  onClick={() => handleReviewSponsoredAd(ad.id, 'reject')}
+                                  className="flex-1 py-2 rounded-xl bg-rose-600/20 text-rose-300 border border-rose-500/40 hover:bg-rose-600/30 text-xs font-bold transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+                                >
+                                  <X className="w-4 h-4" />
+                                  <span>Reject &amp; Refund</span>
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-between w-full">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = [...(cmsData?.sponsoredStatuses || [])];
+                                    updated[idx] = { ...updated[idx], active: !updated[idx].active };
+                                    updateCmsData({ sponsoredStatuses: updated });
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-mono"
+                                >
+                                  {ad.active !== false ? '🟢 Live in Updates' : '⏸️ Paused'}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (confirm('Delete this ad record?')) {
+                                      updateCmsData({
+                                        sponsoredStatuses: (cmsData?.sponsoredStatuses || []).filter((_, i) => i !== idx),
+                                      });
+                                    }
+                                  }}
+                                  className="p-1.5 text-rose-400 hover:bg-rose-950/40 rounded-lg transition-colors"
+                                  title="Delete Ad Record"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+                    {activeSection === 'security' && (
             <div className="space-y-5">
               <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-800/90 pb-3 overflow-x-auto">
                 {([
@@ -3958,7 +4187,7 @@ export const AdminDashboardModal: React.FC = () => {
                           filteredAuditTrail.map((a) => (
                             <tr
                               key={a.id}
-                              onClick={() => openAuditDrawer(a.refId, { title: `${a.action} · ${a.target}` })}
+                              onClick={() => openAuditDrawer(a.refId, { title: `${a.action} Â· ${a.target}` })}
                               className="hover:bg-zinc-900/80 cursor-pointer transition-colors"
                             >
                               <td className="py-3 px-4 font-mono text-zinc-400 tabular-nums whitespace-nowrap">
@@ -3968,10 +4197,10 @@ export const AdminDashboardModal: React.FC = () => {
                               <td className="py-3 px-4 text-zinc-200 whitespace-nowrap">{a.actor}</td>
                               <td className="py-3 px-4 font-medium text-white whitespace-nowrap">{a.action}</td>
                               <td className="py-3 px-4 text-zinc-300">
-                                <span className="font-medium text-zinc-200">{a.target}</span> — {a.details}
+                                <span className="font-medium text-zinc-200">{a.target}</span> â€” {a.details}
                               </td>
                               <td className="py-3 px-4 font-mono text-emerald-400 whitespace-nowrap">
-                                {a.dualApprovedBy || '—'}
+                                {a.dualApprovedBy || 'â€”'}
                               </td>
                             </tr>
                           ))
@@ -4199,7 +4428,7 @@ export const AdminDashboardModal: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-zinc-400 block mb-1">Min Instant Transfer (₦)</label>
+                      <label className="text-zinc-400 block mb-1">Min Instant Transfer (â‚¦)</label>
                       <input
                         type="number"
                         value={cfgMinTransfer}
@@ -4208,7 +4437,7 @@ export const AdminDashboardModal: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-zinc-400 block mb-1">Max Daily Limit (₦)</label>
+                      <label className="text-zinc-400 block mb-1">Max Daily Limit (â‚¦)</label>
                       <input
                         type="number"
                         value={cfgMaxDailyTransfer}
@@ -4217,7 +4446,7 @@ export const AdminDashboardModal: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-zinc-400 block mb-1">Max Weekly Limit (₦)</label>
+                      <label className="text-zinc-400 block mb-1">Max Weekly Limit (â‚¦)</label>
                       <input
                         type="number"
                         value={cfgMaxWeeklyTransfer}
@@ -4226,7 +4455,7 @@ export const AdminDashboardModal: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-zinc-400 block mb-1">Sponsored Ad Fee (₦)</label>
+                      <label className="text-zinc-400 block mb-1">Sponsored Ad Fee (â‚¦)</label>
                       <input
                         type="number"
                         value={cfgSponsoredAdFee}
@@ -4269,7 +4498,7 @@ export const AdminDashboardModal: React.FC = () => {
                     <div className="space-y-2 text-zinc-300">
                       <div className="flex justify-between py-1.5 border-b border-zinc-800/70">
                         <span className="text-zinc-400">Dual-Sign-Off Threshold</span>
-                        <span className="font-mono text-amber-400 font-semibold">₦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}</span>
+                        <span className="font-mono text-amber-400 font-semibold">â‚¦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between py-1.5 border-b border-zinc-800/70">
                         <span className="text-zinc-400">Active Session Token</span>
@@ -4290,13 +4519,13 @@ export const AdminDashboardModal: React.FC = () => {
         {/* Executive Footer */}
         <footer className="px-6 py-2.5 bg-zinc-950 border-t border-zinc-800/90 flex items-center justify-between text-[11px] font-mono text-zinc-500 shrink-0">
           <span>Last synced: {lastRefreshedAt.toLocaleTimeString()}</span>
-          <span>AGC Control Center · Port 3000</span>
+          <span>AGC Control Center Â· Port 3000</span>
         </footer>
       </div>
 
-      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {/* GLOBAL COMMAND SEARCH MODAL (CTRL + K)                                   */}
-      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {globalSearchOpen && (
         <div
           className="fixed inset-0 z-[125] flex items-start justify-center pt-20 sm:pt-16 p-4 bg-black/75 backdrop-blur-sm"
@@ -4363,8 +4592,8 @@ export const AdminDashboardModal: React.FC = () => {
                           }}
                           className="w-full px-3 py-2 rounded-lg hover:bg-zinc-900 flex items-center justify-between text-left"
                         >
-                          <span className="font-mono text-violet-400">{o.paystackRef || o.id} · {o.product.title}</span>
-                          <span className="font-mono text-emerald-400">₦{o.totalAmount.toLocaleString()}</span>
+                          <span className="font-mono text-violet-400">{o.paystackRef || o.id} Â· {o.product.title}</span>
+                          <span className="font-mono text-emerald-400">â‚¦{o.totalAmount.toLocaleString()}</span>
                         </button>
                       ))}
                     </div>
@@ -4446,9 +4675,9 @@ export const AdminDashboardModal: React.FC = () => {
         </div>
       )}
 
-      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {/* CUSTOMER INFO DOSSIER MODAL                                              */}
-      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {selectedCustomer && (
         <div className="fixed inset-0 z-[115] flex items-center justify-center p-3 pt-14 sm:p-6 bg-black/80 backdrop-blur-sm">
           <div className="w-full max-w-2xl max-h-[88vh] flex flex-col rounded-2xl bg-[#09090b] border border-zinc-800 shadow-2xl overflow-hidden text-xs">
@@ -4470,7 +4699,7 @@ export const AdminDashboardModal: React.FC = () => {
                     )}
                   </h3>
                   <div className="font-mono text-[11px] text-zinc-400">
-                    {selectedCustomer.phoneNumber || selectedCustomer.id} · KYC {(selectedCustomer.kycStatus || 'unverified').toUpperCase()}
+                    {selectedCustomer.phoneNumber || selectedCustomer.id} Â· KYC {(selectedCustomer.kycStatus || 'unverified').toUpperCase()}
                   </div>
                 </div>
               </div>
@@ -4542,7 +4771,7 @@ export const AdminDashboardModal: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-white">Wallet Balance</span>
                   <span className="font-mono font-bold text-emerald-400 tabular-nums">
-                    ₦{(selectedCustomer.walletBalanceNgn || 0).toLocaleString()}
+                    â‚¦{(selectedCustomer.walletBalanceNgn || 0).toLocaleString()}
                   </span>
                 </div>
                 <div className="flex gap-2">
@@ -4655,9 +4884,9 @@ export const AdminDashboardModal: React.FC = () => {
         </div>
       )}
 
-      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {/* ARBITRATION DISPUTE MODAL, DUAL-ADMIN SIGN-OFF & AUDIT DRAWER            */}
-      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <EscrowDisputeModal
         order={disputeOrder}
         onClose={() => setDisputeOrder(null)}
@@ -4694,3 +4923,5 @@ export const AdminDashboardModal: React.FC = () => {
     </div>
   );
 };
+
+

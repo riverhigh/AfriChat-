@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   X,
   Send,
@@ -27,6 +27,8 @@ export const DelayedTransferModal: React.FC = () => {
     CURRENCY_SYMBOLS,
     CURRENCY_RATES,
     systemConfig,
+    chats,
+    adminUsers,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'send' | 'history'>('send');
@@ -39,6 +41,39 @@ export const DelayedTransferModal: React.FC = () => {
   const [paymentPin, setPaymentPin] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Auto-resolve recipient username whenever recipientPhone changes
+  React.useEffect(() => {
+    if (!recipientPhone.trim()) {
+      setRecipientName('');
+      return;
+    }
+    const cleanDigits = recipientPhone.replace(/\D/g, '');
+    const matchedContact = deviceContacts.find((contact: any) => {
+      const c1 = (contact.rawPhoneNumber || '').replace(/\D/g, '');
+      const c2 = (contact.normalizedPhoneNumber || '').replace(/\D/g, '');
+      return (c1 && cleanDigits.endsWith(c1.slice(-9))) || (c2 && cleanDigits.endsWith(c2.slice(-9)));
+    });
+    const matchedChat = (chats || []).find((chatItem: any) => {
+      if (chatItem.isGroup || chatItem.isChannel) return false;
+      const cPhone = (chatItem.phone || chatItem.phoneNumber || '').replace(/\D/g, '');
+      return cPhone && cleanDigits.endsWith(cPhone.slice(-9));
+    });
+    const matchedAdmin = (adminUsers || []).find((u: any) => {
+      const uPhone = (u.phoneNumber || '').replace(/\D/g, '');
+      return uPhone && cleanDigits.endsWith(uPhone.slice(-9));
+    });
+
+    const detectedName =
+      matchedContact?.name ||
+      matchedChat?.name ||
+      matchedAdmin?.fullName ||
+      (cleanDigits.length >= 10 ? User  : '');
+
+    if (detectedName) {
+      setRecipientName(detectedName);
+    }
+  }, [recipientPhone, deviceContacts, chats, adminUsers]);
 
   if (!isTransferModalOpen) return null;
 
@@ -102,7 +137,8 @@ export const DelayedTransferModal: React.FC = () => {
       return;
     }
 
-    if (!recipientPhone.trim() || !recipientName.trim()) {
+    const effectiveRecipientName = recipientName.trim() || User  || recipientPhone.trim();
+    if (!recipientPhone.trim()) {
       setStatusMessage({ type: 'error', text: 'Please enter the recipient name and phone number.' });
       return;
     }
@@ -114,7 +150,7 @@ export const DelayedTransferModal: React.FC = () => {
 
     setIsSending(true);
     try {
-      const result = await sendDelayedTransfer(recipientPhone, recipientName, amountInNGN, note);
+      const result = await sendDelayedTransfer(recipientPhone, effectiveRecipientName, amountInNGN, note);
       if (result.success) {
         setStatusMessage({
           type: 'success',
@@ -417,7 +453,7 @@ export const DelayedTransferModal: React.FC = () => {
                     maxLength={4}
                     value={paymentPin}
                     onChange={(e) => setPaymentPin(e.target.value.replace(/\D/g, ''))}
-                    placeholder="••••"
+                    placeholder="â€¢â€¢â€¢â€¢"
                     className="w-full p-2.5 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-center text-lg font-mono tracking-widest text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
                     required
                   />
@@ -457,7 +493,7 @@ export const DelayedTransferModal: React.FC = () => {
                         {tx.recipientName} ({tx.recipientPhone})
                       </div>
                       <div className="text-[11px] text-slate-500 mt-0.5 truncate">
-                        {tx.createdAt} · {tx.note}
+                        {tx.createdAt} Â· {tx.note}
                       </div>
                     </div>
 
@@ -485,4 +521,5 @@ export const DelayedTransferModal: React.FC = () => {
     </div>
   );
 };
+
 

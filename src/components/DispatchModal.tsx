@@ -18,6 +18,14 @@ import {
   RotateCcw,
   Receipt,
   Sparkles,
+  Zap,
+  Menu,
+  Bell,
+  ChevronDown,
+  ChevronRight,
+  Sliders,
+  Send,
+  CloudSun,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { DispatchDeliveryOrder, DispatchProvider } from '../types';
@@ -32,12 +40,13 @@ export const DispatchModal: React.FC = () => {
     currentUser,
     formatPrice,
     systemConfig,
+    startAiChat,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'book' | 'history'>('book');
   const [vehicleType, setVehicleType] = useState<'bike' | 'van'>('bike');
-  const [packageWeight, setPackageWeight] = useState<number>(1);
-  const [senderAddress, setSenderAddress] = useState('Shop 14, Balogun Ultra-Modern Complex, Lagos Island');
+  const [packageWeight, setPackageWeight] = useState<number>(2);
+  const [senderAddress, setSenderAddress] = useState('J937-827, Kudirat Abiola Way, Ikeja, Lagos');
   const [senderPhone, setSenderPhone] = useState(currentUser.phoneNumber || '+2348031234567');
   const [recipientName, setRecipientName] = useState('');
   const [recipientPhone, setRecipientPhone] = useState('');
@@ -51,6 +60,8 @@ export const DispatchModal: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'delivered'>('all');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [showSmartFilters, setShowSmartFilters] = useState(false);
+  const [aiPromptInput, setAiPromptInput] = useState('');
 
   // Sync active tracking order when dispatchOrders updates via live socket/API
   useEffect(() => {
@@ -73,7 +84,6 @@ export const DispatchModal: React.FC = () => {
   const platformFee = Math.round(baseDeliveryFee * feeRate);
   const totalDeliveryCost = baseDeliveryFee + platformFee;
 
-  // Auto-select provider based on weight (internal logistics routing)
   const autoSelectProvider = (): DispatchProvider => {
     return packageWeight >= 5 || vehicleType === 'van' ? 'pickkr' : 'gokada';
   };
@@ -111,7 +121,6 @@ export const DispatchModal: React.FC = () => {
 
       setActiveTrackingOrder(newOrder);
       setOrderCreatedSuccess(true);
-      // Reset form fields
       setPackageDesc('');
       setRecipientName('');
       setRecipientPhone('');
@@ -135,7 +144,6 @@ export const DispatchModal: React.FC = () => {
     setActiveTab('book');
   };
 
-  // Filter history orders
   const filteredOrders = dispatchOrders.filter((ord) => {
     const matchesSearch =
       ord.trackingCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -144,610 +152,550 @@ export const DispatchModal: React.FC = () => {
       ord.packageDescription.toLowerCase().includes(searchQuery.toLowerCase());
 
     if (!matchesSearch) return false;
-
-    if (statusFilter === 'active') {
-      return ord.status !== 'delivered';
-    }
-    if (statusFilter === 'delivered') {
-      return ord.status === 'delivered';
-    }
+    if (statusFilter === 'active') return ord.status !== 'delivered';
+    if (statusFilter === 'delivered') return ord.status === 'delivered';
     return true;
   });
 
   const activeCount = dispatchOrders.filter((o) => o.status !== 'delivered').length;
-  const deliveredCount = dispatchOrders.filter((o) => o.status === 'delivered').length;
+  const firstName = (currentUser.fullName || 'Mitch').split(' ')[0];
 
   return (
-    <div
-      onClick={() => setIsDispatchModalOpen(false)}
-      className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in"
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg bg-white dark:bg-[#161426] rounded-t-3xl sm:rounded-3xl shadow-2xl max-h-[92vh] flex flex-col overflow-hidden border border-slate-200 dark:border-slate-800"
-      >
-        {/* Grab bar */}
-        <div className="w-10 h-1 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto my-2.5 shrink-0 sm:hidden" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in p-0 sm:p-4">
+      {/* Full-bleed Container */}
+      <div className="w-full max-w-md h-full sm:h-[92vh] sm:rounded-3xl bg-[#090814] text-white flex flex-col shadow-2xl border border-white/10 overflow-hidden relative font-sans">
+        
+        {/* ATMOSPHERIC NIGHT SKY HERO BACKGROUND */}
+        <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+          <img
+            src="https://images.unsplash.com/photo-1519501025264-65ba15a82390?w=1200&auto=format&fit=crop&q=80"
+            alt="Lagos Night Skyline"
+            className="w-full h-[52%] object-cover object-top opacity-35 filter brightness-75 contrast-125"
+          />
+          {/* Night gradient & stars overlay */}
+          <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-[#0a0818]/80 to-[#090814]" />
+          {/* Subtle moon & lighting glow */}
+          <div className="absolute top-6 left-1/3 w-32 h-32 bg-sky-400/10 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute top-20 right-10 w-44 h-44 bg-purple-600/15 rounded-full blur-3xl pointer-events-none" />
+        </div>
 
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 dark:border-slate-800 shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-emerald-600/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shadow-inner">
-              <Truck className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100 font-display">
-                  AGC Dispatch
-                </h3>
-                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-mono font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-                  LIVE API
-                </span>
-              </div>
-              <p className="text-[10px] text-slate-400">
-                On-demand parcel delivery across Nigeria with live tracking
-              </p>
-            </div>
-          </div>
+        {/* ── TOP UTILITY NAVIGATION BAR ── */}
+        <div className="relative z-10 pt-safe px-4 pt-3 pb-2 flex items-center justify-between gap-2 shrink-0">
+          {/* Left: Menu / Close */}
           <button
             type="button"
             onClick={() => setIsDispatchModalOpen(false)}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white flex items-center justify-center hover:bg-white/15 transition-colors shadow-sm"
+            title="Close Dispatch"
           >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Tab Navigation: Book vs History */}
-        <div className="flex items-center border-b border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/40 px-3 pt-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => setActiveTab('book')}
-            className={`flex-1 pb-2.5 pt-1 text-xs font-semibold flex items-center justify-center gap-1.5 border-b-2 transition-all ${
-              activeTab === 'book'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-            }`}
-          >
-            <Truck className="w-3.5 h-3.5" />
-            <span>Book & Track</span>
-            {activeTrackingOrder && activeTrackingOrder.status !== 'delivered' && (
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            )}
+            <Menu className="w-5 h-5 text-white/90" />
           </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('history')}
-            className={`flex-1 pb-2.5 pt-1 text-xs font-semibold flex items-center justify-center gap-1.5 border-b-2 transition-all ${
-              activeTab === 'history'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-            }`}
-          >
-            <History className="w-3.5 h-3.5" />
-            <span>Order History</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-              {dispatchOrders.length}
-            </span>
-          </button>
-        </div>
-
-        {/* Searching for rider overlay banner */}
-        {isSearching && (
-          <div className="mx-4 mt-3 p-4 bg-indigo-600 text-white rounded-2xl flex flex-col items-center gap-2 shadow-lg animate-in slide-in-from-top-2">
-            <div className="flex items-center gap-2">
-              <Search className="w-5 h-5 animate-pulse" />
-              <strong className="text-sm">Connecting to Live Courier API...</strong>
-            </div>
-            <p className="text-xs text-indigo-200 text-center">
-              Matching your package with nearest verified rider in Lagos
-            </p>
-            <div className="w-full bg-indigo-700 rounded-full h-1.5 overflow-hidden mt-1">
-              <div
-                className="bg-white h-full rounded-full animate-pulse"
-                style={{ width: '85%' }}
-              />
-            </div>
+          {/* Center: Location Pill Dropdown */}
+          <div className="flex-1 max-w-[240px] flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/15 text-xs text-white/90 shadow-sm cursor-pointer hover:border-purple-400/50 transition-colors">
+            <MapPin className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+            <span className="truncate text-[11px] font-medium">{senderAddress}</span>
+            <ChevronDown className="w-3.5 h-3.5 text-white/60 shrink-0" />
           </div>
-        )}
 
-        {/* Rider found success banner */}
-        {orderCreatedSuccess && !isSearching && (
-          <div className="mx-4 mt-3 p-3 bg-emerald-600 text-white rounded-2xl flex items-center gap-2.5 shadow-lg animate-in slide-in-from-top-2">
-            <CheckCircle2 className="w-5 h-5 shrink-0" />
-            <div className="text-xs">
-              <strong>Rider Dispatched & Commission Recorded!</strong>{' '}
-              {activeTrackingOrder?.riderName} is assigned to pickup your package.
-            </div>
-          </div>
-        )}
-
-        {/* Modal Scrollable Body */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {activeTab === 'book' ? (
-            <>
-              {/* Active Tracking Card */}
-              {activeTrackingOrder && (
-                <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-950/90 via-slate-900 to-indigo-950 text-white space-y-3 border border-emerald-500/30 shadow-md">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] uppercase font-bold font-mono tracking-wider bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                      {activeTrackingOrder.status === 'delivered'
-                        ? 'Delivered'
-                        : activeTrackingOrder.status === 'in_transit'
-                        ? 'In Transit'
-                        : 'Rider Assigned · Live'}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => copyTrackingCode(activeTrackingOrder.trackingCode)}
-                      className="text-xs font-mono font-bold text-amber-300 hover:text-amber-200 flex items-center gap-1 bg-amber-400/10 px-2 py-0.5 rounded-md transition-colors"
-                      title="Copy Tracking Code"
-                    >
-                      <span>{activeTrackingOrder.trackingCode}</span>
-                      {copiedCode === activeTrackingOrder.trackingCode ? (
-                        <Check className="w-3 h-3 text-emerald-400" />
-                      ) : (
-                        <Copy className="w-3 h-3 opacity-70" />
-                      )}
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
-                        <Bike className="w-4 h-4 text-emerald-400" />
-                        <span>{activeTrackingOrder.riderName}</span>
-                      </h4>
-                      <p className="text-[11px] text-slate-300 font-mono">
-                        Plate: {activeTrackingOrder.riderPlate || 'GKD-481-APP'}
-                      </p>
-                    </div>
-                    {activeTrackingOrder.riderPhone && (
-                      <a
-                        href={`tel:${activeTrackingOrder.riderPhone}`}
-                        className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 rounded-xl text-xs font-bold flex items-center gap-1 shadow-xs transition-all active:scale-95"
-                      >
-                        <Phone className="w-3.5 h-3.5" />
-                        <span>Call Rider</span>
-                      </a>
-                    )}
-                  </div>
-
-                  {/* Progress Milestones */}
-                  <div className="space-y-1.5 pt-1">
-                    <div className="flex justify-between text-[11px] font-medium">
-                      <span className={activeTrackingOrder.status !== 'finding_rider' ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
-                        1. Assigned
-                      </span>
-                      <span className={activeTrackingOrder.status === 'in_transit' || activeTrackingOrder.status === 'delivered' ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
-                        2. En Route
-                      </span>
-                      <span className={activeTrackingOrder.status === 'delivered' ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
-                        3. Delivered
-                      </span>
-                    </div>
-                    <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                      <div
-                        className="bg-gradient-to-r from-emerald-500 to-indigo-400 h-full transition-all duration-500"
-                        style={{
-                          width:
-                            activeTrackingOrder.status === 'delivered'
-                              ? '100%'
-                              : activeTrackingOrder.status === 'in_transit'
-                              ? '66%'
-                              : '33%',
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Pricing Breakdown with 5% Platform Fee */}
-                  <div className="pt-2 border-t border-white/10 text-[11px] space-y-1">
-                    <div className="flex items-center justify-between text-slate-300">
-                      <span className="truncate pr-2">To: {activeTrackingOrder.recipientName} ({activeTrackingOrder.recipientAddress})</span>
-                      <span className="font-mono text-slate-300 shrink-0">
-                        Base: ₦{activeTrackingOrder.estimatedFee.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between font-mono">
-                      <span className="text-emerald-300 flex items-center gap-1">
-                        <Sparkles className="w-3 h-3" />
-                        AfriChat Fee ({feePercent}%):
-                      </span>
-                      <span className="text-emerald-300">
-                        +₦{(activeTrackingOrder.platformFee ?? Math.round(activeTrackingOrder.estimatedFee * feeRate)).toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between font-mono font-bold text-xs pt-1 border-t border-white/5">
-                      <span className="text-white">Total Charged:</span>
-                      <span className="text-emerald-400">
-                        ₦{(activeTrackingOrder.totalFee ?? (activeTrackingOrder.estimatedFee + (activeTrackingOrder.platformFee ?? Math.round(activeTrackingOrder.estimatedFee * feeRate)))).toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
-                </div>
+          {/* Right: Notifications & Close */}
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setActiveTab('history')}
+              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white flex items-center justify-center hover:bg-white/15 transition-colors relative shadow-sm"
+              title="Delivery Notifications"
+            >
+              <Bell className="w-4.5 h-4.5 text-white/90" />
+              {activeCount > 0 && (
+                <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-black animate-pulse" />
               )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsDispatchModalOpen(false)}
+              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white/70 hover:text-white flex items-center justify-center hover:bg-white/15 transition-colors shadow-sm"
+              title="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
 
-              {/* Booking Form */}
-              <form onSubmit={handleBookDispatch} className="space-y-3.5">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider">
-                    Book New Delivery
-                  </h4>
-                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-md">
-                    {feePercent}% Platform Fee Included
+        {/* ── USER GREETING & WEATHER SECTION ── */}
+        <div className="relative z-10 px-5 pt-3 pb-4 shrink-0 space-y-2.5">
+          <div className="flex items-center gap-3">
+            {/* Glowing Scalloped Avatar Ring */}
+            <div className="relative">
+              <div className="w-13 h-13 rounded-full p-[3px] bg-gradient-to-tr from-lime-400 via-emerald-400 to-teal-400 shadow-[0_0_16px_rgba(132,204,22,0.4)] flex items-center justify-center animate-in zoom-in-50">
+                <div className="w-full h-full rounded-full bg-[#120f29] border-2 border-[#090814] flex items-center justify-center overflow-hidden">
+                  {currentUser.avatarUrl ? (
+                    <img src={currentUser.avatarUrl} alt={currentUser.fullName} className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-xs font-black text-lime-300 font-mono">
+                      {(currentUser.fullName || 'HI').slice(0, 2).toUpperCase()}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Greeting Headline */}
+            <div>
+              <h2 className="text-xl font-extrabold text-white tracking-tight flex items-center gap-1.5 font-display">
+                <span>Hi {firstName}!</span>
+                <span className="text-xl">👋</span>
+              </h2>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-xs text-white/70 font-medium">
+                  {new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}
+                </span>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/10 backdrop-blur-md border border-white/15 text-[10px] font-medium text-white/90">
+                  <CloudSun className="w-3 h-3 text-amber-300" />
+                  <span>31°C · Partly cloudy</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* FLOATING AI PROMPT BAR ("Ask AgcBot AI") */}
+          <div className="pt-2">
+            <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-full bg-white/90 dark:bg-white/10 backdrop-blur-xl border border-white/20 shadow-lg text-slate-800 dark:text-white">
+              <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-purple-600 to-pink-500 flex items-center justify-center text-white text-[10px] font-bold shrink-0">
+                AI
+              </div>
+              <input
+                type="text"
+                value={aiPromptInput}
+                onChange={(e) => setAiPromptInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && aiPromptInput.trim()) {
+                    setIsDispatchModalOpen(false);
+                    startAiChat();
+                  }
+                }}
+                placeholder="Ask AgcBot AI or book dispatch..."
+                className="flex-1 bg-transparent text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-white/60 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDispatchModalOpen(false);
+                  startAiChat();
+                }}
+                className="w-7 h-7 rounded-full bg-black/10 dark:bg-white/20 hover:bg-purple-600 hover:text-white flex items-center justify-center text-slate-600 dark:text-white transition-colors shrink-0"
+                title="Launch AgcBot Assistant"
+              >
+                <Zap className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ── DRAGGABLE BOTTOM SHEET / MAIN WORKSPACE ── */}
+        <div className="relative z-10 flex-1 bg-white dark:bg-[#121024] text-slate-900 dark:text-white rounded-t-3xl shadow-[0_-8px_30px_rgba(0,0,0,0.6)] flex flex-col overflow-hidden border-t border-slate-200 dark:border-white/10">
+          {/* Drag Handle Bar */}
+          <div className="pt-2.5 pb-1 flex justify-center shrink-0">
+            <div className="w-10 h-1 rounded-full bg-slate-300 dark:bg-white/20" />
+          </div>
+
+          {/* Navigation Sub-Tabs */}
+          <div className="px-5 pt-1 pb-2 flex items-center justify-between border-b border-slate-100 dark:border-white/5 shrink-0">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab('book')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  activeTab === 'book'
+                    ? 'bg-purple-600 text-white shadow-sm'
+                    : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                Book Dispatch
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('history')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeTab === 'history'
+                    ? 'bg-purple-600 text-white shadow-sm'
+                    : 'text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <span>My Deliveries</span>
+                {activeCount > 0 && (
+                  <span className="w-4 h-4 rounded-full bg-emerald-500 text-white text-[9px] flex items-center justify-center font-mono">
+                    {activeCount}
                   </span>
+                )}
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowSmartFilters(!showSmartFilters)}
+              className="text-xs text-slate-500 dark:text-neutral-400 hover:text-purple-600 flex items-center gap-1"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Smart Filters</span>
+            </button>
+          </div>
+
+          {/* Success Banner */}
+          {orderCreatedSuccess && (
+            <div className="mx-5 my-2 p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-medium flex items-center gap-2 animate-in slide-in-from-top-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+              <span>Order placed! Connecting nearest Gokada / Pickkr dispatch rider...</span>
+            </div>
+          )}
+
+          {/* ── TAB 1: BOOK DISPATCH ── */}
+          {activeTab === 'book' && (
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {/* Featured Carousel Card ("Send a package") */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-50 to-purple-50/40 dark:from-white/5 dark:to-purple-950/20 border border-slate-200/80 dark:border-white/10 relative overflow-hidden">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="space-y-1 max-w-[210px]">
+                    <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+                      Send a package
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-neutral-400 leading-relaxed">
+                      Have a rider deliver your packages, food, or electronics across town.
+                    </p>
+                  </div>
+                  {/* 3D Package Illustration */}
+                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-amber-400 via-orange-500 to-amber-600 text-white flex items-center justify-center shadow-lg shadow-orange-500/30 shrink-0 transform -rotate-3 hover:rotate-0 transition-transform">
+                    <Package className="w-8 h-8 text-white drop-shadow-md" />
+                  </div>
                 </div>
 
-                {/* Package Info Row */}
-                <div className="grid grid-cols-2 gap-2">
-                  {/* Package Weight */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
-                      <Weight className="w-3 h-3" /> Weight (kg)
-                    </label>
+                {/* Pagination Dots Indicator */}
+                <div className="flex items-center gap-1 mt-3">
+                  <span className="w-4 h-1.5 rounded-full bg-orange-500" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-white/20" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-white/20" />
+                </div>
+              </div>
+
+              {/* Vehicle Selection Cards */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 dark:text-neutral-300 block">
+                  Select Vehicle Type
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setVehicleType('bike')}
+                    className={`p-3 rounded-2xl border text-left transition-all ${
+                      vehicleType === 'bike'
+                        ? 'border-purple-600 bg-purple-50 dark:bg-purple-950/40 ring-1 ring-purple-600 text-purple-950 dark:text-white'
+                        : 'border-slate-200 dark:border-neutral-800 hover:border-purple-300 dark:hover:border-neutral-700 bg-slate-50/50 dark:bg-neutral-900/50 text-slate-700 dark:text-neutral-300'
+                    }`}
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-2">
+                      <Bike className="w-5 h-5" />
+                    </div>
+                    <div className="text-xs font-bold">Motorbike Express</div>
+                    <div className="text-[11px] text-slate-500 dark:text-neutral-400">Up to 10kg · Fast</div>
+                    <div className="text-xs font-mono font-bold text-purple-600 dark:text-purple-400 mt-1">
+                      ₦2,400 base
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setVehicleType('van')}
+                    className={`p-3 rounded-2xl border text-left transition-all ${
+                      vehicleType === 'van'
+                        ? 'border-purple-600 bg-purple-50 dark:bg-purple-950/40 ring-1 ring-purple-600 text-purple-950 dark:text-white'
+                        : 'border-slate-200 dark:border-neutral-800 hover:border-purple-300 dark:hover:border-neutral-700 bg-slate-50/50 dark:bg-neutral-900/50 text-slate-700 dark:text-neutral-300'
+                    }`}
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-2">
+                      <Truck className="w-5 h-5" />
+                    </div>
+                    <div className="text-xs font-bold">Delivery Van</div>
+                    <div className="text-[11px] text-slate-500 dark:text-neutral-400">Bulk & Heavy · 500kg</div>
+                    <div className="text-xs font-mono font-bold text-purple-600 dark:text-purple-400 mt-1">
+                      ₦6,500 base
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Delivery Details Form */}
+              <form onSubmit={handleBookDispatch} className="space-y-3 pt-1">
+                {/* Pickup Address */}
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-neutral-300 block mb-1">
+                    Pickup Location
+                  </label>
+                  <div className="relative">
+                    <MapPin className="w-4 h-4 text-emerald-500 absolute left-3 top-3" />
                     <input
-                      type="number"
-                      min="0.1"
-                      step="0.1"
-                      value={packageWeight}
-                      onChange={(e) => setPackageWeight(parseFloat(e.target.value) || 0.1)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500"
+                      type="text"
+                      value={senderAddress}
+                      onChange={(e) => setSenderAddress(e.target.value)}
+                      placeholder="Sender Pickup Address"
+                      className="w-full pl-9 pr-3 py-2.5 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
+                      required
                     />
                   </div>
+                </div>
 
-                  {/* Vehicle Type */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Vehicle Type
-                    </label>
-                    <div className="grid grid-cols-2 gap-1">
-                      {[
-                        { id: 'bike', label: '🏍️ Bike', desc: '<15kg' },
-                        { id: 'van', label: '🚐 Van', desc: 'Bulk Cargo' },
-                      ].map((v) => (
-                        <button
-                          key={v.id}
-                          type="button"
-                          onClick={() => setVehicleType(v.id as 'bike' | 'van')}
-                          className={`py-1.5 px-2 rounded-xl border text-center transition-all text-[11px] ${
-                            vehicleType === v.id
-                              ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-900 dark:text-indigo-200 font-bold'
-                              : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-                          }`}
-                        >
-                          <div>{v.label}</div>
-                          <div className="text-[9px] text-slate-400">{v.desc}</div>
-                        </button>
-                      ))}
-                    </div>
+                {/* Dropoff Address */}
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-neutral-300 block mb-1">
+                    Destination Dropoff
+                  </label>
+                  <div className="relative">
+                    <Navigation className="w-4 h-4 text-purple-500 absolute left-3 top-3" />
+                    <input
+                      type="text"
+                      value={recipientAddress}
+                      onChange={(e) => setRecipientAddress(e.target.value)}
+                      placeholder="e.g. 14 Admiralty Way, Lekki Phase 1"
+                      className="w-full pl-9 pr-3 py-2.5 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
+                      required
+                    />
                   </div>
                 </div>
 
-                {/* Item Description */}
+                {/* Recipient Details */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 dark:text-neutral-300 block mb-1">
+                      Recipient Name
+                    </label>
+                    <input
+                      type="text"
+                      value={recipientName}
+                      onChange={(e) => setRecipientName(e.target.value)}
+                      placeholder="e.g. Amara Obi"
+                      className="w-full p-2.5 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 dark:text-neutral-300 block mb-1">
+                      Recipient Phone
+                    </label>
+                    <input
+                      type="tel"
+                      value={recipientPhone}
+                      onChange={(e) => setRecipientPhone(e.target.value)}
+                      placeholder="08012345678"
+                      className="w-full p-2.5 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600 font-mono"
+                      required
+                    />
+                  </div>
+                </div>
+
+                {/* Package Description & Weight */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
-                    <Package className="w-3 h-3" /> Item Description
+                  <label className="text-xs font-bold text-slate-700 dark:text-neutral-300 block mb-1">
+                    Package Description &amp; Contents
                   </label>
                   <input
                     type="text"
                     value={packageDesc}
                     onChange={(e) => setPackageDesc(e.target.value)}
-                    placeholder="e.g. Ankara Fabric, iPhone 15, Shoes"
+                    placeholder="e.g. Box of clothes, iPhone, food tray"
+                    className="w-full p-2.5 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-600"
                     required
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
 
-                {/* Sender Address */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
-                    <MapPin className="w-3 h-3 text-emerald-500" /> Pickup Address
-                  </label>
-                  <input
-                    type="text"
-                    value={senderAddress}
-                    onChange={(e) => setSenderAddress(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500"
-                  />
-                </div>
-
-                {/* Recipient Details */}
-                <div className="space-y-2">
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1">
-                    <Navigation className="w-3 h-3 text-indigo-500" /> Recipient & Dropoff Details
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      type="text"
-                      placeholder="Recipient Name"
-                      value={recipientName}
-                      onChange={(e) => setRecipientName(e.target.value)}
-                      required
-                      className="px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500"
-                    />
-                    <input
-                      type="tel"
-                      placeholder="Phone (080...)"
-                      value={recipientPhone}
-                      onChange={(e) => setRecipientPhone(e.target.value)}
-                      required
-                      className="px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono focus:ring-1 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <input
-                    type="text"
-                    placeholder="Dropoff Address (e.g. 14 Admiralty Way, Lekki Phase 1)"
-                    value={recipientAddress}
-                    onChange={(e) => setRecipientAddress(e.target.value)}
-                    required
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500"
-                  />
-                </div>
-
-                {/* Transparent 5% Fee Quote Box */}
-                <div className="p-3 bg-slate-50 dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-2">
-                  <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-                    <span>Base Courier Rate ({vehicleType}):</span>
-                    <span className="font-mono font-semibold">{formatPrice(baseDeliveryFee, 'NGN')}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-emerald-600 dark:text-emerald-400">
-                    <span className="flex items-center gap-1">
-                      <Sparkles className="w-3 h-3" />
-                      AfriChat Platform Fee ({feePercent}%):
+                {/* Live Estimated Fee Breakdown */}
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 space-y-1.5 text-xs">
+                  <div className="flex justify-between text-slate-500 dark:text-neutral-400">
+                    <span>Base Delivery Fare ({vehicleType === 'bike' ? 'Motorbike' : 'Van'})</span>
+                    <span className="font-mono font-medium text-slate-800 dark:text-white">
+                      ₦{baseDeliveryFee.toLocaleString()}
                     </span>
-                    <span className="font-mono font-semibold">+{formatPrice(platformFee, 'NGN')}</span>
                   </div>
-                  <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
-                    <div>
-                      <div className="text-[10px] text-slate-400">Total Delivery Amount:</div>
-                      <div className="text-base font-black font-mono text-indigo-600 dark:text-indigo-400">
-                        {formatPrice(totalDeliveryCost, 'NGN')}
-                      </div>
-                    </div>
-                    <div className="text-right text-[11px] text-slate-500">
-                      Wallet Balance:{' '}
-                      <strong className="font-mono text-slate-800 dark:text-slate-200">
-                        {formatPrice(wallet.availableBalance, 'NGN')}
-                      </strong>
-                    </div>
+                  <div className="flex justify-between text-slate-500 dark:text-neutral-400">
+                    <span>Platform Commission ({feePercent}%)</span>
+                    <span className="font-mono font-medium text-slate-800 dark:text-white">
+                      ₦{platformFee.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="pt-1.5 border-t border-slate-200 dark:border-neutral-800 flex justify-between font-bold text-sm">
+                    <span>Total Estimated Fare</span>
+                    <span className="font-mono text-purple-600 dark:text-purple-400">
+                      ₦{totalDeliveryCost.toLocaleString()}
+                    </span>
                   </div>
                 </div>
 
-                {/* Security Guarantee Note */}
-                <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-                  <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
-                  <span>Escrow Protection · Live GPS tracking · {feePercent}% platform commission guarantees instant customer support</span>
-                </div>
-
-                {/* Submit Button */}
+                {/* Glowing Book Button */}
                 <button
                   type="submit"
                   disabled={isSearching}
-                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all active:scale-98"
+                  className="w-full py-3.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-purple-600/30 transition-all active:scale-[0.98] disabled:opacity-50"
                 >
                   {isSearching ? (
                     <>
-                      <Search className="w-4 h-4 animate-pulse" />
-                      <span>Searching nearby riders...</span>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Matching Nearest Dispatch Rider...</span>
                     </>
                   ) : (
                     <>
-                      <Truck className="w-4 h-4" />
-                      <span>Book Courier Now • {formatPrice(totalDeliveryCost, 'NGN')}</span>
+                      <Zap className="w-4 h-4 fill-white text-white" />
+                      <span>Confirm &amp; Book Rider (₦{totalDeliveryCost.toLocaleString()})</span>
                     </>
                   )}
                 </button>
               </form>
-            </>
-          ) : (
-            /* ORDER HISTORY TAB */
-            <div className="space-y-3">
-              {/* Search & Filter Bar */}
-              <div className="space-y-2">
-                <div className="relative">
-                  <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search by code, recipient, address, or item..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500"
-                  />
-                  {searchQuery && (
+            </div>
+          )}
+
+          {/* ── TAB 2: MY DELIVERIES & LIVE TRACKING ── */}
+          {activeTab === 'history' && (
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {/* Active Tracking Hero Card */}
+              {activeTrackingOrder && (
+                <div className="p-4 rounded-2xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/40 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-purple-950 dark:text-purple-200 flex items-center gap-1.5">
+                      <Zap className="w-4 h-4 text-purple-600" />
+                      <span>Live Order Tracking</span>
+                    </span>
                     <button
                       type="button"
-                      onClick={() => setSearchQuery('')}
-                      className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 text-xs"
+                      onClick={() => copyTrackingCode(activeTrackingOrder.trackingCode)}
+                      className="text-[11px] font-mono text-purple-600 hover:text-purple-700 flex items-center gap-1 font-bold"
                     >
-                      Clear
+                      {copiedCode === activeTrackingOrder.trackingCode ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-500" />
+                          <span>Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>{activeTrackingOrder.trackingCode}</span>
+                        </>
+                      )}
                     </button>
-                  )}
-                </div>
-
-                {/* Filter Pills */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setStatusFilter('all')}
-                    className={`px-3 py-1 rounded-full font-medium transition-all text-[11px] ${
-                      statusFilter === 'all'
-                        ? 'bg-indigo-600 text-white font-bold'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
-                    }`}
-                  >
-                    All ({dispatchOrders.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setStatusFilter('active')}
-                    className={`px-3 py-1 rounded-full font-medium transition-all text-[11px] flex items-center gap-1 ${
-                      statusFilter === 'active'
-                        ? 'bg-emerald-600 text-white font-bold'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
-                    }`}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Active ({activeCount})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setStatusFilter('delivered')}
-                    className={`px-3 py-1 rounded-full font-medium transition-all text-[11px] ${
-                      statusFilter === 'delivered'
-                        ? 'bg-indigo-600 text-white font-bold'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
-                    }`}
-                  >
-                    Delivered ({deliveredCount})
-                  </button>
-                </div>
-              </div>
-
-              {/* History Items List */}
-              {filteredOrders.length === 0 ? (
-                <div className="py-12 text-center space-y-2">
-                  <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400 mx-auto flex items-center justify-center">
-                    <Package className="w-6 h-6" />
                   </div>
-                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                    No dispatch orders found
-                  </p>
-                  <p className="text-[11px] text-slate-400 max-w-xs mx-auto">
-                    {searchQuery
-                      ? 'No delivery matches your search query. Try another keyword.'
-                      : 'You have not booked any dispatch deliveries yet. Book your first one above!'}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('book')}
-                    className="mt-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold"
-                  >
-                    Book a Delivery Now
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {filteredOrders.map((ord) => {
-                    const ordPlatformFee = ord.platformFee ?? Math.round(ord.estimatedFee * feeRate);
-                    const ordTotalFee = ord.totalFee ?? (ord.estimatedFee + ordPlatformFee);
 
-                    return (
+                  {/* Tracking Status Progress */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs font-semibold">
+                      <span className="capitalize text-slate-800 dark:text-white">
+                        Status: {activeTrackingOrder.status.replace(/_/g, ' ')}
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        {activeTrackingOrder.estimatedMinutes ? `${activeTrackingOrder.estimatedMinutes} mins away` : 'In transit'}
+                      </span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-white/10 overflow-hidden">
                       <div
-                        key={ord.id}
-                        className="p-3.5 bg-slate-50 dark:bg-slate-900/70 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-2.5 transition-all hover:border-indigo-400/50"
-                      >
-                        {/* Header: Tracking code & Status badge */}
-                        <div className="flex items-center justify-between">
-                          <button
-                            type="button"
-                            onClick={() => copyTrackingCode(ord.trackingCode)}
-                            className="flex items-center gap-1 text-xs font-mono font-bold text-slate-800 dark:text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400"
-                            title="Click to copy code"
-                          >
-                            <span>{ord.trackingCode}</span>
-                            {copiedCode === ord.trackingCode ? (
-                              <Check className="w-3 h-3 text-emerald-500" />
-                            ) : (
-                              <Copy className="w-3 h-3 opacity-60" />
-                            )}
-                          </button>
+                        className="h-full rounded-full bg-gradient-to-r from-purple-600 to-emerald-500 transition-all duration-500"
+                        style={{
+                          width:
+                            activeTrackingOrder.status === 'delivered'
+                              ? '100%'
+                              : activeTrackingOrder.status === 'in_transit'
+                              ? '75%'
+                              : activeTrackingOrder.status === 'picked_up'
+                              ? '50%'
+                              : '25%',
+                        }}
+                      />
+                    </div>
+                  </div>
 
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                              ord.status === 'delivered'
-                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
-                                : ord.status === 'in_transit'
-                                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
-                                : 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border border-indigo-500/30'
-                            }`}
-                          >
-                            {ord.status.replace('_', ' ')}
-                          </span>
+                  {/* Rider Info Pill */}
+                  {activeTrackingOrder.riderName && (
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-black/40 border border-slate-200/80 dark:border-white/10 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-xs">
+                          {activeTrackingOrder.riderName.charAt(0)}
                         </div>
-
-                        {/* Package & Destination Info */}
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-900 dark:text-slate-100">
-                            {ord.vehicleType === 'van' ? (
-                              <Truck className="w-3.5 h-3.5 text-indigo-500" />
-                            ) : (
-                              <Bike className="w-3.5 h-3.5 text-emerald-500" />
-                            )}
-                            <span>{ord.packageDescription}</span>
+                        <div>
+                          <div className="text-xs font-bold text-slate-900 dark:text-white">
+                            {activeTrackingOrder.riderName}
                           </div>
-                          <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                            <Navigation className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span className="truncate">
-                              To: <strong>{ord.recipientName}</strong> · {ord.recipientAddress}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Rider details */}
-                        {ord.riderName && (
-                          <div className="text-[11px] text-slate-500 dark:text-slate-400 bg-white/60 dark:bg-slate-800/40 p-2 rounded-xl flex items-center justify-between border border-slate-200/50 dark:border-slate-800/50">
-                            <div>
-                              <div className="font-medium text-slate-800 dark:text-slate-200">
-                                {ord.riderName}
-                              </div>
-                              <div className="font-mono text-[10px] text-slate-400">
-                                {ord.riderPlate}
-                              </div>
-                            </div>
-                            {ord.riderPhone && (
-                              <a
-                                href={`tel:${ord.riderPhone}`}
-                                className="px-2 py-1 bg-slate-200 dark:bg-slate-700 hover:bg-emerald-500 hover:text-white rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
-                              >
-                                <Phone className="w-3 h-3" />
-                                <span>Call</span>
-                              </a>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Financial breakdown: Base, 5% fee, Total */}
-                        <div className="pt-2 border-t border-slate-200/60 dark:border-slate-800 text-[11px] flex items-center justify-between">
-                          <div className="space-y-0.5">
-                            <div className="text-[10px] text-slate-400">
-                              Base: ₦{ord.estimatedFee.toLocaleString()} · 5% Fee: ₦{ordPlatformFee.toLocaleString()}
-                            </div>
-                            <div className="font-mono font-bold text-xs text-indigo-600 dark:text-indigo-400">
-                              Total: ₦{ordTotalFee.toLocaleString()}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActiveTrackingOrder(ord);
-                                setActiveTab('book');
-                              }}
-                              className="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
-                            >
-                              <Receipt className="w-3 h-3" />
-                              <span>Track Live</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleReorder(ord)}
-                              className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
-                              title="Re-order to same recipient"
-                            >
-                              <RotateCcw className="w-3 h-3" />
-                              <span>Reorder</span>
-                            </button>
+                          <div className="text-[10px] text-slate-500 font-mono">
+                            {activeTrackingOrder.riderPlate || 'Plate: LAG-492-XY'}
                           </div>
                         </div>
                       </div>
-                    );
-                  })}
+                      {activeTrackingOrder.riderPhone && (
+                        <a
+                          href={`tel:${activeTrackingOrder.riderPhone}`}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-xs font-bold flex items-center gap-1 shadow-xs"
+                        >
+                          <Phone className="w-3.5 h-3.5" />
+                          <span>Call</span>
+                        </a>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
+
+              {/* Past Deliveries List */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-neutral-300">
+                  <span>Recent Deliveries ({filteredOrders.length})</span>
+                </div>
+
+                {filteredOrders.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-slate-400">
+                    No dispatch delivery orders recorded yet.
+                  </div>
+                ) : (
+                  filteredOrders.map((ord) => (
+                    <div
+                      key={ord.id}
+                      onClick={() => setActiveTrackingOrder(ord)}
+                      className="p-3.5 rounded-2xl bg-slate-50 dark:bg-neutral-900/60 border border-slate-200/80 dark:border-neutral-800 hover:border-purple-500/50 cursor-pointer transition-colors space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-purple-600/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                            {ord.vehicleType === 'van' ? <Truck className="w-4 h-4" /> : <Bike className="w-4 h-4" />}
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900 dark:text-white">
+                              {ord.packageDescription}
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              To: {ord.recipientName} ({ord.recipientPhone})
+                            </div>
+                          </div>
+                        </div>
+                        <span
+                          className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase ${
+                            ord.status === 'delivered'
+                              ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+                              : 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300'
+                          }`}
+                        >
+                          {ord.status}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-200/60 dark:border-neutral-800 text-slate-500 dark:text-neutral-400 font-mono">
+                        <span>Total: ₦{ord.totalFee.toLocaleString()}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleReorder(ord);
+                          }}
+                          className="text-purple-600 hover:underline flex items-center gap-1 font-semibold"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>Reorder</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           )}
         </div>

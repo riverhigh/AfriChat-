@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   ChevronLeft,
   Phone,
@@ -198,7 +198,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
   const handleToggleLock = () => {
     const next = !isLocked;
     updateChat(chat.id, { isLocked: next });
-    showToast(next ? '🔒 Chat is now locked and protected with PIN' : '🔓 Chat lock disabled');
+    showToast(next ? 'ðŸ”’ Chat is now locked and protected with PIN' : 'ðŸ”“ Chat lock disabled');
   };
 
   // 6. Favourite toggle
@@ -218,7 +218,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
   // 8. Block / Unblock user
   const handleToggleBlock = () => {
     const nextBlocked = toggleBlockUser(chat.id);
-    showToast(nextBlocked ? `🚫 Blocked ${chat.name}` : `Unblocked ${chat.name}`);
+    showToast(nextBlocked ? `ðŸš« Blocked ${chat.name}` : `Unblocked ${chat.name}`);
   };
 
   // 9. Report entity
@@ -1013,9 +1013,9 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
         </div>
       </div>
 
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {/* DRAWER 1: INVITE VIA SHAREABLE LINK (QR CODE & COPY) */}
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {showInviteLinkDrawer && (
         <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in">
           <div className="w-full max-w-md bg-[#18181c] rounded-t-3xl sm:rounded-3xl border border-neutral-800 p-5 space-y-4 shadow-2xl">
@@ -1073,9 +1073,9 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
         </div>
       )}
 
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {/* DRAWER 2: INVITE BY ADDING THEM DIRECTLY FROM CONTACTS */}
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {showAddMembersDrawer && (
         <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in">
           <div className="w-full max-w-md bg-[#18181c] rounded-t-3xl sm:rounded-3xl border border-neutral-800 flex flex-col max-h-[85vh] shadow-2xl overflow-hidden">
@@ -1229,9 +1229,9 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
         </div>
       )}
 
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {/* MODAL 3: MEDIA, LINKS & DOCS GALLERY */}
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {showMediaGallery && (
         <div className="fixed inset-0 z-60 bg-black/90 backdrop-blur-md flex items-center justify-center p-3 animate-in fade-in">
           <div className="w-full max-w-lg bg-[#18181c] rounded-3xl border border-neutral-800 flex flex-col max-h-[85vh] overflow-hidden shadow-2xl">
@@ -1288,9 +1288,9 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
         </div>
       )}
 
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {/* MODAL 4: ENCRYPTION SECURITY NUMBER */}
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {showEncryptionModal && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
           <div className="w-full max-w-sm bg-[#18181c] rounded-3xl border border-neutral-800 p-5 space-y-4 shadow-2xl text-center">
@@ -1327,9 +1327,9 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
         </div>
       )}
 
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {/* MODAL 5: CLEAR CHAT CONFIRMATION */}
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {showClearConfirm && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
           <div className="w-full max-w-sm bg-[#18181c] rounded-3xl border border-neutral-800 p-5 space-y-4 shadow-2xl text-center">
@@ -1364,9 +1364,9 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
         </div>
       )}
 
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {/* MODAL 6: REPORT ENTITY */}
-      {/* ────────────────────────────────────────────────────────────────────────── */}
+      {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {showReportModal && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
           <form
@@ -1449,3 +1449,4 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
     </div>
   );
 };
+

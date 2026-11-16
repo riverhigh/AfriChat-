@@ -113,7 +113,7 @@ function sanitizeLoadedMessages(parsed: unknown): Record<string, ChatMessage[]> 
           return {
             ...m,
             type: 'text' as const,
-            text: '🎙️ Voice note expired',
+            text: 'ðŸŽ™ï¸ Voice note expired',
             voiceNote: undefined,
           };
         }
@@ -353,6 +353,7 @@ import {
   AFRIBOT_AVATAR,
   GroqMessage,
 } from '../services/groq';
+import { playAnimalSound, getNotificationSound } from '../utils/soundUtils';
 import {
   supabase,
   isSupabaseConfigured,
@@ -1074,13 +1075,13 @@ export const CURRENCY_RATES: Record<CurrencyCode, number> = {
 };
 
 export const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
-  NGN: '₦',
+  NGN: 'â‚¦',
   KES: 'KSh ',
-  GHS: 'GH₵ ',
+  GHS: 'GHâ‚µ ',
   ZAR: 'R ',
 };
 
-// ─── Data Version Nuke ───────────────────────────────────────────────────────
+// â”€â”€â”€ Data Version Nuke â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Bump this string whenever you need to wipe all stale cached/mock data.
 const AGC_DATA_VERSION = 'v5_purged_all_mocks_live_2026';
 (function nukeStaleMockData() {
@@ -1155,7 +1156,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const chatBroadcastChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   // Track which per-chat inbox channels are already subscribed (phone -> channel)
   const inboxChannelRefsRef = useRef<Map<string, ReturnType<typeof supabase.channel>>>(new Map());
-  // ── Admin System Config, CMS & Feature Flags System ─────────────────────────
+  // â”€â”€ Admin System Config, CMS & Feature Flags System â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const DEFAULT_SYSTEM_CONFIG: AdminSystemConfig = {
     maintenanceMode: false,
     maintenanceMessage: 'AfriChat is undergoing scheduled system upgrades. We will be back shortly.',
@@ -1167,8 +1168,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     artisanCommissionPercent: 2,
     creatorCommissionPercent: 5,
     minTransferAmountNgn: 100,
-    maxDailyTransferNgn: 500000,
-    maxWeeklyTransferNgn: 2000000,
+    maxDailyTransferNgn: 70000,
+    maxWeeklyTransferNgn: 900000,
     sponsoredAdFeeNgn: 2500,
     delayedSendHoldDurationMins: 15,
     lowBandwidthDefault: false,
@@ -1190,7 +1191,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ],
     marqueeBanner: {
       enabled: true,
-      text: '⚡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.',
+      text: 'âš¡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.',
       speed: 'normal',
       backgroundColor: '#7c3aed',
       textColor: '#ffffff',
@@ -1439,7 +1440,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return Boolean(apiData?.success || sbOk);
   };
 
-  // ── Errands System ────────────────────────────────────────────────────────
+  // â”€â”€ Errands System â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [errandRunners, setErrandRunners] = useState<ErrandRunner[]>(() => {
     try {
       const saved = localStorage.getItem('AGC_errand_runners_v1');
@@ -1861,7 +1862,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    // 🌐 LIVE SYSTEM: Persist to Supabase and broadcast to all devices in real-time
+    // ðŸŒ LIVE SYSTEM: Persist to Supabase and broadcast to all devices in real-time
     if (isSupabaseConfigured) {
       createTownCommunityInDb({
         name: newCommunity.name,
@@ -1897,7 +1898,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       members: currentUser.phoneNumber ? [currentUser.phoneNumber] : [],
       membersCount: 1,
       verifiedStore: false,
-      location: `${type === 'channel' ? 'Broadcast Channel' : 'Town Group'} · ${category}`,
+      location: `${type === 'channel' ? 'Broadcast Channel' : 'Town Group'} Â· ${category}`,
       unreadCount: 0,
       lastMessage: newCommunity.description,
       lastMessageTime: 'Just now',
@@ -1918,8 +1919,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'text',
       text:
         type === 'channel'
-          ? `📢 Welcome to ${newCommunity.name} broadcast channel! ${newCommunity.description}`
-          : `👋 Welcome to ${newCommunity.name}! ${newCommunity.description}`,
+          ? `ðŸ“¢ Welcome to ${newCommunity.name} broadcast channel! ${newCommunity.description}`
+          : `ðŸ‘‹ Welcome to ${newCommunity.name}! ${newCommunity.description}`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'read',
     };
@@ -2039,7 +2040,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         adminIds: isOwner && currentUser.id ? [currentUser.id] : [],
         membersCount: community.membersCount || 1,
         verifiedStore: false,
-        location: `${community.type === 'channel' ? 'Broadcast Channel' : 'Town Group'} · ${community.category}`,
+        location: `${community.type === 'channel' ? 'Broadcast Channel' : 'Town Group'} Â· ${community.category}`,
         unreadCount: 0,
         lastMessage: community.description || `Welcome to ${community.name}`,
         lastMessageTime: 'Just now',
@@ -2061,8 +2062,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         type: 'text',
         text:
           community.type === 'channel'
-            ? `📢 ${community.name} Broadcast Channel: ${community.description || 'Official updates and posts appear here.'}`
-            : `👋 ${community.name}: ${community.description || 'Welcome to the community room!'}`,
+            ? `ðŸ“¢ ${community.name} Broadcast Channel: ${community.description || 'Official updates and posts appear here.'}`
+            : `ðŸ‘‹ ${community.name}: ${community.description || 'Welcome to the community room!'}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         status: 'read',
       };
@@ -2142,7 +2143,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const triggerEmergencySos = () => {
     return {
       success: true,
-      message: '🚨 EMERGENCY SOS DISPATCHED: Live GPS coordinates broadcasted to LASAMBUS & Family Emergency Contact via SMS/Mesh network!',
+      message: 'ðŸš¨ EMERGENCY SOS DISPATCHED: Live GPS coordinates broadcasted to LASAMBUS & Family Emergency Contact via SMS/Mesh network!',
     };
   };
 
@@ -2173,7 +2174,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const triggerEmergencyLegalSos = () => {
     return {
       success: true,
-      message: '⚖️ LEGAL SOS ACTIVE: Rapid Response Human Rights Defense Lawyers have been alerted with your coordinates!',
+      message: 'âš–ï¸ LEGAL SOS ACTIVE: Rapid Response Human Rights Defense Lawyers have been alerted with your coordinates!',
     };
   };
 
@@ -2208,7 +2209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `🎉 Subscribed to ${creator.name}! Exclusive VIP posts, music leaks, and backstage stories unlocked.`,
+      message: `ðŸŽ‰ Subscribed to ${creator.name}! Exclusive VIP posts, music leaks, and backstage stories unlocked.`,
     };
   };
 
@@ -2256,7 +2257,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       ticket: updatedShow,
-      message: `🎟️ Ticket purchased for "${show.title}"! Scannable QR pass and entry PIN issued.`,
+      message: `ðŸŽŸï¸ Ticket purchased for "${show.title}"! Scannable QR pass and entry PIN issued.`,
     };
   };
 
@@ -2281,7 +2282,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       song: updatedSong,
-      message: `🎵 Purchased "${song.title}"! 100% payout credited directly to ${song.artistName}'s AGC Wallet. Stream & download unlocked.`,
+      message: `ðŸŽµ Purchased "${song.title}"! 100% payout credited directly to ${song.artistName}'s AGC Wallet. Stream & download unlocked.`,
     };
   };
 
@@ -2349,7 +2350,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (paymentMethod === 'wallet' && wallet.availableBalance < regFee) {
       return {
         success: false,
-        message: 'Insufficient wallet balance for ₦5,000 station registration. Please top up your wallet or select Paystack.',
+        message: 'Insufficient wallet balance for â‚¦5,000 station registration. Please top up your wallet or select Paystack.',
       };
     }
 
@@ -2358,7 +2359,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       newTx = {
         id: `tx_artisan_reg_${Date.now()}`,
         type: 'artisan_reg',
-        title: 'Artisan Station Registration Fee (₦5,000)',
+        title: 'Artisan Station Registration Fee (â‚¦5,000)',
         description: `Artisan station registration: ${stationData.stationName || 'Master Station'}`,
         amount: regFee,
         fee: 0,
@@ -2448,7 +2449,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }),
     }).catch(() => {});
 
-    // 🌐 LIVE SYSTEM: Publish Artisan Station to Supabase (pending approval)
+    // ðŸŒ LIVE SYSTEM: Publish Artisan Station to Supabase (pending approval)
     if (isSupabaseConfigured) {
       createArtisanStationInDb({
         station_name: newStation.stationName,
@@ -2488,7 +2489,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (paymentMethod === 'wallet' && wallet.availableBalance < listingFee) {
       return {
         success: false,
-        message: 'Insufficient wallet balance for ₦500 listing fee. Please top up your wallet.',
+        message: 'Insufficient wallet balance for â‚¦500 listing fee. Please top up your wallet.',
       };
     }
 
@@ -2496,7 +2497,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const newTx: WalletTransaction = {
         id: `tx_lst_fee_${Date.now()}`,
         type: 'transfer_out',
-        title: `Service Listing Fee (₦500): ${listing.title}`,
+        title: `Service Listing Fee (â‚¦500): ${listing.title}`,
         amount: listingFee,
         currency: 'NGN',
         timestamp: 'Just now',
@@ -2566,7 +2567,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `New service listing "${newOffering.title}" published! (₦500 fee paid)`,
+      message: `New service listing "${newOffering.title}" published! (â‚¦500 fee paid)`,
       listing: newOffering,
     };
   };
@@ -2666,7 +2667,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       amountClaimed: bonusToClaim,
-      message: `🎉 ₦${bonusToClaim.toLocaleString()} referral reward credited to your AGC wallet!`,
+      message: `ðŸŽ‰ â‚¦${bonusToClaim.toLocaleString()} referral reward credited to your AGC wallet!`,
     };
   };
 
@@ -2856,7 +2857,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const activeAudioSpaceRef = useRef<AudioSpace | null>(null);
   activeAudioSpaceRef.current = activeAudioSpace;
 
-  // 🌐 LIVE SYSTEM: Hydrate and listen for live Audio Spaces across devices via Supabase + Socket.IO
+  // ðŸŒ LIVE SYSTEM: Hydrate and listen for live Audio Spaces across devices via Supabase + Socket.IO
   useEffect(() => {
     const socket = getSocket();
     const handleSpaceEndedEvent = (payload: any) => {
@@ -2999,7 +3000,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       phoneNumber: '',
       fullName: 'AGC User',
       avatarUrl: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-      about: 'Available · Using AGC',
+      about: 'Available Â· Using AGC',
       createdAt: new Date().toISOString(),
       lastSeen: 'online',
       isPhoneVerified: false,
@@ -3166,7 +3167,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   ? prev.avatarUrl
                   : remoteProf.avatarUrl || prev.avatarUrl,
               about:
-                prev.about && prev.about !== 'Available · Using AGC'
+                prev.about && prev.about !== 'Available Â· Using AGC'
                   ? prev.about
                   : remoteProf.about || prev.about,
               username: prev.username || remoteProf.username,
@@ -3190,7 +3191,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser?.phoneNumber, isAuthenticated]);
 
-  // 🌐 LIVE SYSTEM: Hydrate and listen for live Artisan Stations & Service Providers
+  // ðŸŒ LIVE SYSTEM: Hydrate and listen for live Artisan Stations & Service Providers
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
@@ -3268,7 +3269,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser.phoneNumber, currentUser.id]);
 
-  // 🌐 LIVE SYSTEM: Realtime Live Job Board Broadcast channel
+  // ðŸŒ LIVE SYSTEM: Realtime Live Job Board Broadcast channel
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
@@ -3293,7 +3294,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [isSupabaseConfigured]);
 
-  // 🌐 LIVE SYSTEM: Realtime Global User Registration & Device Sync
+  // ðŸŒ LIVE SYSTEM: Realtime Global User Registration & Device Sync
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
@@ -3327,7 +3328,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [isSupabaseConfigured]);
 
-  // 🌐 LIVE SYSTEM: Hydrate and listen for live Store Subscriptions
+  // ðŸŒ LIVE SYSTEM: Hydrate and listen for live Store Subscriptions
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
@@ -3431,7 +3432,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setActiveContactRequestPopup((curr) => curr || req);
     showLocalNotification(
-      `👋 New Contact Request from ${req.senderName}`,
+      `ðŸ‘‹ New Contact Request from ${req.senderName}`,
       req.message || `${req.senderName} (${req.senderPhone}) added you!`,
       req.senderAvatar || '/icon-192.png'
     );
@@ -3639,7 +3640,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const label = invite.entityType === 'channel' ? 'Channel' : 'Group';
     showLocalNotification(
-      `📩 ${label} Invite: ${invite.groupName}`,
+      `ðŸ“© ${label} Invite: ${invite.groupName}`,
       `${invite.invitedByName || 'Someone'} invited you to join "${invite.groupName}". Tap to Accept or Decline.`,
       invite.groupAvatar || '/icon-192.png'
     );
@@ -3793,7 +3794,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   name: row.name,
                   rawPhoneNumber: row.phone,
                   normalizedPhoneNumber: row.phone,
-                  about: 'Available · Using AGC',
+                  about: 'Available Â· Using AGC',
                   avatar: row.avatar_url,
                   isRegisteredOnAGC: row.is_on_afri_chat ?? true,
                 });
@@ -3829,7 +3830,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                       phoneNumber: matched.full_phone || c.normalizedPhoneNumber,
                       fullName: matched.username || c.name,
                       avatarUrl: matched.avatar_url || c.avatar,
-                      about: 'Available · Using AGC',
+                      about: 'Available Â· Using AGC',
                       createdAt: new Date().toISOString(),
                       lastSeen: 'recently',
                     },
@@ -3871,7 +3872,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                       phoneNumber: matched.phoneNumber || c.normalizedPhoneNumber,
                       fullName: matched.fullName || c.name,
                       avatarUrl: matched.avatarUrl || c.avatar,
-                      about: matched.about || 'Available · Using AGC',
+                      about: matched.about || 'Available Â· Using AGC',
                       createdAt: new Date().toISOString(),
                       lastSeen: 'online',
                     },
@@ -3893,7 +3894,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (_) {}
   }, [isAuthenticated, currentUser.id, currentUser.phoneNumber]);
 
-  // ─── Realtime Presence & Live Typing Indicators (Supabase Channel) ────────
+  // â”€â”€â”€ Realtime Presence & Live Typing Indicators (Supabase Channel) â”€â”€â”€â”€â”€â”€â”€â”€
   const [onlineUserKeys, setOnlineUserKeys] = useState<Set<string>>(new Set());
   const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({});
   const [lastSeenMap, setLastSeenMap] = useState<Record<string, string>>(() => {
@@ -4545,7 +4546,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isJobBoardModalOpen, setIsJobBoardModalOpen] = useState(false);
   const [isPostJobModalOpen, setIsPostJobModalOpen] = useState(false);
 
-  // 13. Security Settings (Payment PIN & Security Questions — NO default PIN)
+  // 13. Security Settings (Payment PIN & Security Questions â€” NO default PIN)
   const getSecurityStorageKey = (phone?: string) =>
     getUserStorageKey('AGC_security_settings_v2', phone || currentUserRef.current?.phoneNumber || getSavedUserCleanPhone());
 
@@ -5174,7 +5175,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (wallet.availableBalance < adFee) {
       return {
         success: false,
-        message: `Insufficient wallet balance. Sponsored Status Ad costs ₦${adFee.toLocaleString()}.`,
+        message: `Insufficient wallet balance. Sponsored Status Ad costs â‚¦${adFee.toLocaleString()}.`,
       };
     }
 
@@ -5221,13 +5222,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         success: true,
         pending: true,
-        message: `₦${adFee.toLocaleString()} paid! Your Sponsored Ad "${ad.brand.trim()}" is now Pending Admin Approval.`,
+        message: `â‚¦${adFee.toLocaleString()} paid! Your Sponsored Ad "${ad.brand.trim()}" is now Pending Admin Approval.`,
       };
     } catch (_) {
       return {
         success: true,
         pending: true,
-        message: `Sponsored Ad submitted (₦${adFee.toLocaleString()}) and queued for Admin Approval.`,
+        message: `Sponsored Ad submitted (â‚¦${adFee.toLocaleString()}) and queued for Admin Approval.`,
       };
     }
   };
@@ -5250,7 +5251,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       statusType: mediaType,
       mediaUrl: finalMediaUrl,
       videoUrl: mediaType === 'video' ? finalMediaUrl : undefined,
-      caption: caption || (mediaType === 'video' ? 'Video Status 🎥' : 'Photo Status 📸'),
+      caption: caption || (mediaType === 'video' ? 'Video Status ðŸŽ¥' : 'Photo Status ðŸ“¸'),
       createdAt: 'Just now',
       createdAtISO: new Date().toISOString(),
       expiresInHours: 24,
@@ -5283,7 +5284,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       statusType: 'video',
       videoUrl,
       mediaUrl: thumbnail || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=500&auto=format&fit=crop&q=80',
-      caption: caption || 'Video Status 🎥',
+      caption: caption || 'Video Status ðŸŽ¥',
       createdAt: 'Just now',
       expiresInHours: 24,
       viewsCount: 0,
@@ -5487,7 +5488,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [sendSupabaseBroadcastOnce]);
 
-  // ── Multi-Transport Incoming Call & Call Termination Listener ────────────────
+  // â”€â”€ Multi-Transport Incoming Call & Call Termination Listener â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Depends ONLY on currentUser.phoneNumber so listeners never tear down mid-call
   useEffect(() => {
     const rawCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
@@ -5510,7 +5511,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       incomingCallRef.current = payload;
       setIncomingCall(payload);
       showLocalNotification(
-        `📞 Incoming AGC ${payload.type === 'video' ? 'Video' : 'Voice'} Call`,
+        `ðŸ“ž Incoming AGC ${payload.type === 'video' ? 'Video' : 'Voice'} Call`,
         payload.isGroupCall
           ? `${payload.callerName || 'Someone'} invited you to a group call (${payload.groupName || 'Group'})`
           : `${payload.callerName || 'Someone'} is calling you on AGC...`,
@@ -5564,12 +5565,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
     const triggerForceLogout = () => {
-      console.warn('⚠️ AGC force_logout executed: signed in on another device');
+      console.warn('âš ï¸ AGC force_logout executed: signed in on another device');
       localStorage.setItem('AGC_is_authenticated', 'false');
       localStorage.removeItem('AGC_session_token');
       setIsAuthenticated(false);
       setTimeout(() => {
-        alert('⚠️ AGC Security Alert\n\nYour account was just signed in on another device.\nYou have been logged out from this device for security.');
+        alert('âš ï¸ AGC Security Alert\n\nYour account was just signed in on another device.\nYou have been logged out from this device for security.');
         window.location.reload();
       }, 300);
     };
@@ -6083,7 +6084,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     showLocalNotification(
-      `📩 ${entityType === 'channel' ? 'Channel' : 'Group'} Invite Sent`,
+      `ðŸ“© ${entityType === 'channel' ? 'Channel' : 'Group'} Invite Sent`,
       `Sent invite to ${displayNames.join(', ')} for "${targetChat?.name || entityType}".`
     );
   };
@@ -6128,7 +6129,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       location: 'Community Group',
       unreadCount: 0,
       lastMessage: resolvedTargets.length > 0
-        ? `Created group "${name}" · ${resolvedTargets.length} invite(s) sent`
+        ? `Created group "${name}" Â· ${resolvedTargets.length} invite(s) sent`
         : `You created group "${name}"`,
       lastMessageTime: 'Just now',
       catalog: [],
@@ -6219,7 +6220,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       location: 'Broadcast Channel',
       unreadCount: 0,
       lastMessage: resolvedTargets.length > 0
-        ? `Channel created · ${resolvedTargets.length} invite(s) sent`
+        ? `Channel created Â· ${resolvedTargets.length} invite(s) sent`
         : 'Channel created',
       lastMessageTime: 'Just now',
       catalog: [],
@@ -6543,7 +6544,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           chatBroadcastChannelRef.current.subscribe();
         }
 
-        // Send instantly — no waiting for SUBSCRIBED
+        // Send instantly â€” no waiting for SUBSCRIBED
         chatBroadcastChannelRef.current.send({
           type: 'broadcast',
           event: 'new_message',
@@ -6618,7 +6619,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'sent',
     };
 
-    const previewLabel = useOneTime ? '🔒 1-Time Photo' : (caption ? `📷 ${caption}` : '📷 Photo');
+    const previewLabel = useOneTime ? 'ðŸ”’ 1-Time Photo' : (caption ? `ðŸ“· ${caption}` : 'ðŸ“· Photo');
 
     setMessages((prev) => {
       const current = prev[chatId] || [];
@@ -6726,10 +6727,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ) => {
     if (!text.trim()) return;
 
+    // Block non-admins from sending in channels or announce-only groups
+    const _targetChatSend = chats.find((c) => c.id === chatId);
+    if (_targetChatSend?.isChannel || _targetChatSend?.announceMode) {
+      const _myName = currentUser.fullName || '';
+      const _myPhone = (currentUser.phoneNumber || '').replace(/\D/g, '');
+      const _admins = _targetChatSend.admins || [];
+      const _isAdmin = _admins.some((a) => {
+        const aC = (a || '').replace(/\D/g, '');
+        return a === _myName || (aC.length >= 9 && aC.slice(-9) === _myPhone.slice(-9));
+      });
+      if (!_isAdmin) return;
+    }
+
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     const initialStatus: 'sent' | 'delivered' = isOnline ? 'delivered' : 'sent';
     const useOneTime = Boolean(oneTimeView);
-    const previewLabel = useOneTime ? '🔒 1-Time Message' : text;
+    const previewLabel = useOneTime ? 'ðŸ”’ 1-Time Message' : text;
 
     const newMsg: ChatMessage = {
       id: `msg_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -6806,19 +6820,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 2. Broadcast live
     broadcastLiveMessage(chatId, newMsg);
 
-    // 3. AI Chatbot Auto-Response (AfriBot AI powered by Groq)
+    // 3. AI Chatbot Auto-Response (AgcBot)
     const targetChat = chats.find((c) => c.id === chatId);
     const isBotChat = chatId === AFRIBOT_ID || Boolean(targetChat?.isBot);
     const isGroupWithBot = Boolean(
       targetChat?.isGroup &&
       (targetChat.members?.includes(AFRIBOT_NAME) || targetChat.admins?.includes(AFRIBOT_NAME))
     );
-    const mentionsBot = /(^|\s)@(bot|afribot|ai)\b/i.test(text) || replyTo?.sender?.includes('AfriBot');
+    const mentionsBot = /(^|\s)@(bot|afribot|ai)\b/i.test(text) || replyTo?.sender?.includes('AgcBot');
 
     if (isBotChat || (isGroupWithBot && mentionsBot)) {
       setTypingUsers((prev) => ({
         ...prev,
-        [chatId]: ['AfriBot AI is thinking...'],
+        [chatId]: ['AgcBot is thinking...'],
       }));
 
       const cleanedPrompt = isGroupWithBot
@@ -6895,7 +6909,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           broadcastLiveMessage(chatId, botResponseMsg);
         })
         .catch((err: unknown) => {
-          console.error('[AfriBot] Error generating AI response:', err);
+          console.error('[AgcBot] Error generating AI response:', err);
           setTypingUsers((prev) => {
             const copy = { ...prev };
             delete copy[chatId];
@@ -6932,11 +6946,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!passthroughTypes.includes(sourceMessage.type)) {
       if (sourceMessage.type === 'financial_poll' && sourceMessage.financialPoll) {
-        fwdText = `📊 Poll: ${sourceMessage.financialPoll.title}`;
+        fwdText = `ðŸ“Š Poll: ${sourceMessage.financialPoll.title}`;
       } else if (sourceMessage.type === 'game_xo' && sourceMessage.xoGame) {
-        fwdText = `🎮 X/O Game Challenge (${sourceMessage.xoGame.mode === 'bet' ? `₦${sourceMessage.xoGame.betAmount} stake` : 'Friendly'})`;
+        fwdText = `ðŸŽ® X/O Game Challenge (${sourceMessage.xoGame.mode === 'bet' ? `â‚¦${sourceMessage.xoGame.betAmount} stake` : 'Friendly'})`;
       } else if (sourceMessage.type === 'escrow_receipt' && sourceMessage.order) {
-        fwdText = `🔒 Escrow Order: ${sourceMessage.order.product?.title || 'Protected Deal'}`;
+        fwdText = `ðŸ”’ Escrow Order: ${sourceMessage.order.product?.title || 'Protected Deal'}`;
       } else if (!fwdText) {
         fwdText = 'Forwarded message';
       }
@@ -6945,19 +6959,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     let previewLabel = fwdText;
     if (fwdType === 'image') {
-      previewLabel = fwdText ? `📷 ${fwdText}` : '📷 Photo';
+      previewLabel = fwdText ? `ðŸ“· ${fwdText}` : 'ðŸ“· Photo';
     } else if (fwdType === 'voice' && sourceMessage.voiceNote) {
-      previewLabel = `🎤 Voice message (${sourceMessage.voiceNote.durationSeconds}s)`;
+      previewLabel = `ðŸŽ¤ Voice message (${sourceMessage.voiceNote.durationSeconds}s)`;
     } else if (fwdType === 'product_card' && sourceMessage.product) {
-      previewLabel = `🛍️ ${sourceMessage.product.title}`;
+      previewLabel = `ðŸ›ï¸ ${sourceMessage.product.title}`;
     } else if (fwdType === 'meme_sticker') {
-      previewLabel = '🎭 Sticker';
+      previewLabel = 'ðŸŽ­ Sticker';
     } else if (fwdType === 'location') {
-      previewLabel = `📍 ${sourceMessage.locationData?.addressName || 'Shared Location'}`;
+      previewLabel = `ðŸ“ ${sourceMessage.locationData?.addressName || 'Shared Location'}`;
     } else if (fwdType === 'invoice_receipt') {
-      previewLabel = `🧾 Invoice #${(sourceMessage.invoice || sourceMessage.invoiceData)?.invoiceNumber || ''}`;
+      previewLabel = `ðŸ§¾ Invoice #${(sourceMessage.invoice || sourceMessage.invoiceData)?.invoiceNumber || ''}`;
     }
-    const threadPreview = `↪ ${previewLabel || 'Forwarded message'}`;
+    const threadPreview = `â†ª ${previewLabel || 'Forwarded message'}`;
 
     const seenChatIds = new Set<string>();
     const prepared: Array<{ chatId: string; msg: ChatMessage; thread: ChatThread }> = [];
@@ -7072,8 +7086,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24h TTL
     const useOneTime = Boolean(oneTimeView);
     const previewLabel = useOneTime
-      ? `🔒 1-Time Voice Note (${durationSeconds}s)`
-      : `🎤 Voice message (${durationSeconds}s)`;
+      ? `ðŸ”’ 1-Time Voice Note (${durationSeconds}s)`
+      : `ðŸŽ¤ Voice message (${durationSeconds}s)`;
 
     const newMsg: ChatMessage = {
       id: `msg_vn_${Date.now()}`,
@@ -7167,7 +7181,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderAvatar: fromSelf ? currentUser.avatarUrl : undefined,
       type: 'product_card',
       product,
-      text: `🛍️ ${product.title} (${CURRENCY_SYMBOLS[product.currency] || '₦'}${product.price.toLocaleString()})`,
+      text: `ðŸ›ï¸ ${product.title} (${CURRENCY_SYMBOLS[product.currency] || 'â‚¦'}${product.price.toLocaleString()})`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'sent',
     };
@@ -7182,7 +7196,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         c.id === chatId
           ? {
               ...c,
-              lastMessage: `🛍️ ${product.title}`,
+              lastMessage: `ðŸ›ï¸ ${product.title}`,
               lastMessageTime: newMsg.timestamp,
             }
           : c
@@ -7197,7 +7211,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     const label = locationData.addressName?.trim() || `${locationData.latitude.toFixed(4)}, ${locationData.longitude.toFixed(4)}`;
-    const previewLabel = `📍 ${label}`;
+    const previewLabel = `ðŸ“ ${label}`;
 
     const newMsg: ChatMessage = {
       id: `msg_loc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -7207,7 +7221,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderPhone: currentUser.phoneNumber,
       senderAvatar: currentUser.avatarUrl,
       type: 'location',
-      text: `📍 Shared Pin Location: ${label}`,
+      text: `ðŸ“ Shared Pin Location: ${label}`,
       locationData: {
         ...locationData,
         addressName: label,
@@ -7484,7 +7498,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           c.id === chatId
             ? {
                 ...c,
-                lastMessage: `🎭 Meme: ${meme.title}`,
+                lastMessage: `ðŸŽ­ Meme: ${meme.title}`,
                 lastMessageTime: newMsg.timestamp,
               }
             : c
@@ -7498,7 +7512,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         verifiedStore: false,
         location: 'Direct Chat',
         unreadCount: 0,
-        lastMessage: `🎭 Meme: ${meme.title}`,
+        lastMessage: `ðŸŽ­ Meme: ${meme.title}`,
         lastMessageTime: newMsg.timestamp,
         catalog: [],
         isOnline: true,
@@ -7573,7 +7587,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
 
-    // 🌐 LIVE SYSTEM: Persist to Supabase and broadcast live across all devices
+    // ðŸŒ LIVE SYSTEM: Persist to Supabase and broadcast live across all devices
     if (isSupabaseConfigured) {
       createAudioSpaceInDb({
         title: newSpace.title,
@@ -8285,7 +8299,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 3. Scam Alert & Reputation Checker Handlers
 
-  // ── Live Supabase Realtime listener for cross-device scam report sync ─────
+  // â”€â”€ Live Supabase Realtime listener for cross-device scam report sync â”€â”€â”€â”€â”€
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     const scamCh = supabase.channel('agc_scam_reports_live', {
@@ -8410,7 +8424,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return found;
     }
 
-    // 3. Not found anywhere — return clean entity
+    // 3. Not found anywhere â€” return clean entity
     const cleanEntity: ScamEntity = {
       targetValue: query,
       targetType: cleaned.startsWith('+') || /^\d{11}$/.test(cleaned) ? 'phone' : 'bank_account',
@@ -8496,7 +8510,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const triggerScreenshotAttempt = () => {
     setScreenshotBlockedToast(
-      '🛡️ Screenshot Blocked: Chat privacy shield is active to protect sensitive financial records & private conversations!'
+      'ðŸ›¡ï¸ Screenshot Blocked: Chat privacy shield is active to protect sensitive financial records & private conversations!'
     );
     setTimeout(() => {
       setScreenshotBlockedToast(null);
@@ -8529,7 +8543,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         c.id === chatId
           ? {
               ...c,
-              lastMessage: `📄 Invoice #${invoice.invoiceNumber}`,
+              lastMessage: `ðŸ“„ Invoice #${invoice.invoiceNumber}`,
               lastMessageTime: newMsg.timestamp,
             }
           : c
@@ -8635,7 +8649,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         c.id === chatId
           ? {
               ...c,
-              lastMessage: `📊 Stake Poll: ${title}`,
+              lastMessage: `ðŸ“Š Stake Poll: ${title}`,
               lastMessageTime: newMsg.timestamp,
             }
           : c
@@ -8693,7 +8707,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const hasAlreadyStaked = Boolean(myExistingVote);
     if (!hasAlreadyStaked && wallet.availableBalance < poll.stakePerVote) {
-      const sym = CURRENCY_SYMBOLS[poll.currency || 'NGN'] || '₦';
+      const sym = CURRENCY_SYMBOLS[poll.currency || 'NGN'] || 'â‚¦';
       return {
         success: false,
         insufficientFunds: true,
@@ -8934,8 +8948,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             xoGame: incomingGame,
             text:
               incomingGame.mode === 'bet'
-                ? `🎮 X/O Challenge (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
-                : '🎮 Friendly X/O Challenge',
+                ? `ðŸŽ® X/O Challenge (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
+                : 'ðŸŽ® Friendly X/O Challenge',
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             status: 'delivered',
           };
@@ -9099,7 +9113,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: nowIso,
     };
 
-    const sym = CURRENCY_SYMBOLS[newGame.currency] || '₦';
+    const sym = CURRENCY_SYMBOLS[newGame.currency] || 'â‚¦';
     const cardMsg: ChatMessage = {
       id: `msg_xo_${gameId}`,
       chatId,
@@ -9111,8 +9125,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       xoGame: newGame,
       text:
         mode === 'bet'
-          ? `🎮 X/O Challenge: ${sym}${cleanBet.toLocaleString()} bet (Winner pot: ${sym}${winnerPayout.toLocaleString()} after 1% fee)`
-          : '🎮 X/O Friendly Challenge (Tic-Tac-Toe)',
+          ? `ðŸŽ® X/O Challenge: ${sym}${cleanBet.toLocaleString()} bet (Winner pot: ${sym}${winnerPayout.toLocaleString()} after 1% fee)`
+          : 'ðŸŽ® X/O Friendly Challenge (Tic-Tac-Toe)',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'sent',
     };
@@ -9153,7 +9167,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         c.id === chatId
           ? {
               ...c,
-              lastMessage: mode === 'bet' ? `🎮 X/O Challenge (${sym}${cleanBet.toLocaleString()})` : '🎮 X/O Friendly Challenge',
+              lastMessage: mode === 'bet' ? `ðŸŽ® X/O Challenge (${sym}${cleanBet.toLocaleString()})` : 'ðŸŽ® X/O Friendly Challenge',
               lastMessageTime: cardMsg.timestamp,
             }
           : c
@@ -9181,7 +9195,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Waiting for your opponent to accept.' };
     }
     if (game.mode === 'bet' && game.betAmount > 0 && wallet.availableBalance < game.betAmount) {
-      const sym = CURRENCY_SYMBOLS[game.currency || 'NGN'] || '₦';
+      const sym = CURRENCY_SYMBOLS[game.currency || 'NGN'] || 'â‚¦';
       return {
         success: false,
         insufficientFunds: true,
@@ -9412,7 +9426,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderPhone: currentUser.phoneNumber,
       senderAvatar: currentUser.avatarUrl,
       type: 'text',
-      text: `✅ Paid ${CURRENCY_SYMBOLS.NGN}${amount.toLocaleString()} for Ajo Cycle Round ${roundNum} via AGC Wallet.`,
+      text: `âœ… Paid ${CURRENCY_SYMBOLS.NGN}${amount.toLocaleString()} for Ajo Cycle Round ${roundNum} via AGC Wallet.`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'delivered',
     };
@@ -9427,7 +9441,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         c.id === chatId
           ? {
               ...c,
-              lastMessage: `🪙 Paid ₦${amount.toLocaleString()} to Ajo Round ${roundNum}`,
+              lastMessage: `ðŸª™ Paid â‚¦${amount.toLocaleString()} to Ajo Round ${roundNum}`,
               lastMessageTime: newMsg.timestamp,
             }
           : c
@@ -9436,22 +9450,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     broadcastLiveMessage(chatId, newMsg);
 
-    return { success: true, message: `Successfully contributed ₦${amount.toLocaleString()} to Ajo pot (Round ${roundNum})!` };
+    return { success: true, message: `Successfully contributed â‚¦${amount.toLocaleString()} to Ajo pot (Round ${roundNum})!` };
   };
 
   const upgradeVerificationBadge = (badge: 'blue' | 'gold' | 'creator_plus') => {
     let cost = 4000;
     let feeRate = 0.02;
-    let badgeTitle = 'Blue Checkmark (₦4,000/mo · 2% platform fee)';
+    let badgeTitle = 'Blue Checkmark (â‚¦4,000/mo Â· 2% platform fee)';
 
     if (badge === 'gold') {
       cost = 11000;
       feeRate = 0.05;
-      badgeTitle = 'Gold Creator Checkmark (₦11,000/mo · 5% platform fee)';
+      badgeTitle = 'Gold Creator Checkmark (â‚¦11,000/mo Â· 5% platform fee)';
     } else if (badge === 'creator_plus') {
       cost = 25000;
       feeRate = 0.02;
-      badgeTitle = 'Creator Plus Plan (₦25,000/mo · 2% platform fee)';
+      badgeTitle = 'Creator Plus Plan (â‚¦25,000/mo Â· 2% platform fee)';
     }
 
     if (wallet.availableBalance < cost) {
@@ -9556,7 +9570,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         senderAvatar: currentUser.avatarUrl,
         type: 'ajo_update',
         ajoGroup: newGroup,
-        text: `🪙 Ajo Club Launched: ${newGroup.name} (₦${newGroup.totalPoolPerRound.toLocaleString()} Round Pot)`,
+        text: `ðŸª™ Ajo Club Launched: ${newGroup.name} (â‚¦${newGroup.totalPoolPerRound.toLocaleString()} Round Pot)`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         status: 'sent',
       };
@@ -9569,7 +9583,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           c.id === activeChatId
             ? {
                 ...c,
-                lastMessage: `🪙 Ajo Club: ${newGroup.name}`,
+                lastMessage: `ðŸª™ Ajo Club: ${newGroup.name}`,
                 lastMessageTime: ajoMsg.timestamp,
               }
             : c
@@ -9788,9 +9802,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : cachedAvatar || avatarUrl || DEFAULT_AVATAR_SVG;
 
     const chosenAbout =
-      about && about !== 'Available · Using AGC'
+      about && about !== 'Available Â· Using AGC'
         ? about
-        : (partitionedCached?.about || about || 'Available · Using AGC');
+        : (partitionedCached?.about || about || 'Available Â· Using AGC');
 
     const updatedUser: UserProfile = {
       ...(partitionedCached || {}),
@@ -10084,7 +10098,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): Promise<{ success: boolean; error?: string; username?: string }> => {
     const clean = newUsername.trim().toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9_.]/g, '');
     if (clean.length < 3 || clean.length > 24) {
-      return { success: false, error: 'Username must be 3–24 characters (letters, numbers, _ or .).' };
+      return { success: false, error: 'Username must be 3â€“24 characters (letters, numbers, _ or .).' };
     }
     const reserved = new Set([
       'admin', 'administrator', 'agc', 'africhat', 'support', 'help', 'official',
@@ -10140,7 +10154,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     updateUserProfile({
       fullName: clean,
       username: clean,
-      ...(newAbout !== undefined ? { about: newAbout.trim() || 'Available · Using AGC' } : {}),
+      ...(newAbout !== undefined ? { about: newAbout.trim() || 'Available Â· Using AGC' } : {}),
     });
 
     return { success: true, username: clean };
@@ -10185,7 +10199,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       name,
       rawPhoneNumber: phone,
       normalizedPhoneNumber: normalized,
-      about: about || (isRegistered ? 'Available · Using AGC' : 'Invited to AGC'),
+      about: about || (isRegistered ? 'Available Â· Using AGC' : 'Invited to AGC'),
       avatar,
       isRegisteredOnAGC: isRegistered,
       registeredUser: isRegistered
@@ -10194,7 +10208,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             phoneNumber: normalized,
             fullName: name,
             avatarUrl: avatar,
-            about: about || 'Available · Using AGC',
+            about: about || 'Available Â· Using AGC',
             createdAt: new Date().toISOString(),
             lastSeen: 'Just now',
           }
@@ -10289,13 +10303,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ...c,
           isRegisteredOnAGC: true,
           avatar: match.avatar_url || match.avatarUrl || c.avatar,
-          about: match.about || 'Available · Using AGC',
+          about: match.about || 'Available Â· Using AGC',
           registeredUser: {
             id: match.id || `usr_${match.phone_digits}`,
             phoneNumber: match.full_phone || c.normalizedPhoneNumber,
             fullName: match.username || match.fullName || c.name,
             avatarUrl: match.avatar_url || match.avatarUrl || c.avatar,
-            about: match.about || 'Available · Using AGC',
+            about: match.about || 'Available Â· Using AGC',
             createdAt: new Date().toISOString(),
             lastSeen: 'recently',
           },
@@ -10405,7 +10419,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .upsert({ id: targetChatId, type: 'direct', created_at: new Date().toISOString() }, { onConflict: 'id' })
         .then(({ error }) => { if (error) console.warn('[AGC] Supabase chat upsert:', error.message); });
 
-      // Insert both participant rows (bilateral — the key fix for one-sided QR chats)
+      // Insert both participant rows (bilateral â€” the key fix for one-sided QR chats)
       [myUserId, otherUserId].filter(Boolean).forEach((uid) => {
         supabase
           .from('chat_participants')
@@ -10423,9 +10437,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         name: AFRIBOT_NAME,
         avatar: AFRIBOT_AVATAR,
         verifiedStore: false,
-        location: 'AI Assistant • Groq LPU',
+        location: 'AI Assistant â€¢ Groq LPU',
         unreadCount: 0,
-        lastMessage: 'Hello! I am AfriBot AI. Ask me anything, or invite me to your groups as an Admin! 🤖✨',
+        lastMessage: 'Hello! I am AfriBot AI. Ask me anything, or invite me to your groups as an Admin! ðŸ¤–âœ¨',
         lastMessageTime: 'Just now',
         catalog: [],
         isOnline: true,
@@ -10452,7 +10466,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           senderName: AFRIBOT_NAME,
           senderAvatar: AFRIBOT_AVATAR,
           senderPhone: AFRIBOT_PHONE,
-          text: `Habari & Greetings! 👋 I am **AfriBot AI**, powered by Groq ultra-fast LPU inference.\n\nI am your personal AI companion right inside AfriChat. Here are things you can ask me:\n- 💡 Brainstorm business & trade ideas\n- 💰 Explain Ajo savings, crypto, or escrow rules\n- 🌍 Translate between English, Pidgin, Swahili, Yoruba, Hausa, French\n- 📝 Draft contracts, essays, emails, or marketing pitches\n- 👥 **Add me to your Groups as an Admin** to help answer questions, moderate, or summarize chats!\n\nHow can I assist you today?`,
+          text: `Habari & Greetings! ðŸ‘‹ I am **AfriBot AI**, powered by Groq ultra-fast LPU inference.\n\nI am your personal AI companion right inside AfriChat. Here are things you can ask me:\n- ðŸ’¡ Brainstorm business & trade ideas\n- ðŸ’° Explain Ajo savings, crypto, or escrow rules\n- ðŸŒ Translate between English, Pidgin, Swahili, Yoruba, Hausa, French\n- ðŸ“ Draft contracts, essays, emails, or marketing pitches\n- ðŸ‘¥ **Add me to your Groups as an Admin** to help answer questions, moderate, or summarize chats!\n\nHow can I assist you today?`,
           type: 'text',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           status: 'read',
@@ -10497,8 +10511,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderName: AFRIBOT_NAME,
       senderAvatar: AFRIBOT_AVATAR,
       text: makeAdmin
-        ? `🤖 AfriBot AI was added to this group as an Admin! Tag @AfriBot or @bot anytime to ask questions, settle debates, or get AI assistance.`
-        : `🤖 AfriBot AI joined the group! Tag @AfriBot or @bot to chat with the AI.`,
+        ? `ðŸ¤– AfriBot AI was added to this group as an Admin! Tag @AfriBot or @bot anytime to ask questions, settle debates, or get AI assistance.`
+        : `ðŸ¤– AfriBot AI joined the group! Tag @AfriBot or @bot to chat with the AI.`,
       type: 'text',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'delivered',
@@ -10513,7 +10527,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    showLocalNotification('AfriBot AI Added', `🤖 AfriBot AI added to group${makeAdmin ? ' as Admin' : ''}!`);
+    showLocalNotification('AfriBot AI Added', `ðŸ¤– AfriBot AI added to group${makeAdmin ? ' as Admin' : ''}!`);
   };
 
   // 10. Meme Handlers
@@ -10561,7 +10575,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         c.id === chatId
           ? {
               ...c,
-              lastMessage: `🖼️ Meme: ${meme.title || 'Custom Upload'}`,
+              lastMessage: `ðŸ–¼ï¸ Meme: ${meme.title || 'Custom Upload'}`,
               lastMessageTime: newMsg.timestamp,
             }
           : c
@@ -10667,7 +10681,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    // 🌐 Broadcast to all live users via Supabase Realtime
+    // ðŸŒ Broadcast to all live users via Supabase Realtime
     if (isSupabaseConfigured) {
       try {
         const jobCh = supabase.channel('live_job_board', { config: { broadcast: { self: false } } });
@@ -10689,7 +10703,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       job: newJob,
-      message: 'Job posting published successfully on AGC Opportunities Board (₦400 fee deducted)!',
+      message: 'Job posting published successfully on AGC Opportunities Board (â‚¦400 fee deducted)!',
     };
   };
 
@@ -10698,7 +10712,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (wallet.availableBalance < applyFee) {
       return {
         success: false,
-        message: `Insufficient wallet balance for application fee (₦${applyFee}). Please fund your AGC wallet first.`,
+        message: `Insufficient wallet balance for application fee (â‚¦${applyFee}). Please fund your AGC wallet first.`,
       };
     }
 
@@ -10730,7 +10744,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         senderName: currentUser.fullName || 'AGC Applicant',
         senderPhone: currentUser.phoneNumber,
         senderAvatar: currentUser.avatarUrl,
-        text: `📄 Job Application Submitted: "${job.title}" at ${job.company}.\nApplicant: ${currentUser.fullName || 'AGC Member'} (${currentUser.phoneNumber || 'Verified Phone'}).\n₦50 application fee escrow verified. Ready to discuss!`,
+        text: `ðŸ“„ Job Application Submitted: "${job.title}" at ${job.company}.\nApplicant: ${currentUser.fullName || 'AGC Member'} (${currentUser.phoneNumber || 'Verified Phone'}).\nâ‚¦50 application fee escrow verified. Ready to discuss!`,
         type: 'text',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         status: 'sent',
@@ -10743,7 +10757,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `Application submitted for "${job.title}"! ₦50 application fee paid from your wallet. Employer chat opened.`,
+      message: `Application submitted for "${job.title}"! â‚¦50 application fee paid from your wallet. Employer chat opened.`,
     };
   };
 
@@ -11077,8 +11091,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 15. Instant P2P Money Transfer with Rolling 24h Daily & 7d Weekly Limits
   const getTransferLimitsUsage = () => {
-    const dailyLimit = systemConfigRef.current?.maxDailyTransferNgn ?? 500000;
-    const weeklyLimit = systemConfigRef.current?.maxWeeklyTransferNgn ?? 2000000;
+    const dailyLimit = systemConfigRef.current?.maxDailyTransferNgn ?? 70000;
+    const weeklyLimit = systemConfigRef.current?.maxWeeklyTransferNgn ?? 900000;
     const nowMs = Date.now();
     const dayCutoff = nowMs - 24 * 60 * 60 * 1000;
     const weekCutoff = nowMs - 7 * 24 * 60 * 60 * 1000;
@@ -11110,7 +11124,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): Promise<{ success: boolean; transfer?: DelayedTransfer; message?: string }> => {
     const minAmt = systemConfigRef.current?.minTransferAmountNgn ?? 100;
     if (amount < minAmt) {
-      return { success: false, message: `Minimum transfer amount is ₦${minAmt.toLocaleString()}.` };
+      return { success: false, message: `Minimum transfer amount is â‚¦${minAmt.toLocaleString()}.` };
     }
     if (wallet.availableBalance < amount) {
       return {
@@ -11123,39 +11137,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (dailyLimit > 0 && dailyUsed + amount > dailyLimit) {
       return {
         success: false,
-        message: `Daily transfer limit of ₦${dailyLimit.toLocaleString()} exceeded. Remaining today: ₦${Math.max(0, dailyLimit - dailyUsed).toLocaleString()}.`,
+        message: `Daily transfer limit of â‚¦${dailyLimit.toLocaleString()} exceeded. Remaining today: â‚¦${Math.max(0, dailyLimit - dailyUsed).toLocaleString()}.`,
       };
     }
     if (weeklyLimit > 0 && weeklyUsed + amount > weeklyLimit) {
       return {
         success: false,
-        message: `Weekly transfer limit of ₦${weeklyLimit.toLocaleString()} exceeded. Remaining this week: ₦${Math.max(0, weeklyLimit - weeklyUsed).toLocaleString()}.`,
+        message: `Weekly transfer limit of â‚¦${weeklyLimit.toLocaleString()} exceeded. Remaining this week: â‚¦${Math.max(0, weeklyLimit - weeklyUsed).toLocaleString()}.`,
       };
     }
 
     try {
-      const resp = await fetch('/api/wallet/transfer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fromPhone: currentUser.phoneNumber,
-          toPhone: recipientPhone,
-          recipientName,
-          amount,
-          note: note || 'Instant Transfer via AGC Wallet',
-        }),
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !data?.success) {
-        return { success: false, message: data?.message || 'Transfer failed server validation.' };
-      }
+      let serverHandled = false;
+      let transferRef = 	rf_;
+      try {
+        const resp = await fetch('/api/wallet/transfer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fromPhone: currentUser.phoneNumber,
+            toPhone: recipientPhone,
+            recipientName,
+            amount,
+            note: note || 'Instant Transfer via AGC Wallet',
+            clientBalance: wallet.availableBalance,
+          }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok && data?.success) {
+          serverHandled = true;
+          transferRef = data.reference || transferRef;
+          if (data.wallet) {
+            const nextWallet: UserWallet = {
+              availableBalance: Number(data.wallet.availableBalance) || 0,
+              escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
+              currency: data.wallet.currency || 'NGN',
+              transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+            };
+            setWallet(nextWallet);
+            walletRef.current = nextWallet;
+            persistPartitionedWallet(nextWallet, currentUser.phoneNumber);
+          }
+        }
+      } catch (_) {}
 
-      if (data.wallet) {
+      if (!serverHandled) {
+        const refTx = recordLedgerTransaction({
+          type: 'sent',
+          title: `Instant Transfer to ${recipientName}`,
+          description: `${note ? `${note} · ` : ''}Instant transfer to ${recipientName}`,
+          amount,
+          fee: 0,
+          balanceAfter: Math.max(0, wallet.availableBalance - amount),
+          currency: 'NGN',
+          referenceId: transferRef,
+          channel: 'wallet',
+        });
         const nextWallet: UserWallet = {
-          availableBalance: Number(data.wallet.availableBalance) || 0,
-          escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
-          currency: data.wallet.currency || 'NGN',
-          transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+          ...wallet,
+          availableBalance: Math.max(0, wallet.availableBalance - amount),
+          transactions: [refTx, ...wallet.transactions],
         };
         setWallet(nextWallet);
         walletRef.current = nextWallet;
@@ -11188,7 +11229,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         success: true,
         transfer: instantRecord,
-        message: `₦${amount.toLocaleString()} sent instantly to ${recipientName}!`,
+        message: `â‚¦${amount.toLocaleString()} sent instantly to ${recipientName}!`,
       };
     } catch (err: any) {
       return { success: false, message: err?.message || 'Unable to reach transfer server.' };
@@ -11231,7 +11272,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `Transfer of ₦${target.amount.toLocaleString()} cancelled. Funds returned to your available wallet immediately.`,
+      message: `Transfer of â‚¦${target.amount.toLocaleString()} cancelled. Funds returned to your available wallet immediately.`,
     };
   };
 
@@ -11289,7 +11330,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         success: false,
         totalDebited: 0,
-        message: `Insufficient wallet balance for payroll (₦${totalNeeded.toLocaleString()} needed, ₦${wallet.availableBalance.toLocaleString()} available). Please top up via Paystack first.`,
+        message: `Insufficient wallet balance for payroll (â‚¦${totalNeeded.toLocaleString()} needed, â‚¦${wallet.availableBalance.toLocaleString()} available). Please top up via Paystack first.`,
       };
     }
 
@@ -11355,7 +11396,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       totalDebited: totalNeeded,
-      message: `Payroll auto-debit executed successfully! ₦${totalNeeded.toLocaleString()} disbursed to ${targets.length} staff member(s).`,
+      message: `Payroll auto-debit executed successfully! â‚¦${totalNeeded.toLocaleString()} disbursed to ${targets.length} staff member(s).`,
     };
   };
 
@@ -11417,7 +11458,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `🌟 Celebrity Identity Verified! The golden/purple celebrity verified badge is now active on your AGC profile and chats.`,
+      message: `ðŸŒŸ Celebrity Identity Verified! The golden/purple celebrity verified badge is now active on your AGC profile and chats.`,
     };
   };
 
@@ -11552,7 +11593,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (paymentMethod === 'wallet' && wallet.availableBalance < fee) {
       return {
         success: false,
-        message: `Insufficient wallet balance for ₦${fee.toLocaleString()} monthly store registration. Please top up or pay with card.`,
+        message: `Insufficient wallet balance for â‚¦${fee.toLocaleString()} monthly store registration. Please top up or pay with card.`,
       };
     }
 
@@ -11615,7 +11656,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }),
     }).catch(() => {});
 
-    // 🌐 LIVE SYSTEM: Publish Store Subscription to Supabase (pending admin approval)
+    // ðŸŒ LIVE SYSTEM: Publish Store Subscription to Supabase (pending admin approval)
     if (isSupabaseConfigured) {
       createStoreSubscriptionInDb({
         store_name: updatedSub.storeName,
@@ -11639,7 +11680,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `Store submitted under ${tier === 'starter_30' ? 'Starter (₦3k/mo)' : 'Pro (₦7k/mo)'}! Pending Admin Approval before appearing in Marketplace.`,
+      message: `Store submitted under ${tier === 'starter_30' ? 'Starter (â‚¦3k/mo)' : 'Pro (â‚¦7k/mo)'}! Pending Admin Approval before appearing in Marketplace.`,
     };
   };
 
@@ -11664,7 +11705,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (wallet.availableBalance < file.price) {
       return {
         success: false,
-        message: `Insufficient wallet balance to buy "${file.title}" (₦${file.price.toLocaleString()}). Please top up your wallet.`,
+        message: `Insufficient wallet balance to buy "${file.title}" (â‚¦${file.price.toLocaleString()}). Please top up your wallet.`,
       };
     }
 
@@ -11707,7 +11748,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       file: updatedFile,
-      message: `🎉 Purchased "${file.title}"! Download unlocked and saved to your device library.`,
+      message: `ðŸŽ‰ Purchased "${file.title}"! Download unlocked and saved to your device library.`,
     };
   };
 
@@ -11741,7 +11782,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (wallet.availableBalance < price) {
       return {
         success: false,
-        message: `Insufficient wallet balance for VIP session (₦${price.toLocaleString()}). Please top up your wallet.`,
+        message: `Insufficient wallet balance for VIP session (â‚¦${price.toLocaleString()}). Please top up your wallet.`,
       };
     }
 
@@ -11780,7 +11821,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `📞 VIP 1-on-1 ${type.toUpperCase()} session with ${creator.name} confirmed for ${durationMinutes} min(s)! Starting connection now...`,
+      message: `ðŸ“ž VIP 1-on-1 ${type.toUpperCase()} session with ${creator.name} confirmed for ${durationMinutes} min(s)! Starting connection now...`,
     };
   };
 
@@ -11856,7 +11897,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       book: newBook,
-      message: `📖 "${newBook.title}" published to African Writers Guild with 100% Human-Written certification!`,
+      message: `ðŸ“– "${newBook.title}" published to African Writers Guild with 100% Human-Written certification!`,
     };
   };
 
@@ -11915,7 +11956,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!book) return { success: false, message: 'Book not found' };
 
     if (wallet.availableBalance < amount) {
-      return { success: false, message: `Insufficient wallet balance to tip ₦${amount.toLocaleString()}. Please top up your wallet.` };
+      return { success: false, message: `Insufficient wallet balance to tip â‚¦${amount.toLocaleString()}. Please top up your wallet.` };
     }
 
     const newTx: WalletTransaction = {
@@ -11963,7 +12004,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `☕ Tipped ₦${amount.toLocaleString()} directly to author ${book.authorName}! Thank you for supporting authentic human literature.`,
+      message: `â˜• Tipped â‚¦${amount.toLocaleString()} directly to author ${book.authorName}! Thank you for supporting authentic human literature.`,
     };
   };
 
@@ -11974,7 +12015,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (wallet.availableBalance < book.price) {
       return {
         success: false,
-        message: `Insufficient wallet balance to purchase "${book.title}" (₦${book.price.toLocaleString()}). Please top up your wallet.`,
+        message: `Insufficient wallet balance to purchase "${book.title}" (â‚¦${book.price.toLocaleString()}). Please top up your wallet.`,
       };
     }
 
@@ -12007,7 +12048,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `📚 Purchased "${book.title}"! All chapters and group buddy reading unlocked.`,
+      message: `ðŸ“š Purchased "${book.title}"! All chapters and group buddy reading unlocked.`,
     };
   };
 
@@ -12128,7 +12169,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (data.paymentMethod === 'wallet' && wallet.availableBalance < totalFee) {
       return {
         success: false,
-        message: `Insufficient wallet balance for ₦${totalFee.toLocaleString()} (₦5,000 Tutor Reg + ${blueCheckFee > 0 ? '₦4,000 Blue Check' : ''}). Please top up your wallet or pay via Paystack.`,
+        message: `Insufficient wallet balance for â‚¦${totalFee.toLocaleString()} (â‚¦5,000 Tutor Reg + ${blueCheckFee > 0 ? 'â‚¦4,000 Blue Check' : ''}). Please top up your wallet or pay via Paystack.`,
       };
     }
 
@@ -12136,7 +12177,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const newTx: WalletTransaction = {
         id: `tx_tutor_reg_${Date.now()}`,
         type: 'transfer_out',
-        title: `Certified Tutor Registration Fee (₦${totalFee.toLocaleString()})`,
+        title: `Certified Tutor Registration Fee (â‚¦${totalFee.toLocaleString()})`,
         amount: totalFee,
         currency: 'NGN',
         timestamp: 'Just now',
@@ -12175,7 +12216,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: '🎉 Congratulations! You are now a Registered AGC Certified Tutor with Verified Blue Check status. You can publish up to 10 courses!',
+      message: 'ðŸŽ‰ Congratulations! You are now a Registered AGC Certified Tutor with Verified Blue Check status. You can publish up to 10 courses!',
     };
   };
 
@@ -12184,7 +12225,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (paymentMethod === 'wallet' && wallet.availableBalance < proFee) {
       return {
         success: false,
-        message: 'Insufficient wallet balance for ₦20,000 Unlimited Pro Tutor plan. Please top up your wallet or use Paystack.',
+        message: 'Insufficient wallet balance for â‚¦20,000 Unlimited Pro Tutor plan. Please top up your wallet or use Paystack.',
       };
     }
 
@@ -12192,7 +12233,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const newTx: WalletTransaction = {
         id: `tx_tutor_unlimited_${Date.now()}`,
         type: 'transfer_out',
-        title: 'Tutor Unlimited Pro Subscription (₦20,000 / month)',
+        title: 'Tutor Unlimited Pro Subscription (â‚¦20,000 / month)',
         amount: proFee,
         currency: 'NGN',
         timestamp: 'Just now',
@@ -12218,7 +12259,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: '🚀 Upgraded to Unlimited Pro Tutor Plan! You can now publish unlimited courses on AGC with zero restrictions.',
+      message: 'ðŸš€ Upgraded to Unlimited Pro Tutor Plan! You can now publish unlimited courses on AGC with zero restrictions.',
     };
   };
 
@@ -12228,7 +12269,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!tutorProfile.isRegisteredTutor) {
       return {
         success: false,
-        message: 'Tutor Registration Required: You must register as a tutor (₦5,000 fee + ₦4,000 Blue Check) before publishing courses.',
+        message: 'Tutor Registration Required: You must register as a tutor (â‚¦5,000 fee + â‚¦4,000 Blue Check) before publishing courses.',
       };
     }
 
@@ -12236,7 +12277,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (myCoursesCount >= tutorProfile.coursesLimit) {
       return {
         success: false,
-        message: `Course limit reached (${tutorProfile.coursesLimit} courses). Upgrade to the ₦20,000/month Unlimited Pro Plan to add more courses.`,
+        message: `Course limit reached (${tutorProfile.coursesLimit} courses). Upgrade to the â‚¦20,000/month Unlimited Pro Plan to add more courses.`,
       };
     }
 
@@ -12268,7 +12309,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       course: newCourse,
-      message: `📚 "${newCourse.title}" published successfully to AGC Course Academy!`,
+      message: `ðŸ“š "${newCourse.title}" published successfully to AGC Course Academy!`,
     };
   };
 
@@ -12315,7 +12356,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `🎓 Enrolled in "${course.title}"! Full curriculum, video lessons, and syllabus unlocked with Escrow learner guarantee.`,
+      message: `ðŸŽ“ Enrolled in "${course.title}"! Full curriculum, video lessons, and syllabus unlocked with Escrow learner guarantee.`,
     };
   };
 
@@ -12463,17 +12504,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
 
         const msgText = message.oneTimeView
-          ? (message.type === 'image' ? '🔒 1-Time Photo' : message.type === 'voice' ? '🔒 1-Time Voice Note' : '🔒 1-Time Message')
+          ? (message.type === 'image' ? 'ðŸ”’ 1-Time Photo' : message.type === 'voice' ? 'ðŸ”’ 1-Time Voice Note' : 'ðŸ”’ 1-Time Message')
           : (message.type === 'location'
-              ? `📍 ${message.locationData?.addressName || message.metadata?.address_name || 'Shared Pin Location'}`
+              ? `ðŸ“ ${message.locationData?.addressName || message.metadata?.address_name || 'Shared Pin Location'}`
               : plainText ||
                 (message.type === 'image'
-                  ? '📷 Photo'
+                  ? 'ðŸ“· Photo'
                   : message.type === 'voice'
-                  ? '🎤 Voice message'
+                  ? 'ðŸŽ¤ Voice message'
                   : message.type === 'meme_sticker'
-                  ? '🎭 Sticker'
-                  : '📎 Attachment'));
+                  ? 'ðŸŽ­ Sticker'
+                  : 'ðŸ“Ž Attachment'));
 
         if (index >= 0) {
           const updated = [...prev];
@@ -12552,10 +12593,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (activeChatId !== resolvedChatId && activeChatId !== chatId && !isFromMe) {
         showLocalNotification(
-          `💬 ${message.senderName || 'AGC User'}`,
+          `ðŸ’¬ ${message.senderName || 'AGC User'}`,
           message.type === 'location'
-            ? `📍 ${message.locationData?.addressName || 'Shared a pin location'}`
-            : (message.text || (message.type === 'image' ? '📷 Sent a photo' : 'Sent you an attachment')),
+            ? `ðŸ“ ${message.locationData?.addressName || 'Shared a pin location'}`
+            : (message.text || (message.type === 'image' ? 'ðŸ“· Sent a photo' : 'Sent you an attachment')),
           message.senderAvatar || '/icon-192.png'
         );
       }
@@ -12677,7 +12718,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           chatId: groupId,
           sender: 'system',
           text: accepted
-            ? `✅ ${displayName} accepted the invitation and joined.`
+            ? `âœ… ${displayName} accepted the invitation and joined.`
             : `${displayName} declined the invitation.`,
           type: 'text',
           timestamp: 'Just now',
@@ -12690,7 +12731,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return updated;
         });
         if (accepted) {
-          showLocalNotification(`✅ ${displayName} joined`, `${displayName} accepted your group/channel invite.`);
+          showLocalNotification(`âœ… ${displayName} joined`, `${displayName} accepted your group/channel invite.`);
         }
       }
     };
@@ -12712,7 +12753,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         { sendRequest: false }
       );
       showLocalNotification(
-        `✅ ${acceptorName} accepted your request`,
+        `âœ… ${acceptorName} accepted your request`,
         `You can now chat securely with ${acceptorName}.`,
         payload.acceptorAvatar || '/icon-192.png'
       );
@@ -14554,7 +14595,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       userId: 'usr_AGC_official_admin',
       userName: 'AGC Official',
       userAvatar: '/favicon.svg',
-      caption: `📢 ${title}: ${message}`,
+      caption: `ðŸ“¢ ${title}: ${message}`,
       statusType: 'thought',
       thoughtBg: level === 'alert' 
         ? 'from-rose-950 via-purple-950 to-black' 
@@ -15026,3 +15067,10 @@ export const useApp = () => {
   }
   return context;
 };
+
+
+
+
+
+
+

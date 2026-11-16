@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+﻿import express, { Request, Response } from 'express';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import cors from 'cors';
@@ -75,7 +75,7 @@ app.use(
   })
 );
 
-// ── CUSTOM APPLICATION FIREWALL (WAF) & THREAT INSPECTION ──────────────────
+// â”€â”€ CUSTOM APPLICATION FIREWALL (WAF) & THREAT INSPECTION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const SQLI_REGEX = /(union\s+select|select\s+.*\s+from|insert\s+into|drop\s+table|update\s+.*\s+set|delete\s+from|sleep\(\d+\)|benchmark\(|waitfor\s+delay|;\s*--|\/\*|\*\/|;\s*drop|'\s*or\s*['\d]=['\d])/i;
 const XSS_REGEX = /(<script.*?>|javascript:|onload\s*=|onerror\s*=|onmouseover\s*=|eval\(|<iframe|<svg.*?onload)/i;
 const PATH_TRAVERSAL_REGEX = /(\.\.[\/\\]|%2e%2e%2f|%2e%2e\/|\.\.%2f|\/etc\/passwd|win\.ini)/i;
@@ -89,7 +89,7 @@ function inspectPayloadForThreats(target: any): string | null {
   return null;
 }
 
-// ── ADMIN AUDIT, SECURITY EVENTS & IP BLOCKLIST STORE ───────────────────────
+// â”€â”€ ADMIN AUDIT, SECURITY EVENTS & IP BLOCKLIST STORE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const AUDIT_FILE = path.join(__dirname, 'data_admin_audit.json');
 interface AuditEntry {
   id: string;
@@ -277,7 +277,7 @@ app.use('/api', (req: Request, res: Response, next) => {
   next();
 });
 
-// ── AUTH ROUTE RATE LIMITER (BRUTE FORCE PROTECTION) ───────────────────────
+// â”€â”€ AUTH ROUTE RATE LIMITER (BRUTE FORCE PROTECTION) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 interface RateLimitRecord {
   attempts: number;
   resetAt: number;
@@ -319,7 +319,7 @@ const authRateLimiter = (req: Request, res: Response, next: () => void) => {
   next();
 };
 
-// ── ANTI-BOT & RECON SCRAPING MITIGATION ────────────────────────────────────
+// â”€â”€ ANTI-BOT & RECON SCRAPING MITIGATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const BOT_USER_AGENTS = [
   'sqlmap', 'nikto', 'nmap', 'masscan', 'gobuster', 'dirbuster', 'wpscan',
   'python-requests', 'aiohttp', 'curl/', 'wget/', 'postmanruntime',
@@ -385,7 +385,7 @@ function getPhoneVariants(rawPhone?: string): string[] {
   return Array.from(variants);
 }
 
-// ── Persistent User Registry ────────────────────────────────────────────────
+// â”€â”€ Persistent User Registry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 interface RegisteredUser {
   id: string;
   fullName: string;
@@ -412,7 +412,7 @@ interface RegisteredUser {
 
 const usersByPhone = new Map<string, RegisteredUser>();
 
-// ── Single-Session Enforcement: phone → active socket id ──────────────────────
+// â”€â”€ Single-Session Enforcement: phone â†’ active socket id â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // When a phone logs in on a new device/tab, the old socket receives 'force_logout'
 const phoneToSocketId = new Map<string, string>();
 const USERS_FILE = path.join(__dirname, 'data_users.json');
@@ -486,7 +486,7 @@ const DEFAULT_CMS_DATA = {
   ],
   marqueeBanner: {
     enabled: true,
-    text: '⚡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.',
+    text: 'âš¡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.',
     speed: 'normal' as const,
     backgroundColor: '#7c3aed',
     textColor: '#ffffff',
@@ -901,7 +901,7 @@ async function syncUsersFromSupabase(force = false): Promise<void> {
             avatarUrl:
               row.avatar_url ||
               `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || clean)}`,
-            about: 'Available · Using AGC',
+            about: 'Available Â· Using AGC',
             registeredAt: row.registered_at || new Date().toISOString(),
             role: 'user',
             status: 'active',
@@ -951,7 +951,7 @@ async function ensureUserEntry(
         phoneNumber: formattedPhone,
         cleanPhone: clean,
         avatarUrl: hints?.avatarUrl || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(clean)}`,
-        about: 'Available · Using AGC',
+        about: 'Available Â· Using AGC',
         registeredAt: new Date().toISOString(),
         role: 'user',
         status: 'active',
@@ -1113,7 +1113,7 @@ app.post('/api/users/register', (req: Request, res: Response) => {
     phoneNumber: existingCheck?.phoneNumber || phoneNumber,
     cleanPhone: existingCheck?.cleanPhone || cleanPhone,
     avatarUrl: avatarUrl || existingCheck?.avatarUrl,
-    about: about || existingCheck?.about || 'Available · Using AGC',
+    about: about || existingCheck?.about || 'Available Â· Using AGC',
     registeredAt: existingCheck?.registeredAt || new Date().toISOString(),
     role: existingCheck?.role || role || 'user',
     status: existingCheck?.status || 'active',
@@ -1124,10 +1124,10 @@ app.post('/api/users/register', (req: Request, res: Response) => {
   };
   usersByPhone.set(storeKey, user);
   saveUsersFile();
-  console.log(`✅ [User Registered]: ${user.fullName} (${user.phoneNumber})`);
+  console.log(`âœ… [User Registered]: ${user.fullName} (${user.phoneNumber})`);
   io.emit('user_registered', user);
 
-  // 🔒 Single-session: kick any existing socket for this phone
+  // ðŸ”’ Single-session: kick any existing socket for this phone
   const { sessionToken } = req.body;
   const existingSocketId = phoneToSocketId.get(cleanPhone);
   if (existingSocketId) {
@@ -1344,7 +1344,7 @@ app.patch('/api/users/profile', async (req: Request, res: Response) => {
   }
 });
 
-// ── Authoritative Server Wallet Ledger & Anti-Tampering Engine ──────────────
+// â”€â”€ Authoritative Server Wallet Ledger & Anti-Tampering Engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const WALLETS_FILE = path.join(__dirname, 'data_wallets.json');
 const WALLET_LEDGER_FILE = path.join(__dirname, 'data_wallet_transactions.json');
 
@@ -1734,7 +1734,7 @@ app.post('/api/wallet/verify-paystack', async (req: Request, res: Response) => {
       fee,
       reference: ref,
       currency: (verifyJson.data.currency || 'NGN') as any,
-      title: `Verified Paystack Top-up (Fee: ₦${fee.toLocaleString()})`,
+      title: `Verified Paystack Top-up (Fee: â‚¦${fee.toLocaleString()})`,
       verifiedBy: 'paystack_api',
       metadata: { grossPaid: paidMajor, gateway: verifyJson.data.channel },
     });
@@ -1745,7 +1745,7 @@ app.post('/api/wallet/verify-paystack', async (req: Request, res: Response) => {
       actorRole: 'Payment Gateway',
       action: 'Wallet Top-up Verified',
       target: String(phoneNumber),
-      details: `Credited ₦${creditedAmount.toLocaleString()} (Fee ₦${fee.toLocaleString()})`,
+      details: `Credited â‚¦${creditedAmount.toLocaleString()} (Fee â‚¦${fee.toLocaleString()})`,
     });
 
     return res.json({
@@ -1822,7 +1822,7 @@ app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
   return res.json({
     success: true,
     reference: ref,
-    message: `Withdrawal of ₦${numericAmt.toLocaleString()} to ${String(accountName || 'recipient')} processed.`,
+    message: `Withdrawal of â‚¦${numericAmt.toLocaleString()} to ${String(accountName || 'recipient')} processed.`,
     wallet: {
       availableBalance: wallet.availableBalance,
       escrowLockedBalance: wallet.escrowLockedBalance,
@@ -1920,7 +1920,7 @@ app.post('/api/wallet/transfer', (req: Request, res: Response) => {
   }
   const minAmt = systemConfig.minTransferAmountNgn ?? 100;
   if (numericAmt < minAmt) {
-    return res.status(400).json({ success: false, message: `Minimum transfer amount is ₦${minAmt.toLocaleString()}.` });
+    return res.status(400).json({ success: false, message: `Minimum transfer amount is â‚¦${minAmt.toLocaleString()}.` });
   }
 
   const senderWallet = getOrCreateServerWallet(String(fromPhone));
@@ -1948,20 +1948,20 @@ app.post('/api/wallet/transfer', (req: Request, res: Response) => {
     .filter((tx) => new Date(tx.createdAt || 0).getTime() >= weekCutoff)
     .reduce((acc, tx) => acc + (Number(tx.amount) || 0), 0);
 
-  const maxDaily = systemConfig.maxDailyTransferNgn ?? 500000;
-  const maxWeekly = (systemConfig as any).maxWeeklyTransferNgn ?? 2000000;
+  const maxDaily = systemConfig.maxDailyTransferNgn ?? 70000;
+  const maxWeekly = (systemConfig as any).maxWeeklyTransferNgn ?? 900000;
   if (maxDaily > 0 && dailyUsed + numericAmt > maxDaily) {
     const remainingDaily = Math.max(0, maxDaily - dailyUsed);
     return res.status(400).json({
       success: false,
-      message: `Daily transfer limit of ₦${maxDaily.toLocaleString()} exceeded. Remaining today: ₦${remainingDaily.toLocaleString()}.`,
+      message: `Daily transfer limit of â‚¦${maxDaily.toLocaleString()} exceeded. Remaining today: â‚¦${remainingDaily.toLocaleString()}.`,
     });
   }
   if (maxWeekly > 0 && weeklyUsed + numericAmt > maxWeekly) {
     const remainingWeekly = Math.max(0, maxWeekly - weeklyUsed);
     return res.status(400).json({
       success: false,
-      message: `Weekly transfer limit of ₦${maxWeekly.toLocaleString()} exceeded. Remaining this week: ₦${remainingWeekly.toLocaleString()}.`,
+      message: `Weekly transfer limit of â‚¦${maxWeekly.toLocaleString()} exceeded. Remaining this week: â‚¦${remainingWeekly.toLocaleString()}.`,
     });
   }
 
@@ -1989,7 +1989,7 @@ app.post('/api/wallet/transfer', (req: Request, res: Response) => {
     userName: senderMatch?.user.fullName || 'Sender',
     type: 'sent',
     title: `Instant Transfer to ${recipientName || recipientMatch?.user.fullName || toPhone}`,
-    description: `${note ? `${note} · ` : ''}Instant transfer to ${recipientName || toPhone}`,
+    description: `${note ? `${note} Â· ` : ''}Instant transfer to ${recipientName || toPhone}`,
     amount: numericAmt,
     fee: 0,
     balanceAfter: senderWallet.availableBalance,
@@ -2012,7 +2012,7 @@ app.post('/api/wallet/transfer', (req: Request, res: Response) => {
     userName: recipientMatch?.user.fullName || String(recipientName || 'Recipient'),
     type: 'received',
     title: `Instant Transfer from ${senderMatch?.user.fullName || fromPhone}`,
-    description: `${note ? `${note} · ` : ''}Received from ${senderMatch?.user.fullName || fromPhone}`,
+    description: `${note ? `${note} Â· ` : ''}Received from ${senderMatch?.user.fullName || fromPhone}`,
     amount: numericAmt,
     fee: 0,
     balanceAfter: recipientWallet.availableBalance,
@@ -2046,7 +2046,7 @@ app.post('/api/wallet/transfer', (req: Request, res: Response) => {
       balance: recipientWallet.availableBalance,
       escrowLockedBalance: recipientWallet.escrowLockedBalance,
       transactions: recipientWallet.transactions,
-      note: `Received ₦${numericAmt.toLocaleString()} from ${senderMatch?.user.fullName || fromPhone}`,
+      note: `Received â‚¦${numericAmt.toLocaleString()} from ${senderMatch?.user.fullName || fromPhone}`,
     });
   }
 
@@ -2169,11 +2169,11 @@ app.post('/api/statuses/ad-click', (req: Request, res: Response) => {
     statusesMap.set(statusId, existing);
     saveStatusesFile();
   }
-  console.log(`📣 [Ad Click]: status=${statusId} by=${clickedBy || 'guest'} url=${targetUrl || ''}`);
+  console.log(`ðŸ“£ [Ad Click]: status=${statusId} by=${clickedBy || 'guest'} url=${targetUrl || ''}`);
   res.json({ success: true, statusId, clicks: existing?.adClicksCount ?? 1 });
 });
 
-// ── REST: LIVE DISPATCH ORDERS WITH 5% PLATFORM FEE ──────────────────────────
+// â”€â”€ REST: LIVE DISPATCH ORDERS WITH 5% PLATFORM FEE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const RIDER_POOL = [
   { name: 'Tunde Balogun (Gokada Express)', phone: '+2348039988112', plate: 'GKD-481-APP' },
   { name: 'Ibrahim Musa (AGC Swift Rider)', phone: '+2348128392011', plate: 'GKD-912-LG' },
@@ -2352,7 +2352,7 @@ async function fetchSupabaseStoresAndArtisans() {
   return { stores, artisans };
 }
 
-// ── REST: LIVE ADMIN TELEMETRY & COMMAND API ────────────────────────────────
+// â”€â”€ REST: LIVE ADMIN TELEMETRY & COMMAND API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get('/api/admin/health', async (_req: Request, res: Response) => {
   try {
     const probeUrl = async (url: string, headers: Record<string, string> = {}) => {
@@ -2526,7 +2526,7 @@ app.post('/api/admin/escrow/resolve', (req: Request, res: Response) => {
   if (numericAmount >= DUAL_ADMIN_THRESHOLD_NGN) {
     if (!secondaryAdminPin || String(secondaryAdminPin).trim() !== EXPECTED_SECONDARY_ADMIN_PIN) {
       return res.status(403).json({
-        error: `Dual-Admin Approval Required: Secondary Admin PIN invalid for high-value escrow (≥ ₦${DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}).`,
+        error: `Dual-Admin Approval Required: Secondary Admin PIN invalid for high-value escrow (â‰¥ â‚¦${DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}).`,
         code: 'DUAL_ADMIN_PIN_INVALID',
       });
     }
@@ -2536,8 +2536,8 @@ app.post('/api/admin/escrow/resolve', (req: Request, res: Response) => {
     actor: actorName || 'Primary Admin',
     actorRole: 'Super Admin',
     action: action === 'release_to_seller' ? 'Escrow Force-Release' : 'Escrow Refund Issued',
-    target: `Order #${orderId} (${buyerName || 'Buyer'} → ${sellerName || 'Vendor'})`,
-    details: `${note || 'Admin resolution'} · Amount: ₦${numericAmount.toLocaleString()}`,
+    target: `Order #${orderId} (${buyerName || 'Buyer'} â†’ ${sellerName || 'Vendor'})`,
+    details: `${note || 'Admin resolution'} Â· Amount: â‚¦${numericAmount.toLocaleString()}`,
     dualApprovedBy: numericAmount >= DUAL_ADMIN_THRESHOLD_NGN ? (secondaryAdminName || 'Secondary Admin') : undefined,
   });
   const wh = {
@@ -2637,13 +2637,13 @@ app.post('/api/webhooks/paystack', (req: Request, res: Response) => {
         fee,
         reference: ref,
         currency: (req.body?.data?.currency || 'NGN') as any,
-        title: `Verified Paystack Top-up (Fee: ₦${fee.toLocaleString()})`,
+        title: `Verified Paystack Top-up (Fee: â‚¦${fee.toLocaleString()})`,
         verifiedBy: 'paystack_webhook',
         metadata: { grossPaid: amountNgn, event },
       });
       creditedNote = creditRes.alreadyProcessed
         ? `Duplicate webhook ignored cleanly (ref ${ref} already credited)`
-        : `HMAC Verified & Credited ₦${creditedAmount.toLocaleString()} to ${targetPhone}`;
+        : `HMAC Verified & Credited â‚¦${creditedAmount.toLocaleString()} to ${targetPhone}`;
     }
   }
 
@@ -2701,7 +2701,7 @@ app.post('/api/stores/register', (req: Request, res: Response) => {
       actorRole: 'Merchant',
       action: 'Store Pending Approval',
       target: entry.storeName,
-      details: `Tier: ${entry.tier} · Awaiting admin approval`,
+      details: `Tier: ${entry.tier} Â· Awaiting admin approval`,
     });
     io.emit('admin_store_updated', entry);
     res.json({ success: true, store: entry });
@@ -2736,7 +2736,7 @@ app.post('/api/artisans/register', (req: Request, res: Response) => {
       actorRole: 'Artisan',
       action: 'Artisan Pending Approval',
       target: entry.stationName,
-      details: `Category: ${entry.category} · Awaiting admin approval`,
+      details: `Category: ${entry.category} Â· Awaiting admin approval`,
     });
     io.emit('admin_artisan_updated', entry);
     res.json({ success: true, artisan: entry });
@@ -2819,7 +2819,7 @@ app.post('/api/ads/submit', (req: Request, res: Response) => {
       actorRole: 'User',
       action: 'Sponsored Ad Submitted',
       target: newAd.brandName,
-      details: `Paid ₦${newAd.paidAmount.toLocaleString()} · Pending Admin Approval`,
+      details: `Paid â‚¦${newAd.paidAmount.toLocaleString()} Â· Pending Admin Approval`,
     });
     io.emit('admin_cms_updated', cmsData);
     res.json({ success: true, ad: newAd, cms: cmsData, reference: refId });
@@ -2894,7 +2894,7 @@ app.post('/api/admin/ads/review', (req: Request, res: Response) => {
           balance: w.availableBalance,
           escrowLockedBalance: w.escrowLockedBalance,
           transactions: w.transactions,
-          note: `Refunded ₦${refundAmt.toLocaleString()} for declined ad "${targetAd.brandName}"`,
+          note: `Refunded â‚¦${refundAmt.toLocaleString()} for declined ad "${targetAd.brandName}"`,
         });
       }
     }
@@ -2956,7 +2956,7 @@ app.patch('/api/admin/stores/:id', async (req: Request, res: Response) => {
       actorRole: 'Super Admin',
       action: 'Store Updated',
       target: updated.storeName || id,
-      details: `Tier: ${updated.tier || 'unchanged'} · Status: ${updated.status || 'unchanged'} · Verified: ${String(updated.verified ?? '')}`,
+      details: `Tier: ${updated.tier || 'unchanged'} Â· Status: ${updated.status || 'unchanged'} Â· Verified: ${String(updated.verified ?? '')}`,
     });
     io.emit('admin_store_updated', updated);
     res.json({ success: true, store: updated, auditEntry: audit });
@@ -3137,7 +3137,7 @@ app.patch('/api/admin/users/:phone/badge', async (req: Request, res: Response) =
         actorRole: 'Super Admin',
         action: verificationBadge !== undefined ? `Badge: ${verificationBadge || 'Removed'}` : 'User Updated',
         target: `${user.fullName} (${user.phoneNumber})`,
-        details: `Role: ${user.role} · Badge: ${user.verificationBadge || 'none'}`,
+        details: `Role: ${user.role} Â· Badge: ${user.verificationBadge || 'none'}`,
       });
       io.emit('user_updated', user);
       return res.json({ success: true, user });
@@ -3193,7 +3193,7 @@ app.patch('/api/admin/users/:phone/status', async (req: Request, res: Response) 
         actorRole: 'Super Admin',
         action: `Account ${user.status || 'updated'}`,
         target: `${user.fullName} (${user.phoneNumber})`,
-        details: `Role: ${user.role} · Status: ${user.status}`,
+        details: `Role: ${user.role} Â· Status: ${user.status}`,
       });
       io.emit('user_updated', user);
       return res.json({ success: true, user });
@@ -3246,7 +3246,7 @@ app.post('/api/admin/users/:phone/ban', async (req: Request, res: Response) => {
       }
 
       io.emit('user_updated', user);
-      console.log(`🚫 [USER BANNED PERMANENTLY]: ${user.fullName} (${user.phoneNumber})`);
+      console.log(`ðŸš« [USER BANNED PERMANENTLY]: ${user.fullName} (${user.phoneNumber})`);
       return res.json({ success: true, user });
     }
     res.status(404).json({ error: 'User not found' });
@@ -3278,7 +3278,7 @@ app.post('/api/admin/users/:phone/unban', async (req: Request, res: Response) =>
         details: 'Account access restored',
       });
       io.emit('user_updated', user);
-      console.log(`✅ [USER UNBANNED]: ${user.fullName} (${user.phoneNumber})`);
+      console.log(`âœ… [USER UNBANNED]: ${user.fullName} (${user.phoneNumber})`);
       return res.json({ success: true, user });
     }
     res.status(404).json({ error: 'User not found' });
@@ -3323,7 +3323,7 @@ app.post('/api/admin/users/:phone/adjust-wallet', async (req: Request, res: Resp
         actorRole: 'Super Admin',
         action: 'Wallet Adjusted',
         target: `${user.fullName} (${user.phoneNumber})`,
-        details: `New balance: ₦${balance.toLocaleString()} (${note || 'Direct adjustment'})`,
+        details: `New balance: â‚¦${balance.toLocaleString()} (${note || 'Direct adjustment'})`,
       });
       io.emit('user_updated', user);
       io.to(`phone:${cleanKey}`).emit('wallet_updated', {
@@ -3463,7 +3463,7 @@ function serializeSpaceRoom(room: SpaceRoomState) {
 
 // Real-Time Socket Connection Handlers
 io.on('connection', (socket: Socket) => {
-  console.log(`⚡ [Socket Connected]: ${socket.id}`);
+  console.log(`âš¡ [Socket Connected]: ${socket.id}`);
 
   // Immediately push authoritative live admin config, feature flags, CMS, broadcast, and user directory
   socket.emit('admin_config_updated', systemConfig);
@@ -3497,7 +3497,7 @@ io.on('connection', (socket: Socket) => {
       const existing = existingMatch?.user || usersByPhone.get(clean);
       if (existing) {
         if (existing.status === 'banned') {
-          console.warn(`🚫 [BANNED USER ATTEMPT]: ${existing.fullName} (${clean}) rejected.`);
+          console.warn(`ðŸš« [BANNED USER ATTEMPT]: ${existing.fullName} (${clean}) rejected.`);
           socket.emit('account_banned', {
             banned: true,
             reason: existing.banReason || 'Your account is permanently banned.',
@@ -3555,7 +3555,7 @@ io.on('connection', (socket: Socket) => {
       phoneNumber: existing?.phoneNumber || userData.phoneNumber,
       cleanPhone: existing?.cleanPhone || clean,
       avatarUrl: userData.avatarUrl || userData.avatar || existing?.avatarUrl,
-      about: userData.about || existing?.about || 'Available · Using AGC',
+      about: userData.about || existing?.about || 'Available Â· Using AGC',
       registeredAt: existing?.registeredAt || new Date().toISOString(),
       role: existing?.role || userData.role || 'user',
       status: existing?.status || 'active',
@@ -3582,7 +3582,7 @@ io.on('connection', (socket: Socket) => {
   // 1. Join Chat Conversation Room (1-on-1 or Group)
   socket.on('join_chat', (chatId: string) => {
     socket.join(`chat:${chatId}`);
-    console.log(`👤 Socket ${socket.id} joined room chat:${chatId}`);
+    console.log(`ðŸ‘¤ Socket ${socket.id} joined room chat:${chatId}`);
   });
 
   // Leave Chat Room
@@ -3811,7 +3811,7 @@ io.on('connection', (socket: Socket) => {
     }
 
     const snapshot = serializeSpaceRoom(room);
-    console.log(`📻 User ${user.name} joined space:${spaceId} (${snapshot.listenersCount} listening)`);
+    console.log(`ðŸ“» User ${user.name} joined space:${spaceId} (${snapshot.listenersCount} listening)`);
     io.to(`space:${spaceId}`).emit('space_state_sync', snapshot);
     io.to(`space:${spaceId}`).emit('space_user_joined', { spaceId, user, socketId: socket.id });
   });
@@ -4022,7 +4022,7 @@ io.on('connection', (socket: Socket) => {
       socket.join(`phone:${v}`);
     });
     (socket as any)._agcPhone = clean;
-    console.log(`📱 [Phone Registered]: ${clean} (joined ${variants.length} variant rooms) → socket ${socket.id}`);
+    console.log(`ðŸ“± [Phone Registered]: ${clean} (joined ${variants.length} variant rooms) â†’ socket ${socket.id}`);
   });
 
   // 6. WebRTC Call Room Signaling Relay
@@ -4089,12 +4089,12 @@ io.on('connection', (socket: Socket) => {
       }
     }
 
-    // Clean up phone→socket mapping if this socket was the active one
+    // Clean up phoneâ†’socket mapping if this socket was the active one
     const agcPhone = (socket as any)._agcPhone;
     if (agcPhone && phoneToSocketId.get(agcPhone) === socket.id) {
       phoneToSocketId.delete(agcPhone);
     }
-    console.log(`🔌 [Socket Disconnected]: ${socket.id}`);
+    console.log(`ðŸ”Œ [Socket Disconnected]: ${socket.id}`);
   });
 });
 
@@ -4197,8 +4197,8 @@ async function startServer() {
 
   await new Promise<void>((resolve) => {
     httpServer.listen(PORT, HOST, () => {
-      console.log(`🚀 AGC Live Gateway running on http://${HOST}:${PORT}`);
-      console.log(`📡 WebSocket & User Registry ready (${usersByPhone.size} users loaded)`);
+      console.log(`ðŸš€ AGC Live Gateway running on http://${HOST}:${PORT}`);
+      console.log(`ðŸ“¡ WebSocket & User Registry ready (${usersByPhone.size} users loaded)`);
       // Sync Supabase registry & global admin state asynchronously so port binding is never delayed
       Promise.all([syncUsersFromSupabase(true), syncAdminStateFromSupabase()]).catch(() => {});
       syncIntervalRef = setInterval(() => {
@@ -4233,3 +4233,4 @@ startServer().catch((err) => {
 });
 
 export { app, httpServer, io };
+

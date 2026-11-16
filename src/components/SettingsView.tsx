@@ -1,6 +1,8 @@
+import { ANIMAL_SOUNDS, playAnimalSound, getNotificationSound, setNotificationSound, AnimalSound } from '../utils/soundUtils';
 import React, { useState } from 'react';
 import {
   User,
+  Volume2,
   Globe,
   Coins,
   Database,
@@ -123,6 +125,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan' | 'chat_bg'>('services');
+  const [selectedAnimalSound, setSelectedAnimalSound] = useState<AnimalSound>(() => {
+    try { return getNotificationSound(); } catch (_) { return 'meow'; }
+  });
   const [isLegalModalOpen, setIsLegalModalOpen] = useState(false);
   const [isAccountCenterOpen, setIsAccountCenterOpen] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -261,11 +266,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       case 'sw':
         return 'Kiswahili';
       case 'yo':
-        return 'Èdè Yorùbá';
+        return 'ÃˆdÃ¨ YorÃ¹bÃ¡';
       case 'ha':
         return 'Harshen Hausa';
       case 'fr':
-        return 'Français';
+        return 'FranÃ§ais';
       default:
         return 'English';
     }
@@ -405,7 +410,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               onClick={() => setIsServicesModalOpen(true)}
               className="text-xs font-bold text-purple-600 dark:text-purple-400 bg-purple-500/10 px-3 py-1.5 rounded-full hover:bg-purple-500/20 transition-colors"
             >
-              View All →
+              View All â†’
             </button>
           </div>
 
@@ -415,11 +420,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold uppercase tracking-wider opacity-80">My Station</span>
                 <span className="text-[10px] font-mono bg-white/20 px-2 py-0.5 rounded-full">
-                  {artisanStation.isApproved ? '✓ Verified' : 'Pending Review'}
+                  {artisanStation.isApproved ? 'âœ“ Verified' : 'Pending Review'}
                 </span>
               </div>
               <div className="font-black text-lg leading-tight">{artisanStation.stationName}</div>
-              <div className="text-xs opacity-75 mt-0.5">{artisanStation.category} · {artisanStation.location}</div>
+              <div className="text-xs opacity-75 mt-0.5">{artisanStation.category} Â· {artisanStation.location}</div>
               <button
                 onClick={() => setIsServicesModalOpen(true)}
                 className="mt-3 w-full py-2 bg-white/20 hover:bg-white/30 rounded-xl text-xs font-bold transition-colors"
@@ -433,12 +438,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <Wrench className="w-5 h-5 text-purple-500" />
               </div>
               <div className="text-sm font-bold text-slate-800 dark:text-white">Register Your Station</div>
-              <div className="text-xs text-slate-500 dark:text-neutral-400">List your skills & get booked by nearby clients · {CURRENCY_SYMBOLS[currency]}5k setup</div>
+              <div className="text-xs text-slate-500 dark:text-neutral-400">List your skills & get booked by nearby clients Â· {CURRENCY_SYMBOLS[currency]}5k setup</div>
               <button
                 onClick={() => setIsServicesModalOpen(true)}
                 className="mt-1 px-5 py-2 bg-purple-600 text-white text-xs font-bold rounded-xl hover:bg-purple-700 transition-colors"
               >
-                Set Up Station · {CURRENCY_SYMBOLS[currency]}{(5000 * (CURRENCY_RATES[currency] / CURRENCY_RATES['NGN'])).toLocaleString(undefined, {maximumFractionDigits: 0})}
+                Set Up Station Â· {CURRENCY_SYMBOLS[currency]}{(5000 * (CURRENCY_RATES[currency] / CURRENCY_RATES['NGN'])).toLocaleString(undefined, {maximumFractionDigits: 0})}
               </button>
             </div>
           )}
@@ -486,14 +491,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-bold text-sm text-slate-900 dark:text-white truncate">{provider.name}</div>
                     {provider.isVerified && (
-                      <span className="shrink-0 text-[10px] font-mono bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded-full">✓</span>
+                      <span className="shrink-0 text-[10px] font-mono bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded-full">âœ“</span>
                     )}
                   </div>
                   <div className="text-[11px] text-slate-500 dark:text-neutral-400 truncate">{provider.businessName}</div>
                   <div className="flex items-center gap-2 mt-1.5">
-                    <span className="text-[11px] font-semibold text-amber-500">★ {provider.rating}</span>
+                    <span className="text-[11px] font-semibold text-amber-500">â˜… {provider.rating}</span>
                     <span className="text-[10px] text-slate-400">({provider.reviewCount})</span>
-                    <span className="text-[10px] text-slate-400 truncate">· {provider.location}</span>
+                    <span className="text-[10px] text-slate-400 truncate">Â· {provider.location}</span>
                   </div>
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-xs font-black text-purple-600 dark:text-purple-400">
@@ -513,7 +518,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           <div className="p-4 text-center text-xs text-slate-400">
-            AGC Artisan Hub · Connecting African Skill ⚒
+            AGC Artisan Hub Â· Connecting African Skill âš’
           </div>
         </div>
       ) : activeSubTab === 'chat_bg' ? (
@@ -753,7 +758,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                 <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
                   <span className="text-purple-600 dark:text-purple-400 font-semibold">@{currentHandle}</span>
-                  <span aria-hidden="true">·</span>
+                  <span aria-hidden="true">Â·</span>
                   <span>{currentUser.phoneNumber}</span>
                 </div>
 
@@ -850,7 +855,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
                 <p className="text-[11px] text-slate-400">
-                  3–24 characters using lowercase letters, numbers, underscores, or dots.
+                  3â€“24 characters using lowercase letters, numbers, underscores, or dots.
                 </p>
               </div>
 
@@ -863,7 +868,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   value={aboutInput}
                   onChange={(e) => setAboutInput(e.target.value)}
                   maxLength={180}
-                  placeholder="Available · Using AGC"
+                  placeholder="Available Â· Using AGC"
                   className="w-full px-3.5 py-2.5 bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
               </div>
@@ -940,14 +945,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div>
                     <div className="text-[11px] text-indigo-200">Available Balance:</div>
                     <div className="text-2xl font-black font-mono tracking-tight">
-                      {hideBalanceOnNav ? '₦ ••••••••' : formatPrice(wallet.availableBalance, 'NGN')}
+                      {hideBalanceOnNav ? 'â‚¦ â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢' : formatPrice(wallet.availableBalance, 'NGN')}
                     </div>
                   </div>
 
                   <div className="text-right">
                     <div className="text-[10px] text-indigo-200">Escrow Locked:</div>
                     <div className="text-xs font-bold font-mono text-amber-300">
-                      {hideBalanceOnNav ? '₦ ••••••' : formatPrice(wallet.escrowLockedBalance, 'NGN')}
+                      {hideBalanceOnNav ? 'â‚¦ â€¢â€¢â€¢â€¢â€¢â€¢' : formatPrice(wallet.escrowLockedBalance, 'NGN')}
                     </div>
                   </div>
                 </div>
@@ -1111,6 +1116,51 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </button>
             </div>
 
+                        {/* Notification Sound Picker (10 Animal Sounds) */}
+            <div className="px-4 py-3.5 space-y-2.5 border-b border-slate-100 dark:border-neutral-800/80">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <Volume2 className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                  <div>
+                    <div className="text-sm font-medium">Message Notification Sound</div>
+                    <div className="text-xs text-slate-500">Pick an animal sound for incoming messages</div>
+                  </div>
+                </div>
+                <span className="text-xs font-mono font-bold text-purple-600 dark:text-purple-400 capitalize">
+                  {ANIMAL_SOUNDS.find((s) => s.id === selectedAnimalSound)?.emoji} {ANIMAL_SOUNDS.find((s) => s.id === selectedAnimalSound)?.label}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
+                {ANIMAL_SOUNDS.map((snd) => {
+                  const isSelected = selectedAnimalSound === snd.id;
+                  return (
+                    <button
+                      key={snd.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedAnimalSound(snd.id);
+                        setNotificationSound(snd.id);
+                        playAnimalSound(snd.id);
+                      }}
+                      className={`p-2.5 rounded-xl border flex items-center gap-2 transition-all text-left ${
+                        isSelected
+                          ? 'border-purple-600 bg-purple-50 dark:bg-purple-950/40 ring-1 ring-purple-600'
+                          : 'border-slate-200 dark:border-neutral-800 hover:border-purple-300 dark:hover:border-neutral-700 bg-slate-50/50 dark:bg-neutral-900/50'
+                      }`}
+                    >
+                      <span className="text-lg">{snd.emoji}</span>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold truncate text-slate-900 dark:text-white">
+                          {snd.label}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono">Tap to test</div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Text Size (Moved to bottom, minimalist & less flamboyant, preview removed) */}
             <div className="px-4 py-3.5 space-y-2.5">
               <div className="flex items-center justify-between">
@@ -1176,7 +1226,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         {order.product.title}
                       </div>
                       <div className="text-xs text-slate-500">
-                        {order.sellerName} · PIN:{' '}
+                        {order.sellerName} Â· PIN:{' '}
                         <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
                           {order.escrowPin}
                         </span>
@@ -1235,7 +1285,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             }}
             className="p-4 text-center text-xs text-slate-400 select-none"
           >
-            AGC Super-App · Made for African Markets
+            AGC Super-App Â· Made for African Markets
           </div>
 
           {/* Chat Background & Wallpaper Option */}
@@ -1267,7 +1317,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </button>
           </div>
 
-          {/* Subtle Invite Friends & Earn — bottom link */}
+          {/* Subtle Invite Friends & Earn â€” bottom link */}
           {isFeatureEnabled('referral') && (
             <div className="px-4 pb-2">
               <button
@@ -1321,4 +1371,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     </div>
   );
 };
+
+
 

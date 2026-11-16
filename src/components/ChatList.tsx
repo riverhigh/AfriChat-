@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+﻿import React, { useState, useRef } from 'react';
 import {
   Search,
   CheckCheck,
@@ -539,13 +539,12 @@ export const ChatList: React.FC = () => {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-                      <span className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">
-                        {chat.name}
+                      <span className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">{(() => { const matched = (!chat.isGroup && !chat.isChannel) ? (adminUsers || []).find((u) => u.phoneNumber && chat.phone && u.phoneNumber.replace(/\D/g,"").slice(-9) === chat.phone.replace(/\D/g,"").slice(-9)) : null; return matched?.fullName || matched?.username || chat.name; })()}
                       </span>
                       {(chat.isBot || chat.id === 'chat_afribot_ai') && (
                         <span
                           className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-purple-600/20 to-pink-600/20 border border-purple-500/40 text-purple-600 dark:text-purple-300 text-[9px] font-bold shrink-0"
-                          title="AfriBot AI Assistant (Groq)"
+                          title="AgcBot AI Assistant"
                         >
                           <Bot className="w-2.5 h-2.5 text-pink-500" />
                           <span>BOT</span>
@@ -644,7 +643,7 @@ export const ChatList: React.FC = () => {
                         <CheckCheck className="w-3.5 h-3.5 text-purple-500 shrink-0" />
                       )}
                       {chat.isScamFlagged && (
-                        <span className="text-rose-500 font-bold shrink-0">[⚠️ SCAM REPORTED]</span>
+                        <span className="text-rose-500 font-bold shrink-0">[âš ï¸ SCAM REPORTED]</span>
                       )}
                       {typingUsers[chat.id]?.length ? (
                         <span className="text-purple-400 font-semibold italic animate-pulse">typing...</span>
@@ -710,12 +709,12 @@ export const ChatList: React.FC = () => {
       <button
         type="button"
         onClick={startAiChat}
-        className="fixed bottom-[148px] right-5.5 w-13 h-13 rounded-2xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-pink-500 hover:from-purple-500 hover:to-pink-400 text-white flex items-center justify-center shadow-xl shadow-purple-600/40 border border-white/20 transition-all hover:scale-105 active:scale-95 z-20 group"
-        aria-label="Chat with AfriBot AI"
-        title="Chat with AfriBot AI (Powered by Groq)"
+        className="fixed bottom-[136px] right-5 w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-pink-500 hover:from-purple-500 hover:to-pink-400 text-white flex items-center justify-center shadow-lg shadow-purple-600/30 border border-white/20 transition-all hover:scale-105 active:scale-95 z-20 group"
+        aria-label="Chat with AgcBot"
+        title="Chat with AgcBot AI"
       >
         <div className="relative flex items-center justify-center">
-          <Bot className="w-6 h-6 text-white group-hover:rotate-12 transition-transform duration-300" />
+          <Bot className="w-4.5 h-4.5 text-white group-hover:rotate-12 transition-transform duration-300" />
           <span className="absolute -top-2.5 -right-3 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider bg-pink-500 text-white rounded-full shadow-xs animate-pulse">
             AI
           </span>
@@ -873,3 +872,4 @@ export const ChatList: React.FC = () => {
 };
 
 export default ChatList;
+
