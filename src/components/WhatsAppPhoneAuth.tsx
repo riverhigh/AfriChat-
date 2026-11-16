@@ -607,7 +607,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       setOtpExpiresAt(res.expiresAt || (Date.now() + 5 * 60 * 1000));
       setOtpRemainingSeconds(res.expiresInSeconds || 300);
       // OTP delivered via SMS only — no in-app reveal
-      setGeneratedOtp('');
+      setGeneratedOtp(res.devCode || '');
       setShowNotification(false);
 
       // If Supabase phone auth is configured, attempt dispatch notice
@@ -1208,8 +1208,17 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                   Enter 6-Digit Code
                 </h1>
                 <p className="text-xs text-purple-200/70 mt-1 leading-relaxed">
-                  We sent an SMS code to{' '}
-                  <strong className="text-white font-mono">{fullNormalizedNumber}</strong>
+                  {email ? (
+                    <>
+                      We sent your 6-digit code to{' '}
+                      <strong className="text-purple-300 font-semibold">{email}</strong>
+                    </>
+                  ) : (
+                    <>
+                      We sent an SMS code to{' '}
+                      <strong className="text-white font-mono">{fullNormalizedNumber}</strong>
+                    </>
+                  )}
                 </p>
                 <button
                   type="button"
@@ -1251,8 +1260,27 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                 </div>
               ) : (
                 <p className="text-xs text-purple-200/60 text-center">
-                  Enter the code sent to your phone via SMS.
+                  {email ? 'Enter the code sent to your email.' : 'Enter the code sent to your phone via SMS.'}
                 </p>
+              )}
+
+              {generatedOtp && (
+                <div className="p-3 rounded-2xl bg-purple-500/15 border border-purple-500/30 text-center text-xs text-purple-200 flex items-center justify-between gap-2 animate-in zoom-in-95">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span className="truncate">Instant Code: <strong className="font-mono text-white tracking-widest text-sm bg-purple-900/50 px-2 py-0.5 rounded border border-purple-500/30">{generatedOtp}</strong></span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOtpDigits(generatedOtp.split(''));
+                      verifyOtpCode(generatedOtp);
+                    }}
+                    className="px-2.5 py-1 text-xs font-bold bg-purple-600 hover:bg-purple-500 text-white rounded-lg shrink-0 transition-all shadow"
+                  >
+                    Fill & Verify
+                  </button>
+                </div>
               )}
 
               {/* Resend Timer Card */}
