@@ -362,7 +362,7 @@ export const ContactsModal: React.FC = () => {
     if (navigator.clipboard) {
       navigator.clipboard.writeText(inviteText);
     }
-    setInviteSentToast(`ðŸ’¬ Free SMS invite sent to ${contact.name} (${contact.normalizedPhoneNumber})`);
+    setInviteSentToast(`💬 Free SMS invite sent to ${contact.name} (${contact.normalizedPhoneNumber})`);
     setTimeout(() => {
       setInviteSentToast(null);
     }, 3500);
@@ -391,7 +391,7 @@ export const ContactsModal: React.FC = () => {
                 Contacts on AGC
               </h3>
               <p className="text-[10px] text-purple-400/80">
-                {registeredList.length} on AGC Â· {nonRegisteredList.length} inviteable
+                {registeredList.length} on AGC · {nonRegisteredList.length} inviteable
               </p>
             </div>
           </div>

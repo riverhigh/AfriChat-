@@ -266,11 +266,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       case 'sw':
         return 'Kiswahili';
       case 'yo':
-        return 'ÃˆdÃ¨ YorÃ¹bÃ¡';
+        return 'Èdè Yorùbá';
       case 'ha':
         return 'Harshen Hausa';
       case 'fr':
-        return 'FranÃ§ais';
+        return 'Français';
       default:
         return 'English';
     }
@@ -420,11 +420,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold uppercase tracking-wider opacity-80">My Station</span>
                 <span className="text-[10px] font-mono bg-white/20 px-2 py-0.5 rounded-full">
-                  {artisanStation.isApproved ? 'âœ“ Verified' : 'Pending Review'}
+                  {artisanStation.isApproved ? '✓ Verified' : 'Pending Review'}
                 </span>
               </div>
               <div className="font-black text-lg leading-tight">{artisanStation.stationName}</div>
-              <div className="text-xs opacity-75 mt-0.5">{artisanStation.category} Â· {artisanStation.location}</div>
+              <div className="text-xs opacity-75 mt-0.5">{artisanStation.category} · {artisanStation.location}</div>
               <button
                 onClick={() => setIsServicesModalOpen(true)}
                 className="mt-3 w-full py-2 bg-white/20 hover:bg-white/30 rounded-xl text-xs font-bold transition-colors"
@@ -438,12 +438,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <Wrench className="w-5 h-5 text-purple-500" />
               </div>
               <div className="text-sm font-bold text-slate-800 dark:text-white">Register Your Station</div>
-              <div className="text-xs text-slate-500 dark:text-neutral-400">List your skills & get booked by nearby clients Â· {CURRENCY_SYMBOLS[currency]}5k setup</div>
+              <div className="text-xs text-slate-500 dark:text-neutral-400">List your skills & get booked by nearby clients · {CURRENCY_SYMBOLS[currency]}5k setup</div>
               <button
                 onClick={() => setIsServicesModalOpen(true)}
                 className="mt-1 px-5 py-2 bg-purple-600 text-white text-xs font-bold rounded-xl hover:bg-purple-700 transition-colors"
               >
-                Set Up Station Â· {CURRENCY_SYMBOLS[currency]}{(5000 * (CURRENCY_RATES[currency] / CURRENCY_RATES['NGN'])).toLocaleString(undefined, {maximumFractionDigits: 0})}
+                Set Up Station · {CURRENCY_SYMBOLS[currency]}{(5000 * (CURRENCY_RATES[currency] / CURRENCY_RATES['NGN'])).toLocaleString(undefined, {maximumFractionDigits: 0})}
               </button>
             </div>
           )}
@@ -491,14 +491,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-bold text-sm text-slate-900 dark:text-white truncate">{provider.name}</div>
                     {provider.isVerified && (
-                      <span className="shrink-0 text-[10px] font-mono bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded-full">âœ“</span>
+                      <span className="shrink-0 text-[10px] font-mono bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded-full">✓</span>
                     )}
                   </div>
                   <div className="text-[11px] text-slate-500 dark:text-neutral-400 truncate">{provider.businessName}</div>
                   <div className="flex items-center gap-2 mt-1.5">
                     <span className="text-[11px] font-semibold text-amber-500">â˜… {provider.rating}</span>
                     <span className="text-[10px] text-slate-400">({provider.reviewCount})</span>
-                    <span className="text-[10px] text-slate-400 truncate">Â· {provider.location}</span>
+                    <span className="text-[10px] text-slate-400 truncate">· {provider.location}</span>
                   </div>
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-xs font-black text-purple-600 dark:text-purple-400">
@@ -518,7 +518,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           <div className="p-4 text-center text-xs text-slate-400">
-            AGC Artisan Hub Â· Connecting African Skill âš’
+            AGC Artisan Hub · Connecting African Skill âš’
           </div>
         </div>
       ) : activeSubTab === 'chat_bg' ? (
@@ -758,7 +758,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                 <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
                   <span className="text-purple-600 dark:text-purple-400 font-semibold">@{currentHandle}</span>
-                  <span aria-hidden="true">Â·</span>
+                  <span aria-hidden="true">·</span>
                   <span>{currentUser.phoneNumber}</span>
                 </div>
 
@@ -855,7 +855,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
                 <p className="text-[11px] text-slate-400">
-                  3â€“24 characters using lowercase letters, numbers, underscores, or dots.
+                  3–24 characters using lowercase letters, numbers, underscores, or dots.
                 </p>
               </div>
 
@@ -868,7 +868,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   value={aboutInput}
                   onChange={(e) => setAboutInput(e.target.value)}
                   maxLength={180}
-                  placeholder="Available Â· Using AGC"
+                  placeholder="Available · Using AGC"
                   className="w-full px-3.5 py-2.5 bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
               </div>
@@ -945,14 +945,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div>
                     <div className="text-[11px] text-indigo-200">Available Balance:</div>
                     <div className="text-2xl font-black font-mono tracking-tight">
-                      {hideBalanceOnNav ? 'â‚¦ â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢' : formatPrice(wallet.availableBalance, 'NGN')}
+                      {hideBalanceOnNav ? '₦ â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢' : formatPrice(wallet.availableBalance, 'NGN')}
                     </div>
                   </div>
 
                   <div className="text-right">
                     <div className="text-[10px] text-indigo-200">Escrow Locked:</div>
                     <div className="text-xs font-bold font-mono text-amber-300">
-                      {hideBalanceOnNav ? 'â‚¦ â€¢â€¢â€¢â€¢â€¢â€¢' : formatPrice(wallet.escrowLockedBalance, 'NGN')}
+                      {hideBalanceOnNav ? '₦ â€¢â€¢â€¢â€¢â€¢â€¢' : formatPrice(wallet.escrowLockedBalance, 'NGN')}
                     </div>
                   </div>
                 </div>
@@ -1226,7 +1226,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         {order.product.title}
                       </div>
                       <div className="text-xs text-slate-500">
-                        {order.sellerName} Â· PIN:{' '}
+                        {order.sellerName} · PIN:{' '}
                         <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
                           {order.escrowPin}
                         </span>
@@ -1285,7 +1285,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             }}
             className="p-4 text-center text-xs text-slate-400 select-none"
           >
-            AGC Super-App Â· Made for African Markets
+            AGC Super-App · Made for African Markets
           </div>
 
           {/* Chat Background & Wallpaper Option */}
@@ -1317,7 +1317,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </button>
           </div>
 
-          {/* Subtle Invite Friends & Earn â€” bottom link */}
+          {/* Subtle Invite Friends & Earn — bottom link */}
           {isFeatureEnabled('referral') && (
             <div className="px-4 pb-2">
               <button

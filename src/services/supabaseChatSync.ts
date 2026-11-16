@@ -57,7 +57,7 @@ export function sanitizeMessagesForBackup(
       };
       if (sanitized.imageUrl && sanitized.imageUrl.startsWith('data:') && sanitized.imageUrl.length > MAX_IMAGE_LEN) {
         sanitized.imageUrl = undefined;
-        if (!sanitized.text) sanitized.text = 'ðŸ“· Photo';
+        if (!sanitized.text) sanitized.text = '📷 Photo';
       }
       if (sanitized.memeSticker?.imageUrl && sanitized.memeSticker.imageUrl.startsWith('data:') && sanitized.memeSticker.imageUrl.length > MAX_IMAGE_LEN) {
         sanitized.memeSticker = {

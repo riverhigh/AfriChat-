@@ -198,7 +198,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
   const handleToggleLock = () => {
     const next = !isLocked;
     updateChat(chat.id, { isLocked: next });
-    showToast(next ? 'ðŸ”’ Chat is now locked and protected with PIN' : 'ðŸ”“ Chat lock disabled');
+    showToast(next ? '🔒 Chat is now locked and protected with PIN' : '🔓 Chat lock disabled');
   };
 
   // 6. Favourite toggle
@@ -218,7 +218,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
   // 8. Block / Unblock user
   const handleToggleBlock = () => {
     const nextBlocked = toggleBlockUser(chat.id);
-    showToast(nextBlocked ? `ðŸš« Blocked ${chat.name}` : `Unblocked ${chat.name}`);
+    showToast(nextBlocked ? `🚫 Blocked ${chat.name}` : `Unblocked ${chat.name}`);
   };
 
   // 9. Report entity

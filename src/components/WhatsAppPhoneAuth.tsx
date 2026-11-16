@@ -1073,11 +1073,17 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                 </p>
               </div>
 
+              {errorMessage && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs rounded-2xl animate-shake">
+                  {errorMessage}
+                </div>
+              )}
+
               <div className="flex gap-2.5 pt-2">
                 <button
                   type="button"
                   onClick={() => setStep('phone')}
-                  disabled={isCheckingDevice}
+                  disabled={isCheckingDevice || isSendingOtp}
                   className="flex-1 py-2.5 text-xs font-bold text-purple-300 hover:bg-purple-500/10 rounded-xl transition-colors border border-purple-500/20 disabled:opacity-40"
                 >
                   Edit
@@ -1085,13 +1091,13 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleProceedToSendOtp}
-                  disabled={isCheckingDevice}
+                  disabled={isCheckingDevice || isSendingOtp}
                   className="flex-1 py-2.5 text-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl shadow-md transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
                 >
-                  {isCheckingDevice ? (
+                  {isCheckingDevice || isSendingOtp ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Checking...</span>
+                      <span>Sending...</span>
                     </>
                   ) : (
                     <span>Yes, Send Code</span>
@@ -1157,21 +1163,38 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                 </ul>
               </div>
 
+              {errorMessage && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs rounded-2xl animate-shake">
+                  {errorMessage}
+                </div>
+              )}
+
               <div className="flex gap-2.5 pt-1">
                 <button
                   type="button"
                   onClick={() => setStep('phone')}
-                  className="flex-1 py-3 text-xs font-bold text-purple-300 hover:bg-purple-500/10 rounded-xl transition-colors border border-purple-500/20"
+                  disabled={isSendingOtp}
+                  className="flex-1 py-3 text-xs font-bold text-purple-300 hover:bg-purple-500/10 rounded-xl transition-colors border border-purple-500/20 disabled:opacity-40"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={sendOtp}
-                  className="flex-1 py-3 text-xs font-bold bg-gradient-to-r from-purple-600 via-purple-700 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl shadow-lg shadow-purple-900/40 transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                  disabled={isSendingOtp}
+                  className="flex-1 py-3 text-xs font-bold bg-gradient-to-r from-purple-600 via-purple-700 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:opacity-50 text-white rounded-xl shadow-lg shadow-purple-900/40 transition-all active:scale-95 flex items-center justify-center gap-1.5"
                 >
-                  <span>Continue Login</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
+                  {isSendingOtp ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Sending code...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Continue Login</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </>
+                  )}
                 </button>
               </div>
             </div>

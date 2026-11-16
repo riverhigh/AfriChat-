@@ -901,7 +901,7 @@ async function syncUsersFromSupabase(force = false): Promise<void> {
             avatarUrl:
               row.avatar_url ||
               `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || clean)}`,
-            about: 'Available Â· Using AGC',
+            about: 'Available · Using AGC',
             registeredAt: row.registered_at || new Date().toISOString(),
             role: 'user',
             status: 'active',
@@ -951,7 +951,7 @@ async function ensureUserEntry(
         phoneNumber: formattedPhone,
         cleanPhone: clean,
         avatarUrl: hints?.avatarUrl || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(clean)}`,
-        about: 'Available Â· Using AGC',
+        about: 'Available · Using AGC',
         registeredAt: new Date().toISOString(),
         role: 'user',
         status: 'active',
@@ -1119,6 +1119,8 @@ async function sendKudiSms(recipientPhone: string, code: string): Promise<{ succ
   const apiKey = (process.env.KUDISMS_API_KEY || '').trim();
   const rawSender = (process.env.KUDISMS_SENDER_ID || 'AGC').trim();
   const senderId = rawSender.slice(0, 11) || 'AGC';
+  const appnamecode = (process.env.KUDISMS_APP_NAME_CODE || '').trim();
+  const templatecode = (process.env.KUDISMS_TEMPLATE_CODE || '').trim();
   const cleanPhone = normalizeKudiPhone(recipientPhone);
   const messageText = `Your AGC verification code is ${code}. Valid for 5 minutes. Do not share this code.`;
 
@@ -1132,44 +1134,80 @@ async function sendKudiSms(recipientPhone: string, code: string): Promise<{ succ
     return { success: true, messageId: `dev_${Date.now()}` };
   }
 
+  // ── Strategy 1: Official KudiSMS Dedicated OTP Endpoint (/api/otp) ──────────
   try {
-    // 1. Primary KudiSMS endpoint
+    const formData = new FormData();
+    formData.append('token', apiKey);
+    formData.append('senderID', senderId);
+    formData.append('recipients', cleanPhone);
+    formData.append('otp', code);
+    if (appnamecode) formData.append('appnamecode', appnamecode);
+    if (templatecode) formData.append('templatecode', templatecode);
+
+    console.log(`[KudiSMS] Dispatching to https://my.kudisms.net/api/otp for ${cleanPhone}...`);
+    const otpResp = await fetch('https://my.kudisms.net/api/otp', {
+      method: 'POST',
+      body: formData,
+    });
+
+    const otpText = await otpResp.text();
+    let otpParsed;
+    try {
+      otpParsed = JSON.parse(otpText);
+    } catch {
+      otpParsed = { raw: otpText };
+    }
+    console.log(`[KudiSMS /api/otp Response] HTTP ${otpResp.status}:`, otpParsed);
+
+    if (otpResp.ok && (!otpParsed.error || otpParsed.status === 'success' || otpParsed.code === 100 || otpParsed.code === 200)) {
+      return { success: true, messageId: otpParsed.message_id || otpParsed.id || `kudi_otp_${Date.now()}` };
+    }
+  } catch (err: any) {
+    console.warn('[KudiSMS /api/otp Notice]:', err?.message || err);
+  }
+
+  // ── Strategy 2: Direct Transactional SMS Route (/api/sms) ───────────────────
+  try {
+    const smsFormData = new FormData();
+    smsFormData.append('token', apiKey);
+    smsFormData.append('senderID', senderId);
+    smsFormData.append('recipients', cleanPhone);
+    smsFormData.append('message', messageText);
+    smsFormData.append('gateway', '2'); // OTP transactional gateway
+
+    console.log(`[KudiSMS] Fallback dispatching to https://my.kudisms.net/api/sms for ${cleanPhone}...`);
+    const smsResp = await fetch('https://my.kudisms.net/api/sms', {
+      method: 'POST',
+      body: smsFormData,
+    });
+
+    const smsText = await smsResp.text();
+    let smsParsed;
+    try {
+      smsParsed = JSON.parse(smsText);
+    } catch {
+      smsParsed = { raw: smsText };
+    }
+    console.log(`[KudiSMS /api/sms Response] HTTP ${smsResp.status}:`, smsParsed);
+
+    if (smsResp.ok && (!smsParsed.error || smsParsed.status === 'success' || smsParsed.code === 100 || smsParsed.code === 200)) {
+      return { success: true, messageId: smsParsed.message_id || smsParsed.id || `kudi_sms_${Date.now()}` };
+    }
+
+    // URL encoded fallback
     const url = new URL('https://my.kudisms.net/api/sms');
     url.searchParams.append('token', apiKey);
     url.searchParams.append('senderID', senderId);
     url.searchParams.append('recipients', cleanPhone);
     url.searchParams.append('message', messageText);
-    url.searchParams.append('gateway', '2'); // OTP transactional route
+    url.searchParams.append('gateway', '2');
 
-    const resp = await fetch(url.toString(), {
-      method: 'POST',
-      headers: { 'Accept': 'application/json' },
-    });
-    const respText = await resp.text();
-    let parsed;
-    try {
-      parsed = JSON.parse(respText);
-    } catch {
-      parsed = { raw: respText };
-    }
-    console.log(`[KudiSMS Primary] Sent to ${cleanPhone}:`, parsed);
+    const getResp = await fetch(url.toString(), { method: 'POST' });
+    const getText = await getResp.text();
+    console.log(`[KudiSMS URL-encoded Response] HTTP ${getResp.status}:`, getText);
 
-    if (resp.ok && (!parsed.error || parsed.status === 'success' || parsed.code === 100 || parsed.code === 200)) {
-      return { success: true, messageId: parsed.message_id || parsed.id || `kudi_${Date.now()}` };
-    }
-
-    // 2. Fallback KudiSMS endpoint
-    const fallbackUrl = new URL('https://account.kudisms.net/api/');
-    fallbackUrl.searchParams.append('token', apiKey);
-    fallbackUrl.searchParams.append('sender', senderId);
-    fallbackUrl.searchParams.append('mobiles', cleanPhone);
-    fallbackUrl.searchParams.append('message', messageText);
-    const fbResp = await fetch(fallbackUrl.toString(), { method: 'POST' });
-    const fbText = await fbResp.text();
-    console.log(`[KudiSMS Fallback] Sent to ${cleanPhone}:`, fbText);
-
-    return { success: true, messageId: `kudi_fallback_${Date.now()}` };
-  } catch (err) {
+    return { success: true, messageId: `kudi_${Date.now()}` };
+  } catch (err: any) {
     console.error(`[KudiSMS Error] Failed to send SMS to ${cleanPhone}:`, err);
     return { success: false, error: err?.message || 'Failed to dispatch SMS via KudiSMS' };
   }
@@ -1321,7 +1359,7 @@ app.post('/api/users/register', (req: Request, res: Response) => {
     phoneNumber: existingCheck?.phoneNumber || phoneNumber,
     cleanPhone: existingCheck?.cleanPhone || cleanPhone,
     avatarUrl: avatarUrl || existingCheck?.avatarUrl,
-    about: about || existingCheck?.about || 'Available Â· Using AGC',
+    about: about || existingCheck?.about || 'Available · Using AGC',
     registeredAt: existingCheck?.registeredAt || new Date().toISOString(),
     role: existingCheck?.role || role || 'user',
     status: existingCheck?.status || 'active',
@@ -1332,10 +1370,10 @@ app.post('/api/users/register', (req: Request, res: Response) => {
   };
   usersByPhone.set(storeKey, user);
   saveUsersFile();
-  console.log(`âœ… [User Registered]: ${user.fullName} (${user.phoneNumber})`);
+  console.log(`✅ [User Registered]: ${user.fullName} (${user.phoneNumber})`);
   io.emit('user_registered', user);
 
-  // ðŸ”’ Single-session: kick any existing socket for this phone
+  // 🔒 Single-session: kick any existing socket for this phone
   const { sessionToken } = req.body;
   const existingSocketId = phoneToSocketId.get(cleanPhone);
   if (existingSocketId) {
@@ -1942,7 +1980,7 @@ app.post('/api/wallet/verify-paystack', async (req: Request, res: Response) => {
       fee,
       reference: ref,
       currency: (verifyJson.data.currency || 'NGN') as any,
-      title: `Verified Paystack Top-up (Fee: â‚¦${fee.toLocaleString()})`,
+      title: `Verified Paystack Top-up (Fee: ₦${fee.toLocaleString()})`,
       verifiedBy: 'paystack_api',
       metadata: { grossPaid: paidMajor, gateway: verifyJson.data.channel },
     });
@@ -1953,7 +1991,7 @@ app.post('/api/wallet/verify-paystack', async (req: Request, res: Response) => {
       actorRole: 'Payment Gateway',
       action: 'Wallet Top-up Verified',
       target: String(phoneNumber),
-      details: `Credited â‚¦${creditedAmount.toLocaleString()} (Fee â‚¦${fee.toLocaleString()})`,
+      details: `Credited ₦${creditedAmount.toLocaleString()} (Fee ₦${fee.toLocaleString()})`,
     });
 
     return res.json({
@@ -2030,7 +2068,7 @@ app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
   return res.json({
     success: true,
     reference: ref,
-    message: `Withdrawal of â‚¦${numericAmt.toLocaleString()} to ${String(accountName || 'recipient')} processed.`,
+    message: `Withdrawal of ₦${numericAmt.toLocaleString()} to ${String(accountName || 'recipient')} processed.`,
     wallet: {
       availableBalance: wallet.availableBalance,
       escrowLockedBalance: wallet.escrowLockedBalance,
@@ -2128,7 +2166,7 @@ app.post('/api/wallet/transfer', (req: Request, res: Response) => {
   }
   const minAmt = systemConfig.minTransferAmountNgn ?? 100;
   if (numericAmt < minAmt) {
-    return res.status(400).json({ success: false, message: `Minimum transfer amount is â‚¦${minAmt.toLocaleString()}.` });
+    return res.status(400).json({ success: false, message: `Minimum transfer amount is ₦${minAmt.toLocaleString()}.` });
   }
 
   const senderWallet = getOrCreateServerWallet(String(fromPhone));
@@ -2162,14 +2200,14 @@ app.post('/api/wallet/transfer', (req: Request, res: Response) => {
     const remainingDaily = Math.max(0, maxDaily - dailyUsed);
     return res.status(400).json({
       success: false,
-      message: `Daily transfer limit of â‚¦${maxDaily.toLocaleString()} exceeded. Remaining today: â‚¦${remainingDaily.toLocaleString()}.`,
+      message: `Daily transfer limit of ₦${maxDaily.toLocaleString()} exceeded. Remaining today: ₦${remainingDaily.toLocaleString()}.`,
     });
   }
   if (maxWeekly > 0 && weeklyUsed + numericAmt > maxWeekly) {
     const remainingWeekly = Math.max(0, maxWeekly - weeklyUsed);
     return res.status(400).json({
       success: false,
-      message: `Weekly transfer limit of â‚¦${maxWeekly.toLocaleString()} exceeded. Remaining this week: â‚¦${remainingWeekly.toLocaleString()}.`,
+      message: `Weekly transfer limit of ₦${maxWeekly.toLocaleString()} exceeded. Remaining this week: ₦${remainingWeekly.toLocaleString()}.`,
     });
   }
 
@@ -2197,7 +2235,7 @@ app.post('/api/wallet/transfer', (req: Request, res: Response) => {
     userName: senderMatch?.user.fullName || 'Sender',
     type: 'sent',
     title: `Instant Transfer to ${recipientName || recipientMatch?.user.fullName || toPhone}`,
-    description: `${note ? `${note} Â· ` : ''}Instant transfer to ${recipientName || toPhone}`,
+    description: `${note ? `${note} · ` : ''}Instant transfer to ${recipientName || toPhone}`,
     amount: numericAmt,
     fee: 0,
     balanceAfter: senderWallet.availableBalance,
@@ -2220,7 +2258,7 @@ app.post('/api/wallet/transfer', (req: Request, res: Response) => {
     userName: recipientMatch?.user.fullName || String(recipientName || 'Recipient'),
     type: 'received',
     title: `Instant Transfer from ${senderMatch?.user.fullName || fromPhone}`,
-    description: `${note ? `${note} Â· ` : ''}Received from ${senderMatch?.user.fullName || fromPhone}`,
+    description: `${note ? `${note} · ` : ''}Received from ${senderMatch?.user.fullName || fromPhone}`,
     amount: numericAmt,
     fee: 0,
     balanceAfter: recipientWallet.availableBalance,
@@ -2254,7 +2292,7 @@ app.post('/api/wallet/transfer', (req: Request, res: Response) => {
       balance: recipientWallet.availableBalance,
       escrowLockedBalance: recipientWallet.escrowLockedBalance,
       transactions: recipientWallet.transactions,
-      note: `Received â‚¦${numericAmt.toLocaleString()} from ${senderMatch?.user.fullName || fromPhone}`,
+      note: `Received ₦${numericAmt.toLocaleString()} from ${senderMatch?.user.fullName || fromPhone}`,
     });
   }
 
@@ -2377,7 +2415,7 @@ app.post('/api/statuses/ad-click', (req: Request, res: Response) => {
     statusesMap.set(statusId, existing);
     saveStatusesFile();
   }
-  console.log(`ðŸ“£ [Ad Click]: status=${statusId} by=${clickedBy || 'guest'} url=${targetUrl || ''}`);
+  console.log(`📢 [Ad Click]: status=${statusId} by=${clickedBy || 'guest'} url=${targetUrl || ''}`);
   res.json({ success: true, statusId, clicks: existing?.adClicksCount ?? 1 });
 });
 
@@ -2734,7 +2772,7 @@ app.post('/api/admin/escrow/resolve', (req: Request, res: Response) => {
   if (numericAmount >= DUAL_ADMIN_THRESHOLD_NGN) {
     if (!secondaryAdminPin || String(secondaryAdminPin).trim() !== EXPECTED_SECONDARY_ADMIN_PIN) {
       return res.status(403).json({
-        error: `Dual-Admin Approval Required: Secondary Admin PIN invalid for high-value escrow (â‰¥ â‚¦${DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}).`,
+        error: `Dual-Admin Approval Required: Secondary Admin PIN invalid for high-value escrow (â‰¥ ₦${DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}).`,
         code: 'DUAL_ADMIN_PIN_INVALID',
       });
     }
@@ -2745,7 +2783,7 @@ app.post('/api/admin/escrow/resolve', (req: Request, res: Response) => {
     actorRole: 'Super Admin',
     action: action === 'release_to_seller' ? 'Escrow Force-Release' : 'Escrow Refund Issued',
     target: `Order #${orderId} (${buyerName || 'Buyer'} â†’ ${sellerName || 'Vendor'})`,
-    details: `${note || 'Admin resolution'} Â· Amount: â‚¦${numericAmount.toLocaleString()}`,
+    details: `${note || 'Admin resolution'} · Amount: ₦${numericAmount.toLocaleString()}`,
     dualApprovedBy: numericAmount >= DUAL_ADMIN_THRESHOLD_NGN ? (secondaryAdminName || 'Secondary Admin') : undefined,
   });
   const wh = {
@@ -2845,13 +2883,13 @@ app.post('/api/webhooks/paystack', (req: Request, res: Response) => {
         fee,
         reference: ref,
         currency: (req.body?.data?.currency || 'NGN') as any,
-        title: `Verified Paystack Top-up (Fee: â‚¦${fee.toLocaleString()})`,
+        title: `Verified Paystack Top-up (Fee: ₦${fee.toLocaleString()})`,
         verifiedBy: 'paystack_webhook',
         metadata: { grossPaid: amountNgn, event },
       });
       creditedNote = creditRes.alreadyProcessed
         ? `Duplicate webhook ignored cleanly (ref ${ref} already credited)`
-        : `HMAC Verified & Credited â‚¦${creditedAmount.toLocaleString()} to ${targetPhone}`;
+        : `HMAC Verified & Credited ₦${creditedAmount.toLocaleString()} to ${targetPhone}`;
     }
   }
 
@@ -2909,7 +2947,7 @@ app.post('/api/stores/register', (req: Request, res: Response) => {
       actorRole: 'Merchant',
       action: 'Store Pending Approval',
       target: entry.storeName,
-      details: `Tier: ${entry.tier} Â· Awaiting admin approval`,
+      details: `Tier: ${entry.tier} · Awaiting admin approval`,
     });
     io.emit('admin_store_updated', entry);
     res.json({ success: true, store: entry });
@@ -2944,7 +2982,7 @@ app.post('/api/artisans/register', (req: Request, res: Response) => {
       actorRole: 'Artisan',
       action: 'Artisan Pending Approval',
       target: entry.stationName,
-      details: `Category: ${entry.category} Â· Awaiting admin approval`,
+      details: `Category: ${entry.category} · Awaiting admin approval`,
     });
     io.emit('admin_artisan_updated', entry);
     res.json({ success: true, artisan: entry });
@@ -3027,7 +3065,7 @@ app.post('/api/ads/submit', (req: Request, res: Response) => {
       actorRole: 'User',
       action: 'Sponsored Ad Submitted',
       target: newAd.brandName,
-      details: `Paid â‚¦${newAd.paidAmount.toLocaleString()} Â· Pending Admin Approval`,
+      details: `Paid ₦${newAd.paidAmount.toLocaleString()} · Pending Admin Approval`,
     });
     io.emit('admin_cms_updated', cmsData);
     res.json({ success: true, ad: newAd, cms: cmsData, reference: refId });
@@ -3102,7 +3140,7 @@ app.post('/api/admin/ads/review', (req: Request, res: Response) => {
           balance: w.availableBalance,
           escrowLockedBalance: w.escrowLockedBalance,
           transactions: w.transactions,
-          note: `Refunded â‚¦${refundAmt.toLocaleString()} for declined ad "${targetAd.brandName}"`,
+          note: `Refunded ₦${refundAmt.toLocaleString()} for declined ad "${targetAd.brandName}"`,
         });
       }
     }
@@ -3164,7 +3202,7 @@ app.patch('/api/admin/stores/:id', async (req: Request, res: Response) => {
       actorRole: 'Super Admin',
       action: 'Store Updated',
       target: updated.storeName || id,
-      details: `Tier: ${updated.tier || 'unchanged'} Â· Status: ${updated.status || 'unchanged'} Â· Verified: ${String(updated.verified ?? '')}`,
+      details: `Tier: ${updated.tier || 'unchanged'} · Status: ${updated.status || 'unchanged'} · Verified: ${String(updated.verified ?? '')}`,
     });
     io.emit('admin_store_updated', updated);
     res.json({ success: true, store: updated, auditEntry: audit });
@@ -3345,7 +3383,7 @@ app.patch('/api/admin/users/:phone/badge', async (req: Request, res: Response) =
         actorRole: 'Super Admin',
         action: verificationBadge !== undefined ? `Badge: ${verificationBadge || 'Removed'}` : 'User Updated',
         target: `${user.fullName} (${user.phoneNumber})`,
-        details: `Role: ${user.role} Â· Badge: ${user.verificationBadge || 'none'}`,
+        details: `Role: ${user.role} · Badge: ${user.verificationBadge || 'none'}`,
       });
       io.emit('user_updated', user);
       return res.json({ success: true, user });
@@ -3401,7 +3439,7 @@ app.patch('/api/admin/users/:phone/status', async (req: Request, res: Response) 
         actorRole: 'Super Admin',
         action: `Account ${user.status || 'updated'}`,
         target: `${user.fullName} (${user.phoneNumber})`,
-        details: `Role: ${user.role} Â· Status: ${user.status}`,
+        details: `Role: ${user.role} · Status: ${user.status}`,
       });
       io.emit('user_updated', user);
       return res.json({ success: true, user });
@@ -3454,7 +3492,7 @@ app.post('/api/admin/users/:phone/ban', async (req: Request, res: Response) => {
       }
 
       io.emit('user_updated', user);
-      console.log(`ðŸš« [USER BANNED PERMANENTLY]: ${user.fullName} (${user.phoneNumber})`);
+      console.log(`🚫 [USER BANNED PERMANENTLY]: ${user.fullName} (${user.phoneNumber})`);
       return res.json({ success: true, user });
     }
     res.status(404).json({ error: 'User not found' });
@@ -3486,7 +3524,7 @@ app.post('/api/admin/users/:phone/unban', async (req: Request, res: Response) =>
         details: 'Account access restored',
       });
       io.emit('user_updated', user);
-      console.log(`âœ… [USER UNBANNED]: ${user.fullName} (${user.phoneNumber})`);
+      console.log(`✅ [USER UNBANNED]: ${user.fullName} (${user.phoneNumber})`);
       return res.json({ success: true, user });
     }
     res.status(404).json({ error: 'User not found' });
@@ -3531,7 +3569,7 @@ app.post('/api/admin/users/:phone/adjust-wallet', async (req: Request, res: Resp
         actorRole: 'Super Admin',
         action: 'Wallet Adjusted',
         target: `${user.fullName} (${user.phoneNumber})`,
-        details: `New balance: â‚¦${balance.toLocaleString()} (${note || 'Direct adjustment'})`,
+        details: `New balance: ₦${balance.toLocaleString()} (${note || 'Direct adjustment'})`,
       });
       io.emit('user_updated', user);
       io.to(`phone:${cleanKey}`).emit('wallet_updated', {
@@ -3705,7 +3743,7 @@ io.on('connection', (socket: Socket) => {
       const existing = existingMatch?.user || usersByPhone.get(clean);
       if (existing) {
         if (existing.status === 'banned') {
-          console.warn(`ðŸš« [BANNED USER ATTEMPT]: ${existing.fullName} (${clean}) rejected.`);
+          console.warn(`🚫 [BANNED USER ATTEMPT]: ${existing.fullName} (${clean}) rejected.`);
           socket.emit('account_banned', {
             banned: true,
             reason: existing.banReason || 'Your account is permanently banned.',
@@ -3763,7 +3801,7 @@ io.on('connection', (socket: Socket) => {
       phoneNumber: existing?.phoneNumber || userData.phoneNumber,
       cleanPhone: existing?.cleanPhone || clean,
       avatarUrl: userData.avatarUrl || userData.avatar || existing?.avatarUrl,
-      about: userData.about || existing?.about || 'Available Â· Using AGC',
+      about: userData.about || existing?.about || 'Available · Using AGC',
       registeredAt: existing?.registeredAt || new Date().toISOString(),
       role: existing?.role || userData.role || 'user',
       status: existing?.status || 'active',
@@ -3790,7 +3828,7 @@ io.on('connection', (socket: Socket) => {
   // 1. Join Chat Conversation Room (1-on-1 or Group)
   socket.on('join_chat', (chatId: string) => {
     socket.join(`chat:${chatId}`);
-    console.log(`ðŸ‘¤ Socket ${socket.id} joined room chat:${chatId}`);
+    console.log(`👤 Socket ${socket.id} joined room chat:${chatId}`);
   });
 
   // Leave Chat Room
@@ -4019,7 +4057,7 @@ io.on('connection', (socket: Socket) => {
     }
 
     const snapshot = serializeSpaceRoom(room);
-    console.log(`ðŸ“» User ${user.name} joined space:${spaceId} (${snapshot.listenersCount} listening)`);
+    console.log(`📻 User ${user.name} joined space:${spaceId} (${snapshot.listenersCount} listening)`);
     io.to(`space:${spaceId}`).emit('space_state_sync', snapshot);
     io.to(`space:${spaceId}`).emit('space_user_joined', { spaceId, user, socketId: socket.id });
   });
@@ -4230,7 +4268,7 @@ io.on('connection', (socket: Socket) => {
       socket.join(`phone:${v}`);
     });
     (socket as any)._agcPhone = clean;
-    console.log(`ðŸ“± [Phone Registered]: ${clean} (joined ${variants.length} variant rooms) â†’ socket ${socket.id}`);
+    console.log(`📱 [Phone Registered]: ${clean} (joined ${variants.length} variant rooms) â†’ socket ${socket.id}`);
   });
 
   // 6. WebRTC Call Room Signaling Relay
@@ -4302,7 +4340,7 @@ io.on('connection', (socket: Socket) => {
     if (agcPhone && phoneToSocketId.get(agcPhone) === socket.id) {
       phoneToSocketId.delete(agcPhone);
     }
-    console.log(`ðŸ”Œ [Socket Disconnected]: ${socket.id}`);
+    console.log(`🔌 [Socket Disconnected]: ${socket.id}`);
   });
 });
 
@@ -4405,8 +4443,8 @@ async function startServer() {
 
   await new Promise<void>((resolve) => {
     httpServer.listen(PORT, HOST, () => {
-      console.log(`ðŸš€ AGC Live Gateway running on http://${HOST}:${PORT}`);
-      console.log(`ðŸ“¡ WebSocket & User Registry ready (${usersByPhone.size} users loaded)`);
+      console.log(`🚀 AGC Live Gateway running on http://${HOST}:${PORT}`);
+      console.log(`📡 WebSocket & User Registry ready (${usersByPhone.size} users loaded)`);
       // Sync Supabase registry & global admin state asynchronously so port binding is never delayed
       Promise.all([syncUsersFromSupabase(true), syncAdminStateFromSupabase()]).catch(() => {});
       syncIntervalRef = setInterval(() => {

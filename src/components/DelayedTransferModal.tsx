@@ -493,7 +493,7 @@ export const DelayedTransferModal: React.FC = () => {
                         {tx.recipientName} ({tx.recipientPhone})
                       </div>
                       <div className="text-[11px] text-slate-500 mt-0.5 truncate">
-                        {tx.createdAt} Â· {tx.note}
+                        {tx.createdAt} · {tx.note}
                       </div>
                     </div>
 

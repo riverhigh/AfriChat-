@@ -291,7 +291,7 @@ export const AdminDashboardModal: React.FC = () => {
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
 
-  // Config form local state (mirrors systemConfig â€” hydrated only on open, never overwritten mid-edit)
+  // Config form local state (mirrors systemConfig — hydrated only on open, never overwritten mid-edit)
   const wasAdminOpenRef = useRef(false);
   const [cfgMaintenanceMode, setCfgMaintenanceMode] = useState(false);
   const [cfgMaintenanceMsg, setCfgMaintenanceMsg] = useState('');
@@ -1046,7 +1046,7 @@ export const AdminDashboardModal: React.FC = () => {
       items.push({
         id: `act_esc_${o.id}`,
         refId: o.paystackRef || o.id,
-        title: `Escrow Â· ${o.product.title}`,
+        title: `Escrow · ${o.product.title}`,
         subtitle: `${o.buyerName} â†’ ${o.sellerName} (${o.status.replace('_', ' ')})`,
         amountNgn: o.totalAmount,
         type: 'escrow',
@@ -1059,7 +1059,7 @@ export const AdminDashboardModal: React.FC = () => {
       items.push({
         id: `act_disp_${d.id}`,
         refId: d.trackingCode || d.id,
-        title: `Dispatch Â· ${String(d.provider || 'courier').toUpperCase()}`,
+        title: `Dispatch · ${String(d.provider || 'courier').toUpperCase()}`,
         subtitle: `${d.packageDescription || 'Parcel'} â†’ ${d.recipientName}`,
         amountNgn: d.totalFee ?? d.estimatedFee ?? 0,
         type: 'dispatch',
@@ -1071,7 +1071,7 @@ export const AdminDashboardModal: React.FC = () => {
       items.push({
         id: `act_wh_${w.id}`,
         refId: w.reference,
-        title: `Paystack Â· ${w.event}`,
+        title: `Paystack · ${w.event}`,
         subtitle: w.payloadSummary,
         amountNgn: w.amountNgn,
         type: 'webhook',
@@ -1084,7 +1084,7 @@ export const AdminDashboardModal: React.FC = () => {
         id: `act_aud_${a.id}`,
         refId: a.refId,
         title: a.action,
-        subtitle: `${a.target} Â· ${a.details}`,
+        subtitle: `${a.target} · ${a.details}`,
         type: 'audit',
         timestamp: a.timestamp,
       });
@@ -1186,7 +1186,7 @@ export const AdminDashboardModal: React.FC = () => {
       setDualApprovalRequest({
         isOpen: true,
         actionLabel: action === 'release_to_seller' ? 'Escrow Force-Release' : 'Escrow Refund Buyer',
-        targetSummary: `#${order.id} Â· ${order.buyerName} â†’ ${order.sellerName}`,
+        targetSummary: `#${order.id} · ${order.buyerName} â†’ ${order.sellerName}`,
         amountNgn: order.totalAmount,
         errorMsg: null,
         isSubmitting: false,
@@ -1230,7 +1230,7 @@ export const AdminDashboardModal: React.FC = () => {
         await adjustUserWallet(p.phoneOrId, p.delta, false);
         setPayoutAmount('');
         setPayoutNote('');
-        setPayoutFeedback(`Disbursed â‚¦${p.delta.toLocaleString()} to ${p.userName} (Co-signed by ${secondaryName}).`);
+        setPayoutFeedback(`Disbursed ₦${p.delta.toLocaleString()} to ${p.userName} (Co-signed by ${secondaryName}).`);
       }
       setDualApprovalRequest({
         isOpen: false,
@@ -1280,7 +1280,7 @@ export const AdminDashboardModal: React.FC = () => {
     setPayoutNote('');
     try {
       await adjustUserWallet(payoutTargetPhone, amountNum, false);
-      setPayoutFeedback(`Manual payout of â‚¦${amountNum.toLocaleString()} applied to ${targetName}.`);
+      setPayoutFeedback(`Manual payout of ₦${amountNum.toLocaleString()} applied to ${targetName}.`);
       fetchLiveMetrics();
     } finally {
       setPayoutBusy(false);
@@ -1679,7 +1679,7 @@ export const AdminDashboardModal: React.FC = () => {
             <div className="p-2.5 rounded-xl bg-zinc-900/50 border border-zinc-800/80 space-y-1">
               <div className="flex items-center justify-between">
                 <span className="text-zinc-500">Node</span>
-                <span className="text-zinc-200 tabular-nums">:3000 Â· {liveMetrics?.serverMemoryMb ?? 48} MB</span>
+                <span className="text-zinc-200 tabular-nums">:3000 · {liveMetrics?.serverMemoryMb ?? 48} MB</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-zinc-500">Uptime</span>
@@ -1858,7 +1858,7 @@ export const AdminDashboardModal: React.FC = () => {
                   <div className="pb-2.5 border-b border-zinc-800">
                     <div className="font-semibold text-white">{currentUser?.fullName || 'Super Admin'}</div>
                     <div className="text-[11px] font-mono text-zinc-400 mt-0.5">
-                      Role: Super Admin Â· Multi-Admin RBAC
+                      Role: Super Admin · Multi-Admin RBAC
                     </div>
                   </div>
                   <div className="space-y-1.5">
@@ -1947,10 +1947,10 @@ export const AdminDashboardModal: React.FC = () => {
                     <DollarSign className="w-4 h-4 text-violet-400" />
                   </div>
                   <div className="text-2xl font-bold font-mono tabular-nums text-white">
-                    â‚¦{totalPlatformVolumeNgn.toLocaleString()}
+                    ₦{totalPlatformVolumeNgn.toLocaleString()}
                   </div>
                   <div className="text-xs font-mono text-emerald-400 tabular-nums">
-                    +â‚¦{totalDispatchCommission.toLocaleString()} courier fees Â· {activeOrders.length + escrowOrders.length} txns
+                    +₦{totalDispatchCommission.toLocaleString()} courier fees · {activeOrders.length + escrowOrders.length} txns
                   </div>
                 </div>
 
@@ -1960,7 +1960,7 @@ export const AdminDashboardModal: React.FC = () => {
                     <Lock className="w-4 h-4 text-amber-400" />
                   </div>
                   <div className="text-2xl font-bold font-mono tabular-nums text-white">
-                    â‚¦{totalEscrowLockedNgn.toLocaleString()}
+                    ₦{totalEscrowLockedNgn.toLocaleString()}
                   </div>
                   <div className="text-xs font-mono text-zinc-400 tabular-nums">
                     {escrowOrders.filter((o) => o.status === 'escrow_secured' || o.status === 'disputed').length} orders held in vault
@@ -1976,7 +1976,7 @@ export const AdminDashboardModal: React.FC = () => {
                     {pendingDisputesCount}
                   </div>
                   <div className="text-xs font-mono text-zinc-400 tabular-nums">
-                    {escrowOrders.filter((o) => o.status === 'disputed').length} disputes Â· {securityEvents.length} security alerts
+                    {escrowOrders.filter((o) => o.status === 'disputed').length} disputes · {securityEvents.length} security alerts
                   </div>
                 </div>
 
@@ -1990,7 +1990,7 @@ export const AdminDashboardModal: React.FC = () => {
                     <span className="text-sm font-normal text-zinc-400">/ {mergedUsers.length}</span>
                   </div>
                   <div className="text-xs font-mono text-zinc-400 tabular-nums">
-                    {mergedStores.length} stores Â· {mergedArtisans.length} artisans
+                    {mergedStores.length} stores · {mergedArtisans.length} artisans
                   </div>
                 </div>
               </div>
@@ -2042,7 +2042,7 @@ export const AdminDashboardModal: React.FC = () => {
                           <div className="text-right shrink-0">
                             {item.amountNgn !== undefined && (
                               <div className="text-xs font-mono font-semibold text-emerald-400 tabular-nums">
-                                â‚¦{item.amountNgn.toLocaleString()}
+                                ₦{item.amountNgn.toLocaleString()}
                               </div>
                             )}
                             <div className="text-[11px] font-mono text-zinc-500 tabular-nums">
@@ -2133,7 +2133,7 @@ export const AdminDashboardModal: React.FC = () => {
                     <div className="pt-2 border-t border-zinc-800 flex items-center justify-between text-xs">
                       <span className="text-zinc-400">Aggregated User Wallet Pool</span>
                       <span className="font-mono font-semibold text-white tabular-nums">
-                        â‚¦{totalWalletPoolNgn.toLocaleString()}
+                        ₦{totalWalletPoolNgn.toLocaleString()}
                       </span>
                     </div>
                   </div>
@@ -2174,7 +2174,7 @@ export const AdminDashboardModal: React.FC = () => {
                 </div>
 
                 <span className="text-[11px] font-mono text-zinc-400">
-                  Dual-Admin PIN required â‰¥ â‚¦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}
+                  Dual-Admin PIN required â‰¥ ₦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}
                 </span>
               </div>
 
@@ -2199,7 +2199,7 @@ export const AdminDashboardModal: React.FC = () => {
                       ))}
                     </div>
                     <div className="text-xs font-mono text-zinc-400 tabular-nums">
-                      Vault Locked: <strong className="text-emerald-400">â‚¦{totalEscrowLockedNgn.toLocaleString()}</strong>
+                      Vault Locked: <strong className="text-emerald-400">₦{totalEscrowLockedNgn.toLocaleString()}</strong>
                     </div>
                   </div>
 
@@ -2210,7 +2210,7 @@ export const AdminDashboardModal: React.FC = () => {
                           <th className="py-3 px-4">Transaction Ref</th>
                           <th className="py-3 px-4">Buyer</th>
                           <th className="py-3 px-4">Vendor</th>
-                          <th className="py-3 px-4 text-right">Amount Held (â‚¦)</th>
+                          <th className="py-3 px-4 text-right">Amount Held (₦)</th>
                           <th className="py-3 px-4">Status</th>
                           <th className="py-3 px-4 text-right">Actions</th>
                         </tr>
@@ -2391,7 +2391,7 @@ export const AdminDashboardModal: React.FC = () => {
                                 </td>
                                 <td className="py-3 px-4">
                                   <div className="text-zinc-200 font-medium">{tx.userName || 'AGC User'}</div>
-                                  <div className="text-[11px] font-mono text-zinc-500">{tx.userPhone || 'â€”'}</div>
+                                  <div className="text-[11px] font-mono text-zinc-500">{tx.userPhone || '—'}</div>
                                 </td>
                                 <td className="py-3 px-4">
                                   <span
@@ -2417,14 +2417,14 @@ export const AdminDashboardModal: React.FC = () => {
                                         : 'text-rose-400'
                                     }`}
                                   >
-                                    {isIncoming ? '+' : isEscrow ? 'ðŸ”’ ' : '-'}â‚¦{Math.abs(Number(tx.amount) || 0).toLocaleString()}
+                                    {isIncoming ? '+' : isEscrow ? '🔒 ' : '-'}₦{Math.abs(Number(tx.amount) || 0).toLocaleString()}
                                   </div>
                                   {Number(tx.fee) > 0 && (
-                                    <div className="text-[10px] text-zinc-500">Fee: â‚¦{Number(tx.fee).toLocaleString()}</div>
+                                    <div className="text-[10px] text-zinc-500">Fee: ₦{Number(tx.fee).toLocaleString()}</div>
                                   )}
                                 </td>
                                 <td className="py-3 px-4 text-right font-mono text-zinc-200 tabular-nums">
-                                  {typeof tx.balanceAfter === 'number' ? `â‚¦${tx.balanceAfter.toLocaleString()}` : 'â€”'}
+                                  {typeof tx.balanceAfter === 'number' ? `₦${tx.balanceAfter.toLocaleString()}` : '—'}
                                 </td>
                               </tr>
                             );
@@ -2462,7 +2462,7 @@ export const AdminDashboardModal: React.FC = () => {
                             </div>
                             <div className="text-sm font-medium text-zinc-100 truncate">{order.product.title}</div>
                             <div className="text-xs text-zinc-400">
-                              {order.buyerName} â†” {order.sellerName} Â· PIN #{order.escrowPin}
+                              {order.buyerName} â†” {order.sellerName} · PIN #{order.escrowPin}
                             </div>
                           </div>
                         </div>
@@ -2498,10 +2498,10 @@ export const AdminDashboardModal: React.FC = () => {
                         Platform Commission ({systemConfig?.dispatchCommissionPercent ?? 5}% Fee)
                       </span>
                       <div className="text-2xl font-bold font-mono tabular-nums text-white mt-0.5">
-                        â‚¦{totalDispatchCommission.toLocaleString()} Earned
+                        ₦{totalDispatchCommission.toLocaleString()} Earned
                       </div>
                       <p className="text-xs text-zinc-400">
-                        Total courier volume: â‚¦{totalDispatchVolume.toLocaleString()} across {activeOrders.length} orders
+                        Total courier volume: ₦{totalDispatchVolume.toLocaleString()} across {activeOrders.length} orders
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 text-xs">
@@ -2558,13 +2558,13 @@ export const AdminDashboardModal: React.FC = () => {
                                 </td>
                                 <td className="py-3 px-4">
                                   <div className="text-zinc-200 font-medium">{ord.packageDescription}</div>
-                                  <div className="text-[11px] text-zinc-500">{ord.recipientName} Â· {ord.recipientAddress}</div>
+                                  <div className="text-[11px] text-zinc-500">{ord.recipientName} · {ord.recipientAddress}</div>
                                 </td>
                                 <td className="py-3 px-4 text-zinc-300">
                                   {ord.riderName || 'Assigning'} {ord.riderPlate ? `(${ord.riderPlate})` : ''}
                                 </td>
                                 <td className="py-3 px-4 text-right font-mono text-emerald-400 tabular-nums">
-                                  +â‚¦{comm.toLocaleString()}
+                                  +₦{comm.toLocaleString()}
                                 </td>
                                 <td className="py-3 px-4 font-mono uppercase text-[11px] text-zinc-300">
                                   {String(ord.status || '').replace('_', ' ')}
@@ -2643,7 +2643,7 @@ export const AdminDashboardModal: React.FC = () => {
                                 </span>
                               </td>
                               <td className="py-3 px-4 text-right font-mono tabular-nums text-white">
-                                â‚¦{(w.amountNgn || 0).toLocaleString()}
+                                ₦{(w.amountNgn || 0).toLocaleString()}
                               </td>
                               <td className="py-3 px-4 text-zinc-300">{w.payloadSummary}</td>
                               <td className="py-3 px-4 text-right font-mono text-zinc-500 tabular-nums">
@@ -2667,7 +2667,7 @@ export const AdminDashboardModal: React.FC = () => {
                   <div>
                     <h3 className="text-sm font-semibold text-white">Manual Treasury Payout / Adjustment</h3>
                     <p className="text-zinc-400 mt-0.5">
-                      Disbursements â‰¥ â‚¦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()} require Secondary Admin PIN verification.
+                      Disbursements â‰¥ ₦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()} require Secondary Admin PIN verification.
                     </p>
                   </div>
 
@@ -2683,13 +2683,13 @@ export const AdminDashboardModal: React.FC = () => {
                         <option value="">Select registered user...</option>
                         {mergedUsers.map((u) => (
                           <option key={u.id} value={u.phoneNumber || u.id}>
-                            {u.fullName} ({u.phoneNumber || u.id}) â€” â‚¦{(u.walletBalanceNgn || 0).toLocaleString()}
+                            {u.fullName} ({u.phoneNumber || u.id}) — ₦{(u.walletBalanceNgn || 0).toLocaleString()}
                           </option>
                         ))}
                       </select>
                     </div>
                     <div>
-                      <label className="text-zinc-300 font-medium block mb-1.5">Amount (â‚¦ NGN)</label>
+                      <label className="text-zinc-300 font-medium block mb-1.5">Amount (₦ NGN)</label>
                       <input
                         type="number"
                         required
@@ -2965,7 +2965,7 @@ export const AdminDashboardModal: React.FC = () => {
                       <tr className="border-b border-zinc-800 text-zinc-400 font-medium bg-zinc-950/60">
                         <th className="py-3 px-4">User & Phone</th>
                         <th className="py-3 px-4">Role / Status</th>
-                        <th className="py-3 px-4 text-right">Wallet (â‚¦)</th>
+                        <th className="py-3 px-4 text-right">Wallet (₦)</th>
                         <th className="py-3 px-4">Presence</th>
                         <th className="py-3 px-4">Verification Badge</th>
                         <th className="py-3 px-4 text-right">Dossier</th>
@@ -3019,7 +3019,7 @@ export const AdminDashboardModal: React.FC = () => {
                             </div>
                           </td>
                           <td className="py-3 px-4 text-right font-mono tabular-nums text-white font-semibold">
-                            â‚¦{(user.walletBalanceNgn || 0).toLocaleString()}
+                            ₦{(user.walletBalanceNgn || 0).toLocaleString()}
                           </td>
                           <td className="py-3 px-4 font-mono text-[11px]">
                             <span className={user.isOnline ? 'text-emerald-400' : 'text-zinc-500'}>
@@ -3098,7 +3098,7 @@ export const AdminDashboardModal: React.FC = () => {
                             <div className="text-[11px] font-mono text-zinc-400">{user.phoneNumber || user.id}</div>
                           </td>
                           <td className="py-3 px-4 font-mono text-[11px]">
-                            <span className="text-zinc-300">{user.kycType || 'BVN'} Â· </span>
+                            <span className="text-zinc-300">{user.kycType || 'BVN'} · </span>
                             <span
                               className={
                                 user.kycStatus === 'verified'
@@ -3734,7 +3734,7 @@ export const AdminDashboardModal: React.FC = () => {
                                     </span>
                                     {ad.paidAmount ? (
                                       <span className="text-[10px] font-mono text-zinc-400">
-                                        Â· â‚¦{Number(ad.paidAmount).toLocaleString()} paid
+                                        · ₦{Number(ad.paidAmount).toLocaleString()} paid
                                       </span>
                                     ) : null}
                                   </div>
@@ -4187,7 +4187,7 @@ export const AdminDashboardModal: React.FC = () => {
                           filteredAuditTrail.map((a) => (
                             <tr
                               key={a.id}
-                              onClick={() => openAuditDrawer(a.refId, { title: `${a.action} Â· ${a.target}` })}
+                              onClick={() => openAuditDrawer(a.refId, { title: `${a.action} · ${a.target}` })}
                               className="hover:bg-zinc-900/80 cursor-pointer transition-colors"
                             >
                               <td className="py-3 px-4 font-mono text-zinc-400 tabular-nums whitespace-nowrap">
@@ -4197,10 +4197,10 @@ export const AdminDashboardModal: React.FC = () => {
                               <td className="py-3 px-4 text-zinc-200 whitespace-nowrap">{a.actor}</td>
                               <td className="py-3 px-4 font-medium text-white whitespace-nowrap">{a.action}</td>
                               <td className="py-3 px-4 text-zinc-300">
-                                <span className="font-medium text-zinc-200">{a.target}</span> â€” {a.details}
+                                <span className="font-medium text-zinc-200">{a.target}</span> — {a.details}
                               </td>
                               <td className="py-3 px-4 font-mono text-emerald-400 whitespace-nowrap">
-                                {a.dualApprovedBy || 'â€”'}
+                                {a.dualApprovedBy || '—'}
                               </td>
                             </tr>
                           ))
@@ -4428,7 +4428,7 @@ export const AdminDashboardModal: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-zinc-400 block mb-1">Min Instant Transfer (â‚¦)</label>
+                      <label className="text-zinc-400 block mb-1">Min Instant Transfer (₦)</label>
                       <input
                         type="number"
                         value={cfgMinTransfer}
@@ -4437,7 +4437,7 @@ export const AdminDashboardModal: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-zinc-400 block mb-1">Max Daily Limit (â‚¦)</label>
+                      <label className="text-zinc-400 block mb-1">Max Daily Limit (₦)</label>
                       <input
                         type="number"
                         value={cfgMaxDailyTransfer}
@@ -4446,7 +4446,7 @@ export const AdminDashboardModal: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-zinc-400 block mb-1">Max Weekly Limit (â‚¦)</label>
+                      <label className="text-zinc-400 block mb-1">Max Weekly Limit (₦)</label>
                       <input
                         type="number"
                         value={cfgMaxWeeklyTransfer}
@@ -4455,7 +4455,7 @@ export const AdminDashboardModal: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-zinc-400 block mb-1">Sponsored Ad Fee (â‚¦)</label>
+                      <label className="text-zinc-400 block mb-1">Sponsored Ad Fee (₦)</label>
                       <input
                         type="number"
                         value={cfgSponsoredAdFee}
@@ -4498,7 +4498,7 @@ export const AdminDashboardModal: React.FC = () => {
                     <div className="space-y-2 text-zinc-300">
                       <div className="flex justify-between py-1.5 border-b border-zinc-800/70">
                         <span className="text-zinc-400">Dual-Sign-Off Threshold</span>
-                        <span className="font-mono text-amber-400 font-semibold">â‚¦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}</span>
+                        <span className="font-mono text-amber-400 font-semibold">₦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between py-1.5 border-b border-zinc-800/70">
                         <span className="text-zinc-400">Active Session Token</span>
@@ -4519,7 +4519,7 @@ export const AdminDashboardModal: React.FC = () => {
         {/* Executive Footer */}
         <footer className="px-6 py-2.5 bg-zinc-950 border-t border-zinc-800/90 flex items-center justify-between text-[11px] font-mono text-zinc-500 shrink-0">
           <span>Last synced: {lastRefreshedAt.toLocaleTimeString()}</span>
-          <span>AGC Control Center Â· Port 3000</span>
+          <span>AGC Control Center · Port 3000</span>
         </footer>
       </div>
 
@@ -4592,8 +4592,8 @@ export const AdminDashboardModal: React.FC = () => {
                           }}
                           className="w-full px-3 py-2 rounded-lg hover:bg-zinc-900 flex items-center justify-between text-left"
                         >
-                          <span className="font-mono text-violet-400">{o.paystackRef || o.id} Â· {o.product.title}</span>
-                          <span className="font-mono text-emerald-400">â‚¦{o.totalAmount.toLocaleString()}</span>
+                          <span className="font-mono text-violet-400">{o.paystackRef || o.id} · {o.product.title}</span>
+                          <span className="font-mono text-emerald-400">₦{o.totalAmount.toLocaleString()}</span>
                         </button>
                       ))}
                     </div>
@@ -4699,7 +4699,7 @@ export const AdminDashboardModal: React.FC = () => {
                     )}
                   </h3>
                   <div className="font-mono text-[11px] text-zinc-400">
-                    {selectedCustomer.phoneNumber || selectedCustomer.id} Â· KYC {(selectedCustomer.kycStatus || 'unverified').toUpperCase()}
+                    {selectedCustomer.phoneNumber || selectedCustomer.id} · KYC {(selectedCustomer.kycStatus || 'unverified').toUpperCase()}
                   </div>
                 </div>
               </div>
@@ -4771,7 +4771,7 @@ export const AdminDashboardModal: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-white">Wallet Balance</span>
                   <span className="font-mono font-bold text-emerald-400 tabular-nums">
-                    â‚¦{(selectedCustomer.walletBalanceNgn || 0).toLocaleString()}
+                    ₦{(selectedCustomer.walletBalanceNgn || 0).toLocaleString()}
                   </span>
                 </div>
                 <div className="flex gap-2">
