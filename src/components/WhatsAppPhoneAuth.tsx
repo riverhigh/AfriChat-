@@ -604,14 +604,9 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       setCanResend(false);
       setOtpExpiresAt(res.expiresAt || (Date.now() + 5 * 60 * 1000));
       setOtpRemainingSeconds(res.expiresInSeconds || 300);
-
-      if (res.devCode) {
-        setGeneratedOtp(res.devCode);
-        setShowNotification(true);
-      } else {
-        setGeneratedOtp('');
-        setShowNotification(false);
-      }
+      // OTP delivered via SMS only — no in-app reveal
+      setGeneratedOtp('');
+      setShowNotification(false);
 
       // If Supabase phone auth is configured, attempt dispatch notice
       if (isSupabaseConfigured) {
@@ -631,22 +626,38 @@ export const WhatsAppPhoneAuth: React.FC = () => {
 
   // Handle OTP input digits
   const handleDigitChange = (index: number, val: string) => {
-    if (!/^\d*$/.test(val)) return;
+    const digits = val.replace(/\D/g, '');
 
+    // Paste / SMS auto-fill of full code into any box
+    if (digits.length >= 6) {
+      const filled = digits.slice(0, 6).split('');
+      setOtpDigits(filled);
+      otpInputsRef.current[5]?.focus();
+      verifyOtpCode(filled.join(''));
+      return;
+    }
+
+    // Multi-digit paste filling from current position
+    if (digits.length > 1) {
+      const newDigits = [...otpDigits];
+      for (let i = 0; i < digits.length && index + i < 6; i++) {
+        newDigits[index + i] = digits[i];
+      }
+      setOtpDigits(newDigits);
+      const nextIdx = Math.min(index + digits.length, 5);
+      otpInputsRef.current[nextIdx]?.focus();
+      const combined = newDigits.join('');
+      if (combined.length === 6) verifyOtpCode(combined);
+      return;
+    }
+
+    // Single digit
     const newDigits = [...otpDigits];
-    newDigits[index] = val.slice(-1);
+    newDigits[index] = digits;
     setOtpDigits(newDigits);
-
-    // Auto-focus next box
-    if (val && index < 5) {
-      otpInputsRef.current[index + 1]?.focus();
-    }
-
-    // Auto-verify if all 6 digits entered
+    if (digits && index < 5) otpInputsRef.current[index + 1]?.focus();
     const combined = newDigits.join('');
-    if (combined.length === 6) {
-      verifyOtpCode(combined);
-    }
+    if (combined.length === 6) verifyOtpCode(combined);
   };
 
   const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -834,44 +845,6 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         <div className="absolute -bottom-32 -right-32 w-96 h-96 bg-indigo-700/20 rounded-full blur-[120px]" />
       </div>
 
-      {/* Top Banner / In-app SMS Notification Pill (AGC Theme) */}
-      {showNotification && generatedOtp && step === 'otp' && (
-        <div
-          style={{
-            top: 'max(calc(env(safe-area-inset-top, 0px) + 12px), 16px)',
-          }}
-          className="fixed left-4 right-4 z-50 max-w-sm mx-auto p-3.5 bg-[#170c2e]/95 backdrop-blur-md border border-purple-500/40 rounded-2xl shadow-2xl shadow-purple-950/80 animate-in slide-in-from-top-4"
-        >
-          <div className="flex items-start gap-3">
-            <div className="w-8 h-8 rounded-full bg-purple-600/20 text-purple-400 flex items-center justify-center shrink-0 border border-purple-500/30">
-              <MessageSquare className="w-4 h-4" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-purple-400 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-amber-400" />
-                  <span>AGC SMS · NOW</span>
-                </span>
-                <span className="text-[10px] text-slate-400 font-mono">Carrier Instant</span>
-              </div>
-              <p className="text-xs text-slate-200 mt-1">
-                Your AGC verification code is: <strong className="text-white font-mono text-sm tracking-wider font-bold bg-purple-900/40 px-1.5 py-0.5 rounded border border-purple-500/30">{generatedOtp}</strong>
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setOtpDigits(generatedOtp.split(''));
-                  verifyOtpCode(generatedOtp);
-                }}
-                className="mt-2 text-[11px] font-bold text-purple-400 hover:text-purple-300 underline flex items-center gap-1"
-              >
-                <span>Tap to auto-fill {generatedOtp}</span>
-                <ArrowRight className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Mobile-First Web App Frame */}
       <div className="w-full max-w-md min-h-screen sm:min-h-[700px] sm:max-h-[880px] bg-gradient-to-b from-[#180a33] via-[#0e0620] to-[#080314] text-white flex flex-col justify-between rounded-none sm:rounded-[36px] sm:border sm:border-purple-500/30 sm:shadow-2xl sm:shadow-purple-950/70 overflow-hidden relative z-10">
@@ -1241,7 +1214,8 @@ export const WhatsAppPhoneAuth: React.FC = () => {
                     ref={(el) => { otpInputsRef.current[idx] = el; }}
                     type="text"
                     inputMode="numeric"
-                    maxLength={1}
+                    maxLength={6}
+                    autoComplete={idx === 0 ? 'one-time-code' : 'off'}
                     value={digit}
                     onChange={(e) => handleDigitChange(idx, e.target.value)}
                     onKeyDown={(e) => handleKeyDown(idx, e)}

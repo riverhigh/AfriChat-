@@ -1136,7 +1136,7 @@ async function sendTermiiOtp(recipientPhone: string, code: string): Promise<{ su
         pin_time_to_live: 5,
         pin_length: 6,
         pin_placeholder: '<1234>',
-        message_text: `Your AGC code is <1234>. Valid 5 mins. Do not share.`,
+        message_text: `<1234> is your AGC verification code. Valid for 5 minutes.`,
         pin_type: 'NUMERIC',
       }),
     });
