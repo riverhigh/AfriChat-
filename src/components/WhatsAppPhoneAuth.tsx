@@ -17,6 +17,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { LegalComplianceModal } from './LegalComplianceModal';
+import { requestBackendOtp, verifyBackendOtp } from '../services/kudisms';
 import { compressAvatarImage, isPlaceholderAvatar } from '../utils/imageUtils';
 
 interface CountryCode {
@@ -188,6 +189,9 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   const [fullName, setFullName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState(AVATAR_PRESETS[0]);
   const [showNotification, setShowNotification] = useState(false);
+  const [otpExpiresAt, setOtpExpiresAt] = useState<number>(0);
+  const [otpRemainingSeconds, setOtpRemainingSeconds] = useState<number>(300);
+  const [isSendingOtp, setIsSendingOtp] = useState<boolean>(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [isCheckingDevice, setIsCheckingDevice] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -580,27 +584,48 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     await sendOtp();
   };
 
-  // Send the OTP code and move to OTP entry screen
+  // Send the OTP code via backend KudiSMS engine and move to OTP entry screen
   const sendOtp = async () => {
-    setStep('otp');
-    setResendTimer(30);
-    setCanResend(false);
+    setIsSendingOtp(true);
     setErrorMessage(null);
+    setOtpDigits(['', '', '', '', '', '']);
 
-    // Generate 6-digit OTP code
-    const code = `${Math.floor(100000 + Math.random() * 900000)}`;
-    setGeneratedOtp(code);
-    setShowNotification(true);
+    try {
+      const res = await requestBackendOtp(fullNormalizedNumber);
+      setIsSendingOtp(false);
 
-    // If Supabase phone auth is configured, attempt real dispatch
-    if (isSupabaseConfigured) {
-      try {
-        await supabase.auth.signInWithOtp({
-          phone: fullNormalizedNumber,
-        });
-      } catch (err) {
-        console.warn('Supabase SMS dispatch notice (using local code):', err);
+      if (!res.success) {
+        setErrorMessage(res.error || 'Failed to send OTP. Please check your phone number.');
+        return;
       }
+
+      setStep('otp');
+      setResendTimer(30);
+      setCanResend(false);
+      setOtpExpiresAt(res.expiresAt || (Date.now() + 5 * 60 * 1000));
+      setOtpRemainingSeconds(res.expiresInSeconds || 300);
+
+      if (res.devCode) {
+        setGeneratedOtp(res.devCode);
+        setShowNotification(true);
+      } else {
+        setGeneratedOtp('');
+        setShowNotification(false);
+      }
+
+      // If Supabase phone auth is configured, attempt dispatch notice
+      if (isSupabaseConfigured) {
+        try {
+          await supabase.auth.signInWithOtp({
+            phone: fullNormalizedNumber,
+          });
+        } catch (err) {
+          console.warn('Supabase SMS dispatch notice:', err);
+        }
+      }
+    } catch (err: any) {
+      setIsSendingOtp(false);
+      setErrorMessage(err?.message || 'Error communicating with verification server.');
     }
   };
 
@@ -630,22 +655,21 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     }
   };
 
-  // Verify OTP — strict match only (generated code or real Supabase SMS)
+  // Verify OTP via backend KudiSMS engine
   const verifyOtpCode = async (codeToVerify: string) => {
+    if (codeToVerify.length < 6) return;
     setIsVerifying(true);
     setErrorMessage(null);
 
-    setTimeout(async () => {
-      // Strict: code must match the generated OTP exactly
-      const isValid = codeToVerify === generatedOtp;
-
-      if (!isValid) {
+    try {
+      const res = await verifyBackendOtp(fullNormalizedNumber, codeToVerify);
+      if (!res.success) {
         setIsVerifying(false);
-        setErrorMessage('Incorrect code. Please check and try again, or tap Resend.');
+        setErrorMessage(res.error || 'Verification failed. Please check the code and try again.');
         return;
       }
 
-      // ✅ OTP valid — check if this number was registered
+      // ✅ OTP valid on backend — check if this number was registered
       let existing = existingSessionInfo || findExistingAccount(phoneNumber, selectedCountry.code);
       if (!existing && isSupabaseConfigured) {
         const supabaseCheck = await checkPhoneInSupabaseRegistry(fullNormalizedNumber);
@@ -704,7 +728,10 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       // Genuinely new user — proceed to username selection
       setIsVerifying(false);
       setStep('profile');
-    }, 600);
+    } catch (err: any) {
+      setIsVerifying(false);
+      setErrorMessage(err?.message || 'Verification error. Please try again.');
+    }
   };
 
   // Complete profile setup with unique username
@@ -793,19 +820,10 @@ export const WhatsAppPhoneAuth: React.FC = () => {
     }, 1200);
   };
 
-  // Resend code
+  // Resend code via backend KudiSMS engine
   const handleResendCode = async () => {
-    if (!canResend) return;
-    const newCode = `${Math.floor(100000 + Math.random() * 900000)}`;
-    setGeneratedOtp(newCode);
-    setOtpDigits(['', '', '', '', '', '']);
-    setResendTimer(30);
-    setCanResend(false);
-    setShowNotification(true);
-    // Also retry Supabase SMS
-    if (isSupabaseConfigured) {
-      try { await supabase.auth.signInWithOtp({ phone: fullNormalizedNumber }); } catch (_) {}
-    }
+    if (!canResend || isSendingOtp) return;
+    await sendOtp();
   };
 
   return (

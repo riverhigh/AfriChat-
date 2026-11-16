@@ -14,6 +14,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { requestBackendOtp, verifyBackendOtp } from '../services/kudisms';
 import {
   signInWithEmail,
   signUpWithEmail,
@@ -160,16 +161,28 @@ export const AuthModal: React.FC = () => {
   };
 
   // ─── Phone OTP Handlers ──────────────────────────────────────────────────
-  const handleSendOtp = (e: React.FormEvent) => {
+  const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phoneInput.trim() || phoneInput.length < 7) {
       alert('Please enter a valid phone number');
       return;
     }
-    const otp = `${Math.floor(100000 + Math.random() * 900000)}`;
-    setGeneratedOtp(otp);
-    setStep('otp');
-    setShowSimulatedSms(true);
+    try {
+      const res = await requestBackendOtp(fullNormalizedNumber);
+      if (!res.success) {
+        alert(res.error || 'Failed to send OTP');
+        return;
+      }
+      if (res.devCode) {
+        setGeneratedOtp(res.devCode);
+        setShowSimulatedSms(true);
+      } else {
+        setShowSimulatedSms(false);
+      }
+      setStep('otp');
+    } catch (err: any) {
+      alert(err?.message || 'Error sending OTP');
+    }
   };
 
   const handleOtpChange = (index: number, val: string) => {
@@ -190,55 +203,61 @@ export const AuthModal: React.FC = () => {
       alert('Please enter all 6 digits of your OTP');
       return;
     }
-    if (entered !== generatedOtp && entered !== '123456') {
-      alert('Invalid OTP code. Please enter the 6-digit code shown in the banner.');
-      return;
-    }
 
-    // Strict role-based login: check if phone number is already registered
-    if (isSupabaseConfigured) {
-      try {
-        const { data } = await supabase
-          .from('profiles')
-          .select('full_name, avatar_url, bio, role, phone_number')
-          .eq('phone_number', fullNormalizedNumber)
-          .maybeSingle();
-
-        if (data && data.full_name) {
-          loginWithPhone(fullNormalizedNumber, data.full_name, data.avatar_url, data.bio, data.role || 'user');
-          setStep('input');
-          setPhoneInput('');
-          setOtpDigits(['', '', '', '', '', '']);
-          setShowSimulatedSms(false);
-          setIsAuthModalOpen(false);
-          return;
-        }
-      } catch (err) {
-        console.warn('Profile check error:', err);
-      }
-    }
-
-    // Check local storage cached profile
     try {
-      const saved = localStorage.getItem('AGC_user_profile_v2');
-      if (saved) {
-        const profile = JSON.parse(saved);
-        const cleanSaved = (profile.phoneNumber || '').replace(/\D/g, '');
-        const cleanEntered = fullNormalizedNumber.replace(/\D/g, '');
-        if (cleanSaved && cleanSaved === cleanEntered && profile.fullName) {
-          loginWithPhone(profile.phoneNumber, profile.fullName, profile.avatarUrl, profile.about, profile.role || 'user');
-          setStep('input');
-          setPhoneInput('');
-          setOtpDigits(['', '', '', '', '', '']);
-          setShowSimulatedSms(false);
-          setIsAuthModalOpen(false);
-          return;
+      const res = await verifyBackendOtp(fullNormalizedNumber, entered);
+      if (!res.success) {
+        alert(res.error || 'Invalid or expired verification code');
+        return;
+      }
+
+      // Strict role-based login: check if phone number is already registered
+      if (isSupabaseConfigured) {
+        try {
+          const { data } = await supabase
+            .from('profiles')
+            .select('full_name, avatar_url, bio, role, phone_number')
+            .eq('phone_number', fullNormalizedNumber)
+            .maybeSingle();
+
+          if (data && data.full_name) {
+            loginWithPhone(fullNormalizedNumber, data.full_name, data.avatar_url, data.bio, data.role || 'user');
+            setStep('input');
+            setPhoneInput('');
+            setOtpDigits(['', '', '', '', '', '']);
+            setShowSimulatedSms(false);
+            setIsAuthModalOpen(false);
+            return;
+          }
+        } catch (err) {
+          console.warn('Profile check error:', err);
         }
       }
-    } catch (_) {}
 
-    // Truly new user: prompt to set up profile
-    setStep('profile');
+      // Check local storage cached profile
+      try {
+        const saved = localStorage.getItem('AGC_user_profile_v2');
+        if (saved) {
+          const profile = JSON.parse(saved);
+          const cleanSaved = (profile.phoneNumber || '').replace(/\D/g, '');
+          const cleanEntered = fullNormalizedNumber.replace(/\D/g, '');
+          if (cleanSaved && cleanSaved === cleanEntered && profile.fullName) {
+            loginWithPhone(profile.phoneNumber, profile.fullName, profile.avatarUrl, profile.about, profile.role || 'user');
+            setStep('input');
+            setPhoneInput('');
+            setOtpDigits(['', '', '', '', '', '']);
+            setShowSimulatedSms(false);
+            setIsAuthModalOpen(false);
+            return;
+          }
+        }
+      } catch (_) {}
+
+      // Truly new user: prompt to set up profile
+      setStep('profile');
+    } catch (err: any) {
+      alert(err?.message || 'Verification error');
+    }
   };
 
   const handleCompleteProfile = async () => {

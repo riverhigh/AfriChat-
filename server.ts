@@ -1082,6 +1082,214 @@ function saveUsersFile() {
   }
 }
 
+// ─── KUDISMS OTP VERIFICATION ENGINE ──────────────────────────────────────────
+interface StoredOtpRecord {
+  phone: string;
+  code: string;
+  expiresAt: number;      // 5 minutes (300 seconds)
+  attempts: number;       // max 5 attempts
+  createdAt: number;
+  lastSentAt: number;
+}
+
+const otpStore = new Map<string, StoredOtpRecord>();
+
+// Cleanup expired OTPs every 60 seconds
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, record] of otpStore.entries()) {
+    if (now > record.expiresAt) {
+      otpStore.delete(key);
+    }
+  }
+}, 60 * 1000);
+
+function normalizeKudiPhone(rawPhone: string): string {
+  let clean = String(rawPhone || '').replace(/\D/g, '');
+  if (!clean) return '';
+  if (clean.startsWith('0') && clean.length === 11) {
+    clean = '234' + clean.slice(1);
+  } else if (clean.startsWith('2340') && clean.length === 14) {
+    clean = '234' + clean.slice(4);
+  }
+  return clean;
+}
+
+async function sendKudiSms(recipientPhone: string, code: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const apiKey = (process.env.KUDISMS_API_KEY || '').trim();
+  const rawSender = (process.env.KUDISMS_SENDER_ID || 'AfriChat').trim();
+  const senderId = rawSender.slice(0, 11) || 'AfriChat';
+  const cleanPhone = normalizeKudiPhone(recipientPhone);
+  const messageText = `Your AfriChat verification code is ${code}. Valid for 5 minutes. Do not share this code.`;
+
+  if (!apiKey) {
+    console.log(`\n======================================================`);
+    console.log(`📱 [KudiSMS Dev Mode] No KUDISMS_API_KEY configured.`);
+    console.log(`📱 Target Phone: ${cleanPhone || recipientPhone}`);
+    console.log(`📱 Verification Code: ${code} (Expires in 5 minutes)`);
+    console.log(`📱 Sender ID: ${senderId}`);
+    console.log(`======================================================\n`);
+    return { success: true, messageId: `dev_${Date.now()}` };
+  }
+
+  try {
+    // 1. Primary KudiSMS endpoint
+    const url = new URL('https://my.kudisms.net/api/sms');
+    url.searchParams.append('token', apiKey);
+    url.searchParams.append('senderID', senderId);
+    url.searchParams.append('recipients', cleanPhone);
+    url.searchParams.append('message', messageText);
+    url.searchParams.append('gateway', '2'); // OTP transactional route
+
+    const resp = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' },
+    });
+    const respText = await resp.text();
+    let parsed;
+    try {
+      parsed = JSON.parse(respText);
+    } catch {
+      parsed = { raw: respText };
+    }
+    console.log(`[KudiSMS Primary] Sent to ${cleanPhone}:`, parsed);
+
+    if (resp.ok && (!parsed.error || parsed.status === 'success' || parsed.code === 100 || parsed.code === 200)) {
+      return { success: true, messageId: parsed.message_id || parsed.id || `kudi_${Date.now()}` };
+    }
+
+    // 2. Fallback KudiSMS endpoint
+    const fallbackUrl = new URL('https://account.kudisms.net/api/');
+    fallbackUrl.searchParams.append('token', apiKey);
+    fallbackUrl.searchParams.append('sender', senderId);
+    fallbackUrl.searchParams.append('mobiles', cleanPhone);
+    fallbackUrl.searchParams.append('message', messageText);
+    const fbResp = await fetch(fallbackUrl.toString(), { method: 'POST' });
+    const fbText = await fbResp.text();
+    console.log(`[KudiSMS Fallback] Sent to ${cleanPhone}:`, fbText);
+
+    return { success: true, messageId: `kudi_fallback_${Date.now()}` };
+  } catch (err) {
+    console.error(`[KudiSMS Error] Failed to send SMS to ${cleanPhone}:`, err);
+    return { success: false, error: err?.message || 'Failed to dispatch SMS via KudiSMS' };
+  }
+}
+
+// REST: Send OTP (Generates 6-digit code, 5 minute TTL, dispatches via KudiSMS)
+app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) {
+      return res.status(400).json({ success: false, error: 'Phone number is required.' });
+    }
+    const clean = normalizeKudiPhone(phone);
+    if (!clean || clean.length < 7) {
+      return res.status(400).json({ success: false, error: 'Please enter a valid phone number.' });
+    }
+
+    // Rate-limiting: 30s resend cooldown
+    const existing = otpStore.get(clean);
+    const now = Date.now();
+    if (existing && now - existing.lastSentAt < 30000) {
+      const waitSec = Math.ceil((30000 - (now - existing.lastSentAt)) / 1000);
+      return res.status(429).json({
+        success: false,
+        error: `Please wait ${waitSec} second${waitSec > 1 ? 's' : ''} before requesting a new code.`,
+        retryAfter: waitSec,
+      });
+    }
+
+    // Generate secure 6-digit OTP
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = now + 5 * 60 * 1000; // 5 minutes TTL
+
+    otpStore.set(clean, {
+      phone: clean,
+      code,
+      expiresAt,
+      attempts: 0,
+      createdAt: now,
+      lastSentAt: now,
+    });
+
+    const smsResult = await sendKudiSms(clean, code);
+    const hasApiKey = Boolean(process.env.KUDISMS_API_KEY?.trim());
+
+    return res.json({
+      success: true,
+      message: hasApiKey
+        ? `Verification code dispatched to ${phone}.`
+        : `Verification code generated (Test Mode). Code: ${code}`,
+      expiresInSeconds: 300,
+      expiresAt,
+      isTestMode: !hasApiKey,
+      ...(!hasApiKey ? { devCode: code } : {}),
+      smsResult,
+    });
+  } catch (err) {
+    console.error('Error in /api/auth/send-otp:', err);
+    return res.status(500).json({ success: false, error: 'Internal server error sending OTP.' });
+  }
+});
+
+// REST: Verify OTP (Validates 5-minute TTL, attempt count, and single-use)
+app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
+  try {
+    const { phone, code } = req.body;
+    if (!phone || !code) {
+      return res.status(400).json({ success: false, error: 'Phone number and verification code are required.' });
+    }
+    const clean = normalizeKudiPhone(phone);
+    const record = otpStore.get(clean);
+
+    if (!record) {
+      return res.status(400).json({
+        success: false,
+        error: 'No active verification code found for this number or code has expired. Please request a new code.',
+      });
+    }
+
+    const now = Date.now();
+    if (now > record.expiresAt) {
+      otpStore.delete(clean);
+      return res.status(400).json({
+        success: false,
+        error: 'This verification code has expired (codes expire after 5 minutes). Please request a new code.',
+        expired: true,
+      });
+    }
+
+    if (record.attempts >= 5) {
+      otpStore.delete(clean);
+      return res.status(400).json({
+        success: false,
+        error: 'Too many incorrect attempts. For security, this code has been invalidated. Please request a new code.',
+      });
+    }
+
+    const submittedCode = String(code).trim();
+    if (record.code !== submittedCode) {
+      record.attempts += 1;
+      const remaining = 5 - record.attempts;
+      return res.status(400).json({
+        success: false,
+        error: `Incorrect verification code. ${remaining > 0 ? `${remaining} attempt${remaining > 1 ? 's' : ''} remaining.` : 'Code has been invalidated.'}`,
+      });
+    }
+
+    // Code is valid! Invalidate OTP to prevent replay attacks
+    otpStore.delete(clean);
+
+    return res.json({
+      success: true,
+      message: 'Phone number verified successfully.',
+    });
+  } catch (err) {
+    console.error('Error in /api/auth/verify-otp:', err);
+    return res.status(500).json({ success: false, error: 'Internal server error verifying OTP.' });
+  }
+});
+
 // REST: Register user
 app.post('/api/users/register', (req: Request, res: Response) => {
   const { id, fullName, phoneNumber, avatarUrl, about, role } = req.body;
