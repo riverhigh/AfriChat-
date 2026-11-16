@@ -288,15 +288,66 @@ export async function fetchActiveBroadcast() {
 
 // ─── Live Town Communities (Groups & Channels) ────────────────────────────────
 
+export function isHiddenOrInvalidCommunityRow(row: {
+  id?: string;
+  name?: string;
+  description?: string | null;
+  tags?: string[] | null;
+  is_live?: boolean | null;
+}): boolean {
+  if (!row) return true;
+  if (row.is_live === false) return true;
+  const tags: string[] = Array.isArray(row.tags) ? row.tags.map((t) => String(t).toLowerCase()) : [];
+  if (tags.includes('__deleted__') || tags.includes('__sys_probe__') || tags.includes('__probe__')) {
+    return true;
+  }
+  const name = String(row.name || '').trim();
+  const lowerName = name.toLowerCase();
+  const lowerDesc = String(row.description || '').trim().toLowerCase();
+  const lowerId = String(row.id || '').trim().toLowerCase();
+
+  if (!name || name.startsWith('__') || lowerId.startsWith('__') || lowerId.startsWith('test_')) {
+    return true;
+  }
+  if (
+    lowerName.includes('__probe') ||
+    lowerName.includes('lagos tech') ||
+    lowerDesc.includes('lagos tech') ||
+    lowerName.includes('test') ||
+    lowerName.includes('mock') ||
+    lowerName.includes('dummy') ||
+    lowerName.includes('sample') ||
+    lowerDesc.includes('test group') ||
+    lowerDesc.includes('mock account') ||
+    (lowerDesc === '{}' && tags.length > 0)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+const COMMUNITY_UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export async function fetchLiveTownCommunities(limit = 100) {
-  return supabase
+  const res = await supabase
     .from('town_communities')
     .select('*')
+    .neq('is_live', false)
     .order('created_at', { ascending: false })
     .limit(limit);
+
+  if (res.data && Array.isArray(res.data)) {
+    return {
+      ...res,
+      data: res.data.filter((row: any) => !isHiddenOrInvalidCommunityRow(row)),
+    };
+  }
+  return res;
 }
 
 export async function createTownCommunityInDb(comm: {
+  id?: string;
   name: string;
   type?: string;
   category?: string;
@@ -315,7 +366,7 @@ export async function createTownCommunityInDb(comm: {
   }
 
   // Only insert columns that exist on town_communities schema in Supabase
-  const payload = {
+  const payload: Record<string, any> = {
     name: comm.name,
     description: comm.description || null,
     category: comm.category || 'Tech & Hustle',
@@ -324,8 +375,43 @@ export async function createTownCommunityInDb(comm: {
     tags,
     is_live: true,
   };
+  if (comm.id && COMMUNITY_UUID_REGEX.test(comm.id)) {
+    payload.id = comm.id;
+  }
 
   return supabase.from('town_communities').insert(payload).select().maybeSingle();
+}
+
+export async function deleteTownCommunityInDb(idOrName: string, fallbackName?: string) {
+  const deletedTags = ['__deleted__'];
+  const isUuid = COMMUNITY_UUID_REGEX.test(idOrName);
+
+  // 1. Try hard delete by ID if UUID
+  if (isUuid) {
+    const delRes = await supabase.from('town_communities').delete().eq('id', idOrName).select('id');
+    if (!delRes.error && Array.isArray(delRes.data) && delRes.data.length > 0) {
+      return delRes;
+    }
+    // Fallback if RLS blocks DELETE: soft-delete via UPDATE so it never returns
+    return supabase
+      .from('town_communities')
+      .update({ is_live: false, tags: deletedTags, members_count: 0 })
+      .eq('id', idOrName);
+  }
+
+  // 2. Otherwise try matching by name
+  const targetName = fallbackName || idOrName;
+  if (targetName) {
+    const delByName = await supabase.from('town_communities').delete().eq('name', targetName).select('id');
+    if (!delByName.error && Array.isArray(delByName.data) && delByName.data.length > 0) {
+      return delByName;
+    }
+    return supabase
+      .from('town_communities')
+      .update({ is_live: false, tags: deletedTags, members_count: 0 })
+      .eq('name', targetName);
+  }
+  return { data: null, error: null };
 }
 
 export async function updateTownCommunityInDb(nameOrId: string, updates: {

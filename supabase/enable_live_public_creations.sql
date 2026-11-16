@@ -10,6 +10,7 @@ ALTER TABLE public.town_communities ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "allow_all_read_town" ON public.town_communities;
 DROP POLICY IF EXISTS "allow_all_insert_town" ON public.town_communities;
 DROP POLICY IF EXISTS "allow_all_update_town" ON public.town_communities;
+DROP POLICY IF EXISTS "allow_all_delete_town" ON public.town_communities;
 
 CREATE POLICY "allow_all_read_town" ON public.town_communities
   FOR SELECT USING (true);
@@ -19,6 +20,9 @@ CREATE POLICY "allow_all_insert_town" ON public.town_communities
 
 CREATE POLICY "allow_all_update_town" ON public.town_communities
   FOR UPDATE USING (true) WITH CHECK (true);
+
+CREATE POLICY "allow_all_delete_town" ON public.town_communities
+  FOR DELETE USING (true);
 
 -- 2. Audio Spaces (Street Radio / Spaces)
 ALTER TABLE public.audio_spaces ENABLE ROW LEVEL SECURITY;

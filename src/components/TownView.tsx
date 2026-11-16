@@ -47,8 +47,11 @@ export const TownView: React.FC = () => {
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [joinCodeError, setJoinCodeError] = useState<string | null>(null);
 
-  // Swipe gesture state for Town communities
+  // Swipe gesture & delete confirm state for Town communities
   const [swipedCommunityId, setSwipedCommunityId] = useState<string | null>(null);
+  const [confirmDeleteCommunity, setConfirmDeleteCommunity] = useState<TownCommunity | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [isSubmittingCreate, setIsSubmittingCreate] = useState(false);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const handleTouchStart = (_id: string, e: React.TouchEvent) => {
@@ -131,11 +134,18 @@ export const TownView: React.FC = () => {
   const liveSpaces = audioSpaces.filter((s) => s.isLive);
 
   const filteredCommunities = townCommunities.filter((item) => {
-    // 1. Strict filter: purge any test, mock, dummy, sample, or Lagos Tech entities
-    const lowerName = item.name.toLowerCase();
-    const lowerDesc = (item.description || '').toLowerCase();
-    const lowerId = item.id.toLowerCase();
+    // 1. Strict filter: purge any probe, system, test, mock, dummy, sample, or Lagos Tech entities
+    const rawName = (item.name || '').trim();
+    const lowerName = rawName.toLowerCase();
+    const lowerDesc = (item.description || '').trim().toLowerCase();
+    const lowerId = (item.id || '').trim().toLowerCase();
     if (
+      !rawName ||
+      rawName.startsWith('__') ||
+      lowerName.includes('__probe') ||
+      lowerId.startsWith('__') ||
+      lowerId.startsWith('test_') ||
+      lowerDesc === '{}' ||
       lowerName.includes('lagos tech') ||
       lowerDesc.includes('lagos tech') ||
       lowerName.includes('test') ||
@@ -143,9 +153,7 @@ export const TownView: React.FC = () => {
       lowerName.includes('dummy') ||
       lowerName.includes('sample') ||
       lowerDesc.includes('test group') ||
-      lowerDesc.includes('mock account') ||
-      lowerId.startsWith('test_') ||
-      lowerId.startsWith('__test')
+      lowerDesc.includes('mock account')
     ) {
       return false;
     }
@@ -497,9 +505,7 @@ export const TownView: React.FC = () => {
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (window.confirm(`Delete "${item.name}"? This will remove this ${item.type}.`)) {
-                            deleteTownCommunity(item.id);
-                          }
+                          setConfirmDeleteCommunity(item);
                           setSwipedCommunityId(null);
                         }}
                         className="w-20 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white flex flex-col items-center justify-center gap-1 text-[11px] font-bold transition-colors cursor-pointer"
@@ -699,26 +705,93 @@ export const TownView: React.FC = () => {
                 <span>Admin identity set as <strong>{cleanUsername}</strong> (Phone hidden).</span>
               </div>
 
+              {createError && (
+                <p className="text-[11px] text-rose-500 font-semibold leading-snug">
+                  {createError}
+                </p>
+              )}
+
               <button
                 type="button"
+                disabled={isSubmittingCreate}
                 onClick={() => {
-                  if (!newCommunityName.trim()) return;
+                  if (isSubmittingCreate) return;
+                  const cleanName = newCommunityName.trim();
+                  if (!cleanName || cleanName.length < 2) {
+                    setCreateError('Please enter a valid community name (at least 2 characters).');
+                    return;
+                  }
+                  if (cleanName.startsWith('__')) {
+                    setCreateError('Community names cannot start with "__".');
+                    return;
+                  }
+                  if (
+                    newCommunityType !== 'space' &&
+                    townCommunities.some(
+                      (c) => c.name.trim().toLowerCase() === cleanName.toLowerCase() && c.type === newCommunityType
+                    )
+                  ) {
+                    setCreateError(`A ${newCommunityType} named "${cleanName}" already exists.`);
+                    return;
+                  }
+                  setCreateError(null);
+                  setIsSubmittingCreate(true);
                   if (newCommunityType === 'space') {
-                    createAudioSpace(newCommunityName, newCommunityDesc, newCommunityCategory as any);
+                    createAudioSpace(cleanName, newCommunityDesc, newCommunityCategory as any);
                   } else {
-                    addTownCommunity(newCommunityName, newCommunityType, newCommunityCategory, newCommunityDesc);
+                    addTownCommunity(cleanName, newCommunityType, newCommunityCategory, newCommunityDesc);
                   }
                   setShowCreateModal(false);
                   setNewCommunityName('');
                   setNewCommunityDesc('');
+                  setTimeout(() => setIsSubmittingCreate(false), 600);
                 }}
-                className={`w-full py-2.5 rounded-xl text-white font-bold text-xs shadow-md transition-all active:scale-95 ${
+                className={`w-full py-2.5 rounded-xl text-white font-bold text-xs shadow-md transition-all active:scale-95 disabled:opacity-60 ${
                   newCommunityType === 'space'
                     ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/30'
                     : 'bg-purple-600 hover:bg-purple-700 shadow-purple-600/30'
                 }`}
               >
                 {newCommunityType === 'space' ? 'Go Live Now 🎙️' : 'Publish Community'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Confirm Delete Community ──────────────────────────────── */}
+      {confirmDeleteCommunity && (
+        <div
+          onClick={() => setConfirmDeleteCommunity(null)}
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-xs bg-white dark:bg-[#120924] rounded-3xl p-5 border border-rose-500/30 shadow-2xl space-y-4 text-slate-900 dark:text-white"
+          >
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold">Delete {confirmDeleteCommunity.type}?</h3>
+              <p className="text-xs text-slate-500 dark:text-purple-300/70 leading-relaxed">
+                This will remove <strong>{confirmDeleteCommunity.name}</strong> and its chat thread.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteCommunity(null)}
+                className="py-2 rounded-xl bg-slate-100 dark:bg-white/10 text-xs font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteTownCommunity(confirmDeleteCommunity.id);
+                  setConfirmDeleteCommunity(null);
+                }}
+                className="py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold"
+              >
+                Delete
               </button>
             </div>
           </div>

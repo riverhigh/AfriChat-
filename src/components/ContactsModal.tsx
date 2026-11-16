@@ -59,10 +59,14 @@ export const ContactsModal: React.FC = () => {
   const [channelDesc, setChannelDesc] = useState('');
   const [selectedChannelMembers, setSelectedChannelMembers] = useState<{ name: string; phone: string }[]>([]);
 
+  const [isCreatingGroupOrChannel, setIsCreatingGroupOrChannel] = useState(false);
+
   const handleCreateGroup = () => {
-    if (!groupName.trim()) return;
+    const cleanName = groupName.trim();
+    if (!cleanName || cleanName.startsWith('__') || isCreatingGroupOrChannel) return;
+    setIsCreatingGroupOrChannel(true);
     createGroup(
-      groupName.trim(),
+      cleanName,
       selectedGroupMembers.map((m) => m.name),
       undefined,
       groupDesc.trim(),
@@ -71,13 +75,17 @@ export const ContactsModal: React.FC = () => {
     setIsContactsModalOpen(false);
     setShowCreateGroup(false);
     setGroupName('');
+    setGroupDesc('');
     setSelectedGroupMembers([]);
+    setTimeout(() => setIsCreatingGroupOrChannel(false), 600);
   };
 
   const handleCreateChannel = () => {
-    if (!channelName.trim()) return;
+    const cleanName = channelName.trim();
+    if (!cleanName || cleanName.startsWith('__') || isCreatingGroupOrChannel) return;
+    setIsCreatingGroupOrChannel(true);
     createChannel(
-      channelName.trim(),
+      cleanName,
       channelDesc.trim(),
       undefined,
       selectedChannelMembers.map((m) => m.name),
@@ -88,6 +96,7 @@ export const ContactsModal: React.FC = () => {
     setChannelName('');
     setChannelDesc('');
     setSelectedChannelMembers([]);
+    setTimeout(() => setIsCreatingGroupOrChannel(false), 600);
   };
   const [newPhone, setNewPhone] = useState('');
   const [inviteSentToast, setInviteSentToast] = useState<string | null>(null);

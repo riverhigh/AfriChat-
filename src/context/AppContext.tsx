@@ -362,6 +362,8 @@ import {
   fetchLiveTownCommunities,
   createTownCommunityInDb,
   updateTownCommunityInDb,
+  deleteTownCommunityInDb,
+  isHiddenOrInvalidCommunityRow,
   fetchLiveAudioSpaces,
   createAudioSpaceInDb,
   updateAudioSpaceInDb,
@@ -1084,6 +1086,7 @@ export const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
 // â”€â”€â”€ Data Version Nuke â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Bump this string whenever you need to wipe all stale cached/mock data.
 const AGC_DATA_VERSION = 'v5_purged_all_mocks_live_2026';
+const AGC_GROUPS_PURGE_FLAG = 'AGC_groups_purged_2026_11_16';
 (function nukeStaleMockData() {
   if (typeof window === 'undefined') return;
   try {
@@ -1091,6 +1094,7 @@ const AGC_DATA_VERSION = 'v5_purged_all_mocks_live_2026';
     if (stored !== AGC_DATA_VERSION) {
       const keepKeys = new Set([
         'AGC_data_version',
+        'AGC_groups_purged_2026_11_16',
         'AGC_font_size',
         'AGC_low_data_mode',
         'AGC_language',
@@ -1122,6 +1126,67 @@ const AGC_DATA_VERSION = 'v5_purged_all_mocks_live_2026';
       toRemove.forEach((k) => safeLocalStorage.removeItem(k));
       safeLocalStorage.setItem('AGC_data_version', AGC_DATA_VERSION);
       console.log('[AGC] Stale mock data purged, 100% live system running.');
+    }
+
+    // One-time system-wide purge of stale groups, channels, Town Square caches & group invites
+    if (safeLocalStorage.getItem(AGC_GROUPS_PURGE_FLAG) !== '1') {
+      safeLocalStorage.removeItem('AGC_town_communities_v2');
+      const allKeys: string[] = [];
+      for (let i = 0; i < safeLocalStorage.length; i++) {
+        const k = safeLocalStorage.key(i);
+        if (k) allKeys.push(k);
+      }
+
+      const isGroupOrCommunityChatId = (id: string) =>
+        id.startsWith('town_comm_') || id.startsWith('group_') || id.startsWith('channel_');
+
+      allKeys.forEach((key) => {
+        if (key.startsWith('AGC_group_invites') || key.startsWith('AGC_handled_group_invites') || key.startsWith('AGC_declined_group_ids')) {
+          safeLocalStorage.removeItem(key);
+          return;
+        }
+        if (key.startsWith('AGC_chats_v2')) {
+          try {
+            const raw = safeLocalStorage.getItem(key);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              const cleaned = parsed.filter(
+                (c: any) =>
+                  c &&
+                  typeof c.id === 'string' &&
+                  !isGroupOrCommunityChatId(c.id) &&
+                  !c.isGroup &&
+                  !c.isChannel
+              );
+              safeLocalStorage.setItem(key, JSON.stringify(cleaned));
+            }
+          } catch (_) {}
+          return;
+        }
+        if (key.startsWith('AGC_messages_v2')) {
+          try {
+            const raw = safeLocalStorage.getItem(key);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              let changed = false;
+              Object.keys(parsed).forEach((cid) => {
+                if (isGroupOrCommunityChatId(cid)) {
+                  delete parsed[cid];
+                  changed = true;
+                }
+              });
+              if (changed) {
+                safeLocalStorage.setItem(key, JSON.stringify(parsed));
+              }
+            }
+          } catch (_) {}
+        }
+      });
+
+      safeLocalStorage.setItem(AGC_GROUPS_PURGE_FLAG, '1');
+      console.log('[AGC] Cleared stale groups, channels, and Town Square caches while preserving DMs.');
     }
   } catch (_) {}
 })();
@@ -1639,6 +1704,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // QR Code Scanner Modal
   const [isScanQrModalOpen, setIsScanQrModalOpen] = useState(false);
 
+  const generateCommunityUuid = () => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  };
+
+  const isInvalidCommunityClientItem = (c: Partial<TownCommunity> | null | undefined) => {
+    if (!c) return true;
+    return isHiddenOrInvalidCommunityRow({
+      id: c.id,
+      name: c.name,
+      description: c.description,
+      is_live: true,
+    });
+  };
+
   // Town Communities & Anonymous Privacy
   const [townCommunities, setTownCommunities] = useState<TownCommunity[]>(() => {
     try {
@@ -1646,10 +1732,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          // Prune test/mock and Lagos Tech communities from initial state
-          const clean = parsed.filter((c: TownCommunity) => {
-            const low = `${c.name} ${c.id} ${c.description || ''}`.toLowerCase();
-            return !low.includes('lagos tech') && !low.includes('test') && !low.includes('mock') && !low.includes('sample') && !c.id.startsWith('test_') && !c.id.startsWith('__test');
+          const seenKeys = new Set<string>();
+          const clean: TownCommunity[] = [];
+          parsed.forEach((c: TownCommunity) => {
+            if (isInvalidCommunityClientItem(c)) return;
+            const dedupeKey = `${String(c.name || '').trim().toLowerCase()}::${c.type || 'group'}`;
+            if (seenKeys.has(c.id) || seenKeys.has(dedupeKey)) return;
+            seenKeys.add(c.id);
+            seenKeys.add(dedupeKey);
+            clean.push(c);
           });
           return clean;
         }
@@ -1670,6 +1761,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
   const townCommunitiesRef = useRef<TownCommunity[]>(townCommunities);
+  const deletedCommunityIdsRef = useRef<Set<string>>(new Set());
+  const deletedCommunityNamesRef = useRef<Set<string>>(new Set());
+  const recentCommunityCreateRef = useRef<Map<string, number>>(new Map());
   useEffect(() => {
     townCommunitiesRef.current = townCommunities;
     try {
@@ -1679,121 +1773,209 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Sync communities across devices from Supabase & Gateway server
   useEffect(() => {
-    // 1. Fetch from Supabase town_communities
-    if (isSupabaseConfigured) {
-      // Purge Lagos Tech and any leftover test entities in Supabase
-      supabase.from('town_communities').delete().ilike('name', '%lagos tech%').then(() => {}, () => {});
-      supabase.from('town_communities').delete().ilike('name', '%test%').then(() => {}, () => {});
-      supabase.from('town_communities').delete().ilike('name', '%mock%').then(() => {}, () => {});
+    let isMounted = true;
 
-      supabase
-        .from('town_communities')
-        .select('*')
-        .then(({ data }: any) => {
-          if (data && Array.isArray(data) && data.length > 0) {
-            setTownCommunities((prev) => {
-              const map = new Map<string, TownCommunity>();
-              prev.forEach((c) => map.set(c.id, c));
-              data.forEach((row: any) => {
-                const lowerName = (row.name || '').toLowerCase();
-                const lowerDesc = (row.description || '').toLowerCase();
-                const lowerId = (row.id || '').toLowerCase();
-                if (
-                  lowerName.includes('lagos tech') ||
-                  lowerDesc.includes('lagos tech') ||
-                  lowerName.includes('test') ||
-                  lowerName.includes('mock') ||
-                  lowerName.includes('sample') ||
-                  lowerDesc.includes('test') ||
-                  lowerId.startsWith('test_') ||
-                  lowerId.startsWith('__test')
-                ) {
-                  return; // Skip test or lagos tech community
-                }
-                const tags: string[] = Array.isArray(row.tags) ? row.tags : [];
-                const typeTag = tags.find((t: string) => t.startsWith('type:'));
-                const commType = typeTag ? (typeTag.replace('type:', '') as 'group' | 'channel') : (row.category === 'Broadcast' ? 'channel' : 'group');
-                const membersTag = tags.find((t: string) => t.startsWith('members:'));
-                let parsedMembers: string[] = [];
-                if (membersTag) {
-                  try { parsedMembers = JSON.parse(membersTag.replace('members:', '')); } catch (_) {}
-                }
-                const actualCount = row.members_count || (parsedMembers.length > 0 ? parsedMembers.length + 1 : 1);
+    const removeCommunityLocally = (communityId: string, fallbackName?: string) => {
+      if (!communityId && !fallbackName) return;
+      if (communityId) deletedCommunityIdsRef.current.add(communityId);
+      const normName = (fallbackName || '').trim().toLowerCase();
+      if (normName) deletedCommunityNamesRef.current.add(normName);
 
-                map.set(row.id, {
-                  id: row.id,
-                  name: row.name,
-                  type: commType,
-                  category: row.category || 'Tech & Hustle',
-                  description: row.description || '',
-                  membersCount: actualCount,
-                  avatar: row.avatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(row.name)}&backgroundColor=581c87&textColor=ffffff`,
-                  isVerified: row.is_live || false,
-                  isJoined: true,
-                  recentActivity: parsedMembers.length > 0 ? `${parsedMembers.length} members connected` : 'Active community',
-                  adminName: 'AGC Admin',
-                });
+      setTownCommunities((prev) => {
+        const updated = prev.filter(
+          (c) =>
+            c.id !== communityId &&
+            (!normName || c.name.trim().toLowerCase() !== normName)
+        );
+        try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+        return updated;
+      });
 
-                // Sync corresponding chat thread in chats state
-                const chatId = `town_comm_${row.id}`;
-                setChats((cPrev) => {
-                  const existingIdx = cPrev.findIndex((c) => c.id === chatId || c.name === row.name);
-                  if (existingIdx !== -1) {
-                    const cExisting = cPrev[existingIdx];
-                    const updatedChat: ChatThread = {
-                      ...cExisting,
-                      isGroup: commType !== 'channel',
-                      isChannel: commType === 'channel',
-                      membersCount: actualCount,
-                      members: parsedMembers.length > 0 ? parsedMembers : cExisting.members,
-                    };
-                    const updated = [...cPrev];
-                    updated[existingIdx] = updatedChat;
-                    persistPartitionedChats(updated, currentUser.phoneNumber);
-                    return updated;
-                  }
-                  return cPrev;
-                });
+      const communityChatId = `town_comm_${communityId}`;
+      const myPhone = currentUserRef.current?.phoneNumber;
+      setChats((prev) => {
+        const updated = prev.filter(
+          (c) =>
+            c.id !== communityChatId &&
+            !(normName && c.id.startsWith('town_comm_') && c.name.trim().toLowerCase() === normName)
+        );
+        if (updated.length !== prev.length) {
+          persistPartitionedChats(updated, myPhone);
+        }
+        return updated;
+      });
+
+      setMessages((prev) => {
+        if (!prev[communityChatId]) return prev;
+        const updated = { ...prev };
+        delete updated[communityChatId];
+        persistPartitionedMessages(updated, myPhone);
+        return updated;
+      });
+
+      setActiveChatId((curr) => (curr === communityChatId ? null : curr));
+    };
+
+    const syncLiveCommunities = async () => {
+      const authoritativeRows: TownCommunity[] = [];
+      const seenIds = new Set<string>();
+      const seenNames = new Set<string>();
+      const threadSyncUpdates = new Map<string, { name: string; commType: 'group' | 'channel'; actualCount: number; parsedMembers: string[] }>();
+      let gotSupabaseAuth = false;
+      let gotServerAuth = false;
+
+      if (isSupabaseConfigured) {
+        try {
+          const { data, error } = await fetchLiveTownCommunities(100);
+          if (!error && Array.isArray(data)) {
+            gotSupabaseAuth = true;
+            data.forEach((row: any) => {
+              if (isHiddenOrInvalidCommunityRow(row)) return;
+              if (deletedCommunityIdsRef.current.has(row.id)) return;
+              const lowerName = String(row.name || '').trim().toLowerCase();
+              if (deletedCommunityNamesRef.current.has(lowerName)) return;
+
+              const tags: string[] = Array.isArray(row.tags) ? row.tags : [];
+              const typeTag = tags.find((t: string) => t.startsWith('type:'));
+              const commType = typeTag
+                ? (typeTag.replace('type:', '') as 'group' | 'channel')
+                : (row.category === 'Broadcast' ? 'channel' : 'group');
+              const membersTag = tags.find((t: string) => t.startsWith('members:'));
+              let parsedMembers: string[] = [];
+              if (membersTag) {
+                try { parsedMembers = JSON.parse(membersTag.replace('members:', '')); } catch (_) {}
+              }
+              const actualCount = row.members_count || (parsedMembers.length > 0 ? parsedMembers.length + 1 : 1);
+              const dedupeKey = `${lowerName}::${commType}`;
+              if (seenIds.has(row.id) || seenNames.has(dedupeKey)) return;
+              seenIds.add(row.id);
+              seenNames.add(dedupeKey);
+
+              const existingLocal = townCommunitiesRef.current.find((c) => c.id === row.id);
+              const chatId = `town_comm_${row.id}`;
+              const alreadyInChats = chatsRef.current.some((c) => c.id === chatId);
+
+              authoritativeRows.push({
+                id: row.id,
+                name: row.name,
+                type: commType,
+                category: row.category || 'Tech & Hustle',
+                description: row.description || '',
+                membersCount: actualCount,
+                avatar: row.avatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(row.name)}&backgroundColor=581c87&textColor=ffffff`,
+                isVerified: Boolean(row.is_live),
+                isJoined: Boolean(existingLocal?.isJoined || alreadyInChats),
+                recentActivity: parsedMembers.length > 0 ? `${parsedMembers.length} members connected` : 'Active community',
+                adminName: existingLocal?.adminName || 'AGC Admin',
               });
-              const merged = Array.from(map.values());
-              try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(merged)); } catch (_) {}
-              return merged;
+
+              threadSyncUpdates.set(chatId, {
+                name: row.name,
+                commType,
+                actualCount,
+                parsedMembers,
+              });
             });
           }
+        } catch (_) {}
+      }
+
+      try {
+        const res = await fetch('/api/communities');
+        if (res.ok) {
+          const json = await res.json();
+          if (Array.isArray(json?.communities)) {
+            gotServerAuth = true;
+            json.communities.forEach((c: TownCommunity) => {
+              if (isInvalidCommunityClientItem(c)) return;
+              if (deletedCommunityIdsRef.current.has(c.id)) return;
+              const lowerName = String(c.name || '').trim().toLowerCase();
+              if (deletedCommunityNamesRef.current.has(lowerName)) return;
+              const commType = c.type === 'channel' ? 'channel' : 'group';
+              const dedupeKey = `${lowerName}::${commType}`;
+              if (seenIds.has(c.id) || seenNames.has(dedupeKey)) return;
+              seenIds.add(c.id);
+              seenNames.add(dedupeKey);
+              authoritativeRows.push(c);
+            });
+          }
+        }
+      } catch (_) {}
+
+      if (!isMounted) return;
+
+      if (gotSupabaseAuth || gotServerAuth) {
+        const now = Date.now();
+        setTownCommunities((prev) => {
+          // Preserve only brand-new local creates (< 10s old) that haven't settled yet
+          const pendingRecent = prev.filter((c) => {
+            if (isInvalidCommunityClientItem(c)) return false;
+            if (deletedCommunityIdsRef.current.has(c.id)) return false;
+            if (seenIds.has(c.id)) return false;
+            const createdTs = recentCommunityCreateRef.current.get(`${c.name.trim().toLowerCase()}::${c.type}`);
+            return Boolean(createdTs && now - createdTs < 10000);
+          });
+          const merged = [...pendingRecent, ...authoritativeRows];
+          try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(merged)); } catch (_) {}
+          return merged;
         });
-    }
 
-    // 2. Fetch from Gateway server /api/communities
-    try {
-      fetch('/api/communities')
-        .then((r) => (r.ok ? r.json() : null))
-        .then((json) => {
-          if (json?.communities && Array.isArray(json.communities) && json.communities.length > 0) {
-            setTownCommunities((prev) => {
-              const map = new Map<string, TownCommunity>();
-              prev.forEach((c) => map.set(c.id, c));
-              json.communities.forEach((c: TownCommunity) => map.set(c.id, c));
-              const merged = Array.from(map.values());
-              try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(merged)); } catch (_) {}
-              return merged;
+        if (threadSyncUpdates.size > 0) {
+          setChats((cPrev) => {
+            let changed = false;
+            const updated = cPrev.map((cExisting) => {
+              const sync = threadSyncUpdates.get(cExisting.id);
+              if (!sync) return cExisting;
+              changed = true;
+              return {
+                ...cExisting,
+                isGroup: sync.commType !== 'channel',
+                isChannel: sync.commType === 'channel',
+                membersCount: sync.actualCount,
+                members: sync.parsedMembers.length > 0 ? sync.parsedMembers : cExisting.members,
+              };
             });
-          }
-        }, () => {});
-    } catch (_) {}
+            if (changed) {
+              persistPartitionedChats(updated, currentUserRef.current?.phoneNumber);
+              return updated;
+            }
+            return cPrev;
+          });
+        }
+      }
+    };
 
-    // 3. Socket.io community_created listener
+    syncLiveCommunities();
+
+    // 3. Socket.io community_created & community_deleted listeners
     const socket = getSocket();
     const handleCommunityCreated = (comm: TownCommunity) => {
-      if (!comm || !comm.id) return;
+      if (!comm || !comm.id || isInvalidCommunityClientItem(comm)) return;
+      if (deletedCommunityIdsRef.current.has(comm.id)) return;
+      const lowerKey = `${String(comm.name || '').trim().toLowerCase()}::${comm.type || 'group'}`;
       setTownCommunities((prev) => {
-        if (prev.some((c) => c.id === comm.id)) return prev;
+        if (
+          prev.some(
+            (c) =>
+              c.id === comm.id ||
+              `${c.name.trim().toLowerCase()}::${c.type}` === lowerKey
+          )
+        ) {
+          return prev;
+        }
         const updated = [comm, ...prev];
         try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
         return updated;
       });
     };
 
+    const handleCommunityDeleted = (payload: { id?: string; name?: string }) => {
+      if (!payload?.id && !payload?.name) return;
+      removeCommunityLocally(payload.id || '', payload.name);
+    };
+
     socket?.on('community_created', handleCommunityCreated);
+    socket?.on('community_deleted', handleCommunityDeleted);
 
     // 4. Supabase Realtime live_town_communities broadcast listener across devices
     let commCh: ReturnType<typeof supabase.channel> | null = null;
@@ -1803,6 +1985,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .on('broadcast', { event: 'community_created' }, ({ payload }) => {
           if (!payload || !payload.id) return;
           handleCommunityCreated(payload);
+        })
+        .on('broadcast', { event: 'community_deleted' }, ({ payload }: any) => {
+          if (!payload?.id && !payload?.name) return;
+          removeCommunityLocally(payload.id || '', payload.name);
         })
         .on('broadcast', { event: 'members_updated' }, ({ payload }: any) => {
           if (!payload?.chatName) return;
@@ -1827,60 +2013,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return () => {
+      isMounted = false;
       socket?.off('community_created', handleCommunityCreated);
+      socket?.off('community_deleted', handleCommunityDeleted);
       if (commCh) commCh.unsubscribe();
     };
   }, []);
 
-
-
   const toggleJoinTownCommunity = (id: string) => {
     setTownCommunities((prev) =>
       prev.map((c) =>
-        c.id === id ? { ...c, isJoined: !c.isJoined, membersCount: c.isJoined ? c.membersCount - 1 : c.membersCount + 1 } : c
+        c.id === id ? { ...c, isJoined: !c.isJoined, membersCount: c.isJoined ? Math.max(0, c.membersCount - 1) : c.membersCount + 1 } : c
       )
     );
   };
 
   const addTownCommunity = (name: string, type: 'group' | 'channel', category: TownCommunity['category'], description: string) => {
+    const cleanName = name.trim();
+    const cleanDesc = description.trim();
+    if (!cleanName || cleanName.length < 2 || cleanName.startsWith('__') || cleanName.toLowerCase().includes('__probe')) {
+      return;
+    }
+
+    const dedupeKey = `${cleanName.toLowerCase()}::${type}`;
+    const now = Date.now();
+    const lastCreatedAt = recentCommunityCreateRef.current.get(dedupeKey) || 0;
+    if (now - lastCreatedAt < 5000) {
+      return;
+    }
+    if (
+      townCommunitiesRef.current.some(
+        (c) => c.name.trim().toLowerCase() === cleanName.toLowerCase() && c.type === type
+      )
+    ) {
+      return;
+    }
+    recentCommunityCreateRef.current.set(dedupeKey, now);
+
+    const communityId = generateCommunityUuid();
     const newCommunity: TownCommunity = {
-      id: `town_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      name: name.trim(),
+      id: communityId,
+      name: cleanName,
       type,
       category,
       membersCount: 1,
-      avatar: `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(name)}&backgroundColor=581c87&textColor=ffffff`,
-      description: description.trim() || `${type === 'channel' ? 'Channel' : 'Group'} community`,
+      avatar: `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(cleanName)}&backgroundColor=581c87&textColor=ffffff`,
+      description: cleanDesc || `${type === 'channel' ? 'Channel' : 'Group'} community`,
       isVerified: false,
       isJoined: true,
       recentActivity: 'Just created',
       adminName: currentUser.fullName || 'You',
     };
     setTownCommunities((prev) => {
-      const updated = [newCommunity, ...prev];
+      const updated = [newCommunity, ...prev.filter((c) => c.id !== communityId)];
       try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (e) {}
       return updated;
     });
 
-    //  LIVE SYSTEM: Persist to Supabase and broadcast to all devices in real-time
+    // LIVE SYSTEM: Persist once to Supabase and broadcast via shared channel helper
     if (isSupabaseConfigured) {
       createTownCommunityInDb({
+        id: newCommunity.id,
         name: newCommunity.name,
         type: newCommunity.type,
         category: newCommunity.category,
         description: newCommunity.description,
         avatar: newCommunity.avatar,
         members_count: 1,
+        members: currentUser.phoneNumber ? [currentUser.phoneNumber] : [],
       }).catch((e) => console.warn('Supabase community create notice:', e));
 
-      try {
-        const commCh = supabase.channel('live_town_communities', { config: { broadcast: { self: false } } });
-        commCh.subscribe((st) => {
-          if (st === 'SUBSCRIBED') {
-            commCh.send({ type: 'broadcast', event: 'community_created', payload: newCommunity });
-          }
-        });
-      } catch (_) {}
+      sendSupabaseBroadcastOnce('live_town_communities', 'community_created', newCommunity);
     }
 
     // Create corresponding ChatThread so the group/channel appears in chat list
@@ -1932,11 +2135,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    // Broadcast via Socket.io
+    // Broadcast via Socket.io & save to gateway server
     const socket = getSocket();
     socket?.emit('create_community', newCommunity);
 
-    // Save to gateway server
     try {
       fetch('/api/communities', {
         method: 'POST',
@@ -1944,32 +2146,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         body: JSON.stringify(newCommunity),
       }).catch(() => {});
     } catch (_) {}
-
-    // Persist to Supabase town_communities
-    if (isSupabaseConfigured) {
-      supabase.from('town_communities').insert({
-        id: newCommunity.id,
-        name: newCommunity.name,
-        category: newCommunity.category,
-        description: newCommunity.description,
-        avatar: newCommunity.avatar,
-        members_count: 1,
-      }).then(({ error }) => {
-        if (error) console.warn('Town community Supabase insert notice:', error.message);
-      });
-    }
   };
 
   const deleteTownCommunity = (communityId: string) => {
+    const targetComm = townCommunitiesRef.current.find((c) => c.id === communityId);
+    const targetName = targetComm?.name;
+    const normName = targetName?.trim().toLowerCase();
+
+    deletedCommunityIdsRef.current.add(communityId);
+    if (normName) deletedCommunityNamesRef.current.add(normName);
+
     setTownCommunities((prev) => {
-      const updated = prev.filter((c) => c.id !== communityId);
+      const updated = prev.filter(
+        (c) => c.id !== communityId && (!normName || c.name.trim().toLowerCase() !== normName)
+      );
       try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
       return updated;
     });
 
     const communityChatId = `town_comm_${communityId}`;
     setChats((prev) => {
-      const updated = prev.filter((c) => c.id !== communityChatId);
+      const updated = prev.filter(
+        (c) =>
+          c.id !== communityChatId &&
+          !(normName && c.id.startsWith('town_comm_') && c.name.trim().toLowerCase() === normName)
+      );
       persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
@@ -1981,22 +2182,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
+    setGroupInvites((prev) => prev.filter((inv) => inv.groupId !== communityChatId && inv.groupId !== communityId));
     setActiveChatId((curr) => (curr === communityChatId ? null : curr));
 
     if (isSupabaseConfigured) {
-      supabase.from('town_communities').delete().eq('id', communityId).then(() => {}, () => {});
-      try {
-        const commCh = supabase.channel('live_town_communities', { config: { broadcast: { self: false } } });
-        commCh.subscribe((st) => {
-          if (st === 'SUBSCRIBED') {
-            commCh.send({ type: 'broadcast', event: 'community_deleted', payload: { id: communityId } });
-          }
-        });
-      } catch (_) {}
+      deleteTownCommunityInDb(communityId, targetName).catch(() => {});
+      sendSupabaseBroadcastOnce('live_town_communities', 'community_deleted', {
+        id: communityId,
+        name: targetName,
+      });
     }
+
+    try {
+      fetch(`/api/communities/${encodeURIComponent(communityId)}`, { method: 'DELETE' }).catch(() => {});
+    } catch (_) {}
+
+    const socket = getSocket();
+    socket?.emit('delete_community', { id: communityId, name: targetName });
   };
 
   const openCommunityChat = (community: TownCommunity) => {
+    if (
+      isInvalidCommunityClientItem(community) ||
+      deletedCommunityIdsRef.current.has(community.id) ||
+      deletedCommunityNamesRef.current.has(community.name.trim().toLowerCase())
+    ) {
+      return;
+    }
     const chatId = `town_comm_${community.id}`;
     const isOwner = Boolean(
       community.adminName &&
@@ -2704,6 +2916,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const activeChatIdRef = useRef<string | null>(activeChatId);
+  activeChatIdRef.current = activeChatId;
+  const notifiedMessageIdsRef = useRef<Set<string>>(new Set());
 
   // Automatically mark chat as read when opened (clears badge instantly)
   useEffect(() => {
@@ -6096,7 +6311,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     description?: string,
     memberPhones?: string[]
   ): string => {
-    const newChatId = 'group_' + Date.now();
+    const cleanName = name.trim();
+    if (!cleanName || cleanName.length < 2 || cleanName.startsWith('__')) return '';
+    const dedupeKey = `group:${cleanName.toLowerCase()}`;
+    const now = Date.now();
+    if (now - (recentCommunityCreateRef.current.get(dedupeKey) || 0) < 4000) {
+      return '';
+    }
+    recentCommunityCreateRef.current.set(dedupeKey, now);
+
+    const newChatId = 'group_' + now;
     const shortInvite = 'G' + Math.random().toString(36).substring(2, 7).toUpperCase();
     const myName = currentUser.fullName || 'You';
     const myPhone = currentUser.phoneNumber || '';
@@ -6123,14 +6347,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const newThread: ChatThread = {
       id: newChatId,
-      name,
+      name: cleanName,
       avatar: avatar || 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=150&auto=format&fit=crop&q=80',
       verifiedStore: false,
       location: 'Community Group',
       unreadCount: 0,
       lastMessage: resolvedTargets.length > 0
-        ? `Created group "${name}" · ${resolvedTargets.length} invite(s) sent`
-        : `You created group "${name}"`,
+        ? `Created group "${cleanName}" · ${resolvedTargets.length} invite(s) sent`
+        : `You created group "${cleanName}"`,
       lastMessageTime: 'Just now',
       catalog: [],
       isOnline: true,
@@ -6152,8 +6376,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       chatId: newChatId,
       sender: 'system',
       text: resolvedTargets.length > 0
-        ? `You created group "${name}" and sent invitations to ${resolvedTargets.map((t) => t.name).join(', ')}.`
-        : `You created group "${name}".`,
+        ? `You created group "${cleanName}" and sent invitations to ${resolvedTargets.map((t) => t.name).join(', ')}.`
+        : `You created group "${cleanName}".`,
       type: 'text',
       timestamp: 'Just now',
       status: 'sent',
@@ -6187,7 +6411,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     memberNamesOrPhones?: string[],
     memberPhones?: string[]
   ): string => {
-    const newChatId = 'channel_' + Date.now();
+    const cleanName = name.trim();
+    if (!cleanName || cleanName.length < 2 || cleanName.startsWith('__')) return '';
+    const dedupeKey = `channel:${cleanName.toLowerCase()}`;
+    const now = Date.now();
+    if (now - (recentCommunityCreateRef.current.get(dedupeKey) || 0) < 4000) {
+      return '';
+    }
+    recentCommunityCreateRef.current.set(dedupeKey, now);
+
+    const newChatId = 'channel_' + now;
     const shortInvite = 'C' + Math.random().toString(36).substring(2, 7).toUpperCase();
     const myName = currentUser.fullName || 'You';
     const myPhone = currentUser.phoneNumber || '';
@@ -6214,7 +6447,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const newThread: ChatThread = {
       id: newChatId,
-      name,
+      name: cleanName,
       avatar: avatar || 'https://images.unsplash.com/photo-1582213782179-e0d53f98f2ca?w=150&auto=format&fit=crop&q=80',
       verifiedStore: false,
       location: 'Broadcast Channel',
@@ -6243,8 +6476,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       chatId: newChatId,
       sender: 'system',
       text: resolvedTargets.length > 0
-        ? `Channel "${name}" created and invitations sent to ${resolvedTargets.map((t) => t.name).join(', ')}.`
-        : `Channel "${name}" created. Broadcast updates, news, and media to your subscribers.`,
+        ? `Channel "${cleanName}" created and invitations sent to ${resolvedTargets.map((t) => t.name).join(', ')}.`
+        : `Channel "${cleanName}" created. Broadcast updates, news, and media to your subscribers.`,
       type: 'text',
       timestamp: 'Just now',
       status: 'sent',
@@ -12369,13 +12602,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Otherwise prev state ({} / []) overwrites the user's saved localStorage history.
       if (!isAuthenticatedRef.current || isHydratingChatsRef.current) return;
 
-      const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+      const userNow = currentUserRef.current;
+      const currentActiveChatId = activeChatIdRef.current;
+      const myCleanPhone = userNow.phoneNumber?.replace(/\D/g, '') || '';
       const normMyPhone = normalizePhoneDigits(myCleanPhone);
       if (!normMyPhone || loadedPhoneForChatsRef.current !== normMyPhone) return;
 
+      // Ignore deleted/probe Town communities
+      if (chatId.startsWith('town_comm_')) {
+        const rawCommId = chatId.replace('town_comm_', '');
+        if (deletedCommunityIdsRef.current.has(rawCommId)) return;
+      }
+      if (chat?.name && String(chat.name).trim().startsWith('__')) return;
+
       const senderCleanPhone = (message.senderPhone || '').replace(/\D/g, '');
       const isFromMe =
-        (Boolean(senderId) && senderId === currentUser.id) ||
+        (Boolean(senderId) && senderId === userNow.id) ||
         (Boolean(senderCleanPhone && myCleanPhone && phonesMatch(senderCleanPhone, myCleanPhone)) &&
           message.sender !== 'system');
 
@@ -12390,7 +12632,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (parts.length >= 2 && myCleanPhone) {
           const isParticipant = phonesMatch(parts[0], myCleanPhone) || phonesMatch(parts[1], myCleanPhone);
           if (!isParticipant) {
-            // Strictly private between other users; drop immediately!
             return;
           }
         }
@@ -12430,10 +12671,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // 3. Filter duplicates by message ID (merge live polls / ajo cards / X/O game states)
+      let isDuplicateMessage = false;
       setMessages((prev) => {
         const list = prev[resolvedChatId] || prev[chatId] || [];
         const existingIdx = list.findIndex((m) => m.id === message.id);
         if (existingIdx >= 0) {
+          isDuplicateMessage = true;
           if (message.type === 'financial_poll' || message.type === 'ajo_update' || message.type === 'game_xo') {
             const updatedList = list.map((m, idx) => {
               if (idx !== existingIdx) return m;
@@ -12467,7 +12710,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
             const updated = { ...prev, [resolvedChatId]: updatedList };
             try {
-              const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+              const userKey = getUserStorageKey('AGC_messages_v2', userNow.phoneNumber);
               localStorage.setItem(userKey, JSON.stringify(updated));
             } catch (_) {}
             return updated;
@@ -12488,11 +12731,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           [resolvedChatId]: [...list, receivedMsg],
         };
         try {
-          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+          const userKey = getUserStorageKey('AGC_messages_v2', userNow.phoneNumber);
           localStorage.setItem(userKey, JSON.stringify(updated));
         } catch (_) {}
         return updated;
       });
+
+      if (isDuplicateMessage) return;
 
       // 4. Update or insert thread
       setChats((prev) => {
@@ -12519,20 +12764,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (index >= 0) {
           const updated = [...prev];
           const matched = { ...updated[index] };
-          if (matched.id !== resolvedChatId && activeChatId === matched.id) {
+          const activeNow = activeChatIdRef.current;
+          if (matched.id !== resolvedChatId && activeNow === matched.id) {
             setActiveChatId(resolvedChatId);
           }
           matched.id = resolvedChatId;
           matched.lastMessage = msgText;
           matched.lastMessageTime = message.timestamp;
           matched.unreadCount =
-            activeChatId === resolvedChatId || activeChatId === matched.id || activeChatId === chatId
+            activeNow === resolvedChatId || activeNow === matched.id || activeNow === chatId
               ? 0
               : (matched.unreadCount || 0) + 1;
           updated.splice(index, 1);
           const finalUpdated = [matched, ...updated];
           try {
-            const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+            const userKey = getUserStorageKey('AGC_chats_v2', userNow.phoneNumber);
             localStorage.setItem(userKey, JSON.stringify(finalUpdated));
           } catch (_) {}
           return finalUpdated;
@@ -12548,18 +12794,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ) {
             return prev;
           }
+          const activeNow = activeChatIdRef.current;
           const newThread: ChatThread = {
             id: resolvedChatId,
             name: isGroupChat
               ? (chat?.name || (isChannelChat ? 'Broadcast Channel' : 'Group Chat'))
               : isSelfChat
-              ? `${currentUser.fullName || 'You'} (Message yourself)`
+              ? `${userNow.fullName || 'You'} (Message yourself)`
               : (message.senderName || 'AGC Contact'),
             avatar:
               (isGroupChat
                 ? chat?.avatar
                 : isSelfChat
-                ? currentUser.avatarUrl
+                ? userNow.avatarUrl
                 : message.senderAvatar) ||
               "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
             verifiedStore: false,
@@ -12570,7 +12817,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               : isSelfChat
               ? 'Notes to Self'
               : (resolvedChatId.startsWith('town_comm_') ? 'Town Community' : 'Direct Chat'),
-            unreadCount: activeChatId === resolvedChatId || activeChatId === chatId ? 0 : 1,
+            unreadCount: activeNow === resolvedChatId || activeNow === chatId ? 0 : 1,
             lastMessage: msgText,
             lastMessageTime: message.timestamp,
             catalog: [],
@@ -12580,18 +12827,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             membersCount: chat?.membersCount || 2,
             members: chat?.members || [],
             memberPhones: chat?.memberPhones || [],
-            phone: isSelfChat ? currentUser.phoneNumber : (message.senderPhone || ''),
+            phone: isSelfChat ? userNow.phoneNumber : (message.senderPhone || ''),
           };
           const finalUpdated = [newThread, ...prev];
           try {
-            const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
+            const userKey = getUserStorageKey('AGC_chats_v2', userNow.phoneNumber);
             localStorage.setItem(userKey, JSON.stringify(finalUpdated));
           } catch (_) {}
           return finalUpdated;
         }
       });
 
-      if (activeChatId !== resolvedChatId && activeChatId !== chatId && !isFromMe) {
+      if (
+        currentActiveChatId !== resolvedChatId &&
+        currentActiveChatId !== chatId &&
+        !isFromMe &&
+        !notifiedMessageIdsRef.current.has(message.id)
+      ) {
+        notifiedMessageIdsRef.current.add(message.id);
+        if (notifiedMessageIdsRef.current.size > 300) {
+          const firstKey = notifiedMessageIdsRef.current.values().next().value;
+          if (firstKey) notifiedMessageIdsRef.current.delete(firstKey);
+        }
         showLocalNotification(
           `💬 ${message.senderName || 'AGC User'}`,
           message.type === 'location'
@@ -12601,35 +12858,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
       }
     },
-    [currentUser, activeChatId]
+    []
   );
 
   useEffect(() => {
-    const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    const userAtMount = currentUserRef.current;
+    const myCleanPhone = userAtMount.phoneNumber?.replace(/\D/g, '') || '';
     if (!isAuthenticated || !myCleanPhone) return;
     const normPhone = normalizePhoneDigits(myCleanPhone);
     const socket = initSocket({
-      id: currentUser.id,
-      name: currentUser.fullName,
-      avatar: currentUser.avatarUrl,
-      phone: currentUser.phoneNumber,
+      id: userAtMount.id,
+      name: userAtMount.fullName,
+      avatar: userAtMount.avatarUrl,
+      phone: userAtMount.phoneNumber,
     });
 
     const registerRoomsOnConnect = () => {
-      if (myCleanPhone) {
-        socket.emit('register_phone', myCleanPhone);
-        if (normPhone !== myCleanPhone) {
-          socket.emit('register_phone', normPhone);
+      const latestUser = currentUserRef.current;
+      const latestCleanPhone = latestUser.phoneNumber?.replace(/\D/g, '') || myCleanPhone;
+      const latestNorm = normalizePhoneDigits(latestCleanPhone);
+      if (latestCleanPhone) {
+        socket.emit('register_phone', latestCleanPhone);
+        if (latestNorm !== latestCleanPhone) {
+          socket.emit('register_phone', latestNorm);
         }
         socket.emit('user_online', {
-          userId: currentUser.id,
-          userName: currentUser.fullName,
-          avatar: currentUser.avatarUrl,
-          phoneNumber: currentUser.phoneNumber,
+          userId: latestUser.id,
+          userName: latestUser.fullName,
+          avatar: latestUser.avatarUrl,
+          phoneNumber: latestUser.phoneNumber,
         });
       }
-      if (activeChatId) {
-        joinChatRoom(activeChatId);
+      if (activeChatIdRef.current) {
+        joinChatRoom(activeChatIdRef.current);
       }
     };
 
@@ -12645,7 +12906,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const handleGroupCreated = (payload: any) => {
       if (!payload?.chat) return;
       const chat: ChatThread = payload.chat;
-      if (chat.creatorId && chat.creatorId === currentUser.id) return;
+      if (chat.name && chat.name.trim().startsWith('__')) return;
+      const latestUser = currentUserRef.current;
+      if (chat.creatorId && chat.creatorId === latestUser.id) return;
       if (chatsRef.current.some((c) => c.id === chat.id && c.invitationStatus !== 'pending')) return;
       const syntheticInvite: GroupInvitation = {
         id: `ginv_${chat.id}_${myCleanPhone || 'me'}`,
@@ -12654,7 +12917,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         groupAvatar: chat.avatar,
         entityType: chat.isChannel || chat.id.startsWith('channel_') ? 'channel' : 'group',
         description: chat.description,
-        invitedPhone: currentUser.phoneNumber || '',
+        invitedPhone: latestUser.phoneNumber || '',
         invitedByPhone: chat.memberPhones?.[0] || '',
         invitedByName: chat.invitedBy || chat.admins?.[0] || 'Group Admin',
         membersCount: chat.membersCount || 1,
@@ -12674,7 +12937,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const handleGroupInviteResponse = (payload: any) => {
       if (!payload?.groupId) return;
       const { groupId, responderPhone, responderName, accepted } = payload;
-      if (responderPhone && currentUser.phoneNumber && phonesMatch(responderPhone, currentUser.phoneNumber)) {
+      const latestUser = currentUserRef.current;
+      if (responderPhone && latestUser.phoneNumber && phonesMatch(responderPhone, latestUser.phoneNumber)) {
         return;
       }
 
@@ -12708,7 +12972,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             pendingMembers: nextPending,
           };
         });
-        persistPartitionedChats(updated, currentUser.phoneNumber);
+        persistPartitionedChats(updated, latestUser.phoneNumber);
         return updated;
       });
 
@@ -12727,7 +12991,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMessages((prev) => {
           const list = prev[groupId] || [];
           const updated = { ...prev, [groupId]: [...list, sysMsg] };
-          persistPartitionedMessages(updated, currentUser.phoneNumber);
+          persistPartitionedMessages(updated, latestUser.phoneNumber);
           return updated;
         });
         if (accepted) {
@@ -12742,7 +13006,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const handleFriendRequestAccepted = (payload: any) => {
       if (!payload || !payload.acceptorPhone) return;
-      if (currentUser.phoneNumber && phonesMatch(payload.acceptorPhone, currentUser.phoneNumber)) return;
+      const latestUser = currentUserRef.current;
+      if (latestUser.phoneNumber && phonesMatch(payload.acceptorPhone, latestUser.phoneNumber)) return;
       const acceptorName = payload.acceptorName || payload.acceptorPhone;
       addNewDeviceContact(
         acceptorName,
@@ -12851,6 +13116,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       bc = new BroadcastChannel('AGC_chats_sync');
       bc.onmessage = (e) => {
+        const latestUser = currentUserRef.current;
         if (e.data && e.data.type === 'message_reaction' && e.data.chatId && e.data.messageId) {
           applyRemoteMessageReaction(e.data);
           return;
@@ -12860,7 +13126,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return;
         }
         if (e.data && e.data.type === 'group_invite' && e.data.invite) {
-          const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+          const myPhone = latestUser.phoneNumber?.replace(/\D/g, '') || '';
           const target = (e.data.targetPhone || e.data.invite.invitedPhone || '').replace(/\D/g, '');
           const sender = (e.data.invite.invitedByPhone || '').replace(/\D/g, '');
           if (target && myPhone && phonesMatch(target, myPhone) && (!sender || !phonesMatch(sender, myPhone))) {
@@ -12873,7 +13139,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return;
         }
         if (e.data && e.data.type === 'friend_request' && e.data.request) {
-          const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+          const myPhone = latestUser.phoneNumber?.replace(/\D/g, '') || '';
           const target = (e.data.targetPhone || e.data.request.recipientPhone || '').replace(/\D/g, '');
           const sender = (e.data.request.senderPhone || '').replace(/\D/g, '');
           if (target && myPhone && phonesMatch(target, myPhone) && (!sender || !phonesMatch(sender, myPhone))) {
@@ -12882,9 +13148,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return;
         }
         if (e.data && e.data.chatId && e.data.message) {
-          const { chatId, senderId, targetPhone, memberPhones, isGroup } = e.data;
-          const myPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
-          if (senderId === currentUser.id && !chatId.includes('self')) {
+          const { chatId, senderId, targetPhone, isGroup } = e.data;
+          const myPhone = latestUser.phoneNumber?.replace(/\D/g, '') || '';
+          if (senderId === latestUser.id && !chatId.includes('self')) {
             return;
           }
           if (chatId.startsWith('dm_') && !chatId.includes('self')) {
@@ -13026,7 +13292,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       sbTownFeed
         .on('broadcast', { event: 'new_message' }, ({ payload }: any) => {
-          if (payload && payload.message && payload.senderId !== currentUser.id) {
+          const latestUser = currentUserRef.current;
+          if (payload && payload.message && payload.senderId !== latestUser.id) {
             const hasThread =
               chatsRef.current.some((c) => c.id === payload.chatId) ||
               townCommunitiesRef.current.some((tc) => `town_comm_${tc.id}` === payload.chatId && tc.isJoined);
@@ -13057,7 +13324,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
       if (sbTownFeed) sbTownFeed.unsubscribe();
     };
-  }, [currentUser, activeChatId, isAuthenticated, handleIncomingMessage, applyXoGameUpdate, applyRemoteMessageReaction]);
+  }, [currentUser.id, currentUser.phoneNumber, isAuthenticated, handleIncomingMessage, applyXoGameUpdate, applyRemoteMessageReaction]);
 
   const syncCurrentUserFromRecord = useCallback((me?: AdminUserRecord) => {
     if (!me || !currentUser?.phoneNumber) return;

@@ -175,11 +175,14 @@ begin
 exception when others then null;
 end $$;
 
--- 7. Automated Database Cleanup: Purge Test & Mock Communities from Town
+-- 7. Automated Database Cleanup: Purge Test, Probe & Mock Communities from Town
 delete from public.town_communities
 where lower(name) like '%test%'
    or lower(name) like '%mock%'
    or lower(name) like '%sample%'
+   or lower(name) like '%lagos tech%'
+   or name like '\_\_%' escape '\'
+   or is_live = false
    or lower(id::text) like 'test_%'
    or lower(id::text) like '__test%';
 

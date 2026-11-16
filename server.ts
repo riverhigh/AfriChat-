@@ -1020,12 +1020,36 @@ function saveStatusesFile() {
   }
 }
 
+function isInvalidServerCommunity(c: any): boolean {
+  if (!c || !c.id || !c.name) return true;
+  if (c.is_live === false || c.isDeleted) return true;
+  const name = String(c.name || '').trim();
+  const lowName = name.toLowerCase();
+  const lowDesc = String(c.description || '').trim().toLowerCase();
+  const lowId = String(c.id || '').trim().toLowerCase();
+  const tags: string[] = Array.isArray(c.tags) ? c.tags.map((t: any) => String(t).toLowerCase()) : [];
+  if (tags.includes('__deleted__') || tags.includes('__sys_probe__') || tags.includes('__probe__')) return true;
+  if (name.startsWith('__') || lowId.startsWith('__') || lowId.startsWith('test_')) return true;
+  if (
+    lowName.includes('__probe') ||
+    lowName.includes('lagos tech') ||
+    lowDesc.includes('lagos tech') ||
+    lowName.includes('test') ||
+    lowName.includes('mock') ||
+    lowName.includes('dummy') ||
+    lowName.includes('sample')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 try {
   if (fs.existsSync(COMMUNITIES_FILE)) {
     const raw = JSON.parse(fs.readFileSync(COMMUNITIES_FILE, 'utf8'));
     if (Array.isArray(raw)) {
       for (const c of raw) {
-        if (c.id) communitiesMap.set(c.id, c);
+        if (!isInvalidServerCommunity(c)) communitiesMap.set(c.id, c);
       }
     }
   }
@@ -2423,16 +2447,49 @@ app.get('/api/users', async (_req: Request, res: Response) => {
 
 // REST: Communities endpoints
 app.get('/api/communities', (_req: Request, res: Response) => {
-  res.json({ communities: Array.from(communitiesMap.values()) });
+  const valid = Array.from(communitiesMap.values()).filter((c) => !isInvalidServerCommunity(c));
+  res.json({ communities: valid });
 });
 
 app.post('/api/communities', (req: Request, res: Response) => {
   const comm = req.body;
-  if (!comm || !comm.id) return res.status(400).json({ error: 'Community data required' });
+  if (!comm || !comm.id || !comm.name) return res.status(400).json({ error: 'Community data required' });
+  if (isInvalidServerCommunity(comm)) {
+    return res.status(400).json({ error: 'Invalid community name or payload' });
+  }
+  const normName = String(comm.name).trim().toLowerCase();
+  const commType = comm.type || 'group';
+  const duplicate = Array.from(communitiesMap.values()).find(
+    (c) =>
+      c.id === comm.id ||
+      (String(c.name || '').trim().toLowerCase() === normName && (c.type || 'group') === commType)
+  );
+  if (duplicate) {
+    return res.json({ success: true, community: duplicate, deduplicated: true });
+  }
   communitiesMap.set(comm.id, comm);
   saveCommunitiesFile();
   io.emit('community_created', comm);
   res.json({ success: true, community: comm });
+});
+
+app.delete('/api/communities/:id', (req: Request, res: Response) => {
+  const targetId = String(req.params.id || '').trim();
+  if (!targetId) return res.status(400).json({ error: 'Community ID required' });
+  const existed = communitiesMap.delete(targetId);
+  if (existed) {
+    saveCommunitiesFile();
+  }
+  io.emit('community_deleted', { id: targetId });
+  res.json({ success: true, deletedId: targetId });
+});
+
+app.delete('/api/communities', (_req: Request, res: Response) => {
+  const deletedIds = Array.from(communitiesMap.keys());
+  communitiesMap.clear();
+  saveCommunitiesFile();
+  deletedIds.forEach((id) => io.emit('community_deleted', { id }));
+  res.json({ success: true, clearedCount: deletedIds.length });
 });
 
 // REST: Resend Email Endpoint
@@ -3896,11 +3953,27 @@ io.on('connection', (socket: Socket) => {
 
   // Town Communities Broadcast
   socket.on('create_community', (comm: any) => {
-    if (comm && comm.id) {
-      communitiesMap.set(comm.id, comm);
+    if (!comm || !comm.id || isInvalidServerCommunity(comm)) return;
+    const normName = String(comm.name).trim().toLowerCase();
+    const commType = comm.type || 'group';
+    const duplicate = Array.from(communitiesMap.values()).find(
+      (c) =>
+        c.id === comm.id ||
+        (String(c.name || '').trim().toLowerCase() === normName && (c.type || 'group') === commType)
+    );
+    if (duplicate) return;
+    communitiesMap.set(comm.id, comm);
+    saveCommunitiesFile();
+    socket.broadcast.emit('community_created', comm);
+  });
+
+  socket.on('delete_community', (payload: { id?: string }) => {
+    const id = String(payload?.id || '').trim();
+    if (!id) return;
+    if (communitiesMap.delete(id)) {
       saveCommunitiesFile();
-      io.emit('community_created', comm);
     }
+    socket.broadcast.emit('community_deleted', { id });
   });
 
   // 1. Join Chat Conversation Room (1-on-1 or Group)

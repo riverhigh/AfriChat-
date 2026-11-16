@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ShieldCheck,
   Check,
@@ -429,7 +429,7 @@ export const AdminDashboardModal: React.FC = () => {
             ? supabase.from('artisan_stations').select('*').then((r) => r, () => null)
             : Promise.resolve(null),
           isSupabaseConfigured
-            ? supabase.from('town_communities').select('id').then((r) => r, () => null)
+            ? supabase.from('town_communities').select('id, name, is_live, tags').neq('is_live', false).then((r) => r, () => null)
             : Promise.resolve(null),
           isSupabaseConfigured
             ? supabase.from('user_statuses').select('id').then((r) => r, () => null)
@@ -502,7 +502,13 @@ export const AdminDashboardModal: React.FC = () => {
           onlineUsers: usersArr.filter((u: any) => u.lastSeen === 'online'),
           registeredUsersCount: usersArr.length,
           registeredUsers: usersArr,
-          communitiesCount: Array.isArray(sbCommRes?.data) ? sbCommRes.data.length : (prev?.communitiesCount || 0),
+          communitiesCount: Array.isArray(sbCommRes?.data)
+            ? sbCommRes.data.filter((c: any) => {
+                const n = String(c?.name || '').trim().toLowerCase();
+                const tags: string[] = Array.isArray(c?.tags) ? c.tags.map((t: any) => String(t).toLowerCase()) : [];
+                return c?.is_live !== false && !n.startsWith('__') && !tags.includes('__deleted__') && !tags.includes('__sys_probe__');
+              }).length
+            : (prev?.communitiesCount || 0),
           activeStatusesCount: Array.isArray(sbStatRes?.data) ? sbStatRes.data.length : (prev?.activeStatusesCount || 0),
           stores: sbStores,
           artisans: sbArtisans,
