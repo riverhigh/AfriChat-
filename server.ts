@@ -1194,19 +1194,8 @@ async function sendKudiSms(recipientPhone: string, code: string): Promise<{ succ
       return { success: true, messageId: smsParsed.message_id || smsParsed.id || `kudi_sms_${Date.now()}` };
     }
 
-    // URL encoded fallback
-    const url = new URL('https://my.kudisms.net/api/sms');
-    url.searchParams.append('token', apiKey);
-    url.searchParams.append('senderID', senderId);
-    url.searchParams.append('recipients', cleanPhone);
-    url.searchParams.append('message', messageText);
-    url.searchParams.append('gateway', '2');
-
-    const getResp = await fetch(url.toString(), { method: 'POST' });
-    const getText = await getResp.text();
-    console.log(`[KudiSMS URL-encoded Response] HTTP ${getResp.status}:`, getText);
-
-    return { success: true, messageId: `kudi_${Date.now()}` };
+    const errorMsg = smsParsed?.msg || smsParsed?.error || otpParsed?.msg || otpParsed?.error || 'KudiSMS dispatch rejected.';
+    return { success: false, error: errorMsg, providerResponse: smsParsed || otpParsed };
   } catch (err: any) {
     console.error(`[KudiSMS Error] Failed to send SMS to ${cleanPhone}:`, err);
     return { success: false, error: err?.message || 'Failed to dispatch SMS via KudiSMS' };
@@ -1252,6 +1241,14 @@ app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
 
     const smsResult = await sendKudiSms(clean, code);
     const hasApiKey = Boolean(process.env.KUDISMS_API_KEY?.trim());
+
+    if (hasApiKey && !smsResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: `KudiSMS Delivery Error: ${smsResult.error || 'Failed to dispatch SMS'}. Please check your Sender ID at my.kudisms.net/user/senderid.`,
+        smsResult,
+      });
+    }
 
     return res.json({
       success: true,

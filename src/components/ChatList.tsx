@@ -46,6 +46,7 @@ export const ChatList: React.FC = () => {
     acceptGroupInvite,
     declineGroupInvite,
     startAiChat,
+    adminUsers,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
