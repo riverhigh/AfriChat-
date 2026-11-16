@@ -1115,41 +1115,62 @@ function normalizePhone(rawPhone: string): string {
   return clean;
 }
 
-// ── Termii SMS Provider ───────────────────────────────────────────────────────
+// ── Termii SMS Provider (Messaging API — sends our own generated code) ────────
 async function sendTermiiOtp(recipientPhone: string, code: string): Promise<{ success: boolean; messageId?: string; error?: string; provider?: string }> {
   const apiKey = (process.env.TERMII_API_KEY || '').trim();
   if (!apiKey) return { success: false, error: 'No TERMII_API_KEY configured', provider: 'termii' };
 
   const cleanPhone = normalizePhone(recipientPhone);
+  const message = `${code} is your AGC verification code. Valid for 5 minutes. Do not share.`;
+
+  // Strategy 1: DND channel (bypasses Do-Not-Disturb in Nigeria)
   try {
-    console.log(`[Termii] Dispatching OTP to ${cleanPhone}...`);
-    const resp = await fetch('https://v3.api.termii.com/api/sms/otp/send', {
+    console.log(`[Termii] Dispatching to ${cleanPhone} via dnd channel...`);
+    const resp = await fetch('https://v3.api.termii.com/api/sms/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         api_key: apiKey,
-        message_type: 'NUMERIC',
         to: cleanPhone,
         from: 'N-Alert',
-        channel: 'generic',
-        pin_attempts: 5,
-        pin_time_to_live: 5,
-        pin_length: 6,
-        pin_placeholder: '<1234>',
-        message_text: `<1234> is your AGC verification code. Valid for 5 minutes.`,
-        pin_type: 'NUMERIC',
+        sms: message,
+        type: 'plain',
+        channel: 'dnd',
       }),
     });
-
     const data = await resp.json().catch(() => ({}));
-    console.log(`[Termii Response] HTTP ${resp.status}:`, data);
-
-    if (resp.ok && data?.pinId) {
-      return { success: true, messageId: data.pinId, provider: 'termii' };
+    console.log(`[Termii dnd Response] HTTP ${resp.status}:`, data);
+    if (resp.ok && (data?.message_id || data?.messageId || data?.code === 'ok' || String(data?.message || '').toLowerCase().includes('successfully'))) {
+      return { success: true, messageId: data.message_id || data.messageId || `termii_${Date.now()}`, provider: 'termii' };
     }
-    return { success: false, error: data?.message || data?.error || 'Termii rejected the request', provider: 'termii' };
+    console.warn(`[Termii dnd failed]: ${data?.message || JSON.stringify(data)} — trying generic channel...`);
   } catch (err: any) {
-    console.error('[Termii Error]:', err?.message || err);
+    console.warn('[Termii dnd error]:', err?.message);
+  }
+
+  // Strategy 2: Generic channel fallback
+  try {
+    console.log(`[Termii] Fallback to ${cleanPhone} via generic channel...`);
+    const resp2 = await fetch('https://v3.api.termii.com/api/sms/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: apiKey,
+        to: cleanPhone,
+        from: 'N-Alert',
+        sms: message,
+        type: 'plain',
+        channel: 'generic',
+      }),
+    });
+    const data2 = await resp2.json().catch(() => ({}));
+    console.log(`[Termii generic Response] HTTP ${resp2.status}:`, data2);
+    if (resp2.ok && (data2?.message_id || data2?.messageId || String(data2?.message || '').toLowerCase().includes('successfully'))) {
+      return { success: true, messageId: data2.message_id || data2.messageId || `termii_${Date.now()}`, provider: 'termii' };
+    }
+    return { success: false, error: data2?.message || 'Termii rejected the request on both channels', provider: 'termii' };
+  } catch (err: any) {
+    console.error('[Termii generic Error]:', err?.message || err);
     return { success: false, error: err?.message || 'Termii network error', provider: 'termii' };
   }
 }
