@@ -1,31 +1,48 @@
 /**
- * AGC Sound Utilities — Web Audio API generated sounds (no external files)
+ * AGC Sound Utilities — Modern UI Synthesized Chimes, Tones & Pings via Web Audio API
  */
 
-export type AnimalSound =
-  | 'meow'
-  | 'bark'
-  | 'moo'
-  | 'oink'
-  | 'quack'
-  | 'rooster'
-  | 'frog'
-  | 'elephant'
-  | 'lion'
-  | 'monkey';
+export type NotificationSound =
+  | 'chime'
+  | 'pulse'
+  | 'bubble'
+  | 'marimba'
+  | 'breeze'
+  | 'bell'
+  | 'harp'
+  | 'radar'
+  | 'crystal'
+  | 'zen';
 
-export const ANIMAL_SOUNDS: { id: AnimalSound; label: string; emoji: string }[] = [
-  { id: 'meow',     label: 'Cat Meow',    emoji: '🐱' },
-  { id: 'bark',     label: 'Dog Bark',    emoji: '🐶' },
-  { id: 'moo',      label: 'Cow Moo',     emoji: '🐄' },
-  { id: 'oink',     label: 'Pig Oink',    emoji: '🐷' },
-  { id: 'quack',    label: 'Duck Quack',  emoji: '🦆' },
-  { id: 'rooster',  label: 'Rooster',     emoji: '🐓' },
-  { id: 'frog',     label: 'Frog Croak',  emoji: '🐸' },
-  { id: 'elephant', label: 'Elephant',    emoji: '🐘' },
-  { id: 'lion',     label: 'Lion Roar',   emoji: '🦁' },
-  { id: 'monkey',   label: 'Monkey',      emoji: '🐒' },
+// Backward compatibility alias
+export type AnimalSound = NotificationSound;
+
+export interface SoundOption {
+  id: NotificationSound;
+  label: string;
+  category: 'Modern' | 'Subtle' | 'Melodic' | 'Classic';
+  icon: string;
+}
+
+export const NOTIFICATION_SOUNDS: SoundOption[] = [
+  { id: 'chime',   label: 'Soft Chime',   category: 'Modern',  icon: '✨' },
+  { id: 'pulse',   label: 'Warm Pulse',   category: 'Modern',  icon: '🟣' },
+  { id: 'bubble',  label: 'Water Pop',    category: 'Subtle',  icon: '🫧' },
+  { id: 'breeze',  label: 'Air Sweep',    category: 'Subtle',  icon: '🍃' },
+  { id: 'marimba', label: 'Marimba Tap',  category: 'Melodic', icon: '🎵' },
+  { id: 'harp',    label: 'Harp Arp',     category: 'Melodic', icon: '🪕' },
+  { id: 'crystal', label: 'Crystal Tone', category: 'Melodic', icon: '💎' },
+  { id: 'bell',    label: 'Desk Bell',    category: 'Classic', icon: '🔔' },
+  { id: 'radar',   label: 'Echo Radar',   category: 'Classic', icon: '📡' },
+  { id: 'zen',     label: 'Zen Bowl',     category: 'Classic', icon: '🧘' },
 ];
+
+// Compatibility alias for existing imports
+export const ANIMAL_SOUNDS = NOTIFICATION_SOUNDS.map(s => ({
+  id: s.id,
+  label: s.label,
+  emoji: s.icon,
+}));
 
 export function playSwooshSound() {
   try {
@@ -44,17 +61,17 @@ export function playSwooshSound() {
   } catch (_) {}
 }
 
-export function playAnimalSound(type: AnimalSound = 'meow') {
+export function playNotificationSound(type: NotificationSound | string = 'chime') {
   try {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     const t = ctx.currentTime;
 
-    const note = (
+    const playTone = (
       freq: number,
       start: number,
       dur: number,
       wave: OscillatorType = 'sine',
-      vol = 0.3,
+      vol = 0.25,
       freqEnd?: number
     ) => {
       const osc = ctx.createOscillator();
@@ -65,50 +82,115 @@ export function playAnimalSound(type: AnimalSound = 'meow') {
       osc.frequency.setValueAtTime(freq, t + start);
       if (freqEnd) osc.frequency.exponentialRampToValueAtTime(freqEnd, t + start + dur);
       g.gain.setValueAtTime(vol, t + start);
-      g.gain.exponentialRampToValueAtTime(0.001, t + start + dur);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + start + dur);
       osc.start(t + start);
-      osc.stop(t + start + dur + 0.01);
+      osc.stop(t + start + dur + 0.02);
     };
 
-    switch (type) {
-      case 'meow':
-        note(700, 0, 0.08); note(550, 0.07, 0.22, 'sine', 0.25, 400);
+    // Normalize legacy animal ids to new sleek sounds
+    const soundKey = (type === 'meow' ? 'chime' :
+      type === 'bark' ? 'pulse' :
+      type === 'moo' ? 'zen' :
+      type === 'oink' ? 'bubble' :
+      type === 'quack' ? 'marimba' :
+      type === 'rooster' ? 'crystal' :
+      type === 'frog' ? 'radar' :
+      type === 'elephant' ? 'breeze' :
+      type === 'lion' ? 'harp' :
+      type === 'monkey' ? 'bell' : type) as NotificationSound;
+
+    switch (soundKey) {
+      case 'chime':
+        // Modern dual high chime (C6 -> G6)
+        playTone(1046.5, 0, 0.15, 'sine', 0.25);
+        playTone(1567.98, 0.08, 0.28, 'sine', 0.22);
         break;
-      case 'bark':
-        note(300, 0, 0.07, 'sawtooth', 0.4); note(240, 0.09, 0.1, 'sawtooth', 0.3);
+
+      case 'pulse':
+        // Warm round UI pulse
+        playTone(320, 0, 0.06, 'triangle', 0.3, 480);
+        playTone(480, 0.05, 0.18, 'sine', 0.25, 240);
         break;
-      case 'moo':
-        note(140, 0, 0.6, 'sine', 0.4, 110); note(110, 0.3, 0.4, 'sine', 0.3);
+
+      case 'bubble':
+        // Delicate water droplet pop
+        playTone(600, 0, 0.04, 'sine', 0.25, 1200);
+        playTone(1200, 0.03, 0.08, 'sine', 0.15, 800);
         break;
-      case 'oink':
-        note(380, 0, 0.09, 'triangle', 0.3); note(330, 0.08, 0.14, 'triangle', 0.25);
+
+      case 'breeze':
+        // Smooth airy harmonic slide
+        playTone(523.25, 0, 0.12, 'sine', 0.18, 659.25);
+        playTone(659.25, 0.08, 0.22, 'sine', 0.2, 783.99);
         break;
-      case 'quack':
-        note(480, 0, 0.07, 'sawtooth', 0.3, 400); note(420, 0.09, 0.09, 'sawtooth', 0.25);
+
+      case 'marimba':
+        // Organic wooden mallet note pair
+        playTone(587.33, 0, 0.09, 'triangle', 0.35);
+        playTone(880, 0.08, 0.16, 'triangle', 0.3);
         break;
-      case 'rooster':
-        note(500, 0, 0.1); note(800, 0.1, 0.1); note(600, 0.2, 0.25, 'sine', 0.25, 400);
+
+      case 'harp':
+        // 3-note ascending harp glissando
+        playTone(523.25, 0, 0.12, 'sine', 0.2);
+        playTone(659.25, 0.06, 0.15, 'sine', 0.2);
+        playTone(783.99, 0.12, 0.25, 'sine', 0.25);
         break;
-      case 'frog':
-        note(180, 0, 0.05, 'square', 0.3); note(220, 0.07, 0.05, 'square', 0.25); note(180, 0.14, 0.05, 'square', 0.2);
+
+      case 'crystal':
+        // High pure crystal bell
+        playTone(1318.51, 0, 0.25, 'sine', 0.25);
+        playTone(1760, 0.05, 0.35, 'sine', 0.18);
         break;
-      case 'elephant':
-        note(90, 0, 0.7, 'sawtooth', 0.5, 70); note(110, 0.1, 0.5, 'sawtooth', 0.35);
+
+      case 'bell':
+        // Clear subtle desk bell ping
+        playTone(1174.66, 0, 0.35, 'sine', 0.3);
+        playTone(2349.32, 0, 0.15, 'sine', 0.08);
         break;
-      case 'lion':
-        note(90, 0, 0.35, 'sawtooth', 0.5); note(70, 0.25, 0.5, 'sawtooth', 0.4, 50);
+
+      case 'radar':
+        // Digital ambient radar blip
+        playTone(880, 0, 0.05, 'sine', 0.25);
+        playTone(1760, 0.08, 0.18, 'sine', 0.2);
         break;
-      case 'monkey':
-        note(600, 0, 0.07); note(900, 0.08, 0.07); note(600, 0.16, 0.07); note(900, 0.24, 0.07);
+
+      case 'zen':
+        // Deep soothing singing bowl vibration
+        playTone(261.63, 0, 0.45, 'sine', 0.35);
+        playTone(523.25, 0.02, 0.35, 'sine', 0.15);
+        break;
+
+      default:
+        playTone(1046.5, 0, 0.15, 'sine', 0.25);
+        playTone(1567.98, 0.08, 0.25, 'sine', 0.2);
         break;
     }
   } catch (_) {}
 }
 
-export function getNotificationSound(): AnimalSound {
-  return (localStorage.getItem('AGC_notification_sound') as AnimalSound) || 'meow';
+// Backward compatibility alias for playAnimalSound
+export const playAnimalSound = playNotificationSound;
+
+export function getNotificationSound(): NotificationSound {
+  const saved = localStorage.getItem('AGC_notification_sound') as any;
+  if (!saved) return 'chime';
+  // Map legacy animal names if stored in user's browser localStorage
+  const map: Record<string, NotificationSound> = {
+    meow: 'chime',
+    bark: 'pulse',
+    moo: 'zen',
+    oink: 'bubble',
+    quack: 'marimba',
+    rooster: 'crystal',
+    frog: 'radar',
+    elephant: 'breeze',
+    lion: 'harp',
+    monkey: 'bell',
+  };
+  return map[saved] || (saved as NotificationSound) || 'chime';
 }
 
-export function setNotificationSound(sound: AnimalSound) {
+export function setNotificationSound(sound: NotificationSound | string) {
   localStorage.setItem('AGC_notification_sound', sound);
 }

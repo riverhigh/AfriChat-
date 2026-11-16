@@ -1,4 +1,10 @@
-import { ANIMAL_SOUNDS, playAnimalSound, getNotificationSound, setNotificationSound, AnimalSound } from '../utils/soundUtils';
+import {
+  NOTIFICATION_SOUNDS,
+  playNotificationSound,
+  getNotificationSound,
+  setNotificationSound,
+  NotificationSound,
+} from '../utils/soundUtils';
 import React, { useState } from 'react';
 import {
   User,
@@ -125,8 +131,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan' | 'chat_bg'>('services');
-  const [selectedAnimalSound, setSelectedAnimalSound] = useState<AnimalSound>(() => {
-    try { return getNotificationSound(); } catch (_) { return 'meow'; }
+  const [selectedNotificationSound, setSelectedNotificationSound] = useState<NotificationSound>(() => {
+    try { return getNotificationSound(); } catch (_) { return 'chime'; }
   });
   const [isLegalModalOpen, setIsLegalModalOpen] = useState(false);
   const [isAccountCenterOpen, setIsAccountCenterOpen] = useState(false);
@@ -1116,45 +1122,47 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </button>
             </div>
 
-                        {/* Notification Sound Picker (10 Animal Sounds) */}
-            <div className="px-4 py-3.5 space-y-2.5 border-b border-slate-100 dark:border-neutral-800/80">
+            {/* Notification Sound Picker (Modern Tones & Chimes) */}
+            <div className="px-4 py-3.5 space-y-3 border-b border-slate-100 dark:border-neutral-800/80">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <Volume2 className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                <div className="flex items-center gap-3.5">
+                  <div className="w-8 h-8 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                    <Volume2 className="w-4 h-4" />
+                  </div>
                   <div>
-                    <div className="text-sm font-medium">Message Notification Sound</div>
-                    <div className="text-xs text-slate-500">Pick an animal sound for incoming messages</div>
+                    <div className="text-sm font-semibold text-slate-900 dark:text-white">Message Tone</div>
+                    <div className="text-xs text-slate-500">Pick a tone for incoming messages</div>
                   </div>
                 </div>
-                <span className="text-xs font-mono font-bold text-purple-600 dark:text-purple-400 capitalize">
-                  {ANIMAL_SOUNDS.find((s) => s.id === selectedAnimalSound)?.emoji} {ANIMAL_SOUNDS.find((s) => s.id === selectedAnimalSound)?.label}
+                {/* Active Sound Pill */}
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 text-xs font-semibold text-purple-600 dark:text-purple-300">
+                  <span>{NOTIFICATION_SOUNDS.find((s) => s.id === selectedNotificationSound)?.icon}</span>
+                  <span>{NOTIFICATION_SOUNDS.find((s) => s.id === selectedNotificationSound)?.label}</span>
                 </span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
-                {ANIMAL_SOUNDS.map((snd) => {
-                  const isSelected = selectedAnimalSound === snd.id;
+
+              {/* Sound Pills Carousel / Flow */}
+              <div className="flex flex-wrap gap-2 pt-1">
+                {NOTIFICATION_SOUNDS.map((snd) => {
+                  const isSelected = selectedNotificationSound === snd.id;
                   return (
                     <button
                       key={snd.id}
                       type="button"
                       onClick={() => {
-                        setSelectedAnimalSound(snd.id);
+                        setSelectedNotificationSound(snd.id);
                         setNotificationSound(snd.id);
-                        playAnimalSound(snd.id);
+                        playNotificationSound(snd.id);
                       }}
-                      className={`p-2.5 rounded-xl border flex items-center gap-2 transition-all text-left ${
+                      className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all active:scale-95 ${
                         isSelected
-                          ? 'border-purple-600 bg-purple-50 dark:bg-purple-950/40 ring-1 ring-purple-600'
-                          : 'border-slate-200 dark:border-neutral-800 hover:border-purple-300 dark:hover:border-neutral-700 bg-slate-50/50 dark:bg-neutral-900/50'
+                          ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30 ring-2 ring-purple-400/50'
+                          : 'bg-slate-100 dark:bg-neutral-800/70 text-slate-700 dark:text-neutral-300 hover:bg-purple-50 dark:hover:bg-neutral-800 border border-transparent hover:border-purple-300 dark:hover:border-neutral-700'
                       }`}
                     >
-                      <span className="text-lg">{snd.emoji}</span>
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold truncate text-slate-900 dark:text-white">
-                          {snd.label}
-                        </div>
-                        <div className="text-[10px] text-slate-400 font-mono">Tap to test</div>
-                      </div>
+                      <span className="text-sm">{snd.icon}</span>
+                      <span>{snd.label}</span>
+                      {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-white ml-0.5 animate-pulse" />}
                     </button>
                   );
                 })}
