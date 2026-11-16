@@ -1,4 +1,4 @@
-﻿import express, { Request, Response } from 'express';
+import express, { Request, Response } from 'express';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import cors from 'cors';
@@ -1117,10 +1117,10 @@ function normalizeKudiPhone(rawPhone: string): string {
 
 async function sendKudiSms(recipientPhone: string, code: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
   const apiKey = (process.env.KUDISMS_API_KEY || '').trim();
-  const rawSender = (process.env.KUDISMS_SENDER_ID || 'AfriChat').trim();
-  const senderId = rawSender.slice(0, 11) || 'AfriChat';
+  const rawSender = (process.env.KUDISMS_SENDER_ID || 'AGC').trim();
+  const senderId = rawSender.slice(0, 11) || 'AGC';
   const cleanPhone = normalizeKudiPhone(recipientPhone);
-  const messageText = `Your AfriChat verification code is ${code}. Valid for 5 minutes. Do not share this code.`;
+  const messageText = `Your AGC verification code is ${code}. Valid for 5 minutes. Do not share this code.`;
 
   if (!apiKey) {
     console.log(`\n======================================================`);

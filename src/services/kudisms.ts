@@ -1,5 +1,5 @@
 /**
- * KudiSMS OTP Verification Service for AfriChat
+ * KudiSMS OTP Verification Service for AGC
  * Backend-generated 6-digit numeric OTP with 5-minute TTL (300 seconds),
  * rate limiting, and SMS delivery via KudiSMS API.
  */
