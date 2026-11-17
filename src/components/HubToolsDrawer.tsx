@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Briefcase,
   StickyNote,
@@ -121,13 +122,18 @@ function formatTimestampMeta(iso: string): string {
 }
 
 interface HubToolsDrawerProps {
-  eligibleRoles: string[];
+  eligibleRoles?: string[];
   isAdmin?: boolean;
+  stacked?: boolean;
 }
 
 const DUAL_ADMIN_THRESHOLD_NGN = 100000;
 
-export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({ eligibleRoles, isAdmin }) => {
+export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({
+  eligibleRoles,
+  isAdmin,
+  stacked = false,
+}) => {
   const {
     currentUser,
     currency,
@@ -141,12 +147,94 @@ export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({ eligibleRoles, i
     refreshAdminUsers,
     setUserStatus,
     startChatWithContact,
+    creators,
+    hasActiveStore,
+    storeSubscription,
+    artisanStation,
+    serviceProviders,
+    errandRunners,
   } = useApp();
 
   const activeBadge = currentUser?.verificationBadge || getBadgeForPhone(currentUser?.phoneNumber);
   const userIsAdminAccount =
     currentUser?.role === 'admin' || Boolean(currentUser?.isAdmin) || activeBadge === 'admin';
   const effectiveIsAdmin = Boolean(isAdmin ?? userIsAdminAccount) && userIsAdminAccount;
+
+  const resolvedRoles = useMemo(() => {
+    if (Array.isArray(eligibleRoles)) return eligibleRoles;
+    const roles: string[] = [];
+    const normalizedHandle = (currentUser?.username || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^@+/, '');
+
+    const isCreatorMatched =
+      activeBadge === 'creator_plus' ||
+      currentUser?.role === 'creator' ||
+      Boolean(currentUser?.isCreator) ||
+      currentUser?.creatorPlan === 'gold' ||
+      currentUser?.creatorPlan === 'creator_plus' ||
+      creators.some(
+        (c) =>
+          c.id === currentUser?.id ||
+          (normalizedHandle.length > 0 &&
+            c.handle.trim().toLowerCase().replace(/^@+/, '') === normalizedHandle)
+      );
+
+    const isStoreMatched =
+      activeBadge === 'gold' ||
+      currentUser?.role === 'merchant' ||
+      Boolean(hasActiveStore) ||
+      Boolean(
+        storeSubscription?.isRegistered &&
+          storeSubscription?.tier &&
+          storeSubscription.tier !== 'none' &&
+          storeSubscription.approvalStatus !== 'suspended' &&
+          storeSubscription.approvalStatus !== 'rejected'
+      );
+
+    const isArtisanMatched =
+      Boolean(
+        artisanStation &&
+          artisanStation.approvalStatus !== 'suspended' &&
+          artisanStation.approvalStatus !== 'rejected' &&
+          (!artisanStation.ownerPhone ||
+            phonesMatch(artisanStation.ownerPhone, currentUser?.phoneNumber) ||
+            artisanStation.ownerId === currentUser?.id)
+      ) ||
+      serviceProviders.some(
+        (p) =>
+          p.id === currentUser?.id ||
+          (Boolean(p.phone) && phonesMatch(p.phone, currentUser?.phoneNumber))
+      );
+
+    const isErrandsStallMatched = errandRunners.some(
+      (r) =>
+        (r.userId === currentUser?.id ||
+          (Boolean(r.phone) && phonesMatch(r.phone, currentUser?.phoneNumber)) ||
+          (Boolean(r.userPhone) && phonesMatch(r.userPhone, currentUser?.phoneNumber))) &&
+        r.approvalStatus !== 'rejected' &&
+        r.verificationStatus !== 'rejected'
+    );
+
+    if (userIsAdminAccount) roles.push('Admin');
+    if (isCreatorMatched) roles.push('Creator');
+    if (isStoreMatched) roles.push('Store');
+    if (isArtisanMatched) roles.push('Artisan');
+    if (isErrandsStallMatched) roles.push('Errands Stall');
+    return roles;
+  }, [
+    eligibleRoles,
+    currentUser,
+    activeBadge,
+    userIsAdminAccount,
+    creators,
+    hasActiveStore,
+    storeSubscription,
+    artisanStation,
+    serviceProviders,
+    errandRunners,
+  ]);
 
   const userScope = useMemo(() => {
     const digits = (currentUser?.phoneNumber || '').replace(/\D/g, '').slice(-9);
@@ -854,7 +942,7 @@ export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({ eligibleRoles, i
   };
 
   // Gate: Only render for admin, creator, store, artisan, or errands stalls
-  if (eligibleRoles.length === 0 && !effectiveIsAdmin) return null;
+  if (resolvedRoles.length === 0 && !effectiveIsAdmin) return null;
 
   const upcomingEventsCount = events.filter((ev) => !ev.completed && ev.date >= todayIso).length;
 
@@ -868,7 +956,7 @@ export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({ eligibleRoles, i
 
   return (
     <>
-      {/* Round Floating Bubble in Hub */}
+      {/* Workspace / Admin Tools Floating Bubble (smaller & stacked above AI bubble in Chat) */}
       <button
         type="button"
         onClick={() => {
@@ -882,28 +970,44 @@ export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({ eligibleRoles, i
         aria-label={isOpen ? 'Close workspace tools drawer' : 'Open workspace tools drawer'}
         aria-expanded={isOpen}
         title={effectiveIsAdmin ? 'Admin & Workspace Tools' : 'Business & Creator Tools'}
-        className="fixed bottom-24 md:bottom-10 right-4 md:right-[max(1.5rem,calc(50%-38rem))] z-30 w-14 h-14 rounded-full bg-gradient-to-tr from-purple-600 via-indigo-600 to-violet-500 hover:from-purple-500 hover:to-violet-400 text-white flex items-center justify-center shadow-xl shadow-purple-600/35 border border-white/20 transition-all duration-200 hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
+        className={
+          stacked
+            ? 'relative w-10 h-10 rounded-full bg-gradient-to-tr from-purple-600 via-indigo-600 to-violet-500 hover:from-purple-500 hover:to-violet-400 text-white flex items-center justify-center shadow-lg shadow-purple-600/35 border border-white/20 transition-all duration-200 hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400'
+            : 'fixed bottom-24 md:bottom-10 right-4 md:right-[max(1.5rem,calc(50%-38rem))] z-30 w-14 h-14 rounded-full bg-gradient-to-tr from-purple-600 via-indigo-600 to-violet-500 hover:from-purple-500 hover:to-violet-400 text-white flex items-center justify-center shadow-xl shadow-purple-600/35 border border-white/20 transition-all duration-200 hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400'
+        }
       >
         <div
           className={`transition-transform duration-200 flex items-center justify-center ${
             isOpen ? 'rotate-90 scale-95' : 'rotate-0'
           }`}
         >
-          {isOpen ? <X className="w-6 h-6" /> : <Briefcase className="w-6 h-6" />}
+          {isOpen ? (
+            <X className={stacked ? 'w-4 h-4' : 'w-6 h-6'} />
+          ) : (
+            <Briefcase className={stacked ? 'w-4 h-4' : 'w-6 h-6'} />
+          )}
         </div>
         {effectiveIsAdmin && disputedOrdersCount > 0 && !isOpen && (
-          <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 rounded-full bg-rose-600 text-white text-[10px] font-black flex items-center justify-center ring-2 ring-white dark:ring-[#120924] tabular-nums">
+          <span
+            className={
+              stacked
+                ? 'absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-black flex items-center justify-center ring-2 ring-white dark:ring-[#120924] tabular-nums'
+                : 'absolute -top-1 -right-1 min-w-[20px] h-5 px-1 rounded-full bg-rose-600 text-white text-[10px] font-black flex items-center justify-center ring-2 ring-white dark:ring-[#120924] tabular-nums'
+            }
+          >
             {disputedOrdersCount}
           </span>
         )}
       </button>
 
       {/* Rolled-Open Drawer Overlay */}
-      {isOpen && (
-        <div
-          onClick={() => setIsOpen(false)}
-          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 animate-in fade-in duration-200"
-        >
+      {isOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            onClick={() => setIsOpen(false)}
+            className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 animate-in fade-in duration-200"
+          >
           <div
             onClick={(e) => e.stopPropagation()}
             role="dialog"
@@ -952,7 +1056,7 @@ export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({ eligibleRoles, i
                       : 'Direct DM'}
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                    {eligibleRoles.length > 0 ? eligibleRoles.join(' · ') : 'Admin'}
+                    {resolvedRoles.length > 0 ? resolvedRoles.join(' · ') : 'Admin'}
                   </p>
                 </div>
               </div>
@@ -2520,8 +2624,9 @@ export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({ eligibleRoles, i
               )}
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body
+        )}
     </>
   );
 };

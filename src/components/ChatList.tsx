@@ -28,6 +28,7 @@ import {
 import { useApp, isStatusExpiredClient, phonesMatch } from '../context/AppContext';
 import { ChatThread } from '../types';
 import { ContactProfileModal } from './ContactProfileModal';
+import { HubToolsDrawer } from './HubToolsDrawer';
 
 export const ChatList: React.FC = () => {
   const {
@@ -753,8 +754,10 @@ export const ChatList: React.FC = () => {
         ) : null}
       </div>
 
-      {/* Floating AI Chatbot & New Chat Rounded FAB Stack (positioned clearly above BottomNav) */}
-      <div className="fixed bottom-28 right-4 z-30 flex flex-col items-center gap-5">
+      {/* Floating Tools + AI Chatbot + New Chat Rounded FAB Stack (positioned clearly above BottomNav) */}
+      <div className="fixed bottom-28 right-4 z-30 flex flex-col items-center gap-3.5">
+        <HubToolsDrawer stacked />
+
         <button
           type="button"
           onClick={startAiChat}
