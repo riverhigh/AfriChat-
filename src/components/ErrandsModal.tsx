@@ -52,16 +52,24 @@ export const ErrandsModal: React.FC = () => {
   const [runnerName, setRunnerName] = useState(currentUser.fullName || '');
   const [runnerLocation, setRunnerLocation] = useState('Lagos Island / Lekki');
   const [runnerFee, setRunnerFee] = useState<number>(1500);
+  const [runnerNin, setRunnerNin] = useState('');
+  const [runnerRegBusy, setRunnerRegBusy] = useState(false);
   const [newItemName, setNewItemName] = useState('');
   const [newItemPrice, setNewItemPrice] = useState<number>(2000);
   const [newItemUnit, setNewItemUnit] = useState('kg');
   const [newItemCategory, setNewItemCategory] = useState('Groceries');
 
-  // Delivery Code & Dispute State
+  // Delivery Code, Dispute & Inline Notice State
   const [enteredCode, setEnteredCode] = useState<Record<string, string>>({});
   const [disputeNotes, setDisputeNotes] = useState<Record<string, string>>({});
   const [activeDisputeOrderId, setActiveDisputeOrderId] = useState<string | null>(null);
+  const [errandNotice, setErrandNotice] = useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
   const [proofImageFile, setProofImageFile] = useState<string | null>(null);
+
+  const showErrandNotice = (text: string, tone: 'ok' | 'err' = 'ok') => {
+    setErrandNotice({ text, tone });
+    setTimeout(() => setErrandNotice(null), 4500);
+  };
 
   if (!isErrandsModalOpen) return null;
 
@@ -99,15 +107,18 @@ export const ErrandsModal: React.FC = () => {
   const handlePlaceOrder = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRunner) {
-      alert('Please select an errand runner.');
+      showErrandNotice('Please select an errand runner.', 'err');
       return;
     }
     if (shoppingCart.length === 0) {
-      alert('Your shopping list is empty. Add items from the runner’s price list.');
+      showErrandNotice('Your shopping list is empty. Add items from the runner price list.', 'err');
       return;
     }
     if (wallet.availableBalance < grandTotal) {
-      alert(`Insufficient wallet balance (${formatPrice(wallet.availableBalance, 'NGN')}). Grand total is ${formatPrice(grandTotal, 'NGN')}. Please top up your wallet.`);
+      showErrandNotice(
+        `Insufficient wallet balance (${formatPrice(wallet.availableBalance, 'NGN')}). Grand total is ${formatPrice(grandTotal, 'NGN')}.`,
+        'err'
+      );
       return;
     }
 
@@ -132,26 +143,34 @@ export const ErrandsModal: React.FC = () => {
       setOrderSuccessOrder(order);
       setShoppingCart([]);
       setActiveTab('my_orders');
+      showErrandNotice(`Escrow locked (${formatPrice(grandTotal, 'NGN')}). Share PIN ${order.escrowReleaseCode} upon delivery.`);
     }
   };
 
-  const handleRegisterRunner = (e: React.FormEvent) => {
+  const handleRegisterRunner = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!runnerName.trim()) {
-      alert('Please enter your name.');
+    if (!runnerName.trim() || !runnerNin.trim()) {
+      showErrandNotice('Runner name and NIN / Government ID reference are required.', 'err');
       return;
     }
-    registerAsErrandRunner({
-      name: runnerName.trim(),
-      location: runnerLocation.trim(),
-      deliveryBaseFee: runnerFee,
-    });
+    setRunnerRegBusy(true);
+    try {
+      const res = await registerAsErrandRunner({
+        name: runnerName.trim(),
+        location: runnerLocation.trim(),
+        deliveryBaseFee: runnerFee,
+        ninOrIdRef: runnerNin.trim().toUpperCase(),
+      });
+      showErrandNotice(res.message || 'Errand runner registration submitted.', res.success ? 'ok' : 'err');
+    } finally {
+      setRunnerRegBusy(false);
+    }
   };
 
   const handleAddItemToInventory = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newItemName.trim() || newItemPrice <= 0) {
-      alert('Please enter a valid item name and price.');
+      showErrandNotice('Please enter a valid item name and price.', 'err');
       return;
     }
     addErrandRunnerItem({
@@ -163,6 +182,7 @@ export const ErrandsModal: React.FC = () => {
     });
     setNewItemName('');
     setNewItemPrice(1000);
+    showErrandNotice('Added item to your live errand price list.');
   };
 
   const handleImageProofUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -257,6 +277,18 @@ export const ErrandsModal: React.FC = () => {
 
         {/* Body Container */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {errandNotice && (
+            <div
+              className={`p-3 rounded-xl text-xs font-bold border ${
+                errandNotice.tone === 'ok'
+                  ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-rose-500/15 border-rose-500/30 text-rose-700 dark:text-rose-300'
+              }`}
+            >
+              {errandNotice.text}
+            </div>
+          )}
+
           {/* TAB 1: BROWSE RUNNERS & ORDER */}
           {activeTab === 'browse' && (
             <div className="space-y-4">
@@ -284,10 +316,19 @@ export const ErrandsModal: React.FC = () => {
                               <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-white dark:border-black" />
                             </div>
                             <div>
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
                                 <h5 className="font-bold text-sm text-slate-900 dark:text-white group-hover:text-purple-400 transition-colors">
                                   {runner.name}
                                 </h5>
+                                {runner.isVerified === false ? (
+                                  <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/15 text-amber-500 border border-amber-500/30">
+                                    Pending Verification
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                                    Verified ✓
+                                  </span>
+                                )}
                                 {milestone && (
                                   <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
                                     <span>{milestone.icon}</span>
@@ -588,37 +629,90 @@ export const ErrandsModal: React.FC = () => {
                           </div>
                         )}
 
-                        {/* Action Buttons: Release or Dispute */}
+                        {/* Inline Action Controls: Code Release & Dispute (Zero browser prompt/alert) */}
                         {!isCompleted && !isDisputed && (
-                          <div className="flex gap-2 pt-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const code = prompt('Enter your 4-digit security code to release escrow funds:');
-                                if (code === order.escrowReleaseCode) {
-                                  completeErrandWithCode(order.id, code || '');
-                                  alert('🎉 Funds released from escrow to runner!');
-                                } else if (code) {
-                                  alert('❌ Invalid code! Escrow funds remain locked.');
+                          <div className="space-y-2 pt-1">
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                maxLength={4}
+                                value={enteredCode[order.id] || ''}
+                                onChange={(e) =>
+                                  setEnteredCode((prev) => ({
+                                    ...prev,
+                                    [order.id]: e.target.value.replace(/\D/g, '').slice(0, 4),
+                                  }))
                                 }
-                              }}
-                              className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors"
-                            >
-                              Release Escrow Funds
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const reason = prompt('State reason for dispute (e.g. wrong items, spoiled meat):');
-                                if (reason) {
-                                  disputeErrandOrder(order.id, reason);
-                                  alert('⚠️ Dispute filed. Escrow locked pending admin review.');
+                                placeholder="Enter 4-digit PIN"
+                                className="w-32 px-3 py-2 rounded-xl bg-white dark:bg-black border border-slate-200 dark:border-purple-800 text-xs font-mono tracking-widest text-center text-slate-900 dark:text-white"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const code = (enteredCode[order.id] || '').trim();
+                                  if (code.length !== 4) {
+                                    showErrandNotice('Enter the 4-digit security release code.', 'err');
+                                    return;
+                                  }
+                                  const ok = completeErrandWithCode(order.id, code);
+                                  showErrandNotice(
+                                    ok ? 'Escrow code verified! Funds released to runner.' : 'Invalid 4-digit security code. Check with customer.',
+                                    ok ? 'ok' : 'err'
+                                  );
+                                }}
+                                className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors"
+                              >
+                                Release Funds
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setActiveDisputeOrderId(activeDisputeOrderId === order.id ? null : order.id)
                                 }
-                              }}
-                              className="px-3 py-2 rounded-xl bg-rose-600/20 text-rose-400 hover:bg-rose-600 hover:text-white border border-rose-500/30 font-bold text-xs transition-colors"
-                            >
-                              Dispute
-                            </button>
+                                className="px-3 py-2 rounded-xl bg-rose-600/20 text-rose-400 hover:bg-rose-600 hover:text-white border border-rose-500/30 font-bold text-xs transition-colors"
+                              >
+                                Dispute
+                              </button>
+                            </div>
+
+                            {activeDisputeOrderId === order.id && (
+                              <div className="p-2.5 rounded-xl bg-rose-950/30 border border-rose-500/30 space-y-2">
+                                <input
+                                  type="text"
+                                  value={disputeNotes[order.id] || ''}
+                                  onChange={(e) =>
+                                    setDisputeNotes((prev) => ({ ...prev, [order.id]: e.target.value }))
+                                  }
+                                  placeholder="Reason for dispute (e.g. wrong items, spoiled goods)..."
+                                  className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-black border border-rose-500/30 text-xs text-slate-900 dark:text-white"
+                                />
+                                <div className="flex gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const reason = (disputeNotes[order.id] || '').trim();
+                                      if (!reason) {
+                                        showErrandNotice('Please enter a reason for the dispute.', 'err');
+                                        return;
+                                      }
+                                      disputeErrandOrder(order.id, reason);
+                                      setActiveDisputeOrderId(null);
+                                      showErrandNotice('Dispute filed. Escrow locked pending admin review.');
+                                    }}
+                                    className="flex-1 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold"
+                                  >
+                                    Submit Dispute
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveDisputeOrderId(null)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-slate-200 dark:bg-neutral-800 text-xs font-semibold"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -678,11 +772,26 @@ export const ErrandsModal: React.FC = () => {
                     </div>
                   </div>
 
+                  <div>
+                    <label className="text-[10px] font-bold text-purple-300 block mb-1">
+                      NIN / Government ID Reference (For Admin Verification)
+                    </label>
+                    <input
+                      type="text"
+                      value={runnerNin}
+                      onChange={(e) => setRunnerNin(e.target.value)}
+                      required
+                      placeholder="e.g. NIN-29481029384"
+                      className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-200 dark:border-neutral-800 rounded-xl text-xs font-mono text-slate-900 dark:text-white"
+                    />
+                  </div>
+
                   <button
                     type="submit"
-                    className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-md transition-all"
+                    disabled={runnerRegBusy}
+                    className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-bold text-xs shadow-md transition-all"
                   >
-                    Activate Runner Profile
+                    {runnerRegBusy ? 'Submitting Profile...' : 'Submit Runner Profile for Verification'}
                   </button>
                 </form>
               ) : (
@@ -706,8 +815,14 @@ export const ErrandsModal: React.FC = () => {
                         {myRunnerProfile.completedCount} errands completed · Fee: {formatPrice(myRunnerProfile.deliveryBaseFee, 'NGN')}
                       </span>
                     </div>
-                    <span className="px-2.5 py-1 bg-emerald-500/20 text-emerald-400 font-bold text-[10px] rounded-full border border-emerald-500/30">
-                      Active Runner
+                    <span
+                      className={`px-2.5 py-1 font-bold text-[10px] rounded-full border ${
+                        myRunnerProfile.isVerified === false
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                          : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                      }`}
+                    >
+                      {myRunnerProfile.isVerified === false ? 'Pending Verification' : 'Verified Runner ✓'}
                     </span>
                   </div>
 

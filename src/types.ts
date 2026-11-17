@@ -2,16 +2,19 @@ export type CurrencyCode = 'NGN' | 'KES' | 'GHS' | 'ZAR';
 
 export type LanguageCode = 'en' | 'pcm' | 'sw' | 'yo' | 'ha' | 'fr';
 
-export type EscrowStatus = 
+export type EscrowStatus =
   | 'escrow_secured'
   | 'shipped'
+  | 'release_approved'
   | 'funds_released'
-  | 'disputed';
+  | 'disputed'
+  | 'refunded';
 
 export interface Product {
   id: string;
   sellerId: string;
   sellerName: string;
+  sellerPhone?: string;
   title: string;
   description: string;
   price: number;
@@ -31,15 +34,24 @@ export interface EscrowOrder {
   chatId: string;
   product: Product;
   quantity: number;
+  subtotalAmount?: number;
+  escrowFee?: number;
   totalAmount: number;
   currency: CurrencyCode;
   status: EscrowStatus;
   escrowPin: string;
+  buyerId?: string;
   buyerName: string;
+  buyerPhone?: string;
   sellerName: string;
+  sellerPhone?: string;
   deliveryAddress: string;
   createdAt: string;
   updatedAt: string;
+  approvedAt?: string;
+  releasedAt?: string;
+  failedClaimAttempts?: number;
+  disputeReason?: string;
   paymentMethod: 'paystack' | 'wallet';
   paystackRef?: string;
 }
@@ -48,6 +60,7 @@ export type WalletTransactionType =
   | 'topup'
   | 'deposit'
   | 'escrow_lock'
+  | 'escrow_fee'
   | 'escrow_release'
   | 'withdrawal'
   | 'payroll_debit'
@@ -63,6 +76,14 @@ export type WalletTransactionType =
   | 'ad_payment'
   | 'store_subscription'
   | 'artisan_reg'
+  | 'errand_escrow'
+  | 'errand_release'
+  | 'service_booking'
+  | 'creator_tip'
+  | 'course_enroll'
+  | 'legal_consult'
+  | 'health_consult'
+  | 'referral_bonus'
   | 'refund';
 
 export interface WalletTransaction {
@@ -1007,18 +1028,32 @@ export type DoctorSpecialty =
 
 export interface DoctorProfile {
   id: string;
+  userId?: string;
+  userPhone?: string;
+  accountType?: 'doctor' | 'clinic';
   name: string;
   title: string;
   specialty: DoctorSpecialty;
   hospitalAffiliation: string;
+  hospitalName?: string;
+  licenseNumber?: string;
+  phone?: string;
+  city?: string;
+  officeAddress?: string;
+  departments?: string[];
   avatar: string;
   rating: number;
   reviewCount: number;
   consultationFee: number;
   currency: CurrencyCode;
   isAvailable: boolean;
+  isVerified?: boolean;
+  approvalStatus?: 'pending' | 'approved' | 'rejected';
+  verificationStatus?: 'pending' | 'approved' | 'rejected';
+  rejectionReason?: string;
   languages: string[];
   bio: string;
+  createdAt?: string;
 }
 
 export interface HospitalQueueToken {
@@ -1059,7 +1094,7 @@ export interface HealthVaultRecord {
 }
 
 // 20. Legal Services & Smart Contract Generator
-export type LawyerSpecialty = 
+export type LawyerSpecialty =
   | 'CAC Business & Corporate'
   | 'Human Rights & Police SOS'
   | 'Tenancy & Property Disputes'
@@ -1068,19 +1103,33 @@ export type LawyerSpecialty =
 
 export interface LawyerProfile {
   id: string;
+  userId?: string;
+  userPhone?: string;
+  phone?: string;
   name: string;
   title: string;
   firm: string;
+  firmName?: string;
   specialty: LawyerSpecialty;
+  specializations?: string[];
   avatar: string;
   barNumber: string;
+  supremeCourtNumber?: string;
   yearsExperience: number;
   consultationFee: number;
   currency: CurrencyCode;
   isAvailable: boolean;
   location: string;
+  officeAddress?: string;
+  city?: string;
   verifiedLicense: boolean;
+  isVerified?: boolean;
+  approvalStatus?: 'pending' | 'approved' | 'rejected';
+  verificationStatus?: 'pending' | 'approved' | 'rejected';
+  rejectionReason?: string;
+  rating?: number;
   bio: string;
+  createdAt?: string;
 }
 
 export interface LegalContractTemplate {
@@ -1612,8 +1661,10 @@ export interface ErrandItem {
 export interface ErrandRunner {
   id: string;
   userId: string;
+  userPhone?: string;
   name: string;
   phone: string;
+  ninOrIdRef?: string;
   avatar: string;
   location: string;
   bio: string;
@@ -1625,6 +1676,11 @@ export interface ErrandRunner {
   itemsForSale: ErrandItem[];
   isOnline: boolean;
   isRegistered: boolean;
+  isVerified?: boolean;
+  approvalStatus?: 'pending' | 'approved' | 'rejected';
+  verificationStatus?: 'pending' | 'approved' | 'rejected';
+  rejectionReason?: string;
+  createdAt?: string;
 }
 
 export interface ErrandOrder {

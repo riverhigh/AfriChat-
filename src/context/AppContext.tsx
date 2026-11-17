@@ -467,7 +467,7 @@ function sanitizeLoadedMessages(parsed: unknown): Record<string, ChatMessage[]> 
           return {
             ...m,
             type: 'text' as const,
-            text: '🎙️ï¸ Voice note expired',
+            text: '🎙️ Voice note expired',
             voiceNote: undefined,
           };
         }
@@ -926,6 +926,10 @@ interface AppContextType {
     buyerName: string,
     deliveryAddress: string
   ) => { success: boolean; order?: EscrowOrder; error?: string };
+  approveEscrowRelease: (orderId: string) => Promise<{ success: boolean; message: string; order?: EscrowOrder }>;
+  claimEscrowWithCode: (orderId: string, enteredPin: string) => Promise<{ success: boolean; message: string; order?: EscrowOrder }>;
+  disputeEscrowOrder: (orderId: string, reason: string) => Promise<{ success: boolean; message: string }>;
+  refreshEscrowOrders: () => Promise<void>;
   releaseEscrowFunds: (orderId: string, enteredPin: string) => { success: boolean; message: string };
   openChatWithProduct: (chatId: string, product: Product) => void;
   activeCall: ActiveCallState | null;
@@ -1266,7 +1270,7 @@ interface AppContextType {
   createErrandOrder: (order: Omit<ErrandOrder, 'id' | 'createdAt' | 'status' | 'escrowReleaseCode' | 'proofImages' | 'customerId' | 'customerName' | 'customerPhone'>) => ErrandOrder | null;
   completeErrandWithCode: (orderId: string, code: string) => boolean;
   disputeErrandOrder: (orderId: string, reason: string) => void;
-  registerAsErrandRunner: (data: { name: string; location: string; deliveryBaseFee: number }) => void;
+  registerAsErrandRunner: (data: { name: string; location: string; deliveryBaseFee: number; ninOrIdRef?: string }) => Promise<{ success: boolean; message?: string }>;
   addErrandRunnerItem: (item: Omit<ErrandItem, 'id'>) => void;
   removeErrandRunnerItem: (itemId: string) => void;
   // 18. Healthcare & Hospital Telehealth
@@ -1276,6 +1280,19 @@ interface AppContextType {
   healthVault: HealthVaultRecord;
   isHealthModalOpen: boolean;
   setIsHealthModalOpen: (val: boolean) => void;
+  registerClinicOrDoctor: (data: {
+    name: string;
+    accountType: 'doctor' | 'clinic';
+    specialty: string;
+    hospitalName: string;
+    city: string;
+    officeAddress: string;
+    licenseNumber: string;
+    consultationFee: number;
+    bio: string;
+    languages: string[];
+    departments?: string[];
+  }) => Promise<{ success: boolean; message: string; profile?: DoctorProfile }>;
   bookDoctorAppointment: (doctorId: string, notes: string) => { success: boolean; message: string };
   takeQueueToken: (hospitalName: string, department: string) => { success: boolean; token: HospitalQueueToken };
   addMedicationReminder: (reminder: Omit<MedicationReminder, 'id'>) => void;
@@ -1287,9 +1304,28 @@ interface AppContextType {
   generatedContracts: GeneratedLegalContract[];
   isLegalModalOpen: boolean;
   setIsLegalModalOpen: (val: boolean) => void;
+  registerLawyer: (data: {
+    name: string;
+    supremeCourtNumber: string;
+    firmName: string;
+    specializations: string[];
+    yearsExperience: number;
+    officeAddress: string;
+    city: string;
+    consultationFee: number;
+    bio: string;
+  }) => Promise<{ success: boolean; message: string; profile?: LawyerProfile }>;
+  bookLawyerConsultation: (lawyerId: string, notes: string) => Promise<{ success: boolean; message: string }>;
   generateLegalContract: (data: Omit<GeneratedLegalContract, 'id' | 'createdAt' | 'status' | 'signatureA'>) => GeneratedLegalContract;
   signLegalContract: (contractId: string, partyBSignature: string) => void;
   triggerEmergencyLegalSos: () => { success: boolean; message: string };
+  refreshProfessionals: () => Promise<void>;
+  reviewProfessional: (
+    category: 'lawyer' | 'clinic' | 'errand',
+    id: string,
+    decision: 'approved' | 'rejected',
+    reason?: string
+  ) => Promise<{ success: boolean; message?: string }>;
   // 21. African Creator & Artist Direct Economy System
   creators: CreatorProfile[];
   creatorPosts: CreatorPost[];
@@ -1444,7 +1480,7 @@ export const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
   ZAR: 'R ',
 };
 
-// â”€â”€â”€ Data Version Nuke â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Data Version Nuke ---
 // Bump this string whenever you need to wipe all stale cached/mock data.
 const AGC_DATA_VERSION = 'v5_purged_all_mocks_live_2026';
 const AGC_GROUPS_PURGE_FLAG = 'AGC_groups_purged_2026_11_16';
@@ -1582,7 +1618,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const chatBroadcastChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   // Track which per-chat inbox channels are already subscribed (phone -> channel)
   const inboxChannelRefsRef = useRef<Map<string, ReturnType<typeof supabase.channel>>>(new Map());
-  // â”€â”€ Admin System Config, CMS & Feature Flags System â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Admin System Config, CMS & Feature Flags System ---
   const DEFAULT_SYSTEM_CONFIG: AdminSystemConfig = {
     maintenanceMode: false,
     maintenanceMessage: 'AfriChat is undergoing scheduled system upgrades. We will be back shortly.',
@@ -1590,7 +1626,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     requirePhoneOtp: false,
     defaultCurrency: 'NGN',
     dispatchCommissionPercent: 5,
-    escrowCommissionPercent: 1.5,
+    escrowCommissionPercent: 1,
     artisanCommissionPercent: 2,
     creatorCommissionPercent: 5,
     sponsoredAdFeeNgn: 2500,
@@ -1613,7 +1649,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ],
     marqueeBanner: {
       enabled: true,
-      text: 'âš¡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.',
+      text: '⚡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.',
       speed: 'normal',
       backgroundColor: '#7c3aed',
       textColor: '#ffffff',
@@ -1860,7 +1896,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return Boolean(apiData?.success || sbOk);
   };
 
-  // â”€â”€ Errands System â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Errands System ---
   const [errandRunners, setErrandRunners] = useState<ErrandRunner[]>(() => {
     try {
       const saved = localStorage.getItem('AGC_errand_runners_v1');
@@ -1892,16 +1928,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): ErrandOrder | null => {
     if (wallet.availableBalance < orderData.totalAmount) return null;
 
-    const escrowTx: WalletTransaction = {
+    const orderId = `errand_${Date.now()}`;
+    const randomPin = Math.floor(1000 + Math.random() * 9000).toString();
+    const escrowTx = recordLedgerTransaction({
       id: `tx_errand_${Date.now()}`,
-      type: 'escrow_lock',
+      type: 'errand_escrow',
       title: `Errand Escrow Lock (Runner: ${orderData.runnerName})`,
+      description: `Errand escrow lock with runner ${orderData.runnerName} (${orderData.items.length} items)`,
       amount: orderData.totalAmount,
+      fee: 0,
+      balanceAfter: wallet.availableBalance - orderData.totalAmount,
       currency: 'NGN',
-      timestamp: 'Just now',
-      status: 'completed',
+      referenceId: `ERR_${orderId}`,
       channel: 'wallet',
-    };
+    });
 
     setWallet((prev) => ({
       ...prev,
@@ -1910,37 +1950,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       transactions: [escrowTx, ...prev.transactions],
     }));
 
-    const randomPin = Math.floor(1000 + Math.random() * 9000).toString();
     const newOrder: ErrandOrder = {
       ...orderData,
-      id: `errand_${Date.now()}`,
+      id: orderId,
       customerId: currentUser.id,
       customerName: currentUser.fullName,
       customerPhone: currentUser.phoneNumber,
       status: 'pending',
       escrowReleaseCode: randomPin,
       proofImages: [],
-      createdAt: 'Just now',
+      createdAt: new Date().toISOString(),
     };
 
     setErrandOrders((prev) => [newOrder, ...prev]);
+
+    fetch('/api/professionals/errands/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newOrder),
+    }).catch(() => {});
+
     return newOrder;
   };
 
   const completeErrandWithCode = (orderId: string, code: string): boolean => {
     const order = errandOrders.find((o) => o.id === orderId);
-    if (!order || order.escrowReleaseCode !== code) return false;
+    if (!order || order.escrowReleaseCode !== code.trim()) return false;
 
-    const releaseTx: WalletTransaction = {
+    const releaseTx = recordLedgerTransaction({
       id: `tx_errand_rel_${Date.now()}`,
-      type: 'escrow_release',
+      type: 'errand_release',
       title: `Errand Escrow Release (Order: ${order.id})`,
+      description: `Errand payout released to ${order.runnerName}`,
       amount: order.totalAmount,
+      fee: 0,
+      balanceAfter: wallet.availableBalance,
       currency: 'NGN',
-      timestamp: 'Just now',
-      status: 'completed',
+      referenceId: `REL_ERR_${order.id}`,
       channel: 'wallet',
-    };
+    });
 
     setWallet((prev) => ({
       ...prev,
@@ -1949,23 +1997,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
 
     setErrandOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: 'completed' } : o)));
-    setErrandRunners((prev) => prev.map((r) => r.id === order.runnerId ? { ...r, completedCount: r.completedCount + 1 } : r));
+    setErrandRunners((prev) => prev.map((r) => (r.id === order.runnerId ? { ...r, completedCount: r.completedCount + 1 } : r)));
+
+    fetch('/api/professionals/errands/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId, code: code.trim() }),
+    }).catch(() => {});
+
     return true;
   };
 
   const disputeErrandOrder = (orderId: string, reason: string) => {
     setErrandOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: 'disputed', disputeReason: reason } : o)));
+    fetch('/api/professionals/errands/dispute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId, reason }),
+    }).catch(() => {});
   };
 
-  const registerAsErrandRunner = (data: { name: string; location: string; deliveryBaseFee: number }) => {
+  const registerAsErrandRunner = async (data: { name: string; location: string; deliveryBaseFee: number; ninOrIdRef?: string }) => {
     const newRunner: ErrandRunner = {
       id: `runner_${Date.now()}`,
       userId: currentUser.id,
+      userPhone: currentUser.phoneNumber,
       name: data.name,
       phone: currentUser.phoneNumber,
       avatar: currentUser.avatarUrl,
       location: data.location,
-      bio: `Verified AGC Errand Runner based in ${data.location}.`,
+      bio: `AGC Errand Runner based in ${data.location}.`,
+      ninOrIdRef: data.ninOrIdRef || '',
+      isVerified: false,
+      approvalStatus: 'pending',
+      verificationStatus: 'pending',
       rating: 5.0,
       reviewsCount: 1,
       completedCount: 0,
@@ -1973,34 +2038,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       currency: 'NGN',
       isOnline: true,
       isRegistered: true,
-      itemsForSale: [
-        { id: `item_${Date.now()}_1`, name: 'Fresh Chicken', price: 3500, unit: 'kg', category: 'Meat & Poultry', inStock: true },
-        { id: `item_${Date.now()}_2`, name: 'Fresh Fish', price: 2800, unit: 'kg', category: 'Meat & Poultry', inStock: true },
-        { id: `item_${Date.now()}_3`, name: 'Curry Powder', price: 500, unit: 'pack', category: 'Spices & Seasoning', inStock: true },
-        { id: `item_${Date.now()}_4`, name: 'Beans (Honey/Brown)', price: 1200, unit: 'derica', category: 'Food Stuffs', inStock: true },
-        { id: `item_${Date.now()}_5`, name: 'Coffee', price: 2200, unit: 'jar', category: 'Groceries', inStock: true },
-      ],
+      createdAt: new Date().toISOString(),
+      itemsForSale: [],
     };
-    setErrandRunners((prev) => [newRunner, ...prev.filter((r) => r.userId !== currentUser.id)]);
+    setErrandRunners((prev) => [newRunner, ...prev.filter((r) => r.userId !== currentUser.id && !phonesMatch(r.phone, currentUser.phoneNumber))]);
+    try {
+      const resp = await fetch('/api/professionals/errands/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newRunner),
+      });
+      const json = await resp.json().catch(() => null);
+      if (resp.ok && json?.runner) {
+        setErrandRunners((prev) => [json.runner, ...prev.filter((r) => r.id !== newRunner.id && r.id !== json.runner.id && r.userId !== currentUser.id)]);
+        return { success: true, message: 'Errand runner profile submitted for verification!' };
+      }
+      return { success: true, message: 'Errand runner profile saved locally (syncing).' };
+    } catch (_) {
+      return { success: true, message: 'Errand runner profile saved locally.' };
+    }
   };
 
   const addErrandRunnerItem = (item: Omit<ErrandItem, 'id'>) => {
     const newItem: ErrandItem = { ...item, id: `item_${Date.now()}` };
+    const targetRunner = errandRunners.find((r) => r.userId === currentUser.id || phonesMatch(r.phone, currentUser.phoneNumber));
     setErrandRunners((prev) => prev.map((r) => {
-      if (r.userId === currentUser.id || r.phone === currentUser.phoneNumber) {
+      if (r.userId === currentUser.id || phonesMatch(r.phone, currentUser.phoneNumber)) {
         return { ...r, itemsForSale: [newItem, ...r.itemsForSale] };
       }
       return r;
     }));
+    if (targetRunner) {
+      fetch('/api/professionals/errands/items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runnerId: targetRunner.id, item: newItem }),
+      }).catch(() => {});
+    }
   };
 
   const removeErrandRunnerItem = (itemId: string) => {
+    const targetRunner = errandRunners.find((r) => r.userId === currentUser.id || phonesMatch(r.phone, currentUser.phoneNumber));
     setErrandRunners((prev) => prev.map((r) => {
-      if (r.userId === currentUser.id || r.phone === currentUser.phoneNumber) {
+      if (r.userId === currentUser.id || phonesMatch(r.phone, currentUser.phoneNumber)) {
         return { ...r, itemsForSale: r.itemsForSale.filter((i: any) => i.id !== itemId) };
       }
       return r;
     }));
+    if (targetRunner) {
+      fetch(`/api/professionals/errands/items/${encodeURIComponent(targetRunner.id)}/${encodeURIComponent(itemId)}`, {
+        method: 'DELETE',
+      }).catch(() => {});
+    }
   };
   const [language, setLanguage] = useState<LanguageCode>('en');
   const [currency, setCurrencyState] = useState<CurrencyCode>(() => {
@@ -2668,7 +2757,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Healthcare
-  const [doctors] = useState<DoctorProfile[]>([]);
+  const [doctors, setDoctors] = useState<DoctorProfile[]>([]);
   const [queueTokens, setQueueTokens] = useState<HospitalQueueToken[]>([]);
   const [medicationReminders, setMedicationReminders] = useState<MedicationReminder[]>([]);
   const [healthVault, setHealthVault] = useState<HealthVaultRecord>({
@@ -2684,11 +2773,116 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [isHealthModalOpen, setIsHealthModalOpen] = useState(false);
 
+  const refreshProfessionals = async () => {
+    try {
+      const resp = await fetch('/api/professionals');
+      if (!resp.ok) return;
+      const data = await resp.json().catch(() => null);
+      if (data?.success) {
+        if (Array.isArray(data.lawyers)) setLawyers(data.lawyers);
+        if (Array.isArray(data.clinicsDoctors)) setDoctors(data.clinicsDoctors);
+        if (Array.isArray(data.errandRunners)) setErrandRunners(data.errandRunners);
+        if (Array.isArray(data.errandOrders)) setErrandOrders(data.errandOrders);
+      }
+    } catch (_) {}
+  };
+
+  useEffect(() => {
+    refreshProfessionals();
+  }, []);
+
+  const registerClinicOrDoctor = async (data: {
+    name: string;
+    accountType: 'doctor' | 'clinic';
+    specialty: string;
+    hospitalName: string;
+    city: string;
+    officeAddress: string;
+    licenseNumber: string;
+    consultationFee: number;
+    bio: string;
+    languages: string[];
+    departments?: string[];
+  }): Promise<{ success: boolean; message: string; profile?: DoctorProfile }> => {
+    const payload = {
+      ...data,
+      hospitalAffiliation: data.hospitalName,
+      userId: currentUser.id,
+      userPhone: currentUser.phoneNumber,
+      avatar: currentUser.avatarUrl,
+    };
+    try {
+      const resp = await fetch('/api/professionals/clinics/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok || !json?.success) {
+        return { success: false, message: json?.error || 'Could not submit registration.' };
+      }
+      if (Array.isArray(json.professionals?.clinicsDoctors)) {
+        setDoctors(json.professionals.clinicsDoctors);
+      } else if (json.doctor) {
+        setDoctors((prev) => [json.doctor, ...prev.filter((d) => d.id !== json.doctor.id)]);
+      }
+      return {
+        success: true,
+        profile: json.doctor,
+        message: 'Registration submitted! Your MDCN / Facility credentials are pending Admin verification.',
+      };
+    } catch (_) {
+      return { success: false, message: 'Network error submitting registration.' };
+    }
+  };
+
   const bookDoctorAppointment = (doctorId: string, notes: string) => {
     const doc = doctors.find((d) => d.id === doctorId);
+    if (!doc) {
+      return { success: false, message: 'Selected doctor or clinic not found.' };
+    }
+    const fee = Math.max(0, Number(doc.consultationFee) || 0);
+    if (fee > 0 && wallet.availableBalance < fee) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance for ₦${fee.toLocaleString()} consultation fee. Top up your wallet first.`,
+      };
+    }
+    if (fee > 0) {
+      const clinicLabel = doc.hospitalAffiliation || doc.hospitalName || '';
+      const tx = recordLedgerTransaction({
+        id: `tx_health_${Date.now()}`,
+        type: 'health_consult',
+        title: `AfriHealth Consult: ${doc.name}${clinicLabel ? ` (${clinicLabel})` : ''}`,
+        description: `Medical telehealth consult with ${doc.name} · Notes: ${(notes || 'General triage').slice(0, 60)}`,
+        amount: fee,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - fee,
+        currency: 'NGN',
+        referenceId: `HLTH_${Date.now()}`,
+        channel: 'wallet',
+      });
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - fee,
+        transactions: [tx, ...prev.transactions],
+      }));
+    }
+    if (doc.userPhone) {
+      const clinicLabel = doc.hospitalAffiliation || doc.hospitalName || '';
+      startChatWithContact({
+        id: doc.id,
+        name: `${doc.name}${clinicLabel ? ` (${clinicLabel})` : ''}`,
+        rawPhoneNumber: doc.userPhone,
+        normalizedPhoneNumber: doc.userPhone,
+        avatar: doc.avatar,
+        isRegisteredOnAGC: true,
+      });
+      setIsHealthModalOpen(false);
+    }
     return {
       success: true,
-      message: `Telehealth consult booked with ${doc ? doc.name : 'doctor'}. Encrypted triage chat opened!`,
+      message: `Telehealth consult booked with ${doc.name}${fee > 0 ? ` (₦${fee.toLocaleString()} paid)` : ''}. Encrypted consultation chat opened!`,
     };
   };
 
@@ -2734,10 +2928,158 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Legal & Smart Contracts
-  const [lawyers] = useState<LawyerProfile[]>([]);
+  const [lawyers, setLawyers] = useState<LawyerProfile[]>([]);
   const [contractTemplates] = useState<LegalContractTemplate[]>(MOCK_CONTRACT_TEMPLATES);
   const [generatedContracts, setGeneratedContracts] = useState<GeneratedLegalContract[]>([]);
   const [isLegalModalOpen, setIsLegalModalOpen] = useState(false);
+
+  const registerLawyer = async (data: {
+    name: string;
+    supremeCourtNumber: string;
+    firmName: string;
+    specializations: string[];
+    yearsExperience: number;
+    officeAddress: string;
+    city: string;
+    consultationFee: number;
+    bio: string;
+  }): Promise<{ success: boolean; message: string; profile?: LawyerProfile }> => {
+    const payload = {
+      ...data,
+      barNumber: data.supremeCourtNumber,
+      firm: data.firmName,
+      userId: currentUser.id,
+      userPhone: currentUser.phoneNumber,
+      avatar: currentUser.avatarUrl,
+    };
+    try {
+      const resp = await fetch('/api/professionals/lawyers/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok || !json?.success) {
+        return { success: false, message: json?.error || 'Could not submit lawyer registration.' };
+      }
+      if (Array.isArray(json.professionals?.lawyers)) {
+        setLawyers(json.professionals.lawyers);
+      } else if (json.lawyer) {
+        setLawyers((prev) => [json.lawyer, ...prev.filter((l) => l.id !== json.lawyer.id)]);
+      }
+      return {
+        success: true,
+        profile: json.lawyer,
+        message: 'Lawyer registration submitted! Your SCN credentials are pending Admin verification.',
+      };
+    } catch (_) {
+      return { success: false, message: 'Network error submitting lawyer registration.' };
+    }
+  };
+
+  const bookLawyerConsultation = async (
+    lawyerId: string,
+    notes: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const lawyer = lawyers.find((l) => l.id === lawyerId);
+    if (!lawyer) return { success: false, message: 'Lawyer profile not found.' };
+    const fee = Math.max(0, Number(lawyer.consultationFee) || 0);
+    const escrowFee = fee > 0 ? Math.min(Math.round(fee * 0.01), 4000) : 0;
+    const totalPayable = fee + escrowFee;
+    if (totalPayable > 0 && wallet.availableBalance < totalPayable) {
+      return {
+        success: false,
+        message: `Insufficient wallet balance. Need ₦${totalPayable.toLocaleString()} (₦${fee.toLocaleString()} fee + ₦${escrowFee.toLocaleString()} escrow protection).`,
+      };
+    }
+
+    const chatPhone = lawyer.userPhone || `+234800${String(lawyer.id).replace(/\D/g, '').slice(-6).padStart(6, '0')}`;
+    const myPhone = currentUser.phoneNumber || '';
+    const deterministicId = myPhone && chatPhone ? getDirectChatId(myPhone, chatPhone) : `chat_law_${lawyer.id}`;
+    const firmLabel = lawyer.firmName || lawyer.firm || 'Counsel';
+    const scnLabel = lawyer.supremeCourtNumber || lawyer.barNumber || '';
+    startChatWithContact({
+      id: lawyer.id,
+      name: `${lawyer.name} (${firmLabel})`,
+      rawPhoneNumber: chatPhone,
+      normalizedPhoneNumber: chatPhone,
+      avatar: lawyer.avatar,
+      isRegisteredOnAGC: true,
+    });
+
+    if (fee > 0) {
+      const escrowResult = createEscrowOrder(
+        deterministicId,
+        {
+          id: `legal_consult_${lawyer.id}_${Date.now()}`,
+          sellerId: lawyer.userId || lawyer.id,
+          sellerName: lawyer.name,
+          sellerPhone: chatPhone,
+          title: `Legal Consultation · ${lawyer.name} (${lawyer.specialty})`,
+          description: notes || `Verified Legal Consultation with SCN ${scnLabel}`,
+          price: fee,
+          currency: 'NGN',
+          imageUrl: '',
+          category: 'fashion',
+          inStock: true,
+          stockCount: 1,
+          location: `${lawyer.city || 'Nigeria'}`,
+          condition: 'Brand New',
+          tags: ['Escrow', 'AfriLaw'],
+        },
+        'wallet',
+        currentUser.fullName || 'Client',
+        `${lawyer.officeAddress || 'Virtual Consultation Room'}`
+      );
+      if (!escrowResult.success) {
+        return { success: false, message: escrowResult.error || 'Unable to lock consultation escrow.' };
+      }
+      recordLedgerTransaction({
+        id: `tx_legal_consult_${Date.now()}`,
+        type: 'legal_consult',
+        title: `AfriLaw Consultation Escrow: ${lawyer.name}`,
+        description: `Consultation booked with ${lawyer.name} (SCN: ${scnLabel})`,
+        amount: fee,
+        fee: escrowFee,
+        balanceAfter: Math.max(0, wallet.availableBalance - totalPayable),
+        currency: 'NGN',
+        referenceId: `LAW_${Date.now()}`,
+        channel: 'wallet',
+      });
+    }
+    setIsLegalModalOpen(false);
+    return {
+      success: true,
+      message: `Consultation booked with ${lawyer.name} (Escrow Secured · PIN generated). Direct legal chat opened!`,
+    };
+  };
+
+  const reviewProfessional = async (
+    category: 'lawyer' | 'clinic' | 'errand',
+    id: string,
+    decision: 'approved' | 'rejected',
+    reason?: string
+  ): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const resp = await fetch('/api/admin/professionals/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, id, decision, reason }),
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok || !json?.success) {
+        return { success: false, message: json?.error || 'Failed to review professional.' };
+      }
+      if (json.professionals) {
+        if (Array.isArray(json.professionals.lawyers)) setLawyers(json.professionals.lawyers);
+        if (Array.isArray(json.professionals.clinicsDoctors)) setDoctors(json.professionals.clinicsDoctors);
+        if (Array.isArray(json.professionals.errandRunners)) setErrandRunners(json.professionals.errandRunners);
+      }
+      return { success: true, message: `Marked as ${decision}.` };
+    } catch (_) {
+      return { success: false, message: 'Network error reviewing professional.' };
+    }
+  };
 
   const generateLegalContract = (data: Omit<GeneratedLegalContract, 'id' | 'createdAt' | 'status' | 'signatureA'>): GeneratedLegalContract => {
     const newContract: GeneratedLegalContract = {
@@ -2760,7 +3102,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const triggerEmergencyLegalSos = () => {
     return {
       success: true,
-      message: 'âš–ï¸ LEGAL SOS ACTIVE: Rapid Response Human Rights Defense Lawyers have been alerted with your coordinates!',
+      message: '⚖️ LEGAL SOS ACTIVE: Rapid Response Human Rights Defense Lawyers have been alerted with your coordinates!',
     };
   };
 
@@ -2774,6 +3116,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const subscribeToCreator = (creatorId: string) => {
     const creator = creators.find((c) => c.id === creatorId);
     if (!creator) return { success: false, message: 'Creator not found' };
+    const price = Number(creator.monthlySubPrice) || 0;
+    if (price > 0 && wallet.availableBalance < price) {
+      return { success: false, message: `Insufficient wallet balance for ₦${price.toLocaleString()} VIP creator subscription.` };
+    }
+    if (price > 0) {
+      const tx = recordLedgerTransaction({
+        id: `tx_creator_sub_${Date.now()}`,
+        type: 'service_booking',
+        title: `VIP Creator Subscription: ${creator.name}`,
+        description: `Monthly VIP fan subscription to ${creator.name}`,
+        amount: price,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - price,
+        currency: 'NGN',
+        referenceId: `CSUB_${creator.id}_${Date.now()}`,
+        channel: 'wallet',
+      });
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - price,
+        transactions: [tx, ...prev.transactions],
+      }));
+    }
 
     setCreators((prev) =>
       prev.map((c) =>
@@ -2820,11 +3185,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const buyShowTicket = (showId: string) => {
     const show = creatorShows.find((s) => s.id === showId);
     if (!show) return { success: false, message: 'Show not found' };
+    const price = Number(show.price) || 0;
+    if (price > 0 && wallet.availableBalance < price) {
+      return { success: false, message: `Insufficient wallet balance for ₦${price.toLocaleString()} show ticket.` };
+    }
+    if (price > 0) {
+      const tx = recordLedgerTransaction({
+        id: `tx_show_${Date.now()}`,
+        type: 'service_booking',
+        title: `Show Ticket: ${show.title}`,
+        description: `Purchased event ticket for "${show.title}"`,
+        amount: price,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - price,
+        currency: 'NGN',
+        referenceId: `SHOW_${show.id}_${Date.now()}`,
+        channel: 'wallet',
+      });
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - price,
+        transactions: [tx, ...prev.transactions],
+      }));
+    }
 
     const generatedPin = `TICK-AFRI-${Math.floor(1000 + Math.random() * 9000)}`;
     const generatedQr = `AFRI-SHOW-${show.id.toUpperCase()}-${generatedPin}`;
 
-    let updatedShow: CreatorShowTicket = {
+    const updatedShow: CreatorShowTicket = {
       ...show,
       isPurchasedByMe: true,
       totalSold: show.totalSold + 1,
@@ -2843,15 +3231,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       ticket: updatedShow,
-      message: `🎟️ï¸ Ticket purchased for "${show.title}"! Scannable QR pass and entry PIN issued.`,
+      message: `🎟️ Ticket purchased for "${show.title}"! Scannable QR pass and entry PIN issued.`,
     };
   };
 
   const buyCreatorSong = (songId: string) => {
     const song = creatorSongs.find((s) => s.id === songId);
     if (!song) return { success: false, message: 'Song not found' };
+    const price = Number(song.price) || 0;
+    if (price > 0 && wallet.availableBalance < price) {
+      return { success: false, message: `Insufficient wallet balance for ₦${price.toLocaleString()} music track.` };
+    }
+    if (price > 0) {
+      const tx = recordLedgerTransaction({
+        id: `tx_song_${Date.now()}`,
+        type: 'store_purchase',
+        title: `Music Purchase: ${song.title}`,
+        description: `Direct track purchase from ${song.artistName}: "${song.title}"`,
+        amount: price,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - price,
+        currency: 'NGN',
+        referenceId: `SONG_${song.id}_${Date.now()}`,
+        channel: 'wallet',
+      });
+      setWallet((prev) => ({
+        ...prev,
+        availableBalance: prev.availableBalance - price,
+        transactions: [tx, ...prev.transactions],
+      }));
+    }
 
-    let updatedSong: CreatorSong = {
+    const updatedSong: CreatorSong = {
       ...song,
       isPurchasedByMe: true,
       salesCount: song.salesCount + 1,
@@ -3080,16 +3491,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (paymentMethod === 'wallet') {
-      const newTx: WalletTransaction = {
+      const newTx = recordLedgerTransaction({
         id: `tx_lst_fee_${Date.now()}`,
-        type: 'transfer_out',
+        type: 'service_booking',
         title: `Service Listing Fee (₦500): ${listing.title}`,
+        description: `Artisan service listing fee for ${listing.title}`,
         amount: listingFee,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - listingFee,
         currency: 'NGN',
-        timestamp: 'Just now',
-        status: 'completed',
+        referenceId: `ART_LST_${Date.now()}`,
         channel: 'wallet',
-      };
+      });
       setWallet((prev) => ({
         ...prev,
         availableBalance: prev.availableBalance - listingFee,
@@ -3240,16 +3653,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, amountClaimed: 0, message: 'No unlocked referral bonuses ready to claim right now.' };
     }
     const bonusToClaim = referralProgram.availableBonus;
-    const newTx: WalletTransaction = {
+    const newTx = recordLedgerTransaction({
       id: `tx_ref_bonus_${Date.now()}`,
-      type: 'topup',
+      type: 'referral_bonus',
       title: 'Anti-Fraud Referral Reward Bonus Claim',
+      description: 'Claimed verified referral invite bonus',
       amount: bonusToClaim,
+      fee: 0,
+      balanceAfter: wallet.availableBalance + bonusToClaim,
       currency: 'NGN',
-      timestamp: 'Just now',
-      status: 'completed',
+      referenceId: `REF_BONUS_${Date.now()}`,
       channel: 'wallet',
-    };
+    });
     setWallet((prev) => ({
       ...prev,
       availableBalance: prev.availableBalance + bonusToClaim,
@@ -3392,6 +3807,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('AGC_escrow_orders_v2', JSON.stringify(escrowOrders));
     } catch (e) {}
   }, [escrowOrders]);
+
+  const refreshEscrowOrders = async () => {
+    try {
+      const phone = currentUserRef.current?.phoneNumber || '';
+      const q = phone ? `?viewerPhone=${encodeURIComponent(phone)}` : '';
+      const res = await fetch(`/api/escrow/orders${q}`);
+      if (!res.ok) return;
+      const data = await res.json().catch(() => null);
+      if (data?.success && Array.isArray(data.orders) && data.orders.length > 0) {
+        setEscrowOrders((prev) => {
+          const map = new Map<string, EscrowOrder>();
+          data.orders.forEach((o: EscrowOrder) => map.set(o.id, o));
+          prev.forEach((o) => {
+            if (!map.has(o.id)) map.set(o.id, o);
+          });
+          return Array.from(map.values());
+        });
+      }
+    } catch (_) {}
+  };
+
   const [activeEscrowModalOrder, setActiveEscrowModalOrder] = useState<EscrowOrder | null>(null);
   const [activeCall, setActiveCall] = useState<ActiveCallState | null>(null);
   const [incomingCall, setIncomingCall] = useState<{
@@ -3654,6 +4090,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   isAuthenticatedRef.current = isAuthenticated;
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isKickedOut, setIsKickedOut] = useState(false);
+
+  useEffect(() => {
+    if (isAuthenticated && currentUser.phoneNumber) {
+      refreshEscrowOrders();
+    }
+  }, [isAuthenticated, currentUser.phoneNumber]);
 
   // Automatically persist chats & messages strictly partitioned per user (ONLY when authenticated & hydrated)
   useEffect(() => {
@@ -4509,7 +4951,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (_) {}
   }, [isAuthenticated, currentUser.id, currentUser.phoneNumber]);
 
-  // â”€â”€â”€ Realtime Presence & Live Typing Indicators (Supabase Channel) â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Realtime Presence & Live Typing Indicators (Supabase Channel) ---
   const [onlineUserKeys, setOnlineUserKeys] = useState<Set<string>>(new Set());
   const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({});
   const [lastSeenMap, setLastSeenMap] = useState<Record<string, string>>(() => {
@@ -6279,7 +6721,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [sendSupabaseBroadcastOnce]);
 
-  // â”€â”€ Multi-Transport Incoming Call & Call Termination Listener â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Multi-Transport Incoming Call & Call Termination Listener ---
   // Depends ONLY on currentUser.phoneNumber so listeners never tear down mid-call
   useEffect(() => {
     const rawCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
@@ -8017,7 +8459,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else if (fwdType === 'invoice_receipt') {
       previewLabel = `🧾 Invoice #${(sourceMessage.invoice || sourceMessage.invoiceData)?.invoiceNumber || ''}`;
     }
-    const threadPreview = `â†ª ${previewLabel || 'Forwarded message'}`;
+    const threadPreview = `↪ ${previewLabel || 'Forwarded message'}`;
 
     const seenChatIds = new Set<string>();
     const prepared: Array<{ chatId: string; msg: ChatMessage; thread: ChatThread }> = [];
@@ -8337,7 +8779,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastLiveMessage(chatId, newMsg);
   };
 
-  // Escrow Order Creation (Paystack or Wallet)
+  // Escrow Order Creation (Paystack or Wallet) with 1% fee capped at ₦4,000 + Two-Step PIN Release
   const createEscrowOrder = (
     chatId: string,
     product: Product,
@@ -8348,82 +8790,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const orderId = `AFR-${Math.floor(100000 + Math.random() * 900000)}`;
     const pin = `${Math.floor(1000 + Math.random() * 9000)}`;
     const paystackRef = `PSK_${Math.floor(10000000 + Math.random() * 90000000)}`;
+    const subtotalAmount = Math.max(0, Math.round(Number(product.price) || 0));
+    const escrowFee = Math.min(Math.round(subtotalAmount * 0.01), 4000);
+    const totalAmount = subtotalAmount + escrowFee;
+
+    const targetChat = chats.find((c) => c.id === chatId);
+    const sellerPhone = product.sellerPhone || targetChat?.phoneNumber || targetChat?.phone || '';
+    const buyerPhone = currentUser.phoneNumber || '';
 
     if (paymentMethod === 'wallet') {
-      if (wallet.availableBalance < product.price) {
+      if (wallet.availableBalance < totalAmount) {
         return {
           success: false,
-          error: `Insufficient wallet balance (${CURRENCY_SYMBOLS.NGN}${wallet.availableBalance.toLocaleString()}). Please fund wallet via Paystack first.`,
+          error: `Insufficient wallet balance (${CURRENCY_SYMBOLS.NGN}${wallet.availableBalance.toLocaleString()}). Need ${CURRENCY_SYMBOLS.NGN}${totalAmount.toLocaleString()} (incl. ₦${escrowFee.toLocaleString()} escrow fee).`,
         };
       }
 
-      // Deduct from wallet and lock in escrow
-      const tx = recordLedgerTransaction({
-        type: 'escrow_lock',
-        title: `Escrow Lock for ${product.title}`,
-        description: `Marketplace escrow lock: ${product.title}`,
-        amount: product.price,
-        fee: 0,
-        balanceAfter: wallet.availableBalance - product.price,
-        currency: product.currency,
-        referenceId: `ESC_${orderId}`,
-        channel: 'wallet',
-      });
-
       setWallet((prev) => ({
         ...prev,
-        availableBalance: prev.availableBalance - product.price,
-        escrowLockedBalance: prev.escrowLockedBalance + product.price,
-        transactions: [tx, ...prev.transactions],
+        availableBalance: prev.availableBalance - totalAmount,
+        escrowLockedBalance: prev.escrowLockedBalance + subtotalAmount,
       }));
     } else {
-      // Paystack Direct Checkout
-      const tx = recordLedgerTransaction({
-        type: 'store_purchase',
-        title: `Paystack Escrow: ${product.title}`,
-        description: `Marketplace purchase via Paystack: ${product.title}`,
-        amount: product.price,
-        fee: 0,
-        balanceAfter: wallet.availableBalance,
-        currency: product.currency,
-        referenceId: paystackRef,
-        channel: 'paystack',
-      });
-
       setWallet((prev) => ({
         ...prev,
-        escrowLockedBalance: prev.escrowLockedBalance + product.price,
-        transactions: [tx, ...prev.transactions],
+        escrowLockedBalance: prev.escrowLockedBalance + subtotalAmount,
       }));
     }
+
+    const cleanBuyer = buyerName.trim() || currentUser.fullName || 'AGC Buyer';
+    const cleanAddress = deliveryAddress.trim() || 'Direct AGC Chat Delivery';
 
     const newOrder: EscrowOrder = {
       id: orderId,
       chatId,
       product,
       quantity: 1,
-      totalAmount: product.price,
+      subtotalAmount,
+      escrowFee,
+      totalAmount,
       currency: product.currency,
       status: 'escrow_secured',
       escrowPin: pin,
-      buyerName: buyerName || currentUser.fullName || 'AGC User',
+      buyerName: cleanBuyer,
+      buyerPhone,
       sellerName: product.sellerName,
-      deliveryAddress: deliveryAddress || '14 Admiralty Way, Lekki Phase 1, Lagos',
-      createdAt: 'Just now',
-      updatedAt: 'Just now',
+      sellerPhone,
+      deliveryAddress: cleanAddress,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       paymentMethod,
       paystackRef,
+      failedClaimAttempts: 0,
     };
 
     setEscrowOrders((prev) => [newOrder, ...prev]);
+
+    const receiptText = `Funds held in AGC Escrow Vault (${CURRENCY_SYMBOLS[product.currency] || '₦'}${subtotalAmount.toLocaleString()} + ${CURRENCY_SYMBOLS[product.currency] || '₦'}${escrowFee.toLocaleString()} 1% fee) awaiting buyer approval. Seller only claims payout after buyer approves release & shares their system code.`;
 
     const receiptMsg: ChatMessage = {
       id: `msg_escrow_${Date.now()}`,
       chatId,
       sender: 'system',
       type: 'escrow_receipt',
-      order: newOrder,
-      text: `Payment secured via Paystack in AGC Escrow Vault: ${CURRENCY_SYMBOLS[product.currency]}${product.price.toLocaleString()}. Seller notified to dispatch. Share release PIN ${pin} only after receiving parcel!`,
+      order: { ...newOrder },
+      text: receiptText,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'delivered',
     };
@@ -8433,6 +8864,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       [chatId]: [...(prev[chatId] || []), receiptMsg],
     }));
 
+    // Broadcast sanitized receipt (no PIN!) so seller sees the held funds status in real time
+    broadcastLiveMessage(chatId, {
+      ...receiptMsg,
+      order: { ...newOrder, escrowPin: '' },
+    });
+
     setChats((prev) =>
       bumpChatThreadToTop(prev, chatId, {
         lastMessage: `🔒 Escrow Vault: ${product.title}`,
@@ -8441,8 +8878,213 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
+    // Persist authoritatively to server (writes server ledger + emits escrow_order_updated & wallet_updated)
+    fetch('/api/escrow/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        orderId,
+        chatId,
+        product,
+        quantity: 1,
+        subtotalAmount,
+        escrowFee,
+        totalAmount,
+        currency: product.currency,
+        buyerName: cleanBuyer,
+        buyerPhone,
+        sellerName: product.sellerName,
+        sellerPhone,
+        deliveryAddress: cleanAddress,
+        paymentMethod,
+        paystackRef,
+        escrowPin: pin,
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.success && data.order) {
+          setEscrowOrders((prev) => prev.map((o) => (o.id === orderId ? data.order : o)));
+          if (data.wallet) {
+            setWallet((prev) => ({
+              ...prev,
+              availableBalance: Number(data.wallet.availableBalance) ?? prev.availableBalance,
+              escrowLockedBalance: Number(data.wallet.escrowLockedBalance) ?? prev.escrowLockedBalance,
+              transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : prev.transactions,
+            }));
+          }
+        } else {
+          // Server unreachable fallback: record client ledger entry
+          recordLedgerTransaction({
+            type: paymentMethod === 'wallet' ? 'escrow_lock' : 'store_purchase',
+            title: `Escrow Lock: ${product.title}`,
+            description: `Escrow held for ${product.title} (${cleanBuyer} -> ${product.sellerName})`,
+            amount: subtotalAmount,
+            fee: escrowFee,
+            balanceAfter: paymentMethod === 'wallet' ? Math.max(0, wallet.availableBalance - totalAmount) : wallet.availableBalance,
+            currency: product.currency,
+            referenceId: `ESC_${orderId}`,
+            channel: paymentMethod,
+          });
+        }
+      })
+      .catch(() => {
+        recordLedgerTransaction({
+          type: paymentMethod === 'wallet' ? 'escrow_lock' : 'store_purchase',
+          title: `Escrow Lock: ${product.title}`,
+          description: `Escrow held for ${product.title} (${cleanBuyer} -> ${product.sellerName})`,
+          amount: subtotalAmount,
+          fee: escrowFee,
+          balanceAfter: paymentMethod === 'wallet' ? Math.max(0, wallet.availableBalance - totalAmount) : wallet.availableBalance,
+          currency: product.currency,
+          referenceId: `ESC_${orderId}`,
+          channel: paymentMethod,
+        });
+      });
+
     closeCheckout();
     return { success: true, order: newOrder };
+  };
+
+  const approveEscrowRelease = async (
+    orderId: string
+  ): Promise<{ success: boolean; message: string; order?: EscrowOrder }> => {
+    const order = escrowOrders.find((o) => o.id === orderId);
+    if (!order) return { success: false, message: 'Escrow order not found.' };
+
+    try {
+      const res = await fetch('/api/escrow/approve-release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          actorPhone: currentUser.phoneNumber || order.buyerPhone,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success && data.order) {
+        const updatedOrder = { ...order, ...data.order, escrowPin: order.escrowPin || data.order.escrowPin };
+        setEscrowOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
+        setActiveEscrowModalOrder((prev) => (prev && prev.id === orderId ? updatedOrder : prev));
+        const msg: ChatMessage = {
+          id: `msg_esc_app_${Date.now()}`,
+          chatId: order.chatId,
+          sender: 'system',
+          type: 'text',
+          text: `Buyer approved release for Order #${order.id}. Recipient (${order.sellerName}) can now enter the 4-digit system code to claim payout.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          status: 'delivered',
+        };
+        setMessages((prev) => ({
+          ...prev,
+          [order.chatId]: [...(prev[order.chatId] || []), msg],
+        }));
+        broadcastLiveMessage(order.chatId, msg);
+        return { success: true, message: data.message || 'Release approved! Share your 4-digit code with the seller.', order: updatedOrder };
+      }
+      return { success: false, message: data?.error || 'Could not approve escrow release.' };
+    } catch (_) {
+      // Offline optimistic update
+      const updatedOrder: EscrowOrder = {
+        ...order,
+        status: 'release_approved',
+        approvedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setEscrowOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
+      setActiveEscrowModalOrder((prev) => (prev && prev.id === orderId ? updatedOrder : prev));
+      return { success: true, message: 'Release approved! Share your 4-digit code with the seller.', order: updatedOrder };
+    }
+  };
+
+  const claimEscrowWithCode = async (
+    orderId: string,
+    enteredPin: string
+  ): Promise<{ success: boolean; message: string; order?: EscrowOrder }> => {
+    const order = escrowOrders.find((o) => o.id === orderId);
+    if (!order) return { success: false, message: 'Escrow order not found.' };
+    const cleanPin = enteredPin.trim();
+    if (!cleanPin) return { success: false, message: 'Enter the 4-digit system release code provided by the buyer.' };
+
+    try {
+      const res = await fetch('/api/escrow/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          pin: cleanPin,
+          claimantPhone: currentUser.phoneNumber || order.sellerPhone,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success && data.order) {
+        const updatedOrder = data.order as EscrowOrder;
+        setEscrowOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
+        setActiveEscrowModalOrder((prev) => (prev && prev.id === orderId ? updatedOrder : prev));
+        if (data.wallet) {
+          setWallet((prev) => ({
+            ...prev,
+            availableBalance: Number(data.wallet.availableBalance) ?? prev.availableBalance,
+            escrowLockedBalance: Number(data.wallet.escrowLockedBalance) ?? prev.escrowLockedBalance,
+            transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : prev.transactions,
+          }));
+        }
+        const payout = Number(data.payoutAmount ?? order.subtotalAmount ?? order.totalAmount);
+        const relMsg: ChatMessage = {
+          id: `msg_released_${Date.now()}`,
+          chatId: order.chatId,
+          sender: 'system',
+          type: 'text',
+          text: `Escrow PIN verified! ${CURRENCY_SYMBOLS[order.currency] || '₦'}${payout.toLocaleString()} credited directly to ${order.sellerName}'s AGC wallet.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          status: 'delivered',
+        };
+        setMessages((prev) => ({
+          ...prev,
+          [order.chatId]: [...(prev[order.chatId] || []), relMsg],
+        }));
+        broadcastLiveMessage(order.chatId, relMsg);
+        return { success: true, message: data.message || 'Funds claimed and credited to your wallet!', order: updatedOrder };
+      }
+      if (data?.order) {
+        setEscrowOrders((prev) => prev.map((o) => (o.id === orderId ? data.order : o)));
+        setActiveEscrowModalOrder((prev) => (prev && prev.id === orderId ? data.order : prev));
+      }
+      return { success: false, message: data?.error || 'Invalid 4-digit release code.' };
+    } catch (_) {
+      return { success: false, message: 'Network error verifying code with server.' };
+    }
+  };
+
+  const disputeEscrowOrder = async (
+    orderId: string,
+    reason: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const order = escrowOrders.find((o) => o.id === orderId);
+    if (!order) return { success: false, message: 'Escrow order not found.' };
+    try {
+      const res = await fetch('/api/escrow/dispute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          reason: reason.trim() || 'Buyer reported delivery issue',
+          actorName: currentUser.fullName || 'AGC User',
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success && data.order) {
+        setEscrowOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...data.order } : o)));
+        setActiveEscrowModalOrder((prev) => (prev && prev.id === orderId ? { ...prev, ...data.order } : prev));
+        return { success: true, message: data.message || `Dispute flagged for Order #${orderId}.` };
+      }
+      return { success: false, message: data?.error || 'Could not flag dispute.' };
+    } catch (_) {
+      setEscrowOrders((prev) =>
+        prev.map((o) => (o.id === orderId ? { ...o, status: 'disputed', disputeReason: reason } : o))
+      );
+      return { success: true, message: `Dispute flagged for Order #${orderId}. Funds remain safely held in escrow.` };
+    }
   };
 
   const releaseEscrowFunds = (orderId: string, enteredPin: string) => {
@@ -8453,18 +9095,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Invalid 4-digit PIN! Check your order receipt.' };
     }
 
+    const payoutAmount = order.subtotalAmount || order.totalAmount;
     const updated = escrowOrders.map((o) =>
-      o.id === orderId ? { ...o, status: 'funds_released' as const, updatedAt: 'Just now' } : o
+      o.id === orderId ? { ...o, status: 'funds_released' as const, updatedAt: new Date().toISOString() } : o
     );
     setEscrowOrders(updated);
 
-    // Update wallet escrow balance
     const relTx = recordLedgerTransaction({
       type: 'escrow_release',
       title: `Released Escrow Payout: ${order.product.title}`,
       description: `Escrow released to ${order.sellerName} (${order.product.title})`,
-      amount: order.totalAmount,
-      fee: 0,
+      amount: payoutAmount,
+      fee: order.escrowFee || 0,
       balanceAfter: wallet.availableBalance,
       currency: order.currency,
       referenceId: `REL_${order.id}`,
@@ -8472,7 +9114,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setWallet((prev) => ({
       ...prev,
-      escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - order.totalAmount),
+      escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - payoutAmount),
       transactions: [relTx, ...prev.transactions],
     }));
 
@@ -8481,7 +9123,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       chatId: order.chatId,
       sender: 'system',
       type: 'text',
-      text: `Delivery confirmed. Payment of ${CURRENCY_SYMBOLS[order.currency]}${order.totalAmount.toLocaleString()} released to ${order.sellerName}.`,
+      text: `Delivery confirmed. Payment of ${CURRENCY_SYMBOLS[order.currency]}${payoutAmount.toLocaleString()} released to ${order.sellerName}.`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'delivered',
     };
@@ -9359,7 +10001,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 3. Scam Alert & Reputation Checker Handlers
 
-  // â”€â”€ Live Supabase Realtime listener for cross-device scam report sync â”€â”€â”€â”€â”€
+  // --- Live Supabase Realtime listener for cross-device scam report sync ---
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     const scamCh = supabase.channel('agc_scam_reports_live', {
@@ -13251,23 +13893,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const roundNum = activeAjoGroup?.currentRound || 1;
 
     // Deduct contribution and log transaction
+    const ajoTx = recordLedgerTransaction({
+      id: `tx_${Date.now()}`,
+      type: 'transfer_out',
+      title: `Ajo Contribution Round ${roundNum}`,
+      description: `Ajo / Esusu savings contribution Round ${roundNum}`,
+      amount,
+      fee: 0,
+      balanceAfter: Math.max(0, wallet.availableBalance - amount),
+      currency: 'NGN',
+      referenceId: `AJO_${ajoId}_${Date.now()}`,
+      channel: 'wallet',
+    });
+
     setWallet((prev) => ({
       ...prev,
       availableBalance: prev.availableBalance - amount,
-      transactions: [
-        {
-          id: `tx_${Date.now()}`,
-          type: 'transfer_out',
-          title: `Ajo Contribution Round ${roundNum}`,
-          amount,
-          currency: 'NGN',
-          timestamp: 'Just now',
-          status: 'completed',
-          reference: `AJO_${ajoId}_${Date.now()}`,
-          channel: 'wallet',
-        },
-        ...prev.transactions,
-      ],
+      transactions: [ajoTx, ...prev.transactions],
     }));
 
     if (activeAjoGroup) {
@@ -14578,6 +15220,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .catch(() => {});
     } catch (_) {}
 
+    recordLedgerTransaction({
+      id: `tx_disp_${Date.now()}`,
+      type: 'service_booking',
+      title: `Dispatch Delivery: ${newOrder.provider.toUpperCase()} (${code})`,
+      description: `${orderData.packageDescription || 'Parcel dispatch'} to ${orderData.recipientName}`,
+      amount: baseFee,
+      fee: platformFee,
+      balanceAfter: wallet.availableBalance,
+      currency: 'NGN',
+      referenceId: code,
+      channel: 'wallet',
+    });
+
     return newOrder;
   };
 
@@ -14591,17 +15246,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    const newTx: WalletTransaction = {
+    const newTx = recordLedgerTransaction({
       id: `tx_${Date.now()}`,
-      type: 'topup',
+      type: 'service_booking',
       title: `Job Board Posting: ${jobData.title.slice(0, 25)}`,
+      description: `Featured job board posting fee: ${jobData.title}`,
       amount: postFee,
+      fee: 0,
+      balanceAfter: wallet.availableBalance - postFee,
       currency: 'NGN',
-      timestamp: 'Just now',
-      status: 'completed',
-      reference: `JOB_${Date.now()}`,
+      referenceId: `JOB_${Date.now()}`,
       channel: 'wallet',
-    };
+    });
 
     setWallet((prev) => ({
       ...prev,
@@ -14658,17 +15314,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    const newTx: WalletTransaction = {
+    const newTx = recordLedgerTransaction({
       id: `tx_${Date.now()}`,
-      type: 'topup',
+      type: 'service_booking',
       title: `Job Application Fee: ${job.title.slice(0, 24)}`,
+      description: `Verified job application fee for ${job.title}`,
       amount: applyFee,
+      fee: 0,
+      balanceAfter: wallet.availableBalance - applyFee,
       currency: 'NGN',
-      timestamp: 'Just now',
-      status: 'completed',
-      reference: `JOB_APP_${Date.now()}`,
+      referenceId: `JOB_APP_${Date.now()}`,
       channel: 'wallet',
-    };
+    });
 
     setWallet((prev) => ({
       ...prev,
@@ -15534,16 +16191,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    const newTx: WalletTransaction = {
+    const newTx = recordLedgerTransaction({
       id: `tx_vip_${Date.now()}`,
-      type: 'transfer_out',
+      type: 'service_booking',
       title: `VIP 1-on-1 ${type === 'voice' ? 'Voice Call' : type === 'video' ? 'Video Call' : 'VIP Direct Chat'} with ${creator.name} (${durationMinutes}m)`,
+      description: `Creator VIP session (${durationMinutes}m ${type}) with ${creator.name}`,
       amount: price,
+      fee: 0,
+      balanceAfter: wallet.availableBalance - price,
       currency: 'NGN',
-      timestamp: 'Just now',
-      status: 'completed',
+      referenceId: `VIP_${creatorId}_${Date.now()}`,
       channel: 'wallet',
-    };
+    });
 
     setWallet((prev) => ({
       ...prev,
@@ -15707,16 +16366,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: `Insufficient wallet balance to tip ₦${amount.toLocaleString()}. Please top up your wallet.` };
     }
 
-    const newTx: WalletTransaction = {
+    const newTx = recordLedgerTransaction({
       id: `tx_tip_${Date.now()}`,
-      type: 'transfer_out',
+      type: 'creator_tip',
       title: `Reader Tip to ${book.authorName} for "${book.title}"`,
+      description: `AfriBooks reader tip to ${book.authorName}`,
       amount,
+      fee: 0,
+      balanceAfter: wallet.availableBalance - amount,
       currency: 'NGN',
-      timestamp: 'Just now',
-      status: 'completed',
+      referenceId: `TIP_${bookId}_${Date.now()}`,
       channel: 'wallet',
-    };
+    });
 
     setWallet((prev) => ({
       ...prev,
@@ -15752,7 +16413,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `â˜• Tipped ₦${amount.toLocaleString()} directly to author ${book.authorName}! Thank you for supporting authentic human literature.`,
+      message: `☕ Tipped ₦${amount.toLocaleString()} directly to author ${book.authorName}! Thank you for supporting authentic human literature.`,
     };
   };
 
@@ -15767,16 +16428,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    const newTx: WalletTransaction = {
+    const newTx = recordLedgerTransaction({
       id: `tx_book_buy_${Date.now()}`,
-      type: 'transfer_out',
+      type: 'store_purchase',
       title: `Paid Book Purchase: ${book.title}`,
+      description: `AfriBooks purchase: "${book.title}"`,
       amount: book.price,
+      fee: 0,
+      balanceAfter: wallet.availableBalance - book.price,
       currency: book.currency,
-      timestamp: 'Just now',
-      status: 'completed',
+      referenceId: `BOOK_${bookId}_${Date.now()}`,
       channel: 'wallet',
-    };
+    });
 
     setWallet((prev) => ({
       ...prev,
@@ -15922,16 +16585,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (data.paymentMethod === 'wallet') {
-      const newTx: WalletTransaction = {
+      const newTx = recordLedgerTransaction({
         id: `tx_tutor_reg_${Date.now()}`,
-        type: 'transfer_out',
+        type: 'service_booking',
         title: `Certified Tutor Registration Fee (₦${totalFee.toLocaleString()})`,
+        description: `Registered AGC Certified Tutor: ${data.tutorName}`,
         amount: totalFee,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - totalFee,
         currency: 'NGN',
-        timestamp: 'Just now',
-        status: 'completed',
+        referenceId: `TUTOR_REG_${Date.now()}`,
         channel: 'wallet',
-      };
+      });
       setWallet((prev) => ({
         ...prev,
         availableBalance: prev.availableBalance - totalFee,
@@ -15978,16 +16643,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (paymentMethod === 'wallet') {
-      const newTx: WalletTransaction = {
+      const newTx = recordLedgerTransaction({
         id: `tx_tutor_unlimited_${Date.now()}`,
-        type: 'transfer_out',
+        type: 'service_booking',
         title: 'Tutor Unlimited Pro Subscription (₦20,000 / month)',
+        description: 'Upgraded to Unlimited Pro Tutor subscription',
         amount: proFee,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - proFee,
         currency: 'NGN',
-        timestamp: 'Just now',
-        status: 'completed',
+        referenceId: `TUTOR_PRO_${Date.now()}`,
         channel: 'wallet',
-      };
+      });
       setWallet((prev) => ({
         ...prev,
         availableBalance: prev.availableBalance - proFee,
@@ -16077,16 +16744,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (paymentMethod === 'wallet') {
-      const newTx: WalletTransaction = {
+      const newTx = recordLedgerTransaction({
         id: `tx_enroll_${Date.now()}`,
-        type: 'transfer_out',
+        type: 'course_enroll',
         title: `Course Enrollment: ${course.title}`,
+        description: `Enrolled in course: ${course.title}`,
         amount: course.price,
+        fee: 0,
+        balanceAfter: wallet.availableBalance - course.price,
         currency: course.currency,
-        timestamp: 'Just now',
-        status: 'completed',
+        referenceId: `CRS_${courseId}_${Date.now()}`,
         channel: 'wallet',
-      };
+      });
       setWallet((prev) => ({
         ...prev,
         availableBalance: prev.availableBalance - course.price,
@@ -17609,6 +18278,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     };
 
+    const onEscrowOrderUpdated = (payload: { order?: EscrowOrder }) => {
+      const incoming = payload?.order;
+      if (!incoming?.id) return;
+      setEscrowOrders((prev) => {
+        const idx = prev.findIndex((o) => o.id === incoming.id);
+        if (idx >= 0) {
+          const existing = prev[idx];
+          const merged: EscrowOrder = {
+            ...existing,
+            ...incoming,
+            escrowPin: incoming.escrowPin || existing.escrowPin || '',
+          };
+          const copy = [...prev];
+          copy[idx] = merged;
+          return copy;
+        }
+        return [incoming, ...prev];
+      });
+      setActiveEscrowModalOrder((prev) =>
+        prev && prev.id === incoming.id
+          ? { ...prev, ...incoming, escrowPin: incoming.escrowPin || prev.escrowPin || '' }
+          : prev
+      );
+    };
+
+    const onProfessionalsUpdated = (payload: any) => {
+      if (!payload) return;
+      if (Array.isArray(payload.lawyers)) setLawyers(payload.lawyers);
+      if (Array.isArray(payload.clinicsDoctors)) setDoctors(payload.clinicsDoctors);
+      if (Array.isArray(payload.errandRunners)) setErrandRunners(payload.errandRunners);
+      if (Array.isArray(payload.errandOrders)) setErrandOrders(payload.errandOrders);
+    };
+
     socket.on('admin_config_updated', onConfig);
     socket.on('admin_features_updated', onFeatures);
     socket.on('admin_cms_updated', onCms);
@@ -17618,6 +18320,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket.on('user_registered', onUserRegistered);
     socket.on('user_updated', onUserUpdated);
     socket.on('wallet_updated', onWalletUpdatedEvent);
+    socket.on('escrow_order_updated', onEscrowOrderUpdated);
+    socket.on('professionals_updated', onProfessionalsUpdated);
     socket.on('force_logout', onKickEvent);
     socket.on('admin_store_updated', syncAdminFromServer);
     socket.on('admin_artisan_updated', syncAdminFromServer);
@@ -17732,6 +18436,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('user_registered', onUserRegistered);
       socket.off('user_updated', onUserUpdated);
       socket.off('wallet_updated', onWalletUpdatedEvent);
+      socket.off('escrow_order_updated', onEscrowOrderUpdated);
+      socket.off('professionals_updated', onProfessionalsUpdated);
       socket.off('force_logout', onKickEvent);
       socket.off('admin_store_updated', syncAdminFromServer);
       socket.off('admin_artisan_updated', syncAdminFromServer);
@@ -18887,6 +19593,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsOneTimeViewEnabled,
         loadImage,
         createEscrowOrder,
+        approveEscrowRelease,
+        claimEscrowWithCode,
+        disputeEscrowOrder,
+        refreshEscrowOrders,
         releaseEscrowFunds,
         openChatWithProduct,
         activeCall,
@@ -19103,6 +19813,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         healthVault,
         isHealthModalOpen,
         setIsHealthModalOpen,
+        registerClinicOrDoctor,
         bookDoctorAppointment,
         takeQueueToken,
         addMedicationReminder,
@@ -19114,9 +19825,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         generatedContracts,
         isLegalModalOpen,
         setIsLegalModalOpen,
+        registerLawyer,
+        bookLawyerConsultation,
         generateLegalContract,
         signLegalContract,
         triggerEmergencyLegalSos,
+        refreshProfessionals,
+        reviewProfessional,
         // 21. African Creator & Direct Music Economy
         creators,
         creatorPosts,

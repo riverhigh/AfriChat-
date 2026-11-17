@@ -48,7 +48,7 @@ import {
   Loader2,
   AlertCircle,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, phonesMatch } from '../context/AppContext';
 import { CurrencyCode, LanguageCode, AppFontSize } from '../types';
 import { MarketplaceView } from './MarketplaceView';
 import { LegalComplianceModal } from './LegalComplianceModal';
@@ -416,7 +416,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               onClick={() => setIsServicesModalOpen(true)}
               className="text-xs font-bold text-purple-600 dark:text-purple-400 bg-purple-500/10 px-3 py-1.5 rounded-full hover:bg-purple-500/20 transition-colors"
             >
-              View All â†’
+              View All →
             </button>
           </div>
 
@@ -502,7 +502,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                   <div className="text-[11px] text-slate-500 dark:text-neutral-400 truncate">{provider.businessName}</div>
                   <div className="flex items-center gap-2 mt-1.5">
-                    <span className="text-[11px] font-semibold text-amber-500">â˜… {provider.rating}</span>
+                    <span className="text-[11px] font-semibold text-amber-500">★ {provider.rating}</span>
                     <span className="text-[10px] text-slate-400">({provider.reviewCount})</span>
                     <span className="text-[10px] text-slate-400 truncate">· {provider.location}</span>
                   </div>
@@ -524,7 +524,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           <div className="p-4 text-center text-xs text-slate-400">
-            AGC Artisan Hub · Connecting African Skill âš’
+            AGC Artisan Hub · Connecting African Skill ⚒
           </div>
         </div>
       ) : activeSubTab === 'chat_bg' ? (
@@ -951,14 +951,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div>
                     <div className="text-[11px] text-indigo-200">Available Balance:</div>
                     <div className="text-2xl font-black font-mono tracking-tight">
-                      {hideBalanceOnNav ? '₦ â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢' : formatPrice(wallet.availableBalance, 'NGN')}
+                      {hideBalanceOnNav ? '₦ ••••••••' : formatPrice(wallet.availableBalance, 'NGN')}
                     </div>
                   </div>
 
                   <div className="text-right">
                     <div className="text-[10px] text-indigo-200">Escrow Locked:</div>
                     <div className="text-xs font-bold font-mono text-amber-300">
-                      {hideBalanceOnNav ? '₦ â€¢â€¢â€¢â€¢â€¢â€¢' : formatPrice(wallet.escrowLockedBalance, 'NGN')}
+                      {hideBalanceOnNav ? '₦ ••••••' : formatPrice(wallet.escrowLockedBalance, 'NGN')}
                     </div>
                   </div>
                 </div>
@@ -1230,39 +1230,61 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   No orders placed yet. Products bought from chat catalogs appear here with escrow release PINs.
                 </div>
               ) : (
-                escrowOrders.map((order) => (
-                  <div
-                    key={order.id}
-                    onClick={() => setActiveEscrowModalOrder(order)}
-                    className="px-4 py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors"
-                  >
-                    <div>
-                      <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
-                        {order.product.title}
+                escrowOrders.map((order) => {
+                  const isBuyer = phonesMatch(currentUser?.phoneNumber || '', order.buyerPhone) || order.buyerId === currentUser?.id;
+                  const statusText =
+                    order.status === 'funds_released'
+                      ? 'Completed'
+                      : order.status === 'release_approved'
+                      ? 'Release Approved'
+                      : order.status === 'disputed'
+                      ? 'Disputed'
+                      : order.status === 'refunded'
+                      ? 'Refunded'
+                      : 'In Escrow';
+                  const statusTone =
+                    order.status === 'funds_released'
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : order.status === 'disputed'
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : order.status === 'release_approved'
+                      ? 'text-indigo-600 dark:text-indigo-400'
+                      : 'text-amber-600 dark:text-amber-400';
+                  return (
+                    <div
+                      key={order.id}
+                      onClick={() => setActiveEscrowModalOrder(order)}
+                      className="px-4 py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors"
+                    >
+                      <div>
+                        <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                          {order.product.title}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {isBuyer ? order.sellerName : `Buyer: ${order.buyerName}`}
+                          {isBuyer && order.escrowPin ? (
+                            <>
+                              {' · '}PIN:{' '}
+                              <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                {order.escrowPin}
+                              </span>
+                            </>
+                          ) : (
+                            <> · {order.status === 'release_approved' ? 'Enter PIN to claim' : 'Held awaiting buyer approval'}</>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-xs text-slate-500">
-                        {order.sellerName} · PIN:{' '}
-                        <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                          {order.escrowPin}
+                      <div className="text-right">
+                        <div className="text-sm font-bold font-mono">
+                          {formatPrice(order.totalAmount, order.currency)}
+                        </div>
+                        <span className={`text-[10px] uppercase font-bold ${statusTone}`}>
+                          {statusText}
                         </span>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-sm font-bold font-mono">
-                        {formatPrice(order.totalAmount, order.currency)}
-                      </div>
-                      <span
-                        className={`text-[10px] uppercase font-bold ${
-                          order.status === 'funds_released'
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : 'text-amber-600 dark:text-amber-400'
-                        }`}
-                      >
-                        {order.status === 'funds_released' ? 'Completed' : 'In Escrow'}
-                      </span>
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

@@ -4,6 +4,9 @@ export const ADMIN_SYS_CONFIG_KEY = '__agc_sys_config__';
 export const ADMIN_SYS_CMS_KEY = '__agc_sys_cms__';
 export const ADMIN_SYS_USERS_KEY = '__agc_sys_users__';
 export const ADMIN_SYS_STORES_KEY = '__agc_sys_stores__';
+export const ADMIN_SYS_AI_KEY = '__agc_sys_ai_datacenter__';
+export const ADMIN_SYS_PROFS_KEY = '__agc_sys_professionals__';
+export const ADMIN_SYS_ESCROWS_KEY = '__agc_sys_escrows__';
 
 export function canonicalAdminUserKey(phoneOrId?: string): string {
   if (!phoneOrId) return '';

@@ -7,24 +7,18 @@ import {
   Shield,
   ShieldCheck,
   AlertOctagon,
-  ChevronRight,
-  Phone,
-  MessageSquare,
   QrCode,
-  CheckCircle2,
   AlertTriangle,
   Building2,
-  Calendar,
   X,
   Plus,
-  RefreshCw,
   ShoppingBag,
-  ExternalLink,
+  MessageSquare,
+  BadgeCheck,
   MapPin,
-  Mic,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { DoctorProfile, HospitalQueueToken, MedicationReminder } from '../types';
+import { DoctorProfile } from '../types';
 
 export const HealthcareModal: React.FC = () => {
   const {
@@ -35,20 +29,35 @@ export const HealthcareModal: React.FC = () => {
     medicationReminders,
     healthVault,
     bookDoctorAppointment,
+    registerClinicOrDoctor,
     takeQueueToken,
     addMedicationReminder,
     updateHealthVault,
     triggerEmergencySos,
     formatPrice,
-    chats,
-    setActiveChatId,
+    currentUser,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'telehealth' | 'queue' | 'meds' | 'vault'>('telehealth');
-  const [selectedDoctor, setSelectedDoctor] = useState<DoctorProfile | null>(null);
+  const [bookingDocId, setBookingDocId] = useState<string | null>(null);
   const [consultNotes, setConsultNotes] = useState('');
+  const [bookingBusy, setBookingBusy] = useState(false);
   const [sosActiveMessage, setSosActiveMessage] = useState<string | null>(null);
-  const [successToast, setSuccessToast] = useState<string | null>(null);
+  const [toastBanner, setToastBanner] = useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
+
+  // Register Clinic / Doctor form state
+  const [showRegisterHealth, setShowRegisterHealth] = useState(false);
+  const [regAccountType, setRegAccountType] = useState<'doctor' | 'clinic'>('doctor');
+  const [regName, setRegName] = useState(currentUser.fullName || '');
+  const [regLicense, setRegLicense] = useState('');
+  const [regSpecialty, setRegSpecialty] = useState('General Medicine');
+  const [regHospitalName, setRegHospitalName] = useState('');
+  const [regCity, setRegCity] = useState('Lagos');
+  const [regAddress, setRegAddress] = useState('');
+  const [regFee, setRegFee] = useState<number>(8000);
+  const [regLanguages, setRegLanguages] = useState('English, Pidgin');
+  const [regDepartments, setRegDepartments] = useState('General Outpatient Clinic, Pediatrics, Lab');
+  const [regBusy, setRegBusy] = useState(false);
 
   // New queue booking state
   const [selectedHospital, setSelectedHospital] = useState('Lagos University Teaching Hospital (LUTH)');
@@ -72,29 +81,80 @@ export const HealthcareModal: React.FC = () => {
 
   if (!isHealthModalOpen) return null;
 
+  const showToast = (text: string, tone: 'ok' | 'err' = 'ok') => {
+    setToastBanner({ text, tone });
+    setTimeout(() => setToastBanner(null), 4500);
+  };
+
+  const verifiedClinicNames = Array.from(
+    new Set([
+      'Lagos University Teaching Hospital (LUTH)',
+      'Lagoon Hospital Lekki',
+      'Reddington Multi-Specialist Hospital VI',
+      'Korle Bu Teaching Hospital Accra',
+      'Nairobi West Hospital Tele-Center',
+      ...doctors
+        .filter((d) => d.isVerified !== false && (d.accountType === 'clinic' || d.hospitalAffiliation))
+        .map((d) => d.accountType === 'clinic' ? d.name : d.hospitalAffiliation)
+        .filter(Boolean),
+    ])
+  );
+
   const handleSos = () => {
     const res = triggerEmergencySos();
     setSosActiveMessage(res.message);
     setTimeout(() => setSosActiveMessage(null), 6000);
   };
 
-  const handleStartConsult = (doctor: DoctorProfile) => {
-    const res = bookDoctorAppointment(doctor.id, consultNotes);
-    // Find or link a chat
-    const doctorChat = chats.find((c) => c.name.toLowerCase().includes('doctor') || c.name.toLowerCase().includes('dr')) || chats[0];
-    if (doctorChat) {
-      setIsHealthModalOpen(false);
-      setActiveChatId(doctorChat.id);
-    } else {
-      setSuccessToast(res.message);
-      setTimeout(() => setSuccessToast(null), 3000);
+  const handleRegisterHealthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!regName.trim() || !regLicense.trim() || !regAddress.trim()) {
+      showToast('Name, MDCN/Facility license number, and address are required.', 'err');
+      return;
+    }
+    setRegBusy(true);
+    try {
+      const res = await registerClinicOrDoctor({
+        accountType: regAccountType,
+        name: regName.trim(),
+        licenseNumber: regLicense.trim().toUpperCase(),
+        specialty: regSpecialty.trim() || 'General Medicine',
+        hospitalName: regHospitalName.trim() || regName.trim(),
+        city: regCity.trim() || 'Lagos',
+        officeAddress: regAddress.trim(),
+        consultationFee: Number(regFee) || 5000,
+        bio: `Accredited ${regAccountType === 'clinic' ? 'healthcare facility' : 'medical practitioner'} at ${regHospitalName.trim() || regName.trim()}, ${regCity.trim() || 'Lagos'}.`,
+        languages: regLanguages.split(',').map((s) => s.trim()).filter(Boolean),
+        departments: regDepartments.split(',').map((s) => s.trim()).filter(Boolean),
+      });
+      showToast(res.message, res.success ? 'ok' : 'err');
+      if (res.success) {
+        setShowRegisterHealth(false);
+        setRegLicense('');
+        setRegAddress('');
+      }
+    } finally {
+      setRegBusy(false);
+    }
+  };
+
+  const handleStartConsult = async (doctor: DoctorProfile) => {
+    setBookingBusy(true);
+    try {
+      const res = await bookDoctorAppointment(doctor.id, consultNotes.trim() || `Telehealth consult with ${doctor.name}`);
+      showToast(res.message, res.success ? 'ok' : 'err');
+      if (res.success) {
+        setBookingDocId(null);
+        setConsultNotes('');
+      }
+    } finally {
+      setBookingBusy(false);
     }
   };
 
   const handleBookToken = () => {
     const res = takeQueueToken(selectedHospital, selectedDept);
-    setSuccessToast(`🎫 Token ${res.token.tokenNumber} booked! You are #${res.token.positionInLine} in line. Wait safely at home!`);
-    setTimeout(() => setSuccessToast(null), 4000);
+    showToast(`🎫 Token ${res.token.tokenNumber} booked at ${selectedHospital}! Position #${res.token.positionInLine} in line.`);
   };
 
   const handleSaveMedication = () => {
@@ -113,13 +173,12 @@ export const HealthcareModal: React.FC = () => {
     setMedDosage('');
     setMedFrequency('');
     setShowAddMedForm(false);
-    setSuccessToast('💊 Medication reminder activated with 1-tap refill!');
-    setTimeout(() => setSuccessToast(null), 3000);
+    showToast('💊 Medication reminder activated with 1-tap refill!');
   };
 
   const handleSaveVault = () => {
     if (!vaultNdpaConsent) {
-      alert('Under the Nigeria Data Protection Act (NDPA), you must check the consent box before saving personal medical records.');
+      showToast('Under the NDPA, please check the consent box before saving personal medical records.', 'err');
       return;
     }
     updateHealthVault({
@@ -131,8 +190,7 @@ export const HealthcareModal: React.FC = () => {
       emergencyContactPhone: vaultEmergencyPhone,
     });
     setIsEditingVault(false);
-    setSuccessToast('✅ Medical Vault updated and encrypted with temporary emergency QR pass!');
-    setTimeout(() => setSuccessToast(null), 3000);
+    showToast('✅ Medical Vault updated and encrypted with temporary emergency QR pass!');
   };
 
   return (
@@ -183,9 +241,13 @@ export const HealthcareModal: React.FC = () => {
             </div>
           )}
 
-          {successToast && (
-            <div className="mt-2 p-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold animate-in slide-in-from-top-2">
-              {successToast}
+          {toastBanner && (
+            <div
+              className={`mt-2 p-2.5 rounded-xl text-white text-xs font-bold animate-in slide-in-from-top-2 ${
+                toastBanner.tone === 'ok' ? 'bg-emerald-600' : 'bg-rose-600'
+              }`}
+            >
+              {toastBanner.text}
             </div>
           )}
         </div>
@@ -247,12 +309,169 @@ export const HealthcareModal: React.FC = () => {
 
         {/* Tab Body */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {/* TAB 1: TELEHEALTH & ASK A DOCTOR */}
+          {/* TAB 1: TELEHEALTH & CLINICS */}
           {activeTab === 'telehealth' && (
             <div className="space-y-3">
-              <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-900/40 text-xs text-rose-800 dark:text-rose-200">
-                <span className="font-bold">🔒 Low-Data Telehealth:</span> Send symptoms, voice notes, and lab photos with ultra-low compression for 3G networks. Consult licensed African medical practitioners.
+              <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-900/40 flex items-center justify-between gap-2">
+                <div className="text-[11px] text-rose-900 dark:text-rose-200">
+                  <span className="font-bold block">Doctor or Licensed Clinic?</span>
+                  <span className="opacity-80">Register with MDCN / Facility License for telehealth & queues.</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterHealth((v) => !v)}
+                  className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] shrink-0 flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{showRegisterHealth ? 'Close Form' : 'Register Clinic/MD'}</span>
+                </button>
               </div>
+
+              {showRegisterHealth && (
+                <form
+                  onSubmit={handleRegisterHealthSubmit}
+                  className="p-3.5 rounded-2xl bg-slate-100 dark:bg-neutral-900 border border-rose-500/30 space-y-2.5 animate-in zoom-in-95"
+                >
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <BadgeCheck className="w-4 h-4 text-rose-500" />
+                      <span>AfriHealth Provider Registration</span>
+                    </h4>
+                    <div className="flex rounded-lg bg-white dark:bg-black border border-slate-200 dark:border-neutral-800 p-0.5 text-[10px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setRegAccountType('doctor')}
+                        className={`px-2 py-0.5 rounded-md ${regAccountType === 'doctor' ? 'bg-rose-600 text-white' : 'text-slate-500'}`}
+                      >
+                        Doctor
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRegAccountType('clinic')}
+                        className={`px-2 py-0.5 rounded-md ${regAccountType === 'clinic' ? 'bg-rose-600 text-white' : 'text-slate-500'}`}
+                      >
+                        Clinic
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">
+                        {regAccountType === 'clinic' ? 'Clinic / Hospital Name' : 'Doctor Full Name'}
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={regName}
+                        onChange={(e) => setRegName(e.target.value)}
+                        placeholder={regAccountType === 'clinic' ? 'Cedar Crest Medical' : 'Dr. Amaka Eze'}
+                        className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">
+                        {regAccountType === 'clinic' ? 'HEFAMAA / CAC Reg No.' : 'MDCN License No.'}
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={regLicense}
+                        onChange={(e) => setRegLicense(e.target.value)}
+                        placeholder={regAccountType === 'clinic' ? 'FAC/LAG/4821' : 'MDCN/R/41298'}
+                        className="w-full px-2.5 py-1.5 text-xs font-mono bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Specialty</label>
+                      <input
+                        type="text"
+                        value={regSpecialty}
+                        onChange={(e) => setRegSpecialty(e.target.value)}
+                        placeholder="Family Medicine / Cardiology"
+                        className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Hospital Affiliation</label>
+                      <input
+                        type="text"
+                        value={regHospitalName}
+                        onChange={(e) => setRegHospitalName(e.target.value)}
+                        placeholder="Reddington / Independent"
+                        className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">City</label>
+                      <input
+                        type="text"
+                        required
+                        value={regCity}
+                        onChange={(e) => setRegCity(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Consult Fee (₦)</label>
+                      <input
+                        type="number"
+                        min={1000}
+                        value={regFee}
+                        onChange={(e) => setRegFee(Number(e.target.value) || 5000)}
+                        className="w-full px-2.5 py-1.5 text-xs font-mono bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Clinic / Practice Address</label>
+                    <input
+                      type="text"
+                      required
+                      value={regAddress}
+                      onChange={(e) => setRegAddress(e.target.value)}
+                      placeholder="12 Bourdillon Rd, Ikoyi, Lagos"
+                      className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Languages</label>
+                      <input
+                        type="text"
+                        value={regLanguages}
+                        onChange={(e) => setRegLanguages(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Departments</label>
+                      <input
+                        type="text"
+                        value={regDepartments}
+                        onChange={(e) => setRegDepartments(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={regBusy}
+                    className="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold text-xs shadow-sm"
+                  >
+                    {regBusy ? 'Submitting...' : 'Submit for Medical Verification'}
+                  </button>
+                </form>
+              )}
 
               <div className="space-y-3">
                 {doctors.length === 0 ? (
@@ -260,69 +479,118 @@ export const HealthcareModal: React.FC = () => {
                     <Stethoscope className="w-8 h-8 text-rose-500/60 mx-auto mb-2" />
                     <h4 className="text-xs font-bold text-slate-800 dark:text-white font-display">No Telehealth Doctors On Duty</h4>
                     <p className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">
-                      Verified African medical doctors will appear here upon accreditation and going on duty.
+                      Verified doctors & clinics will appear here upon registration & approval.
                     </p>
                   </div>
                 ) : (
-                  doctors.map((doc) => (
-                  <div
-                    key={doc.id}
-                    className="p-3.5 rounded-2xl bg-white dark:bg-neutral-950 border border-slate-200/80 dark:border-neutral-800 shadow-2xs hover:shadow-sm transition-all"
-                  >
-                    <div className="flex items-start gap-3">
-                      <img
-                        src={doc.avatar}
-                        alt={doc.name}
-                        className="w-13 h-13 rounded-2xl object-cover shrink-0 border border-slate-200 dark:border-neutral-800"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                            {doc.name}
-                          </h4>
-                          <span className="text-[10px] px-1.5 py-0.2 rounded font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                            Verified Doctor ✓
-                          </span>
-                        </div>
+                  doctors.map((doc) => {
+                    const isVerified = doc.isVerified !== false;
+                    const isBooking = bookingDocId === doc.id;
+                    return (
+                      <div
+                        key={doc.id}
+                        className="p-3.5 rounded-2xl bg-white dark:bg-neutral-950 border border-slate-200/80 dark:border-neutral-800 shadow-2xs hover:shadow-sm transition-all"
+                      >
+                        <div className="flex items-start gap-3">
+                          <img
+                            src={doc.avatar}
+                            alt={doc.name}
+                            className="w-12 h-12 rounded-2xl object-cover shrink-0 border border-slate-200 dark:border-neutral-800"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                                {doc.name}
+                              </h4>
+                              {isVerified ? (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-0.5">
+                                  <BadgeCheck className="w-3 h-3" />
+                                  <span>{doc.accountType === 'clinic' ? 'Verified Clinic' : 'Verified MD'}</span>
+                                </span>
+                              ) : (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-amber-500/15 text-amber-600 dark:text-amber-300">
+                                  Pending Verification
+                                </span>
+                              )}
+                            </div>
 
-                        <p className="text-[11px] font-medium text-rose-600 dark:text-rose-400 mt-0.5">
-                          {doc.specialty}
-                        </p>
-                        <p className="text-[10px] text-slate-500 dark:text-neutral-400">
-                          {doc.hospitalAffiliation}
-                        </p>
+                            <p className="text-[11px] font-medium text-rose-600 dark:text-rose-400 mt-0.5">
+                              {doc.specialty}
+                            </p>
+                            <p className="text-[10px] text-slate-500 dark:text-neutral-400">
+                              {doc.hospitalAffiliation}
+                              {doc.licenseNumber ? ` · ${doc.licenseNumber}` : ''}
+                            </p>
 
-                        <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500 dark:text-neutral-400">
-                          <span>★ {doc.rating} ({doc.reviewCount})</span>
-                          <span>•</span>
-                          <span>Languages: {doc.languages.join(', ')}</span>
-                        </div>
+                            <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500 dark:text-neutral-400 flex-wrap">
+                              <span>★ {doc.rating} ({doc.reviewCount})</span>
+                              <span>•</span>
+                              <span>{doc.languages.join(', ')}</span>
+                              {doc.city && (
+                                <>
+                                  <span>•</span>
+                                  <span className="inline-flex items-center gap-0.5">
+                                    <MapPin className="w-3 h-3" />
+                                    {doc.city}
+                                  </span>
+                                </>
+                              )}
+                            </div>
 
-                        <p className="text-[11px] text-slate-600 dark:text-neutral-300 mt-1 line-clamp-2">
-                          {doc.bio}
-                        </p>
+                            <div className="mt-2.5 flex items-center justify-between pt-2 border-t border-slate-100 dark:border-neutral-900">
+                              <div>
+                                <span className="text-[10px] text-slate-400 block">Consult Fee</span>
+                                <span className="text-xs font-mono font-bold text-slate-900 dark:text-white">
+                                  {formatPrice(doc.consultationFee, doc.currency)}
+                                </span>
+                              </div>
 
-                        <div className="mt-2.5 flex items-center justify-between pt-2 border-t border-slate-100 dark:border-neutral-900">
-                          <div>
-                            <span className="text-[10px] text-slate-400 block">Consult Fee</span>
-                            <span className="text-xs font-mono font-bold text-slate-900 dark:text-white">
-                              {formatPrice(doc.consultationFee, doc.currency)}
-                            </span>
+                              <button
+                                type="button"
+                                disabled={!isVerified}
+                                onClick={() => setBookingDocId(isBooking ? null : doc.id)}
+                                className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white font-bold text-xs flex items-center gap-1.5 transition-transform active:scale-95 shadow-xs"
+                              >
+                                <MessageSquare className="w-3.5 h-3.5" />
+                                <span>{isVerified ? 'Book Consult' : 'Awaiting Review'}</span>
+                              </button>
+                            </div>
+
+                            {isBooking && (
+                              <div className="mt-2.5 p-2.5 rounded-xl bg-slate-100 dark:bg-neutral-900 border border-rose-500/30 space-y-2">
+                                <textarea
+                                  rows={2}
+                                  value={consultNotes}
+                                  onChange={(e) => setConsultNotes(e.target.value)}
+                                  placeholder="Describe symptoms or questions for the doctor/clinic..."
+                                  className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-black rounded-lg border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white"
+                                />
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={bookingBusy}
+                                    onClick={() => handleStartConsult(doc)}
+                                    className="flex-1 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold"
+                                  >
+                                    {bookingBusy
+                                      ? 'Booking...'
+                                      : `Pay ${formatPrice(doc.consultationFee, doc.currency)} & Start Consult`}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setBookingDocId(null)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-slate-200 dark:bg-neutral-800 text-xs font-semibold"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                           </div>
-
-                          <button
-                            type="button"
-                            onClick={() => handleStartConsult(doc)}
-                            className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 transition-transform active:scale-95 shadow-xs"
-                          >
-                            <MessageSquare className="w-3.5 h-3.5" />
-                            <span>Start Consult</span>
-                          </button>
                         </div>
                       </div>
-                    </div>
-                  </div>
-                ))
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -350,11 +618,11 @@ export const HealthcareModal: React.FC = () => {
                       onChange={(e) => setSelectedHospital(e.target.value)}
                       className="w-full px-3 py-2 text-xs bg-white dark:bg-neutral-900 rounded-xl border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white focus:outline-none"
                     >
-                      <option value="Lagos University Teaching Hospital (LUTH)">Lagos University Teaching Hospital (LUTH)</option>
-                      <option value="Lagoon Hospital Lekki">Lagoon Hospital Lekki Phase 1</option>
-                      <option value="Reddington Multi-Specialist Hospital VI">Reddington Hospital Victoria Island</option>
-                      <option value="Korle Bu Teaching Hospital Accra">Korle Bu Teaching Hospital (Accra Annex)</option>
-                      <option value="Nairobi West Hospital Tele-Center">Nairobi West Hospital Hub</option>
+                      {verifiedClinicNames.map((clinic) => (
+                        <option key={clinic} value={clinic}>
+                          {clinic}
+                        </option>
+                      ))}
                     </select>
                   </div>
 
@@ -548,10 +816,9 @@ export const HealthcareModal: React.FC = () => {
                       {med.canReorder && (
                         <button
                           type="button"
-                          onClick={() => {
-                            setSuccessToast(`🛍️ Refill request sent to ${med.pharmacyPartner}! Gokada courier scheduled.`);
-                            setTimeout(() => setSuccessToast(null), 3000);
-                          }}
+                          onClick={() =>
+                            showToast(`🛍️ Refill request sent to ${med.pharmacyPartner}! Gokada courier scheduled.`)
+                          }
                           className="px-3 py-1 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-[11px] flex items-center gap-1 shadow-2xs transition-transform active:scale-95"
                         >
                           <ShoppingBag className="w-3 h-3" />
@@ -662,6 +929,16 @@ export const HealthcareModal: React.FC = () => {
                         />
                       </div>
                     </div>
+
+                    <label className="flex items-start gap-2 text-[11px] text-slate-600 dark:text-neutral-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={vaultNdpaConsent}
+                        onChange={(e) => setVaultNdpaConsent(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>I consent under NDPA to store encrypted emergency medical metadata.</span>
+                    </label>
 
                     <button
                       type="button"

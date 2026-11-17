@@ -25,15 +25,17 @@ export const CheckoutDrawer: React.FC = () => {
   } = useApp();
 
   const [paymentOption, setPaymentOption] = useState<'paystack' | 'wallet'>('paystack');
-  const [buyerName, setBuyerName] = useState('Chioma Adebayo');
-  const [deliveryAddress, setDeliveryAddress] = useState('14 Admiralty Way, Lekki Phase 1, Lagos');
+  const [buyerName, setBuyerName] = useState('');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   if (!activeCheckoutProduct) return null;
 
   const productPrice = activeCheckoutProduct.price;
-  const hasSufficientWalletBalance = wallet.availableBalance >= productPrice;
+  const escrowFee = Math.min(Math.round(productPrice * 0.01), 4000);
+  const totalPayable = productPrice + escrowFee;
+  const hasSufficientWalletBalance = wallet.availableBalance >= totalPayable;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,10 +43,15 @@ export const CheckoutDrawer: React.FC = () => {
 
     setErrorMessage(null);
 
+    if (!buyerName.trim() || !deliveryAddress.trim()) {
+      setErrorMessage('Please enter recipient name and delivery address or landmark.');
+      return;
+    }
+
     if (paymentOption === 'wallet') {
       if (!hasSufficientWalletBalance) {
         setErrorMessage(
-          `Insufficient wallet balance (${formatPrice(wallet.availableBalance, 'NGN')}). Top up with Paystack or choose Paystack Direct.`
+          `Insufficient wallet balance (${formatPrice(wallet.availableBalance, 'NGN')}). Total with 1% escrow fee is ${formatPrice(totalPayable, activeCheckoutProduct.currency)}. Top up with Paystack or choose Paystack Direct.`
         );
         return;
       }
@@ -54,8 +61,8 @@ export const CheckoutDrawer: React.FC = () => {
         activeChatId,
         activeCheckoutProduct,
         'wallet',
-        buyerName,
-        deliveryAddress
+        buyerName.trim(),
+        deliveryAddress.trim()
       );
       setIsProcessing(false);
       if (!res.success && res.error) {
@@ -68,23 +75,25 @@ export const CheckoutDrawer: React.FC = () => {
 
       openPaystackPopup({
         email: userEmail,
-        amount: productPrice,
+        amount: totalPayable,
         currency: activeCheckoutProduct.currency || 'NGN',
         metadata: {
           chatId: activeChatId,
           productId: activeCheckoutProduct.id,
           productTitle: activeCheckoutProduct.title,
-          buyerName,
-          deliveryAddress,
+          subtotal: productPrice,
+          escrowFee,
+          buyerName: buyerName.trim(),
+          deliveryAddress: deliveryAddress.trim(),
         },
-        onSuccess: (paystackRes) => {
+        onSuccess: () => {
           setIsProcessing(false);
           const res = createEscrowOrder(
             activeChatId,
             activeCheckoutProduct,
             'paystack',
-            buyerName,
-            deliveryAddress
+            buyerName.trim(),
+            deliveryAddress.trim()
           );
           if (!res.success && res.error) {
             setErrorMessage(res.error);
@@ -149,31 +158,48 @@ export const CheckoutDrawer: React.FC = () => {
           )}
 
           {/* Product Summary */}
-          <div className="flex gap-3 p-3 rounded-2xl bg-slate-50 dark:bg-[#11101e] border border-slate-200/80 dark:border-slate-800">
-            {activeCheckoutProduct.imageUrl &&
-              !activeCheckoutProduct.id.startsWith('deal_') &&
-              !activeCheckoutProduct.tags?.includes('Escrow') && (
-                <img
-                  src={activeCheckoutProduct.imageUrl}
-                  alt={activeCheckoutProduct.title}
-                  referrerPolicy="no-referrer"
-                  className="w-16 h-16 rounded-xl object-cover shrink-0"
-                />
-              )}
-            <div className="flex-1 min-w-0">
-              <h4 className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
-                {activeCheckoutProduct.title}
-              </h4>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                Seller: {activeCheckoutProduct.sellerName}
-              </p>
-              <div className="flex items-center justify-between mt-1">
-                <span className="text-base font-bold text-indigo-600 dark:text-indigo-400 font-mono">
-                  {formatPrice(activeCheckoutProduct.price, activeCheckoutProduct.currency)}
-                </span>
-                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-full">
-                  100% Escrow Secured
-                </span>
+          <div className="p-3 rounded-2xl bg-slate-50 dark:bg-[#11101e] border border-slate-200/80 dark:border-slate-800 space-y-2.5">
+            <div className="flex gap-3">
+              {activeCheckoutProduct.imageUrl &&
+                !activeCheckoutProduct.id.startsWith('deal_') &&
+                !activeCheckoutProduct.tags?.includes('Escrow') && (
+                  <img
+                    src={activeCheckoutProduct.imageUrl}
+                    alt={activeCheckoutProduct.title}
+                    referrerPolicy="no-referrer"
+                    className="w-16 h-16 rounded-xl object-cover shrink-0"
+                  />
+                )}
+              <div className="flex-1 min-w-0">
+                <h4 className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                  {activeCheckoutProduct.title}
+                </h4>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Seller: {activeCheckoutProduct.sellerName}
+                </p>
+                <div className="flex items-center justify-between mt-1">
+                  <span className="text-base font-bold text-indigo-600 dark:text-indigo-400 font-mono">
+                    {formatPrice(productPrice, activeCheckoutProduct.currency)}
+                  </span>
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-full">
+                    100% Escrow Secured
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-200/70 dark:border-slate-800 text-[11px] space-y-1">
+              <div className="flex items-center justify-between text-slate-500">
+                <span>Item / Deal Subtotal</span>
+                <span className="font-mono font-medium">{formatPrice(productPrice, activeCheckoutProduct.currency)}</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-500">
+                <span>Escrow Fee (1%, max ₦4,000)</span>
+                <span className="font-mono font-medium">{formatPrice(escrowFee, activeCheckoutProduct.currency)}</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-900 dark:text-slate-100 font-bold pt-1 border-t border-slate-200/70 dark:border-slate-800">
+                <span>Total Payable</span>
+                <span className="font-mono text-indigo-600 dark:text-indigo-400">{formatPrice(totalPayable, activeCheckoutProduct.currency)}</span>
               </div>
             </div>
           </div>
@@ -182,7 +208,7 @@ export const CheckoutDrawer: React.FC = () => {
           <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/60 dark:border-indigo-800/40 rounded-2xl flex items-start gap-2.5">
             <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
             <p className="text-xs text-indigo-900 dark:text-indigo-200 leading-relaxed">
-              Your payment is held safely in the AGC Escrow Vault. The seller is only paid after you inspect your parcel and share your 4-digit PIN.
+              Your payment is held safely in the AGC Escrow Vault awaiting your approval. Once you approve release, give your 4-digit system code to the recipient to claim their payout.
             </p>
           </div>
 
@@ -274,12 +300,13 @@ export const CheckoutDrawer: React.FC = () => {
           <div className="space-y-2 text-xs">
             <div>
               <label className="block text-slate-600 dark:text-slate-400 mb-1">
-                Recipient Name
+                Buyer / Recipient Full Name
               </label>
               <input
                 type="text"
                 value={buyerName}
                 onChange={(e) => setBuyerName(e.target.value)}
+                placeholder="Enter buyer / recipient full name"
                 required
                 className="w-full px-3 py-2 bg-slate-50 dark:bg-[#11101e] border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
@@ -292,6 +319,7 @@ export const CheckoutDrawer: React.FC = () => {
                 type="text"
                 value={deliveryAddress}
                 onChange={(e) => setDeliveryAddress(e.target.value)}
+                placeholder="Enter delivery address or landmark"
                 required
                 className="w-full px-3 py-2 bg-slate-50 dark:bg-[#11101e] border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
@@ -323,8 +351,8 @@ export const CheckoutDrawer: React.FC = () => {
                   <Lock className="w-4 h-4" />
                   <span>
                     {paymentOption === 'paystack'
-                      ? `Pay ${formatPrice(productPrice, activeCheckoutProduct.currency)} with Paystack`
-                      : `Pay ${formatPrice(productPrice, activeCheckoutProduct.currency)} from Wallet`}
+                      ? `Pay ${formatPrice(totalPayable, activeCheckoutProduct.currency)} with Paystack`
+                      : `Pay ${formatPrice(totalPayable, activeCheckoutProduct.currency)} from Wallet`}
                   </span>
                 </>
               )}

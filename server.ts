@@ -76,7 +76,7 @@ app.use(
   })
 );
 
-// â”€â”€ CUSTOM APPLICATION FIREWALL (WAF) & THREAT INSPECTION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── CUSTOM APPLICATION FIREWALL (WAF) & THREAT INSPECTION ──────────────────
 const SQLI_REGEX = /(union\s+select|select\s+.*\s+from|insert\s+into|drop\s+table|update\s+.*\s+set|delete\s+from|sleep\(\d+\)|benchmark\(|waitfor\s+delay|;\s*--|\/\*|\*\/|;\s*drop|'\s*or\s*['\d]=['\d])/i;
 const XSS_REGEX = /(<script.*?>|javascript:|onload\s*=|onerror\s*=|onmouseover\s*=|eval\(|<iframe|<svg.*?onload)/i;
 const PATH_TRAVERSAL_REGEX = /(\.\.[\/\\]|%2e%2e%2f|%2e%2e\/|\.\.%2f|\/etc\/passwd|win\.ini)/i;
@@ -90,7 +90,7 @@ function inspectPayloadForThreats(target: any): string | null {
   return null;
 }
 
-// â”€â”€ ADMIN AUDIT, SECURITY EVENTS & IP BLOCKLIST STORE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── ADMIN AUDIT, SECURITY EVENTS & IP BLOCKLIST STORE ───────────────────────
 const AUDIT_FILE = path.join(__dirname, 'data_admin_audit.json');
 interface AuditEntry {
   id: string;
@@ -278,7 +278,7 @@ app.use('/api', (req: Request, res: Response, next) => {
   next();
 });
 
-// â”€â”€ AUTH ROUTE RATE LIMITER (BRUTE FORCE PROTECTION) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── AUTH ROUTE RATE LIMITER (BRUTE FORCE PROTECTION) ───────────────────────
 interface RateLimitRecord {
   attempts: number;
   resetAt: number;
@@ -320,7 +320,7 @@ const authRateLimiter = (req: Request, res: Response, next: () => void) => {
   next();
 };
 
-// â”€â”€ ANTI-BOT & RECON SCRAPING MITIGATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── ANTI-BOT & RECON SCRAPING MITIGATION ────────────────────────────────────
 const BOT_USER_AGENTS = [
   'sqlmap', 'nikto', 'nmap', 'masscan', 'gobuster', 'dirbuster', 'wpscan',
   'python-requests', 'aiohttp', 'curl/', 'wget/', 'postmanruntime',
@@ -386,7 +386,7 @@ function getPhoneVariants(rawPhone?: string): string[] {
   return Array.from(variants);
 }
 
-// â”€â”€ Persistent User Registry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Persistent User Registry ────────────────────────────────────────────────
 interface RegisteredUser {
   id: string;
   fullName: string;
@@ -427,6 +427,8 @@ const DISPATCH_FILE = path.join(__dirname, 'data_dispatch_orders.json');
 const CONFIG_FILE = path.join(__dirname, 'data_admin_config.json');
 const CMS_FILE = path.join(__dirname, 'data_admin_cms.json');
 const AI_DATACENTER_FILE = path.join(__dirname, 'data_ai_datacenter.json');
+const ESCROWS_FILE = path.join(__dirname, 'data_escrow_orders.json');
+const PROFESSIONALS_FILE = path.join(__dirname, 'data_professionals.json');
 
 const DEFAULT_SYSTEM_CONFIG = {
   maintenanceMode: false,
@@ -435,7 +437,7 @@ const DEFAULT_SYSTEM_CONFIG = {
   requirePhoneOtp: false,
   defaultCurrency: 'NGN',
   dispatchCommissionPercent: 5,
-  escrowCommissionPercent: 1.5,
+  escrowCommissionPercent: 1,
   artisanCommissionPercent: 2,
   creatorCommissionPercent: 5,
   sponsoredAdFeeNgn: 2500,
@@ -486,7 +488,7 @@ const DEFAULT_CMS_DATA = {
   ],
   marqueeBanner: {
     enabled: true,
-    text: 'âš¡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.',
+    text: '⚡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.',
     speed: 'normal' as const,
     backgroundColor: '#7c3aed',
     textColor: '#ffffff',
@@ -604,6 +606,9 @@ const ADMIN_SYS_CONFIG_KEY = '__agc_sys_config__';
 const ADMIN_SYS_CMS_KEY = '__agc_sys_cms__';
 const ADMIN_SYS_USERS_KEY = '__agc_sys_users__';
 const ADMIN_SYS_STORES_KEY = '__agc_sys_stores__';
+const ADMIN_SYS_AI_KEY = '__agc_sys_ai_datacenter__';
+const ADMIN_SYS_PROFS_KEY = '__agc_sys_professionals__';
+const ADMIN_SYS_ESCROWS_KEY = '__agc_sys_escrows__';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function canonicalAdminPhoneKey(phoneOrId?: string): string {
@@ -717,13 +722,21 @@ function pushAdminStoresToSupabase() {
   }).catch(() => {});
 }
 
+// Forward-declared sync hooks populated after state initialization
+let syncAiFromSupabaseHook: ((slice: any) => void) | null = null;
+let syncProfessionalsFromSupabaseHook: ((slice: any) => void) | null = null;
+let syncEscrowsFromSupabaseHook: ((slice: any) => void) | null = null;
+
 async function syncAdminStateFromSupabase() {
   try {
-    const [cfgSlice, cmsSlice, usersSlice, storesSlice] = await Promise.all([
+    const [cfgSlice, cmsSlice, usersSlice, storesSlice, aiSlice, profsSlice, escrowsSlice] = await Promise.all([
       fetchSupabaseAdminSlice(ADMIN_SYS_CONFIG_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_CMS_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_USERS_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_STORES_KEY),
+      fetchSupabaseAdminSlice(ADMIN_SYS_AI_KEY),
+      fetchSupabaseAdminSlice(ADMIN_SYS_PROFS_KEY),
+      fetchSupabaseAdminSlice(ADMIN_SYS_ESCROWS_KEY),
     ]);
 
     if (cfgSlice) {
@@ -808,6 +821,16 @@ async function syncAdminStateFromSupabase() {
         }
       }
       if (auditChanged) saveAdminAuditFile();
+    }
+
+    if (aiSlice && syncAiFromSupabaseHook) {
+      syncAiFromSupabaseHook(aiSlice);
+    }
+    if (profsSlice && syncProfessionalsFromSupabaseHook) {
+      syncProfessionalsFromSupabaseHook(profsSlice);
+    }
+    if (escrowsSlice && syncEscrowsFromSupabaseHook) {
+      syncEscrowsFromSupabaseHook(escrowsSlice);
     }
   } catch (_) {}
 }
@@ -1975,6 +1998,7 @@ interface ServerWalletTx {
     | 'topup'
     | 'deposit'
     | 'escrow_lock'
+    | 'escrow_fee'
     | 'escrow_release'
     | 'withdrawal'
     | 'payroll_debit'
@@ -1990,6 +2014,14 @@ interface ServerWalletTx {
     | 'ad_payment'
     | 'store_subscription'
     | 'artisan_reg'
+    | 'errand_escrow'
+    | 'errand_release'
+    | 'service_booking'
+    | 'creator_tip'
+    | 'course_enroll'
+    | 'legal_consult'
+    | 'health_consult'
+    | 'referral_bonus'
     | 'refund';
   title: string;
   description?: string;
@@ -2057,6 +2089,31 @@ try {
 } catch (e) {
   console.warn('Notice loading unified wallet ledger:', e);
 }
+
+// Backfill any historical transactions stored inside serverWallets into unifiedLedger
+try {
+  const seenLedgerIds = new Set(unifiedLedger.map((t) => t.id));
+  let backfilled = false;
+  for (const w of serverWallets.values()) {
+    for (const tx of w.transactions || []) {
+      if (tx?.id && !seenLedgerIds.has(tx.id)) {
+        seenLedgerIds.add(tx.id);
+        unifiedLedger.push({
+          ...tx,
+          userPhone: tx.userPhone || w.phoneNumber,
+          createdAt: tx.createdAt || w.updatedAt || new Date().toISOString(),
+          referenceId: tx.referenceId || tx.reference,
+        });
+        backfilled = true;
+      }
+    }
+  }
+  if (backfilled) {
+    unifiedLedger.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    unifiedLedger = unifiedLedger.slice(0, 5000);
+    fs.writeFileSync(WALLET_LEDGER_FILE, JSON.stringify(unifiedLedger, null, 2));
+  }
+} catch (_) {}
 
 function saveUnifiedLedgerFile() {
   try {
@@ -3142,9 +3199,63 @@ app.post('/api/games/bet/settle', (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/admin/wallet-transactions', (req: Request, res: Response) => {
+app.get('/api/admin/wallet-transactions', async (req: Request, res: Response) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   const typeFilter = String(req.query.type || '').trim();
+
+  // Merge any persisted Supabase wallet_transactions so cold container restarts don't hide money trail
+  const sbKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+  if (SUPABASE_URL && sbKey) {
+    try {
+      const sbRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/wallet_transactions?select=*&order=created_at.desc&limit=500`,
+        {
+          headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
+          signal: AbortSignal.timeout(4000),
+        }
+      );
+      if (sbRes.ok) {
+        const sbRows = await sbRes.json();
+        if (Array.isArray(sbRows) && sbRows.length > 0) {
+          const existingIds = new Set(unifiedLedger.map((t) => t.id));
+          let added = false;
+          for (const row of sbRows) {
+            if (!row?.id || existingIds.has(row.id)) continue;
+            existingIds.add(row.id);
+            unifiedLedger.push({
+              id: String(row.id),
+              userId: row.user_id || undefined,
+              userPhone: row.user_phone || undefined,
+              userName: row.user_name || undefined,
+              type: row.type,
+              title: row.title || row.description || row.type,
+              description: row.description || row.title || row.type,
+              amount: Number(row.amount || 0),
+              fee: Number(row.fee || 0),
+              balanceAfter: row.balance_after !== null && row.balance_after !== undefined ? Number(row.balance_after) : undefined,
+              currency: row.currency || 'NGN',
+              timestamp: row.created_at
+                ? new Date(row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : '',
+              createdAt: row.created_at || new Date().toISOString(),
+              status: row.status || 'completed',
+              reference: row.reference || row.reference_id || row.id,
+              referenceId: row.reference_id || row.reference || row.id,
+              channel: row.channel || 'wallet',
+              metadata: row.metadata || {},
+            });
+            added = true;
+          }
+          if (added) {
+            unifiedLedger.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+            unifiedLedger = unifiedLedger.slice(0, 5000);
+            saveUnifiedLedgerFile();
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   const rows = unifiedLedger.filter((tx) => {
     if (typeFilter && typeFilter !== 'all' && tx.type !== typeFilter) return false;
     if (!q) return true;
@@ -3157,6 +3268,1038 @@ app.get('/api/admin/wallet-transactions', (req: Request, res: Response) => {
     );
   });
   res.json({ success: true, transactions: rows.slice(0, 500), total: rows.length });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AUTHORITATIVE ESCROW ENGINE (1% FEE MAX ₦4,000 + TWO-STEP PIN RELEASE)
+// ═══════════════════════════════════════════════════════════════════════════════
+interface ServerEscrowOrder {
+  id: string;
+  chatId: string;
+  product: any;
+  quantity: number;
+  subtotalAmount: number;
+  escrowFee: number;
+  totalAmount: number;
+  currency: 'NGN' | 'KES' | 'GHS' | 'ZAR';
+  status: 'escrow_secured' | 'shipped' | 'release_approved' | 'funds_released' | 'disputed';
+  escrowPin: string;
+  buyerName: string;
+  buyerPhone: string;
+  sellerName: string;
+  sellerPhone: string;
+  deliveryAddress: string;
+  createdAt: string;
+  updatedAt: string;
+  approvedAt?: string;
+  releasedAt?: string;
+  failedClaimAttempts?: number;
+  disputeReason?: string;
+  paymentMethod: 'paystack' | 'wallet';
+  paystackRef?: string;
+}
+
+const serverEscrowOrders = new Map<string, ServerEscrowOrder>();
+let serverEscrowsUpdatedAt = '';
+
+try {
+  if (fs.existsSync(ESCROWS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(ESCROWS_FILE, 'utf8'));
+    const list = Array.isArray(raw) ? raw : Array.isArray(raw?.orders) ? raw.orders : [];
+    for (const o of list) {
+      if (o && o.id) serverEscrowOrders.set(String(o.id), o);
+    }
+    if (raw?.updatedAt) serverEscrowsUpdatedAt = String(raw.updatedAt);
+  }
+} catch (e) {
+  console.warn('Notice loading data_escrow_orders.json:', e);
+}
+
+function saveEscrowOrdersFile() {
+  try {
+    serverEscrowsUpdatedAt = new Date().toISOString();
+    fs.writeFileSync(
+      ESCROWS_FILE,
+      JSON.stringify({ orders: Array.from(serverEscrowOrders.values()), updatedAt: serverEscrowsUpdatedAt }, null, 2)
+    );
+  } catch (e) {
+    console.warn('Notice saving data_escrow_orders.json:', e);
+  }
+}
+
+function pushEscrowOrdersToSupabase() {
+  upsertSupabaseAdminSlice(ADMIN_SYS_ESCROWS_KEY, 'AGC_ADMIN_ESCROWS', {
+    orders: Array.from(serverEscrowOrders.values()).slice(0, 500),
+    updatedAt: serverEscrowsUpdatedAt || new Date().toISOString(),
+  }).catch(() => {});
+}
+
+syncEscrowsFromSupabaseHook = (slice: any) => {
+  if (!slice || !Array.isArray(slice.orders)) return;
+  const remoteTs = new Date(slice.updatedAt || slice._rowUpdatedAt || 0).getTime();
+  const localTs = serverEscrowsUpdatedAt ? new Date(serverEscrowsUpdatedAt).getTime() : 0;
+  if (remoteTs > localTs || serverEscrowOrders.size === 0) {
+    for (const o of slice.orders) {
+      if (!o?.id) continue;
+      const cur = serverEscrowOrders.get(o.id);
+      if (!cur || new Date(o.updatedAt || 0).getTime() >= new Date(cur.updatedAt || 0).getTime()) {
+        serverEscrowOrders.set(o.id, o);
+      }
+    }
+    serverEscrowsUpdatedAt = slice.updatedAt || slice._rowUpdatedAt || new Date().toISOString();
+    try {
+      fs.writeFileSync(
+        ESCROWS_FILE,
+        JSON.stringify({ orders: Array.from(serverEscrowOrders.values()), updatedAt: serverEscrowsUpdatedAt }, null, 2)
+      );
+    } catch (_) {}
+  }
+};
+
+function computeEscrowFeeServer(subtotal: number): number {
+  const cleanSub = Math.max(0, Math.round(Number(subtotal) || 0));
+  return Math.min(Math.round(cleanSub * 0.01), 4000);
+}
+
+function maskEscrowOrderForViewer(order: ServerEscrowOrder, viewerPhone?: string): ServerEscrowOrder {
+  if (!viewerPhone) {
+    const { escrowPin: _pin, ...rest } = order as any;
+    return { ...rest, escrowPin: '' };
+  }
+  const isBuyer = phonesMatchServer(viewerPhone, order.buyerPhone);
+  if (isBuyer) return order;
+  const { escrowPin: _pin, ...rest } = order as any;
+  return { ...rest, escrowPin: '' };
+}
+
+function broadcastEscrowOrderUpdate(order: ServerEscrowOrder) {
+  const masked = maskEscrowOrderForViewer(order);
+  const buyerVariants = getPhoneVariants(order.buyerPhone);
+  const buyerSocketIds = new Set<string>();
+  for (const v of buyerVariants) {
+    const room = io.sockets.adapter.rooms.get(`phone:${v}`);
+    if (room) {
+      for (const sid of room) {
+        buyerSocketIds.add(sid);
+        io.to(sid).emit('escrow_order_updated', order);
+      }
+    }
+  }
+  const sellerVariants = getPhoneVariants(order.sellerPhone);
+  const sellerSocketIds = new Set<string>();
+  for (const v of sellerVariants) {
+    const room = io.sockets.adapter.rooms.get(`phone:${v}`);
+    if (room) {
+      for (const sid of room) {
+        if (!buyerSocketIds.has(sid) && !sellerSocketIds.has(sid)) {
+          sellerSocketIds.add(sid);
+          io.to(sid).emit('escrow_order_updated', masked);
+        }
+      }
+    }
+  }
+}
+
+app.get('/api/escrow/orders', (req: Request, res: Response) => {
+  const viewerPhone = String(req.query.viewerPhone || '').trim();
+  const isAdminView = String(req.query.admin || '') === 'true';
+  const allOrders = Array.from(serverEscrowOrders.values()).sort(
+    (a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
+  );
+  if (isAdminView) {
+    return res.json({ success: true, orders: allOrders });
+  }
+  if (!viewerPhone) {
+    return res.json({ success: true, orders: allOrders.map((o) => maskEscrowOrderForViewer(o)) });
+  }
+  const mine = allOrders.filter(
+    (o) => phonesMatchServer(viewerPhone, o.buyerPhone) || phonesMatchServer(viewerPhone, o.sellerPhone)
+  );
+  return res.json({
+    success: true,
+    orders: mine.map((o) => maskEscrowOrderForViewer(o, viewerPhone)),
+  });
+});
+
+app.post('/api/escrow/create', (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const {
+      id,
+      chatId,
+      product,
+      quantity = 1,
+      buyerName,
+      buyerPhone,
+      sellerName,
+      sellerPhone,
+      deliveryAddress,
+      paymentMethod = 'wallet',
+      paystackRef,
+      escrowPin: requestedPin,
+    } = body;
+
+    if (!product || !buyerPhone) {
+      return res.status(400).json({ success: false, message: 'Product and buyer phone are required.' });
+    }
+
+    const qty = Math.max(1, Math.round(Number(quantity) || 1));
+    const unitPrice = Math.max(1, Math.round(Number(product.price) || 0));
+    const subtotalAmount = unitPrice * qty;
+    const escrowFee = computeEscrowFeeServer(subtotalAmount);
+    const totalAmount = subtotalAmount + escrowFee;
+    const currency = (product.currency || 'NGN') as ServerEscrowOrder['currency'];
+
+    const buyerMatch = findUserEntry(String(buyerPhone));
+    const buyerWallet = getOrCreateServerWallet(String(buyerPhone));
+    const channel: 'wallet' | 'paystack' = paymentMethod === 'paystack' ? 'paystack' : 'wallet';
+
+    if (channel === 'wallet' && buyerWallet.availableBalance < totalAmount) {
+      return res.status(400).json({
+        success: false,
+        insufficientFunds: true,
+        message: `Insufficient wallet balance. Need ${totalAmount.toLocaleString()} (includes ₦${escrowFee.toLocaleString()} escrow fee).`,
+        availableBalance: buyerWallet.availableBalance,
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const orderId = String(id || `ORD-${Math.floor(100000 + Math.random() * 900000)}`);
+    const pin = /^\d{4}$/.test(String(requestedPin || ''))
+      ? String(requestedPin)
+      : String(Math.floor(1000 + Math.random() * 9000));
+    const ref = String(paystackRef || `ESC_${orderId}_${Date.now()}`);
+
+    if (channel === 'wallet') {
+      buyerWallet.availableBalance = Math.max(0, buyerWallet.availableBalance - totalAmount);
+    }
+    buyerWallet.escrowLockedBalance = Math.max(0, Number(buyerWallet.escrowLockedBalance || 0) + subtotalAmount);
+    buyerWallet.updatedAt = nowIso;
+
+    const lockTx: ServerWalletTx = {
+      id: `tx_esc_lock_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
+      userId: buyerMatch?.user.id,
+      userPhone: buyerMatch?.user.phoneNumber || String(buyerPhone),
+      userName: buyerMatch?.user.fullName || String(buyerName || 'Buyer'),
+      type: 'escrow_lock',
+      title: `Escrow Vault: ${product.title} (Incl. 1% fee: ₦${escrowFee.toLocaleString()})`,
+      description: `Held in escrow for ${sellerName || product.sellerName} · Order ${orderId}`,
+      amount: totalAmount,
+      fee: escrowFee,
+      balanceAfter: buyerWallet.availableBalance,
+      currency,
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: ref,
+      referenceId: orderId,
+      channel,
+      metadata: { orderId, subtotalAmount, escrowFee, sellerName, sellerPhone },
+    };
+
+    buyerWallet.transactions = [lockTx, ...buyerWallet.transactions].slice(0, 100);
+    serverWallets.set(buyerWallet.phoneKey, buyerWallet);
+    saveWalletsFile();
+    appendUnifiedLedgerTx(lockTx);
+
+    if (buyerMatch) {
+      buyerMatch.user.walletBalanceNgn = buyerWallet.availableBalance;
+      (buyerMatch.user as any).updatedAt = nowIso;
+      usersByPhone.set(buyerMatch.key, buyerMatch.user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(buyerMatch.user);
+    }
+    emitWalletUpdateToPhone(String(buyerPhone), buyerWallet, lockTx.title, ref);
+
+    let resolvedSellerPhone = String(sellerPhone || product.sellerPhone || '').trim();
+    if (!resolvedSellerPhone && sellerName) {
+      for (const u of usersByPhone.values()) {
+        if (u.fullName?.toLowerCase() === String(sellerName).toLowerCase()) {
+          resolvedSellerPhone = u.phoneNumber;
+          break;
+        }
+      }
+    }
+
+    const order: ServerEscrowOrder = {
+      id: orderId,
+      chatId: String(chatId || ''),
+      product: { ...product, sellerPhone: resolvedSellerPhone || product.sellerPhone },
+      quantity: qty,
+      subtotalAmount,
+      escrowFee,
+      totalAmount,
+      currency,
+      status: 'escrow_secured',
+      escrowPin: pin,
+      buyerName: String(buyerName || buyerMatch?.user.fullName || 'Buyer'),
+      buyerPhone: String(buyerPhone),
+      sellerName: String(sellerName || product.sellerName || 'Seller'),
+      sellerPhone: resolvedSellerPhone,
+      deliveryAddress: String(deliveryAddress || ''),
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      failedClaimAttempts: 0,
+      paymentMethod: channel,
+      paystackRef: ref,
+    };
+
+    serverEscrowOrders.set(order.id, order);
+    saveEscrowOrdersFile();
+    pushEscrowOrdersToSupabase();
+    broadcastEscrowOrderUpdate(order);
+
+    appendAuditEntry({
+      refId: order.id,
+      actor: order.buyerName,
+      actorRole: 'Buyer',
+      action: 'Escrow Created',
+      target: `${order.product.title} (${order.buyerName} -> ${order.sellerName})`,
+      details: `Subtotal ₦${subtotalAmount.toLocaleString()} + Fee ₦${escrowFee.toLocaleString()} = ₦${totalAmount.toLocaleString()}`,
+    });
+
+    return res.json({
+      success: true,
+      order,
+      wallet: {
+        availableBalance: buyerWallet.availableBalance,
+        escrowLockedBalance: buyerWallet.escrowLockedBalance,
+        currency: buyerWallet.currency,
+        transactions: buyerWallet.transactions,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to create escrow order' });
+  }
+});
+
+app.post('/api/escrow/approve-release', (req: Request, res: Response) => {
+  const { orderId, actorPhone } = req.body || {};
+  const order = serverEscrowOrders.get(String(orderId || ''));
+  if (!order) {
+    return res.status(404).json({ success: false, message: 'Escrow order not found on server.' });
+  }
+  if (actorPhone && order.buyerPhone && !phonesMatchServer(actorPhone, order.buyerPhone)) {
+    return res.status(403).json({ success: false, message: 'Only the escrow buyer/creator can approve release.' });
+  }
+  if (order.status === 'funds_released') {
+    return res.json({ success: true, order, message: 'Funds already released to recipient.' });
+  }
+  if (order.status === 'disputed') {
+    return res.status(400).json({ success: false, message: 'Order is currently disputed and locked for Admin review.' });
+  }
+  const nowIso = new Date().toISOString();
+  order.status = 'release_approved';
+  order.approvedAt = nowIso;
+  order.updatedAt = nowIso;
+  serverEscrowOrders.set(order.id, order);
+  saveEscrowOrdersFile();
+  pushEscrowOrdersToSupabase();
+  broadcastEscrowOrderUpdate(order);
+
+  appendAuditEntry({
+    refId: order.id,
+    actor: order.buyerName,
+    actorRole: 'Buyer',
+    action: 'Escrow Release Approved',
+    target: `Order #${order.id}`,
+    details: 'Buyer approved release; awaiting recipient PIN entry to claim funds.',
+  });
+
+  return res.json({
+    success: true,
+    order,
+    message: `Release approved! Share your 4-digit system code (${order.escrowPin}) with ${order.sellerName} to claim payout.`,
+  });
+});
+
+app.post('/api/escrow/claim', (req: Request, res: Response) => {
+  const { orderId, pin, claimantPhone } = req.body || {};
+  const order = serverEscrowOrders.get(String(orderId || ''));
+  if (!order) {
+    return res.status(404).json({ success: false, message: 'Escrow order not found.' });
+  }
+  if (order.status === 'funds_released') {
+    return res.status(400).json({ success: false, message: 'Escrow funds have already been claimed.' });
+  }
+  if (order.status === 'disputed') {
+    return res.status(400).json({ success: false, message: 'Order is locked under dispute. Contact Admin arbitration.' });
+  }
+  if (order.status !== 'release_approved') {
+    return res.status(400).json({
+      success: false,
+      message: 'Funds are still held awaiting buyer approval before the claim code can be redeemed.',
+    });
+  }
+
+  const enteredPin = String(pin || '').trim();
+  if (enteredPin !== String(order.escrowPin).trim()) {
+    const attempts = (order.failedClaimAttempts || 0) + 1;
+    order.failedClaimAttempts = attempts;
+    order.updatedAt = new Date().toISOString();
+    if (attempts >= 3) {
+      order.status = 'disputed';
+      order.disputeReason = 'Locked after 3 invalid release PIN claim attempts';
+    }
+    serverEscrowOrders.set(order.id, order);
+    saveEscrowOrdersFile();
+    pushEscrowOrdersToSupabase();
+    broadcastEscrowOrderUpdate(order);
+
+    if (attempts >= 3) {
+      appendAuditEntry({
+        refId: order.id,
+        actor: order.sellerName,
+        actorRole: 'Recipient',
+        action: 'Escrow Auto-Disputed',
+        target: `Order #${order.id}`,
+        details: 'Locked after 3 invalid PIN attempts.',
+      });
+      return res.status(403).json({
+        success: false,
+        locked: true,
+        order: maskEscrowOrderForViewer(order, claimantPhone),
+        message: '3 invalid release codes entered. Order locked in Dispute for Admin review.',
+      });
+    }
+    return res.status(400).json({
+      success: false,
+      attemptsRemaining: 3 - attempts,
+      order: maskEscrowOrderForViewer(order, claimantPhone),
+      message: `Invalid 4-digit release code. ${3 - attempts} attempt(s) remaining before dispute lock.`,
+    });
+  }
+
+  const nowIso = new Date().toISOString();
+  const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const payout = Math.max(0, Number(order.subtotalAmount || order.product?.price || order.totalAmount));
+
+  // Unlock buyer's escrowLockedBalance
+  if (order.buyerPhone) {
+    const buyerWallet = getOrCreateServerWallet(order.buyerPhone);
+    buyerWallet.escrowLockedBalance = Math.max(0, Number(buyerWallet.escrowLockedBalance || 0) - payout);
+    buyerWallet.updatedAt = nowIso;
+    serverWallets.set(buyerWallet.phoneKey, buyerWallet);
+    emitWalletUpdateToPhone(order.buyerPhone, buyerWallet, `Escrow released for ${order.product.title}`, order.id);
+  }
+
+  // Credit seller's availableBalance
+  const sellerTarget = order.sellerPhone || claimantPhone || order.sellerName;
+  const sellerWallet = getOrCreateServerWallet(sellerTarget);
+  const sellerMatch = findUserEntry(sellerTarget);
+  sellerWallet.availableBalance = Math.max(0, Number(sellerWallet.availableBalance || 0) + payout);
+  sellerWallet.updatedAt = nowIso;
+
+  const relTx: ServerWalletTx = {
+    id: `tx_esc_rel_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
+    userId: sellerMatch?.user.id,
+    userPhone: sellerMatch?.user.phoneNumber || sellerWallet.phoneNumber || sellerTarget,
+    userName: sellerMatch?.user.fullName || order.sellerName,
+    type: 'escrow_release',
+    title: `Escrow Payout Claimed: ${order.product.title}`,
+    description: `Released by ${order.buyerName} · Order ${order.id} (Fee ₦${(order.escrowFee || 0).toLocaleString()} paid by buyer)`,
+    amount: payout,
+    fee: order.escrowFee || 0,
+    balanceAfter: sellerWallet.availableBalance,
+    currency: order.currency,
+    timestamp: nowStr,
+    createdAt: nowIso,
+    status: 'completed',
+    reference: `REL_${order.id}`,
+    referenceId: order.id,
+    channel: 'wallet',
+    metadata: { orderId: order.id, buyerName: order.buyerName, buyerPhone: order.buyerPhone },
+  };
+  sellerWallet.transactions = [relTx, ...sellerWallet.transactions].slice(0, 100);
+  serverWallets.set(sellerWallet.phoneKey, sellerWallet);
+  saveWalletsFile();
+  appendUnifiedLedgerTx(relTx);
+
+  if (sellerMatch) {
+    sellerMatch.user.walletBalanceNgn = sellerWallet.availableBalance;
+    (sellerMatch.user as any).updatedAt = nowIso;
+    usersByPhone.set(sellerMatch.key, sellerMatch.user);
+    saveUsersFile();
+    pushAdminUserOverrideToSupabase(sellerMatch.user);
+  }
+
+  order.status = 'funds_released';
+  order.releasedAt = nowIso;
+  order.updatedAt = nowIso;
+  serverEscrowOrders.set(order.id, order);
+  saveEscrowOrdersFile();
+  pushEscrowOrdersToSupabase();
+
+  emitWalletUpdateToPhone(sellerTarget, sellerWallet, relTx.title, relTx.reference);
+  broadcastEscrowOrderUpdate(order);
+
+  appendAuditEntry({
+    refId: order.id,
+    actor: order.sellerName,
+    actorRole: 'Recipient',
+    action: 'Escrow Claimed',
+    target: `Order #${order.id}`,
+    details: `₦${payout.toLocaleString()} credited to ${order.sellerName}`,
+  });
+
+  return res.json({
+    success: true,
+    order: maskEscrowOrderForViewer(order, claimantPhone),
+    payoutAmount: payout,
+    message: `Code verified! ₦${payout.toLocaleString()} has been credited to ${order.sellerName}'s wallet.`,
+    wallet: {
+      availableBalance: sellerWallet.availableBalance,
+      escrowLockedBalance: sellerWallet.escrowLockedBalance,
+      currency: sellerWallet.currency,
+      transactions: sellerWallet.transactions,
+    },
+  });
+});
+
+app.post('/api/escrow/dispute', (req: Request, res: Response) => {
+  const { orderId, reason, actorName } = req.body || {};
+  const order = serverEscrowOrders.get(String(orderId || ''));
+  if (!order) {
+    return res.status(404).json({ success: false, message: 'Escrow order not found.' });
+  }
+  if (order.status === 'funds_released') {
+    return res.status(400).json({ success: false, message: 'Released orders cannot be disputed.' });
+  }
+  order.status = 'disputed';
+  order.disputeReason = String(reason || 'Dispute flagged by participant').trim();
+  order.updatedAt = new Date().toISOString();
+  serverEscrowOrders.set(order.id, order);
+  saveEscrowOrdersFile();
+  pushEscrowOrdersToSupabase();
+  broadcastEscrowOrderUpdate(order);
+
+  appendAuditEntry({
+    refId: order.id,
+    actor: String(actorName || order.buyerName),
+    actorRole: 'Participant',
+    action: 'Escrow Disputed',
+    target: `Order #${order.id}`,
+    details: order.disputeReason,
+  });
+
+  return res.json({ success: true, order, message: `Order #${order.id} flagged for Admin arbitration.` });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VERIFIED PROFESSIONALS MARKETPLACE (AFRILAW, AFRIHEALTH, ERRANDS)
+// ═══════════════════════════════════════════════════════════════════════════════
+interface ProfessionalsStore {
+  lawyers: any[];
+  clinicsDoctors: any[];
+  errandRunners: any[];
+  errandOrders: any[];
+  updatedAt: string;
+}
+
+let professionalsState: ProfessionalsStore = {
+  lawyers: [],
+  clinicsDoctors: [],
+  errandRunners: [],
+  errandOrders: [],
+  updatedAt: '',
+};
+
+try {
+  if (fs.existsSync(PROFESSIONALS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(PROFESSIONALS_FILE, 'utf8'));
+    if (raw && typeof raw === 'object') {
+      professionalsState = {
+        lawyers: Array.isArray(raw.lawyers) ? raw.lawyers : [],
+        clinicsDoctors: Array.isArray(raw.clinicsDoctors) ? raw.clinicsDoctors : [],
+        errandRunners: Array.isArray(raw.errandRunners) ? raw.errandRunners : [],
+        errandOrders: Array.isArray(raw.errandOrders) ? raw.errandOrders : [],
+        updatedAt: String(raw.updatedAt || ''),
+      };
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading data_professionals.json:', e);
+}
+
+function saveProfessionalsFile() {
+  try {
+    professionalsState.updatedAt = new Date().toISOString();
+    fs.writeFileSync(PROFESSIONALS_FILE, JSON.stringify(professionalsState, null, 2));
+  } catch (e) {
+    console.warn('Notice saving data_professionals.json:', e);
+  }
+}
+
+function pushProfessionalsToSupabase() {
+  upsertSupabaseAdminSlice(ADMIN_SYS_PROFS_KEY, 'AGC_PROFESSIONALS', professionalsState).catch(() => {});
+}
+
+function broadcastProfessionalsUpdate() {
+  io.emit('professionals_updated', professionalsState);
+}
+
+syncProfessionalsFromSupabaseHook = (slice: any) => {
+  if (!slice || typeof slice !== 'object') return;
+  const remoteTs = new Date(slice.updatedAt || slice._rowUpdatedAt || 0).getTime();
+  const localTs = professionalsState.updatedAt ? new Date(professionalsState.updatedAt).getTime() : 0;
+  const localEmpty =
+    professionalsState.lawyers.length === 0 &&
+    professionalsState.clinicsDoctors.length === 0 &&
+    professionalsState.errandRunners.length === 0;
+  if (remoteTs > localTs || localEmpty) {
+    professionalsState = {
+      lawyers: Array.isArray(slice.lawyers) ? slice.lawyers : professionalsState.lawyers,
+      clinicsDoctors: Array.isArray(slice.clinicsDoctors) ? slice.clinicsDoctors : professionalsState.clinicsDoctors,
+      errandRunners: Array.isArray(slice.errandRunners) ? slice.errandRunners : professionalsState.errandRunners,
+      errandOrders: Array.isArray(slice.errandOrders) ? slice.errandOrders : professionalsState.errandOrders,
+      updatedAt: slice.updatedAt || slice._rowUpdatedAt || new Date().toISOString(),
+    };
+    try {
+      fs.writeFileSync(PROFESSIONALS_FILE, JSON.stringify(professionalsState, null, 2));
+    } catch (_) {}
+  }
+};
+
+app.get('/api/professionals', async (_req: Request, res: Response) => {
+  if (!professionalsState.updatedAt) {
+    const slice = await fetchSupabaseAdminSlice(ADMIN_SYS_PROFS_KEY);
+    if (slice && syncProfessionalsFromSupabaseHook) syncProfessionalsFromSupabaseHook(slice);
+  }
+  res.json({ success: true, ...professionalsState });
+});
+
+app.post('/api/professionals/lawyers/register', (req: Request, res: Response) => {
+  const b = req.body || {};
+  const rawScn = b.barNumber || b.supremeCourtNumber;
+  const rawFirm = b.firm || b.firmName || 'Independent Legal Practice';
+  if (!b.name || !rawScn || !b.officeAddress || !b.city) {
+    return res.status(400).json({ success: false, error: 'Full name, Supreme Court Number (SCN), office address, and city are required.', message: 'Full name, Supreme Court Number (SCN), office address, and city are required.' });
+  }
+  const scnClean = String(rawScn).trim().toUpperCase();
+  const dup = professionalsState.lawyers.find(
+    (l) => String(l.barNumber || l.supremeCourtNumber || '').trim().toUpperCase() === scnClean && l.userPhone !== b.userPhone
+  );
+  if (dup) {
+    return res.status(409).json({ success: false, error: `Supreme Court Number ${scnClean} is already registered.`, message: `Supreme Court Number ${scnClean} is already registered.` });
+  }
+  const nowIso = new Date().toISOString();
+  const specializations = Array.isArray(b.specializations) && b.specializations.length > 0
+    ? b.specializations
+    : [b.specialty || 'CAC Business & Corporate'];
+  const entry = {
+    id: `law_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    userId: String(b.userId || ''),
+    userPhone: String(b.userPhone || ''),
+    phone: String(b.userPhone || ''),
+    name: String(b.name).trim(),
+    title: String(b.title || 'Barrister & Solicitor'),
+    firm: String(rawFirm).trim(),
+    firmName: String(rawFirm).trim(),
+    specialty: specializations[0],
+    specializations,
+    avatar: String(b.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(b.name)}`),
+    barNumber: scnClean,
+    supremeCourtNumber: scnClean,
+    yearsExperience: Math.max(0, Number(b.yearsExperience) || 1),
+    consultationFee: Math.max(1000, Number(b.consultationFee) || 15000),
+    currency: b.currency || 'NGN',
+    isAvailable: true,
+    location: `${String(b.officeAddress).trim()}, ${String(b.city).trim()}`,
+    officeAddress: String(b.officeAddress).trim(),
+    city: String(b.city).trim(),
+    verifiedLicense: false,
+    isVerified: false,
+    approvalStatus: 'pending',
+    verificationStatus: 'pending',
+    rating: 5.0,
+    bio: String(b.bio || `${specializations.join(', ')} practitioner based in ${b.city}.`).trim(),
+    createdAt: nowIso,
+  };
+  professionalsState.lawyers = [
+    entry,
+    ...professionalsState.lawyers.filter((l) => l.userPhone !== entry.userPhone || !entry.userPhone),
+  ];
+  saveProfessionalsFile();
+  pushProfessionalsToSupabase();
+  broadcastProfessionalsUpdate();
+  return res.json({ success: true, lawyer: entry, professionals: professionalsState });
+});
+
+app.post('/api/professionals/clinics/register', (req: Request, res: Response) => {
+  const b = req.body || {};
+  const rawHospital = b.hospitalAffiliation || b.hospitalName || b.name;
+  if (!b.name || !b.licenseNumber || !rawHospital || !b.city) {
+    return res.status(400).json({ success: false, error: 'Name, MDCN/Facility license number, hospital/clinic name, and city are required.', message: 'Name, MDCN/Facility license number, hospital/clinic name, and city are required.' });
+  }
+  const licClean = String(b.licenseNumber).trim().toUpperCase();
+  const dup = professionalsState.clinicsDoctors.find(
+    (d) => String(d.licenseNumber || '').trim().toUpperCase() === licClean && d.userPhone !== b.userPhone
+  );
+  if (dup) {
+    return res.status(409).json({ success: false, error: `License ${licClean} is already registered.`, message: `License ${licClean} is already registered.` });
+  }
+  const nowIso = new Date().toISOString();
+  const entry = {
+    id: `doc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    userId: String(b.userId || ''),
+    userPhone: String(b.userPhone || ''),
+    phone: String(b.userPhone || ''),
+    accountType: b.accountType === 'clinic' ? 'clinic' : 'doctor',
+    name: String(b.name).trim(),
+    title: String(b.title || (b.accountType === 'clinic' ? 'Accredited Clinic' : 'Medical Practitioner')),
+    specialty: String(b.specialty || 'General Practitioner'),
+    hospitalAffiliation: String(rawHospital).trim(),
+    hospitalName: String(rawHospital).trim(),
+    licenseNumber: licClean,
+    city: String(b.city).trim(),
+    officeAddress: String(b.officeAddress || b.city).trim(),
+    departments: Array.isArray(b.departments) && b.departments.length > 0 ? b.departments : ['General Outpatient Clinic'],
+    avatar: String(b.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(b.name)}`),
+    rating: 5.0,
+    reviewCount: 0,
+    consultationFee: Math.max(500, Number(b.consultationFee) || 5000),
+    currency: b.currency || 'NGN',
+    isAvailable: true,
+    isVerified: false,
+    approvalStatus: 'pending',
+    verificationStatus: 'pending',
+    languages: Array.isArray(b.languages) && b.languages.length > 0 ? b.languages : ['English', 'Pidgin'],
+    bio: String(b.bio || `Verified care at ${rawHospital}, ${b.city}.`).trim(),
+    createdAt: nowIso,
+  };
+  professionalsState.clinicsDoctors = [
+    entry,
+    ...professionalsState.clinicsDoctors.filter((d) => d.userPhone !== entry.userPhone || !entry.userPhone),
+  ];
+  saveProfessionalsFile();
+  pushProfessionalsToSupabase();
+  broadcastProfessionalsUpdate();
+  return res.json({ success: true, doctor: entry, professionals: professionalsState });
+});
+
+app.post('/api/professionals/errands/register', (req: Request, res: Response) => {
+  const b = req.body || {};
+  if (!b.name || !b.location || !b.phone) {
+    return res.status(400).json({ success: false, message: 'Runner name, phone, and coverage location are required.' });
+  }
+  const nowIso = new Date().toISOString();
+  const existing = professionalsState.errandRunners.find(
+    (r) => r.userId === b.userId || phonesMatchServer(r.phone, b.phone)
+  );
+  const runner = existing
+    ? {
+        ...existing,
+        name: String(b.name).trim(),
+        location: String(b.location).trim(),
+        deliveryBaseFee: Math.max(500, Number(b.deliveryBaseFee) || existing.deliveryBaseFee || 1500),
+        ninOrIdRef: String(b.ninOrIdRef || existing.ninOrIdRef || '').trim(),
+        bio: String(b.bio || existing.bio || `Personal market & grocery shopper in ${b.location}`).trim(),
+      }
+    : {
+        id: `run_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        userId: String(b.userId || ''),
+        name: String(b.name).trim(),
+        phone: String(b.phone).trim(),
+        ninOrIdRef: String(b.ninOrIdRef || '').trim(),
+        avatar: String(b.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(b.name)}`),
+        location: String(b.location).trim(),
+        bio: String(b.bio || `Personal market & grocery shopper in ${b.location}`).trim(),
+        rating: 5.0,
+        reviewsCount: 0,
+        completedCount: 0,
+        deliveryBaseFee: Math.max(500, Number(b.deliveryBaseFee) || 1500),
+        currency: b.currency || 'NGN',
+        itemsForSale: [],
+        isOnline: true,
+        isRegistered: true,
+        isVerified: false,
+        approvalStatus: 'pending',
+        createdAt: nowIso,
+      };
+  professionalsState.errandRunners = [
+    runner,
+    ...professionalsState.errandRunners.filter((r) => r.id !== runner.id),
+  ];
+  saveProfessionalsFile();
+  pushProfessionalsToSupabase();
+  broadcastProfessionalsUpdate();
+  return res.json({ success: true, runner, professionals: professionalsState });
+});
+
+app.post('/api/professionals/errands/items', (req: Request, res: Response) => {
+  const { runnerId, userId, phone, item } = req.body || {};
+  const runner = professionalsState.errandRunners.find(
+    (r) => (runnerId && r.id === runnerId) || (userId && r.userId === userId) || (phone && phonesMatchServer(r.phone, phone))
+  );
+  if (!runner) return res.status(404).json({ success: false, message: 'Runner profile not found.' });
+  const newItem = {
+    id: item?.id || `eitem_${Date.now()}`,
+    name: String(item?.name || '').trim(),
+    price: Math.max(1, Number(item?.price) || 0),
+    unit: String(item?.unit || 'piece').trim(),
+    category: String(item?.category || 'Groceries'),
+    inStock: item?.inStock !== false,
+  };
+  runner.itemsForSale = [newItem, ...(runner.itemsForSale || [])];
+  saveProfessionalsFile();
+  pushProfessionalsToSupabase();
+  broadcastProfessionalsUpdate();
+  return res.json({ success: true, runner, item: newItem });
+});
+
+app.delete('/api/professionals/errands/items/:runnerId/:itemId', (req: Request, res: Response) => {
+  const { runnerId, itemId } = req.params;
+  const runner = professionalsState.errandRunners.find((r) => r.id === runnerId);
+  if (!runner) return res.status(404).json({ success: false, message: 'Runner not found.' });
+  runner.itemsForSale = (runner.itemsForSale || []).filter((i: any) => i.id !== itemId);
+  saveProfessionalsFile();
+  pushProfessionalsToSupabase();
+  broadcastProfessionalsUpdate();
+  return res.json({ success: true, runner });
+});
+
+app.post('/api/professionals/errands/order', (req: Request, res: Response) => {
+  const b = req.body || {};
+  if (!b.customerPhone || !b.runnerId || !b.totalAmount) {
+    return res.status(400).json({ success: false, message: 'Customer, runner, and amount required.' });
+  }
+  const amt = Math.round(Number(b.totalAmount) || 0);
+  const custWallet = getOrCreateServerWallet(String(b.customerPhone));
+  if (custWallet.availableBalance < amt) {
+    return res.status(400).json({ success: false, insufficientFunds: true, message: 'Insufficient wallet balance for errand escrow.' });
+  }
+  const nowIso = new Date().toISOString();
+  const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  custWallet.availableBalance -= amt;
+  custWallet.escrowLockedBalance = Number(custWallet.escrowLockedBalance || 0) + amt;
+  custWallet.updatedAt = nowIso;
+  const custMatch = findUserEntry(String(b.customerPhone));
+  const orderId = String(b.id || `err_${Date.now()}`);
+  const tx: ServerWalletTx = {
+    id: `tx_err_lock_${Date.now()}`,
+    userId: custMatch?.user.id,
+    userPhone: custMatch?.user.phoneNumber || String(b.customerPhone),
+    userName: custMatch?.user.fullName || String(b.customerName || 'Customer'),
+    type: 'errand_escrow',
+    title: `Errand Escrow: ${b.runnerName || 'Runner'}`,
+    description: `Errand order #${orderId} held in escrow`,
+    amount: amt,
+    fee: 0,
+    balanceAfter: custWallet.availableBalance,
+    currency: 'NGN',
+    timestamp: nowStr,
+    createdAt: nowIso,
+    status: 'completed',
+    reference: `ERR_${orderId}`,
+    referenceId: orderId,
+    channel: 'wallet',
+  };
+  custWallet.transactions = [tx, ...custWallet.transactions].slice(0, 100);
+  serverWallets.set(custWallet.phoneKey, custWallet);
+  saveWalletsFile();
+  appendUnifiedLedgerTx(tx);
+  emitWalletUpdateToPhone(String(b.customerPhone), custWallet, tx.title, tx.reference);
+
+  const order = {
+    ...b,
+    id: orderId,
+    status: b.status || 'pending',
+    escrowReleaseCode: String(b.escrowReleaseCode || Math.floor(1000 + Math.random() * 9000)),
+    createdAt: b.createdAt || nowIso,
+  };
+  professionalsState.errandOrders = [order, ...professionalsState.errandOrders.filter((o) => o.id !== order.id)];
+  saveProfessionalsFile();
+  pushProfessionalsToSupabase();
+  broadcastProfessionalsUpdate();
+  return res.json({ success: true, order, wallet: custWallet });
+});
+
+app.post('/api/professionals/errands/complete', (req: Request, res: Response) => {
+  const { orderId, code } = req.body || {};
+  const order = professionalsState.errandOrders.find((o) => o.id === orderId);
+  if (!order) return res.status(404).json({ success: false, message: 'Errand order not found.' });
+  if (order.status === 'completed') return res.json({ success: true, order, message: 'Errand already completed.' });
+  if (String(code || '').trim() !== String(order.escrowReleaseCode).trim()) {
+    return res.status(400).json({ success: false, message: 'Invalid 4-digit release code.' });
+  }
+  const nowIso = new Date().toISOString();
+  const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const payout = Math.round(Number(order.totalAmount) || 0);
+  if (order.customerPhone) {
+    const cw = getOrCreateServerWallet(order.customerPhone);
+    cw.escrowLockedBalance = Math.max(0, Number(cw.escrowLockedBalance || 0) - payout);
+    cw.updatedAt = nowIso;
+    serverWallets.set(cw.phoneKey, cw);
+  }
+  const runnerPhone = order.runnerPhone || order.runnerId;
+  const rw = getOrCreateServerWallet(runnerPhone);
+  const rm = findUserEntry(runnerPhone);
+  rw.availableBalance = Math.max(0, Number(rw.availableBalance || 0) + payout);
+  rw.updatedAt = nowIso;
+  const relTx: ServerWalletTx = {
+    id: `tx_err_rel_${Date.now()}`,
+    userId: rm?.user.id,
+    userPhone: rm?.user.phoneNumber || rw.phoneNumber || runnerPhone,
+    userName: rm?.user.fullName || order.runnerName,
+    type: 'errand_release',
+    title: `Errand Payout Released (#${order.id})`,
+    description: `Completed errand for ${order.customerName}`,
+    amount: payout,
+    fee: 0,
+    balanceAfter: rw.availableBalance,
+    currency: 'NGN',
+    timestamp: nowStr,
+    createdAt: nowIso,
+    status: 'completed',
+    reference: `EREL_${order.id}`,
+    referenceId: order.id,
+    channel: 'wallet',
+  };
+  rw.transactions = [relTx, ...rw.transactions].slice(0, 100);
+  serverWallets.set(rw.phoneKey, rw);
+  saveWalletsFile();
+  appendUnifiedLedgerTx(relTx);
+  emitWalletUpdateToPhone(runnerPhone, rw, relTx.title, relTx.reference);
+
+  order.status = 'completed';
+  professionalsState.errandRunners = professionalsState.errandRunners.map((r) =>
+    r.id === order.runnerId ? { ...r, completedCount: (r.completedCount || 0) + 1 } : r
+  );
+  saveProfessionalsFile();
+  pushProfessionalsToSupabase();
+  broadcastProfessionalsUpdate();
+  return res.json({ success: true, order, wallet: rw });
+});
+
+app.post('/api/professionals/errands/dispute', (req: Request, res: Response) => {
+  const { orderId, reason } = req.body || {};
+  const order = professionalsState.errandOrders.find((o) => o.id === orderId);
+  if (!order) return res.status(404).json({ success: false, message: 'Errand order not found.' });
+  order.status = 'disputed';
+  order.disputeReason = String(reason || 'Disputed by customer');
+  saveProfessionalsFile();
+  pushProfessionalsToSupabase();
+  broadcastProfessionalsUpdate();
+  return res.json({ success: true, order });
+});
+
+app.post('/api/admin/professionals/review', (req: Request, res: Response) => {
+  const { category, id, decision, reason } = req.body || {};
+  if (!category || !id || !['approved', 'rejected'].includes(String(decision))) {
+    return res.status(400).json({ success: false, message: 'category, id, and decision (approved|rejected) are required.' });
+  }
+  const approved = decision === 'approved';
+  let targetName = id;
+  if (category === 'lawyer') {
+    professionalsState.lawyers = professionalsState.lawyers.map((l) => {
+      if (l.id === id) {
+        targetName = `${l.name} (SCN: ${l.barNumber || l.supremeCourtNumber || 'SCN'})`;
+        return { ...l, verifiedLicense: approved, isVerified: approved, approvalStatus: decision, verificationStatus: decision, rejectionReason: approved ? undefined : reason };
+      }
+      return l;
+    });
+  } else if (category === 'clinic') {
+    professionalsState.clinicsDoctors = professionalsState.clinicsDoctors.map((d) => {
+      if (d.id === id) {
+        targetName = `${d.name} (${d.licenseNumber || 'MDCN'})`;
+        return { ...d, isVerified: approved, approvalStatus: decision, verificationStatus: decision, rejectionReason: approved ? undefined : reason };
+      }
+      return d;
+    });
+  } else if (category === 'errand') {
+    professionalsState.errandRunners = professionalsState.errandRunners.map((r) => {
+      if (r.id === id) {
+        targetName = `${r.name} (ID: ${r.ninOrIdRef || r.phone})`;
+        return { ...r, isVerified: approved, approvalStatus: decision, verificationStatus: decision, rejectionReason: approved ? undefined : reason };
+      }
+      return r;
+    });
+  }
+  saveProfessionalsFile();
+  pushProfessionalsToSupabase();
+  broadcastProfessionalsUpdate();
+  appendAuditEntry({
+    refId: String(id),
+    actor: 'Super Admin',
+    actorRole: 'Super Admin',
+    action: approved ? `Verified ${category}` : `Rejected ${category}`,
+    target: targetName,
+    details: approved ? 'Credentials verified and Golden Badge granted' : String(reason || 'Verification declined'),
+  });
+  return res.json({ success: true, professionals: professionalsState });
+});
+
+app.post('/api/ai/match-lawyer', async (req: Request, res: Response) => {
+  const query = String(req.body?.query || '').trim();
+  if (!query) {
+    return res.status(400).json({ success: false, message: 'Please describe your legal issue.' });
+  }
+  const pool = professionalsState.lawyers.filter((l) => l.approvalStatus !== 'rejected');
+  if (pool.length === 0) {
+    return res.json({
+      success: true,
+      recommendedIds: [],
+      advice: 'No registered lawyers are available in the directory yet. Registered attorneys with verified SCN credentials appear here.',
+    });
+  }
+
+  const qLower = query.toLowerCase();
+  const fallbackMatch = () => {
+    const scored = pool.map((l) => {
+      const hay = `${l.name} ${l.firm} ${l.specialty} ${(l.specializations || []).join(' ')} ${l.bio} ${l.location}`.toLowerCase();
+      let score = l.verifiedLicense ? 2 : 0;
+      for (const word of qLower.split(/\W+/).filter((w) => w.length >= 3)) {
+        if (hay.includes(word)) score += 3;
+      }
+      return { id: l.id, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    const topIds = scored.slice(0, 3).map((s) => s.id);
+    return {
+      recommendedIds: topIds,
+      advice: `Matched ${topIds.length} legal counsel based on your matter ("${query.slice(0, 60)}"). Review SCN credentials and book with Escrow Protection.`,
+    };
+  };
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.json({ success: true, mode: 'keyword', ...fallbackMatch() });
+  }
+
+  try {
+    const ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
+    const summaryList = pool
+      .slice(0, 30)
+      .map((l) => `ID=${l.id} | Name=${l.name} | SCN=${l.barNumber} | Verified=${Boolean(l.verifiedLicense)} | Specialty=${l.specialty} (${(l.specializations || []).join(', ')}) | City=${l.city || l.location} | Fee=₦${l.consultationFee} | Bio=${l.bio}`)
+      .join('\n');
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `User legal request: "${query}"\n\nAvailable Lawyers:\n${summaryList}`,
+      config: {
+        systemInstruction: 'You are a Nigerian legal triage matcher for AfriLaw. Select up to 3 best matching lawyer IDs from the provided list and write 1-2 short, practical sentences explaining the match. Never invent IDs.',
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            recommendedIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+            advice: { type: Type.STRING },
+          },
+          required: ['recommendedIds', 'advice'],
+        },
+      },
+    });
+    const parsed = JSON.parse((response.text || '').trim() || '{}');
+    const validSet = new Set(pool.map((l) => l.id));
+    const recIds = Array.isArray(parsed.recommendedIds) ? parsed.recommendedIds.filter((id: string) => validSet.has(id)) : [];
+    if (recIds.length > 0) {
+      return res.json({ success: true, mode: 'gemini', recommendedIds: recIds, advice: parsed.advice || 'Recommended counsel matched.' });
+    }
+  } catch (err: any) {
+    console.warn('AI lawyer match fallback:', err?.message || err);
+  }
+  return res.json({ success: true, mode: 'keyword', ...fallbackMatch() });
 });
 
 const ALLOWED_AGC_BILL_CATEGORIES = new Set([
@@ -3362,11 +4505,15 @@ const DEFAULT_AI_KNOWLEDGE: ServerAiKnowledgeEntry[] = [
 ];
 
 let aiKnowledgeEntries: ServerAiKnowledgeEntry[] = [...DEFAULT_AI_KNOWLEDGE];
+let aiDataCenterUpdatedAt = '';
 try {
   if (fs.existsSync(AI_DATACENTER_FILE)) {
     const parsed = JSON.parse(fs.readFileSync(AI_DATACENTER_FILE, 'utf8'));
     if (Array.isArray(parsed) && parsed.length > 0) {
       aiKnowledgeEntries = parsed;
+    } else if (parsed && Array.isArray(parsed.entries) && parsed.entries.length > 0) {
+      aiKnowledgeEntries = parsed.entries;
+      if (parsed.updatedAt) aiDataCenterUpdatedAt = String(parsed.updatedAt);
     }
   }
 } catch (err) {
@@ -3375,11 +4522,43 @@ try {
 
 function saveAiDataCenterFile() {
   try {
-    fs.writeFileSync(AI_DATACENTER_FILE, JSON.stringify(aiKnowledgeEntries, null, 2), 'utf8');
+    aiDataCenterUpdatedAt = new Date().toISOString();
+    fs.writeFileSync(
+      AI_DATACENTER_FILE,
+      JSON.stringify({ entries: aiKnowledgeEntries, updatedAt: aiDataCenterUpdatedAt }, null, 2),
+      'utf8'
+    );
   } catch (err) {
     console.warn('Failed saving data_ai_datacenter.json:', err);
   }
 }
+
+function pushAiDataCenterToSupabase() {
+  upsertSupabaseAdminSlice(ADMIN_SYS_AI_KEY, 'AGC_AI_DATACENTER', {
+    entries: aiKnowledgeEntries,
+    updatedAt: aiDataCenterUpdatedAt || new Date().toISOString(),
+  }).catch(() => {});
+}
+
+syncAiFromSupabaseHook = (aiSlice: any) => {
+  if (!aiSlice || !Array.isArray(aiSlice.entries)) return;
+  const remoteTs = new Date(aiSlice.updatedAt || aiSlice._rowUpdatedAt || 0).getTime();
+  const localTs = aiDataCenterUpdatedAt ? new Date(aiDataCenterUpdatedAt).getTime() : 0;
+  const hasOnlyDefaults =
+    aiKnowledgeEntries.length <= DEFAULT_AI_KNOWLEDGE.length &&
+    aiKnowledgeEntries.every((e) => DEFAULT_AI_KNOWLEDGE.some((d) => d.id === e.id));
+  if (remoteTs > localTs || hasOnlyDefaults) {
+    aiKnowledgeEntries = aiSlice.entries;
+    aiDataCenterUpdatedAt = aiSlice.updatedAt || aiSlice._rowUpdatedAt || new Date().toISOString();
+    try {
+      fs.writeFileSync(
+        AI_DATACENTER_FILE,
+        JSON.stringify({ entries: aiKnowledgeEntries, updatedAt: aiDataCenterUpdatedAt }, null, 2),
+        'utf8'
+      );
+    } catch (_) {}
+  }
+};
 
 const AGC_DOMAIN_KEYWORDS = [
   'agc', 'africhat', 'all good connects', 'agcbot', 'afribot',
@@ -3441,7 +4620,11 @@ function stripHtmlToText(html: string): { title: string; text: string } {
   return { title, text: cleaned.slice(0, 6000) };
 }
 
-app.get('/api/ai/datacenter', (_req: Request, res: Response) => {
+app.get('/api/ai/datacenter', async (_req: Request, res: Response) => {
+  if (!aiDataCenterUpdatedAt) {
+    const aiSlice = await fetchSupabaseAdminSlice(ADMIN_SYS_AI_KEY);
+    if (aiSlice && syncAiFromSupabaseHook) syncAiFromSupabaseHook(aiSlice);
+  }
   res.json({ success: true, entries: aiKnowledgeEntries });
 });
 
@@ -3465,6 +4648,7 @@ app.post('/api/ai/datacenter', (req: Request, res: Response) => {
   };
   aiKnowledgeEntries = [entry, ...aiKnowledgeEntries];
   saveAiDataCenterFile();
+  pushAiDataCenterToSupabase();
   res.json({ success: true, entry, entries: aiKnowledgeEntries });
 });
 
@@ -3523,6 +4707,7 @@ app.put('/api/ai/datacenter/:id', (req: Request, res: Response) => {
     updatedAt: new Date().toISOString(),
   };
   saveAiDataCenterFile();
+  pushAiDataCenterToSupabase();
   res.json({ success: true, entry: aiKnowledgeEntries[idx], entries: aiKnowledgeEntries });
 });
 
@@ -3534,6 +4719,7 @@ app.delete('/api/ai/datacenter/:id', (req: Request, res: Response) => {
   }
   aiKnowledgeEntries = next;
   saveAiDataCenterFile();
+  pushAiDataCenterToSupabase();
   res.json({ success: true, entries: aiKnowledgeEntries });
 });
 
@@ -3919,7 +5105,7 @@ app.post('/api/statuses/ad-click', (req: Request, res: Response) => {
   res.json({ success: true, statusId, clicks: existing?.adClicksCount ?? 1 });
 });
 
-// â”€â”€ REST: LIVE DISPATCH ORDERS WITH 5% PLATFORM FEE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── REST: LIVE DISPATCH ORDERS WITH 5% PLATFORM FEE ──────────────────────────
 const RIDER_POOL = [
   { name: 'Tunde Balogun (Gokada Express)', phone: '+2348039988112', plate: 'GKD-481-APP' },
   { name: 'Ibrahim Musa (AGC Swift Rider)', phone: '+2348128392011', plate: 'GKD-912-LG' },
@@ -4347,7 +5533,7 @@ async function fetchSupabaseStoresAndArtisans() {
   return { stores, artisans };
 }
 
-// â”€â”€ REST: LIVE ADMIN TELEMETRY & COMMAND API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── REST: LIVE ADMIN TELEMETRY & COMMAND API ────────────────────────────────
 app.get('/api/admin/health', async (_req: Request, res: Response) => {
   try {
     const probeUrl = async (url: string, headers: Record<string, string> = {}) => {
@@ -4521,17 +5707,99 @@ app.post('/api/admin/escrow/resolve', (req: Request, res: Response) => {
   if (numericAmount >= DUAL_ADMIN_THRESHOLD_NGN) {
     if (!secondaryAdminPin || String(secondaryAdminPin).trim() !== EXPECTED_SECONDARY_ADMIN_PIN) {
       return res.status(403).json({
-        error: `Dual-Admin Approval Required: Secondary Admin PIN invalid for high-value escrow (â‰¥ ₦${DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}).`,
+        error: `Dual-Admin Approval Required: Secondary Admin PIN invalid for high-value escrow (≥ ₦${DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}).`,
         code: 'DUAL_ADMIN_PIN_INVALID',
       });
     }
   }
+
+  // Settle authoritative server escrow order + wallet balances if tracked on server
+  const srvOrder = serverEscrowOrders.get(String(orderId));
+  if (srvOrder && srvOrder.status !== 'funds_released') {
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const payout = Math.max(0, Number(srvOrder.subtotalAmount || numericAmount || srvOrder.totalAmount));
+    if (srvOrder.buyerPhone) {
+      const bw = getOrCreateServerWallet(srvOrder.buyerPhone);
+      bw.escrowLockedBalance = Math.max(0, Number(bw.escrowLockedBalance || 0) - payout);
+      if (action !== 'release_to_seller') {
+        const refundAmt = Math.max(payout, Number(srvOrder.totalAmount || payout));
+        bw.availableBalance = Math.max(0, Number(bw.availableBalance || 0) + refundAmt);
+        const refTx: ServerWalletTx = {
+          id: `tx_adm_ref_${Date.now()}`,
+          userPhone: bw.phoneNumber,
+          userName: srvOrder.buyerName,
+          type: 'refund',
+          title: `Admin Escrow Refund: ${srvOrder.product?.title || orderId}`,
+          description: note || 'Refunded to buyer via Admin arbitration',
+          amount: refundAmt,
+          fee: 0,
+          balanceAfter: bw.availableBalance,
+          currency: srvOrder.currency,
+          timestamp: nowStr,
+          createdAt: nowIso,
+          status: 'completed',
+          reference: `ADM_REF_${orderId}`,
+          referenceId: String(orderId),
+          channel: 'wallet',
+        };
+        bw.transactions = [refTx, ...bw.transactions].slice(0, 100);
+        appendUnifiedLedgerTx(refTx);
+      }
+      bw.updatedAt = nowIso;
+      serverWallets.set(bw.phoneKey, bw);
+      emitWalletUpdateToPhone(srvOrder.buyerPhone, bw, `Admin escrow decision for #${orderId}`, String(orderId));
+    }
+
+    if (action === 'release_to_seller') {
+      const sellerTarget = srvOrder.sellerPhone || srvOrder.sellerName;
+      const sw = getOrCreateServerWallet(sellerTarget);
+      const sm = findUserEntry(sellerTarget);
+      sw.availableBalance = Math.max(0, Number(sw.availableBalance || 0) + payout);
+      sw.updatedAt = nowIso;
+      const relTx: ServerWalletTx = {
+        id: `tx_adm_rel_${Date.now()}`,
+        userId: sm?.user.id,
+        userPhone: sm?.user.phoneNumber || sw.phoneNumber || sellerTarget,
+        userName: sm?.user.fullName || srvOrder.sellerName,
+        type: 'escrow_release',
+        title: `Admin Escrow Release: ${srvOrder.product?.title || orderId}`,
+        description: note || 'Released to seller via Admin arbitration',
+        amount: payout,
+        fee: srvOrder.escrowFee || 0,
+        balanceAfter: sw.availableBalance,
+        currency: srvOrder.currency,
+        timestamp: nowStr,
+        createdAt: nowIso,
+        status: 'completed',
+        reference: `ADM_REL_${orderId}`,
+        referenceId: String(orderId),
+        channel: 'wallet',
+      };
+      sw.transactions = [relTx, ...sw.transactions].slice(0, 100);
+      serverWallets.set(sw.phoneKey, sw);
+      appendUnifiedLedgerTx(relTx);
+      emitWalletUpdateToPhone(sellerTarget, sw, relTx.title, relTx.reference);
+      srvOrder.status = 'funds_released';
+      srvOrder.releasedAt = nowIso;
+    } else {
+      srvOrder.status = 'disputed';
+      srvOrder.disputeReason = note || 'Refunded to buyer by Admin arbitration';
+    }
+    srvOrder.updatedAt = nowIso;
+    serverEscrowOrders.set(srvOrder.id, srvOrder);
+    saveWalletsFile();
+    saveEscrowOrdersFile();
+    pushEscrowOrdersToSupabase();
+    broadcastEscrowOrderUpdate(srvOrder);
+  }
+
   const audit = appendAuditEntry({
     refId: String(paystackRef || orderId),
     actor: actorName || 'Primary Admin',
     actorRole: 'Super Admin',
     action: action === 'release_to_seller' ? 'Escrow Force-Release' : 'Escrow Refund Issued',
-    target: `Order #${orderId} (${buyerName || 'Buyer'} â†’ ${sellerName || 'Vendor'})`,
+    target: `Order #${orderId} (${buyerName || 'Buyer'} → ${sellerName || 'Vendor'})`,
     details: `${note || 'Admin resolution'} · Amount: ₦${numericAmount.toLocaleString()}`,
     dualApprovedBy: numericAmount >= DUAL_ADMIN_THRESHOLD_NGN ? (secondaryAdminName || 'Secondary Admin') : undefined,
   });
@@ -4550,7 +5818,7 @@ app.post('/api/admin/escrow/resolve', (req: Request, res: Response) => {
   if (webhookLogs.length > 200) webhookLogs.length = 200;
   saveAdminAuditFile();
   io.emit('admin_audit_appended', { auditEntry: audit, webhookLog: wh });
-  res.json({ success: true, auditEntry: audit, webhookLog: wh });
+  res.json({ success: true, auditEntry: audit, webhookLog: wh, order: srvOrder });
 });
 
 // Paystack Webhook Receiver with Strict Cryptographic HMAC-SHA512 Verification & Idempotency
@@ -5304,10 +6572,36 @@ app.post('/api/admin/users/:phone/adjust-wallet', async (req: Request, res: Resp
       usersByPhone.set(key, user);
       saveUsersFile();
 
-      // Sync authoritative server wallet ledger with admin adjustment
+      // Sync authoritative server wallet ledger with admin adjustment + record money trail entry
       const srvWal = getOrCreateServerWallet(user.phoneNumber || cleanKey);
+      const prevBal = Number(srvWal.availableBalance || 0);
+      const diff = balance - prevBal;
       srvWal.availableBalance = balance;
       srvWal.updatedAt = nowIso;
+      if (diff !== 0) {
+        const adjTx: ServerWalletTx = {
+          id: `tx_adm_adj_${Date.now()}`,
+          userId: user.id,
+          userPhone: user.phoneNumber || `+${cleanKey}`,
+          userName: user.fullName || 'AGC User',
+          type: diff > 0 ? 'deposit' : 'withdrawal',
+          title: `Admin Wallet ${diff > 0 ? 'Credit' : 'Debit'} (${note || 'Direct adjustment'})`,
+          description: `Balance adjusted from ₦${prevBal.toLocaleString()} to ₦${balance.toLocaleString()}`,
+          amount: Math.abs(diff),
+          fee: 0,
+          balanceAfter: balance,
+          currency: srvWal.currency || 'NGN',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          createdAt: nowIso,
+          status: 'completed',
+          reference: `WAL_ADM_${Date.now()}`,
+          referenceId: `WAL_ADM_${Date.now()}`,
+          channel: 'wallet',
+          metadata: { adminAdjusted: true, previousBalance: prevBal, newBalance: balance, note },
+        };
+        srvWal.transactions = [adjTx, ...srvWal.transactions].slice(0, 100);
+        appendUnifiedLedgerTx(adjTx);
+      }
       serverWallets.set(srvWal.phoneKey, srvWal);
       saveWalletsFile();
 
@@ -5572,7 +6866,7 @@ function buildGameEventPayload(event: LiveGameEventName, data: any) {
 
 // Real-Time Socket Connection Handlers
 io.on('connection', (socket: Socket) => {
-  console.log(`âš¡ [Socket Connected]: ${socket.id}`);
+  console.log(`⚡ [Socket Connected]: ${socket.id}`);
 
   // Immediately push authoritative live admin config, feature flags, CMS, broadcast, and user directory
   socket.emit('admin_config_updated', systemConfig);
@@ -6443,7 +7737,7 @@ io.on('connection', (socket: Socket) => {
       }
     }
 
-    // Clean up phoneâ†’socket mapping if this socket was the active one
+    // Clean up phone->socket mapping if this socket was the active one
     const agcPhone = (socket as any)._agcPhone;
     if (agcPhone && phoneToSocketId.get(agcPhone) === socket.id) {
       phoneToSocketId.delete(agcPhone);

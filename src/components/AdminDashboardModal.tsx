@@ -50,8 +50,10 @@ import {
   Bot,
   Sparkles,
   Edit3,
+  Gavel,
+  Stethoscope,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, phonesMatch } from '../context/AppContext';
 import { FeatureFlags, CmsAnnouncement, CmsFaqItem, EscrowOrder, SponsoredStatusAd, AiKnowledgeEntry } from '../types';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { getSocket } from '../services/socket';
@@ -67,7 +69,7 @@ import {
   upsertSupabaseAdminArtisanOverride,
 } from '../services/supabaseAdminSync';
 
-type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'comms' | 'ads' | 'ai_datacenter' | 'security';
+type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'professionals' | 'comms' | 'ads' | 'ai_datacenter' | 'security';
 type FinanceSubTab = 'escrows' | 'ledger' | 'disputes' | 'dispatch' | 'webhooks' | 'payouts';
 type UsersSubTab = 'directory' | 'kyc' | 'artisans';
 type CommsSubTab = 'nodes' | 'broadcast' | 'cms';
@@ -189,6 +191,11 @@ export const AdminDashboardModal: React.FC = () => {
     kickUserSession,
     currentUser,
     isUserOnline,
+    lawyers,
+    doctors,
+    errandRunners,
+    reviewProfessional,
+    refreshProfessionals,
   } = useApp();
 
   // Navigation & Shell State
@@ -266,7 +273,8 @@ export const AdminDashboardModal: React.FC = () => {
   const [userRoleFilter, setUserRoleFilter] = useState<'all' | 'user' | 'creator' | 'merchant' | 'admin'>('all');
   const [userStatusFilter, setUserStatusFilter] = useState<'all' | 'active' | 'suspended' | 'banned' | 'flagged'>('all');
   const [dispatchFilter, setDispatchFilter] = useState<'all' | 'active' | 'delivered'>('all');
-  const [escrowFilter, setEscrowFilter] = useState<'all' | 'escrow_secured' | 'funds_released' | 'disputed'>('all');
+  const [escrowFilter, setEscrowFilter] = useState<'all' | 'escrow_secured' | 'release_approved' | 'funds_released' | 'disputed'>('all');
+  const [serverEscrows, setServerEscrows] = useState<EscrowOrder[]>([]);
   const [storeSearch, setStoreSearch] = useState('');
   const [storeStatusFilter, setStoreStatusFilter] = useState<'all' | 'active' | 'pending' | 'suspended'>('all');
 
@@ -283,6 +291,9 @@ export const AdminDashboardModal: React.FC = () => {
   const [customerWalletSuccess, setCustomerWalletSuccess] = useState(false);
   const [walletAdjustBusy, setWalletAdjustBusy] = useState(false);
   const [payoutBusy, setPayoutBusy] = useState(false);
+  const [customerLedgerTxs, setCustomerLedgerTxs] = useState<any[]>([]);
+  const [proFilterMode, setProFilterMode] = useState<'pending' | 'all'>('pending');
+  const [proBusyId, setProBusyId] = useState<string | null>(null);
 
   // Broadcast compose form state
   const [bcTitle, setBcTitle] = useState('');
@@ -301,7 +312,7 @@ export const AdminDashboardModal: React.FC = () => {
   const [cfgAllowReg, setCfgAllowReg] = useState(true);
   const [cfgRequireOtp, setCfgRequireOtp] = useState(true);
   const [cfgDispatchComm, setCfgDispatchComm] = useState(5);
-  const [cfgEscrowComm, setCfgEscrowComm] = useState(2.5);
+  const [cfgEscrowComm, setCfgEscrowComm] = useState(1);
   const [cfgArtisanComm, setCfgArtisanComm] = useState(10);
   const [cfgCreatorComm, setCfgCreatorComm] = useState(15);
   const [cfgSponsoredAdFee, setCfgSponsoredAdFee] = useState(2500);
@@ -311,8 +322,17 @@ export const AdminDashboardModal: React.FC = () => {
   const [featureStatusMsg, setFeatureStatusMsg] = useState<string | null>(null);
   const [badgeStatusMsg, setBadgeStatusMsg] = useState<string | null>(null);
 
-  // AI Bot Data Center state
-  const [aiEntries, setAiEntries] = useState<AiKnowledgeEntry[]>([]);
+  // AI Bot Data Center state (initialized from localStorage cache so entries stay visible across reloads)
+  const [aiEntries, setAiEntries] = useState<AiKnowledgeEntry[]>(() => {
+    try {
+      const raw = localStorage.getItem('AGC_ai_datacenter_cache_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (_) {}
+    return [];
+  });
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSaving, setAiSaving] = useState(false);
   const [aiEditingId, setAiEditingId] = useState<string | null>(null);
@@ -581,10 +601,38 @@ export const AdminDashboardModal: React.FC = () => {
   };
 
   useEffect(() => {
-    if (isAdminModalOpen && activeSection === 'finance' && financeTab === 'ledger') {
+    if (isAdminModalOpen) {
       fetchLedgerTransactions(ledgerSearch, ledgerTypeFilter);
     }
   }, [isAdminModalOpen, activeSection, financeTab, ledgerSearch, ledgerTypeFilter]);
+
+  useEffect(() => {
+    if (!isAdminModalOpen) return;
+    fetch('/api/escrow/orders?admin=true')
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data?.orders)) setServerEscrows(data.orders);
+      })
+      .catch(() => {});
+    refreshProfessionals?.();
+  }, [isAdminModalOpen]);
+
+  useEffect(() => {
+    if (!selectedCustomer) {
+      setCustomerLedgerTxs([]);
+      return;
+    }
+    const q = selectedCustomer.phoneNumber || selectedCustomer.id || selectedCustomer.fullName || '';
+    if (!q) return;
+    fetch(`/api/admin/wallet-transactions?q=${encodeURIComponent(q)}&type=all`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data?.transactions)) {
+          setCustomerLedgerTxs(data.transactions);
+        }
+      })
+      .catch(() => {});
+  }, [selectedCustomer?.id, selectedCustomer?.phoneNumber]);
 
   // Live metrics + health polling + Supabase realtime + Socket.IO security/audit stream
   useEffect(() => {
@@ -973,6 +1021,24 @@ export const AdminDashboardModal: React.FC = () => {
     }
   }, [mergedUsers, selectedCustomer]);
 
+  const mergedEscrowOrders = useMemo(() => {
+    const map = new Map<string, EscrowOrder>();
+    escrowOrders.forEach((o) => map.set(o.id, o));
+    serverEscrows.forEach((s) => {
+      const existing = map.get(s.id);
+      if (!existing) {
+        map.set(s.id, s);
+      } else {
+        const sTime = new Date(s.updatedAt || s.createdAt || 0).getTime();
+        const eTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+        map.set(s.id, sTime >= eTime ? { ...existing, ...s } : { ...s, ...existing });
+      }
+    });
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+  }, [escrowOrders, serverEscrows]);
+
   // Computed Platform Metrics
   const activeOrders = liveMetrics?.dispatch?.orders || dispatchOrders;
   const dispRate = (systemConfig?.dispatchCommissionPercent ?? 5) / 100;
@@ -984,15 +1050,19 @@ export const AdminDashboardModal: React.FC = () => {
     (sum: number, o: any) => sum + (o.totalFee ?? (o.estimatedFee || 0) + Math.round((o.estimatedFee || 0) * dispRate)),
     0
   );
-  const totalEscrowLockedNgn = escrowOrders
-    .filter((o) => o.status === 'escrow_secured' || o.status === 'shipped' || o.status === 'disputed')
+  const totalEscrowLockedNgn = mergedEscrowOrders
+    .filter((o) => o.status === 'escrow_secured' || o.status === 'release_approved' || o.status === 'shipped' || o.status === 'disputed')
     .reduce((acc, curr) => acc + curr.totalAmount, 0);
-  const totalEscrowGmvNgn = escrowOrders.reduce((acc, curr) => acc + curr.totalAmount, 0);
+  const totalEscrowGmvNgn = mergedEscrowOrders.reduce((acc, curr) => acc + curr.totalAmount, 0);
   const totalWalletPoolNgn = mergedUsers.reduce((acc, u) => acc + (Number(u.walletBalanceNgn) || 0), 0);
-  const totalPlatformVolumeNgn = totalEscrowGmvNgn + totalDispatchVolume + (wallet?.transactions?.reduce((s, t) => s + Math.abs(t.amount || 0), 0) || 0);
+  const ledgerVolumeNgn = ledgerTxs.reduce((s, t) => s + Math.abs(Number(t.amount) || 0), 0);
+  const totalPlatformVolumeNgn =
+    totalEscrowGmvNgn +
+    totalDispatchVolume +
+    (ledgerVolumeNgn > 0 ? ledgerVolumeNgn : wallet?.transactions?.reduce((s, t) => s + Math.abs(t.amount || 0), 0) || 0);
 
   const pendingDisputesCount =
-    escrowOrders.filter((o) => o.status === 'disputed').length +
+    mergedEscrowOrders.filter((o) => o.status === 'disputed').length +
     mergedUsers.filter((u) => u.status === 'flagged' || u.status === 'suspended').length +
     securityEvents.filter((s) => s.severity === 'high' || s.severity === 'critical').length;
 
@@ -1011,12 +1081,14 @@ export const AdminDashboardModal: React.FC = () => {
     return matchesSearch && matchesRole && matchesStatus;
   });
 
-  const filteredEscrows = escrowOrders.filter((o) => {
+  const filteredEscrows = mergedEscrowOrders.filter((o) => {
     if (escrowFilter === 'all') return true;
     return o.status === escrowFilter;
   });
 
-  const disputedEscrows = escrowOrders.filter((o) => o.status === 'disputed' || o.status === 'escrow_secured');
+  const disputedEscrows = mergedEscrowOrders.filter(
+    (o) => o.status === 'disputed' || o.status === 'escrow_secured' || o.status === 'release_approved'
+  );
 
   const filteredDispatchOrders = activeOrders.filter((ord: any) => {
     if (dispatchFilter === 'active') return ord.status !== 'delivered';
@@ -1056,21 +1128,33 @@ export const AdminDashboardModal: React.FC = () => {
       title: string;
       subtitle: string;
       amountNgn?: number;
-      type: 'escrow' | 'dispatch' | 'webhook' | 'audit';
+      type: 'escrow' | 'dispatch' | 'webhook' | 'audit' | 'ledger';
       timestamp: string;
       order?: EscrowOrder;
     }> = [];
 
-    escrowOrders.forEach((o) => {
+    mergedEscrowOrders.forEach((o) => {
       items.push({
         id: `act_esc_${o.id}`,
         refId: o.paystackRef || o.id,
         title: `Escrow · ${o.product.title}`,
-        subtitle: `${o.buyerName} â†’ ${o.sellerName} (${o.status.replace('_', ' ')})`,
+        subtitle: `${o.buyerName} → ${o.sellerName} (${o.status.replace('_', ' ')})`,
         amountNgn: o.totalAmount,
         type: 'escrow',
         timestamp: o.updatedAt || o.createdAt || new Date().toISOString(),
         order: o,
+      });
+    });
+
+    ledgerTxs.slice(0, 30).forEach((tx: any, idx: number) => {
+      items.push({
+        id: `act_tx_${tx.id || idx}`,
+        refId: tx.referenceId || tx.reference || tx.id || 'TX',
+        title: `${String(tx.type || 'wallet').replace('_', ' ').toUpperCase()} · ${tx.userName || 'User'}`,
+        subtitle: `${tx.userPhone || '—'} · ${tx.description || tx.title || 'Wallet movement'}`,
+        amountNgn: Math.abs(Number(tx.amount) || 0),
+        type: 'ledger',
+        timestamp: tx.createdAt || tx.timestamp || new Date().toISOString(),
       });
     });
 
@@ -1079,7 +1163,7 @@ export const AdminDashboardModal: React.FC = () => {
         id: `act_disp_${d.id}`,
         refId: d.trackingCode || d.id,
         title: `Dispatch · ${String(d.provider || 'courier').toUpperCase()}`,
-        subtitle: `${d.packageDescription || 'Parcel'} â†’ ${d.recipientName}`,
+        subtitle: `${d.packageDescription || 'Parcel'} → ${d.recipientName}`,
         amountNgn: d.totalFee ?? d.estimatedFee ?? 0,
         type: 'dispatch',
         timestamp: d.createdAt || new Date().toISOString(),
@@ -1111,8 +1195,8 @@ export const AdminDashboardModal: React.FC = () => {
 
     return items
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-      .slice(0, 24);
-  }, [escrowOrders, activeOrders, webhookLogs, auditTrail]);
+      .slice(0, 30);
+  }, [mergedEscrowOrders, ledgerTxs, activeOrders, webhookLogs, auditTrail]);
 
   // Global Search Results (Ctrl+K)
   const globalSearchResults = useMemo(() => {
@@ -1205,7 +1289,7 @@ export const AdminDashboardModal: React.FC = () => {
       setDualApprovalRequest({
         isOpen: true,
         actionLabel: action === 'release_to_seller' ? 'Escrow Force-Release' : 'Escrow Refund Buyer',
-        targetSummary: `#${order.id} · ${order.buyerName} â†’ ${order.sellerName}`,
+        targetSummary: `#${order.id} · ${order.buyerName} → ${order.sellerName}`,
         amountNgn: order.totalAmount,
         errorMsg: null,
         isSubmitting: false,
@@ -1346,7 +1430,7 @@ export const AdminDashboardModal: React.FC = () => {
     const csv = [headers, ...rows]
       .map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))
       .join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1516,6 +1600,12 @@ export const AdminDashboardModal: React.FC = () => {
     setTimeout(() => setAiNotice(null), 3500);
   };
 
+  const persistAiCache = (entries: AiKnowledgeEntry[]) => {
+    try {
+      localStorage.setItem('AGC_ai_datacenter_cache_v1', JSON.stringify(entries));
+    } catch (_) {}
+  };
+
   const fetchAiDataCenter = async () => {
     setAiLoading(true);
     try {
@@ -1523,7 +1613,23 @@ export const AdminDashboardModal: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data?.entries)) {
-          setAiEntries(data.entries);
+          if (data.entries.length > 0) {
+            setAiEntries(data.entries);
+            persistAiCache(data.entries);
+          } else {
+            // If server restarted empty, check if local cache has entries and keep them visible
+            try {
+              const cachedRaw = localStorage.getItem('AGC_ai_datacenter_cache_v1');
+              const cached = cachedRaw ? JSON.parse(cachedRaw) : [];
+              if (Array.isArray(cached) && cached.length > 0) {
+                setAiEntries(cached);
+              } else {
+                setAiEntries([]);
+              }
+            } catch (_) {
+              setAiEntries([]);
+            }
+          }
         }
       }
     } catch (_) {
@@ -1560,11 +1666,19 @@ export const AdminDashboardModal: React.FC = () => {
         return;
       }
       if (aiEditingId) {
-        setAiEntries((prev) => prev.map((it) => (it.id === aiEditingId ? data.entry : it)));
-        showAiToast('Updated AI training entry.');
+        setAiEntries((prev) => {
+          const next = prev.map((it) => (it.id === aiEditingId ? data.entry : it));
+          persistAiCache(next);
+          return next;
+        });
+        showAiToast('Updated AI training entry & persisted to Supabase.');
       } else {
-        setAiEntries((prev) => [data.entry, ...prev]);
-        showAiToast('Added entry to AgcBot Data Center.');
+        setAiEntries((prev) => {
+          const next = [data.entry, ...prev];
+          persistAiCache(next);
+          return next;
+        });
+        showAiToast('Added entry to AgcBot Data Center & persisted.');
       }
       setAiEditingId(null);
       setAiFormTitle('');
@@ -1613,7 +1727,11 @@ export const AdminDashboardModal: React.FC = () => {
       });
       const data = await res.json().catch(() => null);
       if (res.ok && data?.success) {
-        setAiEntries((prev) => prev.map((it) => (it.id === entry.id ? data.entry : it)));
+        setAiEntries((prev) => {
+          const next = prev.map((it) => (it.id === entry.id ? data.entry : it));
+          persistAiCache(next);
+          return next;
+        });
       }
     } catch (_) {}
   };
@@ -1622,7 +1740,11 @@ export const AdminDashboardModal: React.FC = () => {
     try {
       const res = await fetch(`/api/ai/datacenter/${id}`, { method: 'DELETE' });
       if (res.ok) {
-        setAiEntries((prev) => prev.filter((it) => it.id !== id));
+        setAiEntries((prev) => {
+          const next = prev.filter((it) => it.id !== id);
+          persistAiCache(next);
+          return next;
+        });
         showAiToast('Deleted entry from Data Center.');
       }
     } catch (_) {}
@@ -1707,6 +1829,11 @@ export const AdminDashboardModal: React.FC = () => {
     ? 'bg-rose-500'
     : 'bg-amber-400';
 
+  const pendingProsCount =
+    lawyers.filter((l) => !(l.verifiedLicense ?? l.isVerified) || l.approvalStatus === 'pending').length +
+    doctors.filter((d) => d.isVerified === false || d.approvalStatus === 'pending').length +
+    errandRunners.filter((r) => r.isVerified === false || r.approvalStatus === 'pending').length;
+
   const navItems: Array<{
     id: AdminSection;
     label: string;
@@ -1718,10 +1845,11 @@ export const AdminDashboardModal: React.FC = () => {
       id: 'finance',
       label: 'Escrow & Finance',
       icon: Scale,
-      badge: escrowOrders.filter((o) => o.status === 'escrow_secured' || o.status === 'disputed').length || null,
+      badge: mergedEscrowOrders.filter((o) => o.status === 'escrow_secured' || o.status === 'release_approved' || o.status === 'disputed').length || null,
     },
     { id: 'stores', label: 'Vendors & Stores', icon: Store, badge: mergedStores.length || null },
     { id: 'users', label: 'Users & Artisans', icon: Users, badge: mergedUsers.length || null },
+    { id: 'professionals', label: 'Verified Pros', icon: BadgeCheck, badge: pendingProsCount || null },
     { id: 'comms', label: 'Comms & Social', icon: Radio, badge: systemBroadcast?.active ? 'LIVE' : null },
     {
       id: 'ads',
@@ -1738,6 +1866,7 @@ export const AdminDashboardModal: React.FC = () => {
     finance: 'Escrow & Finance Center',
     stores: 'Vendor & Store Tiers',
     users: 'User & Artisan Directory',
+    professionals: 'AfriLaw, AfriHealth & Errands Verification',
     comms: 'Communication & Social Logs',
     ads: 'Sponsored Ads & Promotion Requests',
     ai_datacenter: 'AI Bot Data Center & Guardrails',
@@ -1756,9 +1885,9 @@ export const AdminDashboardModal: React.FC = () => {
         />
       )}
 
-      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+      {/* ======================================== */}
       {/* LEFT PERSISTENT SIDEBAR                                                  */}
-      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+      {/* ======================================== */}
       <aside
         className={`fixed lg:static inset-y-0 left-0 z-40 flex flex-col border-r border-zinc-800/90 bg-zinc-950/95 backdrop-blur-xl transition-all duration-200 shrink-0 ${
           sidebarCollapsed ? 'lg:w-[72px]' : 'lg:w-[260px]'
@@ -1850,9 +1979,9 @@ export const AdminDashboardModal: React.FC = () => {
         </div>
       </aside>
 
-      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+      {/* ======================================== */}
       {/* MAIN COLUMN: TOP UTILITY BAR + DYNAMIC WORKSPACE                         */}
-      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+      {/* ======================================== */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#09090b]">
         {/* Top Global Utility Bar */}
         <header className="pt-safe-admin border-b border-zinc-800/90 bg-zinc-950/80 backdrop-blur-md shrink-0">
@@ -2088,9 +2217,9 @@ export const AdminDashboardModal: React.FC = () => {
 
         {/* Dynamic Workspace */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {/* SECTION 1: OVERVIEW (DASHBOARD)                                    */}
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {activeSection === 'overview' && (
             <div className="space-y-6">
               {/* Top Metric Grid (4 Cards) */}
@@ -2117,7 +2246,7 @@ export const AdminDashboardModal: React.FC = () => {
                     ₦{totalEscrowLockedNgn.toLocaleString()}
                   </div>
                   <div className="text-xs font-mono text-zinc-400 tabular-nums">
-                    {escrowOrders.filter((o) => o.status === 'escrow_secured' || o.status === 'disputed').length} orders held in vault
+                    {mergedEscrowOrders.filter((o) => o.status === 'escrow_secured' || o.status === 'release_approved' || o.status === 'disputed').length} orders held in vault
                   </div>
                 </div>
 
@@ -2130,7 +2259,7 @@ export const AdminDashboardModal: React.FC = () => {
                     {pendingDisputesCount}
                   </div>
                   <div className="text-xs font-mono text-zinc-400 tabular-nums">
-                    {escrowOrders.filter((o) => o.status === 'disputed').length} disputes · {securityEvents.length} security alerts
+                    {mergedEscrowOrders.filter((o) => o.status === 'disputed').length} disputes · {securityEvents.length} security alerts
                   </div>
                 </div>
 
@@ -2156,14 +2285,14 @@ export const AdminDashboardModal: React.FC = () => {
                   <div className="px-5 py-4 border-b border-zinc-800/90 flex items-center justify-between gap-2">
                     <div>
                       <h2 className="text-sm font-semibold text-white">Real-Time Transaction Stream</h2>
-                      <p className="text-xs text-zinc-400">Escrow locks, Paystack webhooks, dispatch fees & audit mutations</p>
+                      <p className="text-xs text-zinc-400">Escrow locks, user spending, bets, Paystack webhooks & dispatch fees</p>
                     </div>
                     <button
                       type="button"
                       onClick={() => setActiveSection('finance')}
                       className="text-xs font-medium text-violet-400 hover:text-violet-300 whitespace-nowrap"
                     >
-                      Open Ledger â†’
+                      Open Ledger →
                     </button>
                   </div>
 
@@ -2224,7 +2353,7 @@ export const AdminDashboardModal: React.FC = () => {
                       }}
                       className="text-xs font-medium text-violet-400 hover:text-violet-300 whitespace-nowrap"
                     >
-                      Security â†’
+                      Security →
                     </button>
                   </div>
 
@@ -2296,9 +2425,9 @@ export const AdminDashboardModal: React.FC = () => {
             </div>
           )}
 
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {/* SECTION 2: ESCROW & FINANCE CENTER                                 */}
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {activeSection === 'finance' && (
             <div className="space-y-5">
               {/* Sub-tab Toolbar */}
@@ -2328,7 +2457,7 @@ export const AdminDashboardModal: React.FC = () => {
                 </div>
 
                 <span className="text-[11px] font-mono text-zinc-400">
-                  Dual-Admin PIN required â‰¥ ₦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}
+                  Dual-Admin PIN required ≥ ₦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()}
                 </span>
               </div>
 
@@ -2336,8 +2465,8 @@ export const AdminDashboardModal: React.FC = () => {
               {financeTab === 'escrows' && (
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 text-xs">
-                      {(['all', 'escrow_secured', 'funds_released', 'disputed'] as const).map((filter) => (
+                    <div className="flex items-center gap-1.5 text-xs flex-wrap">
+                      {(['all', 'escrow_secured', 'release_approved', 'funds_released', 'disputed'] as const).map((filter) => (
                         <button
                           key={filter}
                           type="button"
@@ -2488,17 +2617,31 @@ export const AdminDashboardModal: React.FC = () => {
                         onChange={(e) => setLedgerTypeFilter(e.target.value)}
                         className="px-3 py-2 text-xs rounded-xl bg-zinc-900/70 border border-zinc-800 text-zinc-200"
                       >
-                        <option value="all">All Transaction Types</option>
+                        <option value="all">All Money Trail Events</option>
                         <option value="topup">Top Up / Deposit</option>
                         <option value="transfer_out">Transfer Sent</option>
                         <option value="received">Transfer Received</option>
                         <option value="withdrawal">Bank Withdrawal</option>
                         <option value="escrow_lock">Escrow Lock</option>
+                        <option value="escrow_fee">Escrow 1% Fee</option>
                         <option value="escrow_release">Escrow Release</option>
+                        <option value="errand_escrow">Errand Escrow Lock</option>
+                        <option value="errand_release">Errand Payout</option>
+                        <option value="game_bet">Game Wager / Bet</option>
+                        <option value="game_win">Game Payout / Win</option>
+                        <option value="bill_paid">Bill Paid</option>
+                        <option value="bill_received">Bill Collected</option>
+                        <option value="payroll_debit">Payroll Disbursement</option>
+                        <option value="service_booking">Artisan / Service Booking</option>
+                        <option value="legal_consult">AfriLaw Consult</option>
+                        <option value="health_consult">AfriHealth Consult</option>
+                        <option value="creator_tip">Creator / Book / Show Spend</option>
+                        <option value="course_enroll">Tutor / Course Fee</option>
+                        <option value="referral_bonus">Referral Bonus</option>
                         <option value="ad_payment">Sponsored Ad Fee</option>
                         <option value="store_subscription">Store Subscription</option>
                         <option value="artisan_reg">Artisan Registration</option>
-                        <option value="refund">Refund</option>
+                        <option value="refund">Refund / Admin Credit</option>
                       </select>
                     </div>
                     <button
@@ -2531,8 +2674,8 @@ export const AdminDashboardModal: React.FC = () => {
                           </tr>
                         ) : (
                           ledgerTxs.map((tx: any, idx: number) => {
-                            const isIncoming = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release'].includes(tx.type);
-                            const isEscrow = tx.type === 'escrow_lock';
+                            const isIncoming = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release', 'errand_release', 'referral_bonus', 'bill_received'].includes(tx.type);
+                            const isEscrow = tx.type === 'escrow_lock' || tx.type === 'errand_escrow';
                             return (
                               <tr key={tx.id || idx} className="hover:bg-zinc-900/70 transition-colors">
                                 <td className="py-3 px-4">
@@ -2616,7 +2759,7 @@ export const AdminDashboardModal: React.FC = () => {
                             </div>
                             <div className="text-sm font-medium text-zinc-100 truncate">{order.product.title}</div>
                             <div className="text-xs text-zinc-400">
-                              {order.buyerName} â†” {order.sellerName} · PIN #{order.escrowPin}
+                              {order.buyerName} ↔ {order.sellerName} · PIN #{order.escrowPin}
                             </div>
                           </div>
                         </div>
@@ -2821,7 +2964,7 @@ export const AdminDashboardModal: React.FC = () => {
                   <div>
                     <h3 className="text-sm font-semibold text-white">Manual Treasury Payout / Adjustment</h3>
                     <p className="text-zinc-400 mt-0.5">
-                      Disbursements â‰¥ ₦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()} require Secondary Admin PIN verification.
+                      Disbursements ≥ ₦{DUAL_ADMIN_THRESHOLD_NGN.toLocaleString()} require Secondary Admin PIN verification.
                     </p>
                   </div>
 
@@ -2886,9 +3029,9 @@ export const AdminDashboardModal: React.FC = () => {
             </div>
           )}
 
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {/* SECTION 3: VENDOR & STORE MANAGEMENT                               */}
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {activeSection === 'stores' && (
             <div className="space-y-4">
               {/* Toolbar */}
@@ -3042,9 +3185,9 @@ export const AdminDashboardModal: React.FC = () => {
             </div>
           )}
 
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {/* SECTION 4: USER & ARTISAN DIRECTORY                                */}
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {activeSection === 'users' && (
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/90 pb-3">
@@ -3380,9 +3523,9 @@ export const AdminDashboardModal: React.FC = () => {
             </div>
           )}
 
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {/* SECTION 5: COMMUNICATION & SOCIAL LOGS                             */}
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {activeSection === 'comms' && (
             <div className="space-y-5">
               <div className="flex items-center gap-1.5 border-b border-zinc-800/90 pb-3">
@@ -3956,9 +4099,9 @@ export const AdminDashboardModal: React.FC = () => {
             </div>
           )}
 
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {/* SECTION 6: SYSTEM & SECURITY                                       */}
-          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {/* ======================================== */}
           {/* ════════════════════════════════════════════════════════════════════════ */}
           {/* SECTION: SPONSORED ADS & PROMOTION REQUESTS MANAGEMENT                  */}
           {/* ════════════════════════════════════════════════════════════════════════ */}
@@ -4159,11 +4302,10 @@ export const AdminDashboardModal: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    if (confirm('Delete this ad record?')) {
-                                      updateCmsData({
-                                        sponsoredStatuses: (cmsData?.sponsoredStatuses || []).filter((_, i) => i !== idx),
-                                      });
-                                    }
+                                    updateCmsData({
+                                      sponsoredStatuses: (cmsData?.sponsoredStatuses || []).filter((_, i) => i !== idx),
+                                    });
+                                    notify('Deleted ad record');
                                   }}
                                   className="p-1.5 text-rose-400 hover:bg-rose-950/40 rounded-lg transition-colors"
                                   title="Delete Ad Record"
@@ -4471,7 +4613,235 @@ export const AdminDashboardModal: React.FC = () => {
             </div>
           )}
 
-                    {activeSection === 'security' && (
+          {/* VERIFIED PROFESSIONALS QUEUE (AfriLaw, AfriHealth, Errands) */}
+          {activeSection === 'professionals' && (
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <BadgeCheck className="w-5 h-5 text-amber-400" />
+                    <span>Verified Professionals & Practice Accreditation</span>
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Review Supreme Court numbers (AfriLaw), MDCN/Facility licenses (AfriHealth), and NIN IDs (Errand Runners).
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setProFilterMode('pending')}
+                    className={`px-3 py-1.5 rounded-lg font-medium ${
+                      proFilterMode === 'pending'
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-zinc-900 text-zinc-400 border border-zinc-800'
+                    }`}
+                  >
+                    Pending ({pendingProsCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setProFilterMode('all')}
+                    className={`px-3 py-1.5 rounded-lg font-medium ${
+                      proFilterMode === 'all'
+                        ? 'bg-violet-600 text-white'
+                        : 'bg-zinc-900 text-zinc-400 border border-zinc-800'
+                    }`}
+                  >
+                    All ({lawyers.length + doctors.length + errandRunners.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => refreshProfessionals?.()}
+                    className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800 flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-violet-400" />
+                    <span>Sync</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-4 rounded-2xl bg-zinc-900/50 border border-zinc-800">
+                  <div className="text-xs text-zinc-400 flex items-center gap-1.5">
+                    <Gavel className="w-4 h-4 text-indigo-400" />
+                    <span>AfriLaw Attorneys</span>
+                  </div>
+                  <div className="text-xl font-bold font-mono text-white mt-1">
+                    {lawyers.length}{' '}
+                    <span className="text-xs font-normal text-amber-400">
+                      ({lawyers.filter((l) => !(l.verifiedLicense ?? l.isVerified) || l.approvalStatus === 'pending').length} pending)
+                    </span>
+                  </div>
+                </div>
+                <div className="p-4 rounded-2xl bg-zinc-900/50 border border-zinc-800">
+                  <div className="text-xs text-zinc-400 flex items-center gap-1.5">
+                    <Stethoscope className="w-4 h-4 text-rose-400" />
+                    <span>AfriHealth Clinics & MDs</span>
+                  </div>
+                  <div className="text-xl font-bold font-mono text-white mt-1">
+                    {doctors.length}{' '}
+                    <span className="text-xs font-normal text-amber-400">
+                      ({doctors.filter((d) => d.isVerified === false || d.approvalStatus === 'pending').length} pending)
+                    </span>
+                  </div>
+                </div>
+                <div className="p-4 rounded-2xl bg-zinc-900/50 border border-zinc-800">
+                  <div className="text-xs text-zinc-400 flex items-center gap-1.5">
+                    <Truck className="w-4 h-4 text-purple-400" />
+                    <span>Errand Runners</span>
+                  </div>
+                  <div className="text-xl font-bold font-mono text-white mt-1">
+                    {errandRunners.length}{' '}
+                    <span className="text-xs font-normal text-amber-400">
+                      ({errandRunners.filter((r) => r.isVerified === false || r.approvalStatus === 'pending').length} pending)
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Combined Professionals List */}
+              {(() => {
+                const proRows: Array<{
+                  category: 'lawyer' | 'clinic' | 'errand';
+                  id: string;
+                  name: string;
+                  credLabel: string;
+                  subtitle: string;
+                  feeNgn: number;
+                  phone?: string;
+                  isVerified: boolean;
+                  verificationStatus?: string;
+                }> = [
+                  ...lawyers.map((l) => ({
+                    category: 'lawyer' as const,
+                    id: l.id,
+                    name: l.name,
+                    credLabel: `SCN: ${l.supremeCourtNumber || l.barNumber}`,
+                    subtitle: `${l.firmName || l.firm} · ${l.specializations?.join(', ') || l.specialty} · ${l.officeAddress || l.city || l.location}`,
+                    feeNgn: l.consultationFee,
+                    phone: l.phone || l.userPhone,
+                    isVerified: Boolean(l.verifiedLicense ?? l.isVerified),
+                    verificationStatus: l.verificationStatus || l.approvalStatus,
+                  })),
+                  ...doctors.map((d) => ({
+                    category: 'clinic' as const,
+                    id: d.id,
+                    name: d.name,
+                    credLabel: `License: ${d.licenseNumber || 'MDCN'} (${d.accountType || 'doctor'})`,
+                    subtitle: `${d.specialty} · ${d.hospitalAffiliation || d.hospitalName || ''} · ${d.officeAddress || d.city || 'Nigeria'}`,
+                    feeNgn: d.consultationFee,
+                    phone: d.phone || d.userPhone,
+                    isVerified: d.isVerified !== false && d.approvalStatus !== 'pending',
+                    verificationStatus: d.verificationStatus || d.approvalStatus,
+                  })),
+                  ...errandRunners.map((r) => ({
+                    category: 'errand' as const,
+                    id: r.id,
+                    name: r.name,
+                    credLabel: `ID Ref: ${r.ninOrIdRef || 'Registered'}`,
+                    subtitle: `${r.location} · ${r.completedCount} errands`,
+                    feeNgn: r.deliveryBaseFee,
+                    phone: r.phone || r.userPhone,
+                    isVerified: r.isVerified !== false && r.approvalStatus !== 'pending',
+                    verificationStatus: r.verificationStatus || r.approvalStatus,
+                  })),
+                ].filter((row) => (proFilterMode === 'pending' ? !row.isVerified : true));
+
+                if (proRows.length === 0) {
+                  return (
+                    <div className="p-10 rounded-2xl bg-zinc-900/50 border border-zinc-800 text-center text-xs text-zinc-500">
+                      {proFilterMode === 'pending'
+                        ? 'Zero pending professional applications right now. Switch to All to manage existing practitioners.'
+                        : 'No registered professionals yet.'}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-3">
+                    {proRows.map((row) => (
+                      <div
+                        key={`${row.category}_${row.id}`}
+                        className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800/90 flex flex-wrap items-center justify-between gap-4"
+                      >
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                row.category === 'lawyer'
+                                  ? 'bg-indigo-500/20 text-indigo-300'
+                                  : row.category === 'clinic'
+                                  ? 'bg-rose-500/20 text-rose-300'
+                                  : 'bg-purple-500/20 text-purple-300'
+                              }`}
+                            >
+                              {row.category === 'lawyer' ? 'AfriLaw' : row.category === 'clinic' ? 'AfriHealth' : 'Errands'}
+                            </span>
+                            <span className="text-sm font-bold text-white">{row.name}</span>
+                            <span className="text-[11px] font-mono text-amber-300">{row.credLabel}</span>
+                            <span
+                              className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded ${
+                                row.isVerified
+                                  ? 'bg-emerald-500/15 text-emerald-400'
+                                  : 'bg-amber-500/15 text-amber-300'
+                              }`}
+                            >
+                              {row.isVerified ? 'Verified' : row.verificationStatus || 'Pending'}
+                            </span>
+                          </div>
+                          <div className="text-xs text-zinc-400">{row.subtitle}</div>
+                          <div className="text-[11px] font-mono text-zinc-500">
+                            {row.phone || '—'} · Fee: ₦{(row.feeNgn || 0).toLocaleString()}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          {!row.isVerified && (
+                            <button
+                              type="button"
+                              disabled={proBusyId === row.id}
+                              onClick={async () => {
+                                setProBusyId(row.id);
+                                try {
+                                  const result = await reviewProfessional(row.category, row.id, 'approved');
+                                  notify(result.success ? `Verified ${row.name}` : result.message || 'Approval failed', result.success ? 'ok' : 'err');
+                                } finally {
+                                  setProBusyId(null);
+                                }
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Approve</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={proBusyId === row.id}
+                            onClick={async () => {
+                              setProBusyId(row.id);
+                              try {
+                                const result = await reviewProfessional(row.category, row.id, 'rejected', 'Credentials could not be verified');
+                                notify(result.success ? `Rejected ${row.name}` : result.message || 'Action failed', result.success ? 'ok' : 'err');
+                              } finally {
+                                setProBusyId(null);
+                              }
+                            }}
+                            className="px-3.5 py-2 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/30 disabled:opacity-50 text-rose-300 text-xs font-bold flex items-center gap-1"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            <span>{row.isVerified ? 'Revoke' : 'Reject'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {activeSection === 'security' && (
             <div className="space-y-5">
               <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-800/90 pb-3 overflow-x-auto">
                 {([
@@ -4938,9 +5308,9 @@ export const AdminDashboardModal: React.FC = () => {
         </footer>
       </div>
 
-      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+      {/* ======================================== */}
       {/* GLOBAL COMMAND SEARCH MODAL (CTRL + K)                                   */}
-      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+      {/* ======================================== */}
       {globalSearchOpen && (
         <div
           className="fixed inset-0 z-[125] flex items-start justify-center pt-20 sm:pt-16 p-4 bg-black/75 backdrop-blur-sm"
@@ -5090,9 +5460,9 @@ export const AdminDashboardModal: React.FC = () => {
         </div>
       )}
 
-      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+      {/* ======================================== */}
       {/* CUSTOMER INFO DOSSIER MODAL                                              */}
-      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+      {/* ======================================== */}
       {selectedCustomer && (
         <div className="fixed inset-0 z-[115] flex items-center justify-center p-3 pt-14 sm:p-6 bg-black/80 backdrop-blur-sm">
           <div className="w-full max-w-2xl max-h-[88vh] flex flex-col rounded-2xl bg-[#09090b] border border-zinc-800 shadow-2xl overflow-hidden text-xs">
@@ -5231,6 +5601,64 @@ export const AdminDashboardModal: React.FC = () => {
                 {customerWalletSuccess && <div className="text-emerald-400">Wallet updated on server.</div>}
               </div>
 
+              {/* User Full Money Trail Dossier */}
+              <div className="p-4 rounded-xl bg-zinc-900/50 border border-zinc-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-white">User Money Trail (Bets, Top-Ups, Store, Errands, Bills)</span>
+                  <span className="text-[11px] font-mono text-violet-400">
+                    {customerLedgerTxs.length} entries
+                  </span>
+                </div>
+                {(() => {
+                  const selPhone = selectedCustomer.phoneNumber || '';
+                  const combinedTxs = customerLedgerTxs.length > 0
+                    ? customerLedgerTxs
+                    : ledgerTxs.filter(
+                        (t) =>
+                          (selPhone && phonesMatch(t.userPhone || '', selPhone)) ||
+                          (selectedCustomer.fullName &&
+                            String(t.userName || '').toLowerCase() === String(selectedCustomer.fullName).toLowerCase())
+                      );
+                  if (combinedTxs.length === 0) {
+                    return (
+                      <div className="text-zinc-500 py-3 text-center">
+                        No financial transactions logged for this account yet.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="max-h-52 overflow-y-auto divide-y divide-zinc-800/80 rounded-lg bg-zinc-950/70 border border-zinc-800">
+                      {combinedTxs.slice(0, 35).map((tx: any, i: number) => {
+                        const isCredit = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release', 'errand_release', 'referral_bonus', 'bill_received'].includes(tx.type);
+                        return (
+                          <div key={tx.id || i} className="px-3 py-2 flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-[9px] font-mono uppercase text-zinc-300">
+                                  {String(tx.type || 'tx').replace('_', ' ')}
+                                </span>
+                                <span className="text-zinc-200 truncate">{tx.description || tx.title}</span>
+                              </div>
+                              <div className="text-[10px] font-mono text-zinc-500">
+                                {tx.referenceId || tx.id} · {tx.createdAt ? new Date(tx.createdAt).toLocaleString() : tx.timestamp}
+                              </div>
+                            </div>
+                            <div className="text-right font-mono shrink-0">
+                              <div className={`font-bold ${isCredit ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {isCredit ? '+' : '-'}₦{Math.abs(Number(tx.amount) || 0).toLocaleString()}
+                              </div>
+                              {Number(tx.fee) > 0 && (
+                                <div className="text-[9px] text-zinc-500">Fee ₦{Number(tx.fee).toLocaleString()}</div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+
               {/* Ban & Session Controls */}
               <div className="p-4 rounded-xl bg-zinc-900/50 border border-zinc-800 space-y-3">
                 <div className="font-semibold text-rose-400">Security & Session Controls</div>
@@ -5299,9 +5727,9 @@ export const AdminDashboardModal: React.FC = () => {
         </div>
       )}
 
-      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+      {/* ======================================== */}
       {/* ARBITRATION DISPUTE MODAL, DUAL-ADMIN SIGN-OFF & AUDIT DRAWER            */}
-      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+      {/* ======================================== */}
       <EscrowDisputeModal
         order={disputeOrder}
         onClose={() => setDisputeOrder(null)}

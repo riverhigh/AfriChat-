@@ -102,6 +102,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     sendImageMessage,
     respondToGroupInvitation,
     openCheckout,
+    escrowOrders,
     setActiveEscrowModalOrder,
     formatPrice,
     language,
@@ -1933,19 +1934,53 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   <p className="text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
                     {msg.text}
                   </p>
-                  {msg.order && (
-                    <div className="mt-2 pt-2 border-t border-amber-200 dark:border-amber-800/60 flex items-center justify-between text-xs">
-                      <span className="text-slate-600 dark:text-slate-400 font-mono">
-                        PIN: <strong className="text-amber-700 dark:text-amber-300">{msg.order.escrowPin}</strong>
-                      </span>
-                      <button
-                        onClick={() => setActiveEscrowModalOrder(msg.order!)}
-                        className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-semibold transition-colors"
-                      >
-                        Manage Escrow
-                      </button>
-                    </div>
-                  )}
+                  {msg.order && (() => {
+                    const liveOrder = escrowOrders.find((o) => o.id === msg.order!.id) || msg.order!;
+                    const isBuyer = phonesMatch(currentUser?.phoneNumber || '', liveOrder.buyerPhone) ||
+                      liveOrder.buyerId === currentUser?.id;
+                    const statusLabel =
+                      liveOrder.status === 'funds_released'
+                        ? 'Funds Released'
+                        : liveOrder.status === 'release_approved'
+                        ? 'Approved · Enter Code'
+                        : liveOrder.status === 'disputed'
+                        ? 'Disputed'
+                        : liveOrder.status === 'refunded'
+                        ? 'Refunded'
+                        : 'Held in Escrow (Awaiting Approval)';
+                    return (
+                      <div className="mt-2 pt-2 border-t border-amber-200 dark:border-amber-800/60 space-y-1.5 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-800 dark:text-amber-300">
+                            {statusLabel}
+                          </span>
+                          <button
+                            onClick={() => setActiveEscrowModalOrder(liveOrder)}
+                            className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-semibold transition-colors"
+                          >
+                            Manage Escrow
+                          </button>
+                        </div>
+                        <div className="text-left text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                          {isBuyer ? (
+                            <span>
+                              System PIN (Creator): <strong className="text-amber-700 dark:text-amber-300">{liveOrder.escrowPin}</strong>
+                            </span>
+                          ) : liveOrder.status === 'release_approved' ? (
+                            <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                              Buyer approved! Tap Manage Escrow to enter PIN & claim.
+                            </span>
+                          ) : liveOrder.status === 'funds_released' ? (
+                            <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                              Completed · Payout credited to your wallet
+                            </span>
+                          ) : (
+                            <span>Money held in vault awaiting buyer approval</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             );
@@ -2025,7 +2060,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       <button
                         type="button"
                         onClick={() => {
-                          setToastNotice('Saved to Favorites â­');
+                          setToastNotice('Saved to Favorites ⭐');
                           setTimeout(() => setToastNotice(null), 1800);
                           setActiveMenuMsgId(null);
                         }}
@@ -2533,6 +2568,15 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     msg.product.id.startsWith('deal_') ||
                     Boolean(msg.product.tags?.includes('Escrow'));
                   const showProductImage = Boolean(msg.product.imageUrl) && !isEscrowDeal;
+                  const isSender = msg.sender === 'user';
+                  const subtotal = Number(msg.product.price) || 0;
+                  const fee = Math.min(Math.round(subtotal * 0.01), 4000);
+                  const productForCheckout: Product = {
+                    ...msg.product,
+                    sellerPhone:
+                      msg.product.sellerPhone ||
+                      (isSender ? currentUser?.phoneNumber : currentChat?.phoneNumber || currentChat?.phone || ''),
+                  };
                   return (
                     <div className="space-y-2 min-w-[240px]">
                       {showProductImage && (
@@ -2557,17 +2601,27 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                           {msg.product.title}
                         </h4>
                         <div className="text-sm font-bold font-mono text-indigo-600 dark:text-indigo-400 mt-0.5">
-                          {formatPrice(msg.product.price, msg.product.currency)}
+                          {formatPrice(subtotal, msg.product.currency)}
+                        </div>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                          + {formatPrice(fee, msg.product.currency)} (1% escrow fee, max ₦4,000)
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => openCheckout(msg.product!)}
-                        className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm"
-                      >
-                        <Lock className="w-3.5 h-3.5" />
-                        <span>Buy with Escrow</span>
-                      </button>
+                      {isSender ? (
+                        <div className="w-full py-2 px-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 rounded-xl font-semibold text-[11px] flex items-center justify-center gap-1.5">
+                          <Lock className="w-3.5 h-3.5 shrink-0" />
+                          <span>Deal Sent · Waiting for Buyer Payment</span>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => openCheckout(productForCheckout)}
+                          className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                        >
+                          <Lock className="w-3.5 h-3.5" />
+                          <span>{isEscrowDeal ? 'Pay with Escrow' : 'Buy with Escrow'}</span>
+                        </button>
+                      )}
                     </div>
                   );
                 })()}
@@ -4331,6 +4385,23 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
                 />
               </div>
+
+              {Number(escrowDealAmount) > 0 && (() => {
+                const sub = Number(escrowDealAmount) || 0;
+                const fee = Math.min(Math.round(sub * 0.01), 4000);
+                return (
+                  <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-black/40 border border-slate-200 dark:border-slate-800 space-y-1 text-[11px]">
+                    <div className="flex justify-between text-slate-600 dark:text-slate-300">
+                      <span>Escrow Fee (1%, max ₦4,000)</span>
+                      <span className="font-mono font-semibold">{formatPrice(fee, currency)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-slate-900 dark:text-white pt-1 border-t border-slate-200 dark:border-slate-800">
+                      <span>Buyer Pays Total</span>
+                      <span className="font-mono text-emerald-600 dark:text-emerald-400">{formatPrice(sub + fee, currency)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="grid grid-cols-2 gap-2 pt-1">
@@ -4344,8 +4415,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   }
                   const dealProd: Product = {
                     id: `deal_${Date.now()}`,
-                    sellerId: currentChat.id,
+                    sellerId: currentUser.id,
                     sellerName: currentUser.fullName || 'AGC User',
+                    sellerPhone: currentUser.phoneNumber || '',
                     title: escrowDealTitle.trim(),
                     description: `Escrow-protected deal with ${currentChat.name}`,
                     price: amt,
@@ -4377,6 +4449,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     id: `deal_${Date.now()}`,
                     sellerId: currentChat.id,
                     sellerName: currentChat.name,
+                    sellerPhone: currentChat.phoneNumber || currentChat.phone || '',
                     title: escrowDealTitle.trim(),
                     description: `Direct Escrow payment to ${currentChat.name}`,
                     price: amt,

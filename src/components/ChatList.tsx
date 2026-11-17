@@ -673,7 +673,7 @@ export const ChatList: React.FC = () => {
                         <CheckCheck className="w-3.5 h-3.5 text-purple-500 shrink-0" />
                       )}
                       {chat.isScamFlagged && (
-                        <span className="text-rose-500 font-bold shrink-0">[⚠️ï¸ SCAM REPORTED]</span>
+                        <span className="text-rose-500 font-bold shrink-0">[⚠️ SCAM REPORTED]</span>
                       )}
                       {typingUsers[chat.id]?.length ? (
                         <span className="text-purple-400 font-semibold italic animate-pulse">typing...</span>
