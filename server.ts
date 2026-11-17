@@ -218,6 +218,7 @@ app.use('/api', (req: Request, res: Response, next) => {
     if (blocked) {
       return res.status(403).json({
         error: 'Access Denied: IP address is on the AGC security blocklist.',
+        message: 'Access Denied: IP address is on the AGC security blocklist.',
         reason: blocked.reason,
         code: 'AGC_IP_BLOCKED',
       });
@@ -236,6 +237,7 @@ app.use('/api', (req: Request, res: Response, next) => {
     });
     return res.status(403).json({
       error: 'Access Denied: Malicious payload pattern intercepted by AfriChat WAF engine.',
+      message: 'Access Denied: Malicious payload pattern intercepted by AfriChat WAF engine.',
       reason: urlThreat,
       code: 'AGC_WAF_BLOCKED',
     });
@@ -253,6 +255,7 @@ app.use('/api', (req: Request, res: Response, next) => {
     });
     return res.status(403).json({
       error: 'Access Denied: Dangerous query parameters detected.',
+      message: 'Access Denied: Dangerous query parameters detected.',
       code: 'AGC_WAF_QUERY_VIOLATION',
     });
   }
@@ -270,6 +273,7 @@ app.use('/api', (req: Request, res: Response, next) => {
       });
       return res.status(403).json({
         error: 'Access Denied: Dangerous request body detected.',
+        message: 'Access Denied: Dangerous request body detected.',
         code: 'AGC_WAF_BODY_VIOLATION',
       });
     }
@@ -3004,7 +3008,7 @@ app.post('/api/games/bet/lock', (req: Request, res: Response) => {
 
     const nowIso = new Date().toISOString();
     const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const label = gType === 'whot' ? 'Whot!' : gType === 'ludo' ? 'Ludo' : 'X/O';
+    const label = gType === 'whot' ? 'Whot!' : gType === 'ludo' ? 'Ludo' : gType === 'poker' ? 'Poker' : 'X/O';
 
     wallet.availableBalance = Math.max(0, Number(wallet.availableBalance || 0) - stake);
     wallet.escrowLockedBalance = Math.max(0, Number(wallet.escrowLockedBalance || 0) + stake);

@@ -6,10 +6,61 @@
       "availableBalance": 61000,
       "escrowLockedBalance": 0,
       "currency": "NGN",
-      "transactions": [],
-      "updatedAt": "2026-11-16T23:19:45.441Z"
+      "transactions": [
+        {
+          "id": "tx_xo_ref_c_test_123",
+          "userId": "usr_032044777",
+          "userPhone": "+2347032044777",
+          "userName": "Mitch",
+          "type": "refund",
+          "title": "X/O Challenge Closed (Stake Refunded)",
+          "description": "X/O stake returned from escrow",
+          "amount": 1000,
+          "fee": 0,
+          "balanceAfter": 61000,
+          "currency": "NGN",
+          "timestamp": "09:17 PM",
+          "createdAt": "2026-11-17T21:17:05.485Z",
+          "status": "completed",
+          "reference": "XO_test_123",
+          "referenceId": "XO_test_123",
+          "channel": "wallet",
+          "metadata": {
+            "gameBetEscrow": true,
+            "gameId": "test_123",
+            "gameType": "xo",
+            "outcome": "cancelled"
+          }
+        },
+        {
+          "id": "tx_xo_lock_test_123",
+          "userId": "usr_032044777",
+          "userPhone": "+2347032044777",
+          "userName": "Mitch",
+          "type": "game_wager",
+          "title": "Test",
+          "description": "X/O bet stake locked in server escrow",
+          "amount": 1000,
+          "fee": 0,
+          "balanceAfter": 60000,
+          "currency": "NGN",
+          "timestamp": "09:16 PM",
+          "createdAt": "2026-11-17T21:16:55.880Z",
+          "status": "completed",
+          "reference": "XO_test_123",
+          "referenceId": "XO_test_123",
+          "channel": "wallet",
+          "metadata": {
+            "gameBetEscrow": true,
+            "gameId": "test_123",
+            "gameType": "xo",
+            "role": "challenger"
+          }
+        }
+      ],
+      "updatedAt": "2026-11-17T21:17:05.485Z"
     }
   },
   "usedReferences": [],
-  "updatedAt": "2026-11-17T01:13:30.271Z"
+  "updatedAt": "2026-11-17T21:17:05.487Z"
 }

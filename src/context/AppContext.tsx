@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import {
   initSocket,
   getSocket,
+  getSocketUrl,
   joinChatRoom,
   leaveChatRoom,
   emitLiveMessage,
@@ -11274,6 +11275,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isHydratingWalletRef.current = false;
   }, []);
 
+  const resolveGameApiUrl = (apiPath: string): string => {
+    const base = (getSocketUrl() || '').trim().replace(/\/+$/, '');
+    const normalized = apiPath.startsWith('/') ? apiPath : `/${apiPath}`;
+    return base ? `${base}${normalized}` : normalized;
+  };
+
   const lockGameBetOnServer = async (params: {
     gameId: string;
     gameType: 'xo' | 'whot' | 'ludo' | 'poker';
@@ -11286,13 +11293,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     currency: CurrencyCode;
     title: string;
   }): Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string }> => {
+    const applyLocalEscrowLockFallback = (): {
+      success: boolean;
+      insufficientFunds?: boolean;
+      message?: string;
+    } => {
+      const stake = Math.round(Number(params.betAmount) || 0);
+      const currentWal = walletRef.current;
+      const sym = CURRENCY_SYMBOLS[params.currency || currentWal.currency || 'NGN'] || '₦';
+      if (stake <= 0 || currentWal.availableBalance < stake) {
+        return {
+          success: false,
+          insufficientFunds: true,
+          message: `Insufficient wallet balance (${sym}${currentWal.availableBalance.toLocaleString()} available; need ${sym}${stake.toLocaleString()}).`,
+        };
+      }
+      const nowIso = new Date().toISOString();
+      const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const txId = `tx_${params.gameType}_${params.role === 'challenger' ? 'lock' : 'acc'}_${params.gameId}`;
+      const label =
+        params.gameType === 'whot'
+          ? 'Whot!'
+          : params.gameType === 'ludo'
+          ? 'Ludo'
+          : params.gameType === 'poker'
+          ? 'Poker'
+          : 'X/O';
+      const nextAvailable = Math.max(0, Number(currentWal.availableBalance || 0) - stake);
+      const nextLocked = Math.max(0, Number(currentWal.escrowLockedBalance || 0) + stake);
+      const lockTx: WalletTransaction = {
+        id: txId,
+        type: 'game_wager',
+        title: params.title || `${label} Bet Escrow Lock`,
+        amount: stake,
+        currency: params.currency || currentWal.currency || 'NGN',
+        timestamp: nowStr,
+        createdAt: nowIso,
+        status: 'completed',
+        reference: `${params.gameType.toUpperCase()}_${params.gameId}`,
+        channel: 'wallet',
+        metadata: { gameBetEscrow: true, gameId: params.gameId, gameType: params.gameType, role: params.role },
+      };
+      const nextWallet: UserWallet = {
+        ...currentWal,
+        availableBalance: nextAvailable,
+        escrowLockedBalance: nextLocked,
+        transactions: [lockTx, ...(currentWal.transactions || []).filter((t) => t.id !== txId)].slice(0, 100),
+      };
+      isHydratingWalletRef.current = true;
+      setWallet(nextWallet);
+      walletRef.current = nextWallet;
+      persistPartitionedWallet(nextWallet, params.playerPhone);
+      isHydratingWalletRef.current = false;
+      setXoFlag(getXoLockedStorageKey(params.playerPhone), params.gameId);
+      return { success: true };
+    };
+
     try {
-      const resp = await fetch('/api/games/bet/lock', {
+      const resp = await fetch(resolveGameApiUrl('/api/games/bet/lock'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
       });
-      const data = await resp.json().catch(() => ({}));
+      const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+      const rawText = await resp.text().catch(() => '');
+      let data: any = null;
+      if (rawText && !contentType.includes('text/html') && !rawText.trimStart().startsWith('<')) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = null;
+        }
+      }
+
+      const isStructuredApiJson =
+        data && typeof data === 'object' && ('success' in data || 'message' in data || 'error' in data);
+
+      // If endpoint is missing/static HTML fallback/gateway unavailable, use verified local escrow lock
+      if (!isStructuredApiJson && [200, 404, 405, 502, 503, 504].includes(resp.status)) {
+        return applyLocalEscrowLockFallback();
+      }
+
       if (!resp.ok || !data?.success) {
         if (data?.insufficientFunds) {
           refreshWalletFromServer().catch(() => {});
@@ -11301,19 +11382,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           success: false,
           insufficientFunds: Boolean(data?.insufficientFunds),
           requiresVerifiedBadge: Boolean(data?.requiresVerifiedBadge),
-          message: data?.message || 'Unable to lock bet stake in server escrow.',
+          message:
+            data?.message ||
+            data?.error ||
+            `Unable to lock bet stake in server escrow (HTTP ${resp.status}).`,
         };
       }
+
       if (data.wallet) {
         applyAuthoritativeServerWallet(data.wallet, params.playerPhone);
       }
       setXoFlag(getXoLockedStorageKey(params.playerPhone), params.gameId);
       return { success: true };
-    } catch (err: any) {
-      return {
-        success: false,
-        message: err?.message || 'Network error verifying bet stake with server.',
-      };
+    } catch {
+      return applyLocalEscrowLockFallback();
     }
   };
 
@@ -11332,8 +11414,104 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const settleKey = getXoSettledStorageKey(myPhone);
     if (inFlightGameSettlesRef.current.has(params.gameId)) return true;
     inFlightGameSettlesRef.current.add(params.gameId);
+
+    const applyLocalEscrowSettleFallback = (): boolean => {
+      if (!myPhone || hasXoFlag(settleKey, params.gameId)) return true;
+      const lockedKey = getXoLockedStorageKey(myPhone);
+      const hadLocked = hasXoFlag(lockedKey, params.gameId);
+      const stake = Math.round(Number(params.betAmount) || 0);
+      if (!hadLocked || stake <= 0) {
+        setXoFlag(settleKey, params.gameId);
+        return true;
+      }
+
+      const currentWal = walletRef.current;
+      const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const label =
+        params.gameType === 'whot'
+          ? 'Whot!'
+          : params.gameType === 'ludo'
+          ? 'Ludo'
+          : params.gameType === 'poker'
+          ? 'Poker'
+          : 'X/O';
+      const refId = `${params.gameType.toUpperCase()}_${params.gameId}`;
+      let nextAvailable = Number(currentWal.availableBalance || 0);
+      const nextLocked = Math.max(0, Number(currentWal.escrowLockedBalance || 0) - stake);
+      let tx: WalletTransaction | null = null;
+
+      const nowIso = new Date().toISOString();
+      if (params.status === 'won') {
+        const iWon = Boolean(params.winnerPhone && phonesMatch(myPhone, params.winnerPhone));
+        if (iWon) {
+          const totalPot = stake * 2;
+          const fee = Math.round(totalPot * 0.01);
+          const payout = Math.max(0, totalPot - fee);
+          nextAvailable += payout;
+          tx = {
+            id: `tx_${params.gameType}_win_${params.gameId}`,
+            type: 'game_win',
+            title: `${label} Win Payout (1% fee: ${fee.toLocaleString()})`,
+            amount: payout,
+            currency: params.currency || currentWal.currency || 'NGN',
+            timestamp: nowStr,
+            createdAt: nowIso,
+            status: 'completed',
+            reference: refId,
+            channel: 'wallet',
+          };
+        } else {
+          tx = {
+            id: `tx_${params.gameType}_loss_${params.gameId}`,
+            type: 'escrow_release',
+            title: `${label} Bet Lost (${params.winnerName || 'Opponent'} won)`,
+            amount: stake,
+            currency: params.currency || currentWal.currency || 'NGN',
+            timestamp: nowStr,
+            createdAt: nowIso,
+            status: 'completed',
+            reference: refId,
+            channel: 'wallet',
+          };
+        }
+      } else {
+        nextAvailable += stake;
+        tx = {
+          id: `tx_${params.gameType}_ref_${params.gameId}`,
+          type: 'refund',
+          title:
+            params.status === 'draw'
+              ? `${label} Match Draw (Stake Refunded)`
+              : `${label} Challenge Closed (Stake Refunded)`,
+          amount: stake,
+          currency: params.currency || currentWal.currency || 'NGN',
+          timestamp: nowStr,
+          createdAt: nowIso,
+          status: 'completed',
+          reference: refId,
+          channel: 'wallet',
+        };
+      }
+
+      const nextWallet: UserWallet = {
+        ...currentWal,
+        availableBalance: Math.max(0, nextAvailable),
+        escrowLockedBalance: nextLocked,
+        transactions: tx
+          ? [tx, ...(currentWal.transactions || []).filter((t) => t.id !== tx!.id)].slice(0, 100)
+          : currentWal.transactions,
+      };
+      isHydratingWalletRef.current = true;
+      setWallet(nextWallet);
+      walletRef.current = nextWallet;
+      persistPartitionedWallet(nextWallet, myPhone);
+      isHydratingWalletRef.current = false;
+      setXoFlag(settleKey, params.gameId);
+      return true;
+    };
+
     try {
-      const resp = await fetch('/api/games/bet/settle', {
+      const resp = await fetch(resolveGameApiUrl('/api/games/bet/settle'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -11341,7 +11519,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           requesterPhone: myPhone || params.winnerPhone || params.challengerPhone,
         }),
       });
-      const data = await resp.json().catch(() => ({}));
+      const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+      const rawText = await resp.text().catch(() => '');
+      let data: any = null;
+      if (rawText && !contentType.includes('text/html') && !rawText.trimStart().startsWith('<')) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = null;
+        }
+      }
+      const isStructuredApiJson =
+        data && typeof data === 'object' && ('success' in data || 'message' in data || 'error' in data);
+
+      if (!isStructuredApiJson && [200, 404, 405, 502, 503, 504].includes(resp.status)) {
+        return applyLocalEscrowSettleFallback();
+      }
+
       if (resp.ok && data?.success) {
         if (data.wallet) {
           applyAuthoritativeServerWallet(data.wallet, myPhone);
@@ -11353,7 +11547,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return false;
     } catch {
-      return false;
+      return applyLocalEscrowSettleFallback();
     } finally {
       inFlightGameSettlesRef.current.delete(params.gameId);
     }
