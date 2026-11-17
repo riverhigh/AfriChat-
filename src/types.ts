@@ -1524,6 +1524,9 @@ export interface AdminUserRecord {
   deviceInfo?: string;
   bannedAt?: string;
   banReason?: string;
+  suspendedAt?: string;
+  suspendedUntil?: string;
+  suspensionReason?: string;
   kycStatus?: 'unverified' | 'pending' | 'verified' | 'rejected';
   kycType?: 'BVN' | 'NIN';
   adminWalletAdjustedAt?: string;

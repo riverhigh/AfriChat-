@@ -24,11 +24,9 @@ import {
   Send,
   RefreshCw,
   BadgeCheck,
-  Ban,
   CheckCircle2,
   RotateCcw,
   KeyRound,
-  Wallet,
   Phone,
 } from 'lucide-react';
 import { useApp, phonesMatch } from '../context/AppContext';
@@ -141,12 +139,7 @@ export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({ eligibleRoles, i
     adminResolveEscrow,
     adminUsers,
     refreshAdminUsers,
-    setUserRole,
-    toggleUserVerification,
     setUserStatus,
-    banUser,
-    unbanUser,
-    adjustUserWallet,
     startChatWithContact,
   } = useApp();
 
@@ -180,8 +173,7 @@ export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({ eligibleRoles, i
   const [userSearch, setUserSearch] = useState('');
   const [userStatusFilter, setUserStatusFilter] = useState<'all' | 'active' | 'suspended' | 'banned'>('all');
   const [selectedManagedUser, setSelectedManagedUser] = useState<AdminUserRecord | null>(null);
-  const [walletDeltaInput, setWalletDeltaInput] = useState('');
-  const [banReasonInput, setBanReasonInput] = useState('');
+  const [suspensionReasonInput, setSuspensionReasonInput] = useState('');
   const [userActionBusy, setUserActionBusy] = useState(false);
   const [userActionFeedback, setUserActionFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [isRefreshingUsers, setIsRefreshingUsers] = useState(false);
@@ -2181,270 +2173,130 @@ export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({ eligibleRoles, i
                         </button>
                       </div>
 
-                      {/* Role & Badge */}
-                      <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-[#1a1133] border border-slate-200 dark:border-purple-900/40 space-y-3">
-                        <div>
-                          <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block mb-1">
-                            Account Role
-                          </label>
-                          <select
-                            disabled={userActionBusy}
-                            value={selectedManagedUser.role || 'user'}
-                            onChange={async (e) => {
-                              const nextRole = e.target.value as 'user' | 'creator' | 'merchant' | 'admin';
-                              setUserActionBusy(true);
-                              try {
-                                await setUserRole(selectedManagedUser.phoneNumber || selectedManagedUser.id, nextRole);
-                                setSelectedManagedUser((prev) => (prev ? { ...prev, role: nextRole } : prev));
-                                setUserActionFeedback({
-                                  type: 'ok',
-                                  text: `${selectedManagedUser.fullName} role updated to ${nextRole}.`,
-                                });
-                              } finally {
-                                setUserActionBusy(false);
-                              }
-                            }}
-                            className="w-full min-h-[40px] px-3 rounded-xl bg-white dark:bg-neutral-900 border border-slate-200 dark:border-purple-900/40 text-xs font-mono text-slate-900 dark:text-white"
-                          >
-                            <option value="user">user</option>
-                            <option value="creator">creator</option>
-                            <option value="merchant">merchant</option>
-                            <option value="admin">admin</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block mb-1.5">
-                            Verification Badge
-                          </label>
-                          <div className="flex flex-wrap gap-1.5">
-                            {(
-                              [
-                                { id: 'admin', label: 'Admin' },
-                                { id: 'blue', label: 'Blue' },
-                                { id: 'gold', label: 'Gold' },
-                                { id: 'creator_plus', label: 'C+' },
-                                { id: null, label: 'None' },
-                              ] as const
-                            ).map((b) => {
-                              const active = (selectedManagedUser.verificationBadge || null) === b.id;
-                              return (
-                                <button
-                                  key={String(b.id)}
-                                  type="button"
-                                  disabled={userActionBusy}
-                                  onClick={async () => {
-                                    setUserActionBusy(true);
-                                    try {
-                                      await toggleUserVerification(
-                                        selectedManagedUser.phoneNumber || selectedManagedUser.id,
-                                        b.id,
-                                        {
-                                          phoneNumber: selectedManagedUser.phoneNumber,
-                                          fullName: selectedManagedUser.fullName,
-                                          avatarUrl: selectedManagedUser.avatarUrl,
-                                        }
-                                      );
-                                      setSelectedManagedUser((prev) =>
-                                        prev ? { ...prev, verificationBadge: b.id } : prev
-                                      );
-                                      setUserActionFeedback({
-                                        type: 'ok',
-                                        text: `Updated verification badge to ${b.label}.`,
-                                      });
-                                    } finally {
-                                      setUserActionBusy(false);
-                                    }
-                                  }}
-                                  className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors ${
-                                    active
-                                      ? 'bg-purple-600 text-white'
-                                      : 'bg-white dark:bg-neutral-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-purple-900/40'
-                                  }`}
-                                >
-                                  {b.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Wallet Adjuster */}
-                      <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-[#1a1133] border border-slate-200 dark:border-purple-900/40 space-y-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
-                            <Wallet className="w-3.5 h-3.5 text-emerald-500" /> Wallet Balance
-                          </span>
-                          <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
-                            ₦{(selectedManagedUser.walletBalanceNgn || 0).toLocaleString()}
-                          </span>
-                        </div>
-                        <div className="flex gap-2">
-                          <input
-                            type="number"
-                            value={walletDeltaInput}
-                            onChange={(e) => setWalletDeltaInput(e.target.value)}
-                            placeholder="Credit/debit (e.g. 5000 or -500)"
-                            className="flex-1 min-h-[40px] px-3 rounded-xl bg-white dark:bg-neutral-900 border border-slate-200 dark:border-purple-900/40 text-xs font-mono text-slate-900 dark:text-white"
-                          />
-                          <button
-                            type="button"
-                            disabled={
-                              userActionBusy ||
-                              !walletDeltaInput ||
-                              Number.isNaN(Number(walletDeltaInput)) ||
-                              Number(walletDeltaInput) === 0
-                            }
-                            onClick={async () => {
-                              const delta = Number(walletDeltaInput);
-                              if (!Number.isFinite(delta) || delta === 0) return;
-                              setUserActionBusy(true);
-                              try {
-                                await adjustUserWallet(
-                                  selectedManagedUser.phoneNumber || selectedManagedUser.id,
-                                  delta,
-                                  false
-                                );
-                                setSelectedManagedUser((prev) =>
-                                  prev
-                                    ? {
-                                        ...prev,
-                                        walletBalanceNgn: Math.max(0, (prev.walletBalanceNgn || 0) + delta),
-                                      }
-                                    : prev
-                                );
-                                setWalletDeltaInput('');
-                                setUserActionFeedback({
-                                  type: 'ok',
-                                  text: `Wallet adjusted by ${delta >= 0 ? '+' : ''}₦${delta.toLocaleString()}.`,
-                                });
-                              } finally {
-                                setUserActionBusy(false);
-                              }
-                            }}
-                            className="px-3.5 min-h-[40px] rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold disabled:opacity-50"
-                          >
-                            Apply
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Account Status & Moderation */}
+                      {/* 2-Hour Temporary Suspension Only (Role, Badge, Wallet & Bans live in Main Admin Dashboard) */}
                       <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-[#1a1133] border border-slate-200 dark:border-purple-900/40 space-y-2.5">
-                        <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block">
-                          Account Moderation
-                        </span>
-                        {selectedManagedUser.status !== 'banned' ? (
-                          <>
-                            <input
-                              type="text"
-                              value={banReasonInput}
-                              onChange={(e) => setBanReasonInput(e.target.value)}
-                              placeholder="Optional ban / suspension reason..."
-                              className="w-full min-h-[38px] px-3 rounded-xl bg-white dark:bg-neutral-900 border border-slate-200 dark:border-purple-900/40 text-xs text-slate-900 dark:text-white"
-                            />
-                            <div className="flex flex-wrap gap-2">
-                              {selectedManagedUser.status !== 'active' && (
-                                <button
-                                  type="button"
-                                  disabled={userActionBusy}
-                                  onClick={async () => {
-                                    setUserActionBusy(true);
-                                    try {
-                                      await setUserStatus(
-                                        selectedManagedUser.phoneNumber || selectedManagedUser.id,
-                                        'active'
-                                      );
-                                      setSelectedManagedUser((prev) =>
-                                        prev ? { ...prev, status: 'active' } : prev
-                                      );
-                                      setUserActionFeedback({ type: 'ok', text: 'User set to Active.' });
-                                    } finally {
-                                      setUserActionBusy(false);
-                                    }
-                                  }}
-                                  className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold flex items-center gap-1"
-                                >
-                                  <CheckCircle2 className="w-3.5 h-3.5" />
-                                  <span>Activate</span>
-                                </button>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-amber-500" />
+                            <span>Temporary Suspension (2 Hours Max)</span>
+                          </span>
+                          <span className="text-[10px] font-mono text-amber-500 font-bold uppercase">
+                            2H Limit
+                          </span>
+                        </div>
+
+                        {selectedManagedUser.status === 'banned' ? (
+                          <p className="text-xs text-rose-500 font-medium leading-relaxed">
+                            This user is permanently banned. Manage permanent bans, role/badge updates, and wallet adjustments in the Main Admin Dashboard.
+                          </p>
+                        ) : selectedManagedUser.status === 'suspended' ? (
+                          <div className="space-y-2.5">
+                            <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-700 dark:text-amber-200 space-y-0.5">
+                              <p className="font-bold">
+                                Suspended{' '}
+                                {selectedManagedUser.suspendedUntil
+                                  ? `until ${new Date(selectedManagedUser.suspendedUntil).toLocaleTimeString([], {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}`
+                                  : '(2-hour hold)'}
+                              </p>
+                              {selectedManagedUser.suspensionReason && (
+                                <p className="text-[11px] opacity-90">
+                                  Reason: {selectedManagedUser.suspensionReason}
+                                </p>
                               )}
-                              <button
-                                type="button"
-                                disabled={userActionBusy}
-                                onClick={async () => {
-                                  setUserActionBusy(true);
-                                  try {
-                                    await setUserStatus(
-                                      selectedManagedUser.phoneNumber || selectedManagedUser.id,
-                                      'suspended'
-                                    );
-                                    setSelectedManagedUser((prev) =>
-                                      prev ? { ...prev, status: 'suspended' } : prev
-                                    );
-                                    setUserActionFeedback({ type: 'ok', text: 'User account suspended.' });
-                                  } finally {
-                                    setUserActionBusy(false);
-                                  }
-                                }}
-                                className="px-3 py-2 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-300 border border-amber-500/30 text-xs font-bold"
-                              >
-                                Suspend
-                              </button>
-                              <button
-                                type="button"
-                                disabled={userActionBusy}
-                                onClick={async () => {
-                                  setUserActionBusy(true);
-                                  const reason = banReasonInput.trim() || 'Policy violation';
-                                  try {
-                                    await banUser(
-                                      selectedManagedUser.phoneNumber || selectedManagedUser.id,
-                                      reason
-                                    );
-                                    setSelectedManagedUser((prev) =>
-                                      prev ? { ...prev, status: 'banned', banReason: reason } : prev
-                                    );
-                                    setBanReasonInput('');
-                                    setUserActionFeedback({ type: 'ok', text: 'User permanently banned.' });
-                                  } finally {
-                                    setUserActionBusy(false);
-                                  }
-                                }}
-                                className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1"
-                              >
-                                <Ban className="w-3.5 h-3.5" />
-                                <span>Ban User</span>
-                              </button>
                             </div>
-                          </>
-                        ) : (
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs text-rose-500 font-medium truncate">
-                              Banned: {selectedManagedUser.banReason || 'Permanent block'}
-                            </span>
                             <button
                               type="button"
                               disabled={userActionBusy}
                               onClick={async () => {
                                 setUserActionBusy(true);
                                 try {
-                                  await unbanUser(selectedManagedUser.phoneNumber || selectedManagedUser.id);
-                                  setSelectedManagedUser((prev) =>
-                                    prev ? { ...prev, status: 'active', banReason: undefined } : prev
+                                  await setUserStatus(
+                                    selectedManagedUser.phoneNumber || selectedManagedUser.id,
+                                    'active'
                                   );
-                                  setUserActionFeedback({ type: 'ok', text: 'User ban lifted.' });
+                                  setSelectedManagedUser((prev) =>
+                                    prev
+                                      ? {
+                                          ...prev,
+                                          status: 'active',
+                                          suspendedAt: undefined,
+                                          suspendedUntil: undefined,
+                                          suspensionReason: undefined,
+                                        }
+                                      : prev
+                                  );
+                                  setUserActionFeedback({
+                                    type: 'ok',
+                                    text: 'Suspension lifted. User set to Active.',
+                                  });
                                 } finally {
                                   setUserActionBusy(false);
                                 }
                               }}
-                              className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold shrink-0"
+                              className="min-h-[40px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5"
                             >
-                              Restore User
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Lift Suspension (Activate)</span>
                             </button>
                           </div>
+                        ) : (
+                          <>
+                            <input
+                              type="text"
+                              value={suspensionReasonInput}
+                              onChange={(e) => setSuspensionReasonInput(e.target.value)}
+                              placeholder="Optional 2-hour suspension reason..."
+                              className="w-full min-h-[38px] px-3 rounded-xl bg-white dark:bg-neutral-900 border border-slate-200 dark:border-purple-900/40 text-xs text-slate-900 dark:text-white"
+                            />
+                            <button
+                              type="button"
+                              disabled={userActionBusy}
+                              onClick={async () => {
+                                setUserActionBusy(true);
+                                const reason = suspensionReasonInput.trim() || undefined;
+                                const suspendedUntil = new Date(Date.now() + 2 * 3_600_000).toISOString();
+                                try {
+                                  await setUserStatus(
+                                    selectedManagedUser.phoneNumber || selectedManagedUser.id,
+                                    'suspended',
+                                    { durationHours: 2, reason }
+                                  );
+                                  setSelectedManagedUser((prev) =>
+                                    prev
+                                      ? {
+                                          ...prev,
+                                          status: 'suspended',
+                                          suspendedAt: new Date().toISOString(),
+                                          suspendedUntil,
+                                          suspensionReason: reason,
+                                        }
+                                      : prev
+                                  );
+                                  setSuspensionReasonInput('');
+                                  setUserActionFeedback({
+                                    type: 'ok',
+                                    text: `User suspended for 2 hours (until ${new Date(
+                                      suspendedUntil
+                                    ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}).`,
+                                  });
+                                } finally {
+                                  setUserActionBusy(false);
+                                }
+                              }}
+                              className="min-h-[40px] px-3.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-600 dark:text-amber-300 border border-amber-500/30 text-xs font-bold inline-flex items-center gap-1.5"
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>Suspend for 2 Hours</span>
+                            </button>
+                          </>
                         )}
+
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-200/70 dark:border-purple-900/30">
+                          Role/badge edits, wallet balance adjustments, and permanent bans are exclusive to the Main Admin Dashboard.
+                        </p>
                       </div>
                     </div>
                   ) : (
@@ -2547,10 +2399,10 @@ export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({ eligibleRoles, i
                                       : 'bg-emerald-500/15 text-emerald-500'
                                   }`}
                                 >
-                                  {u.role || 'user'}
+                                  {u.status || 'active'}
                                 </span>
-                                <div className="text-[10px] font-mono text-slate-400 mt-0.5 tabular-nums">
-                                  ₦{(u.walletBalanceNgn || 0).toLocaleString()}
+                                <div className="text-[10px] font-mono text-slate-400 mt-0.5 uppercase">
+                                  {u.role || 'user'}
                                 </div>
                               </div>
                             </button>

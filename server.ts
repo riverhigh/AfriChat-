@@ -498,6 +498,28 @@ interface RegisteredUser {
   deviceInfo?: string;
   bannedAt?: string;
   banReason?: string;
+  suspendedAt?: string;
+  suspendedUntil?: string;
+  suspensionReason?: string;
+}
+
+function expireUserSuspensionIfElapsed(user: RegisteredUser, mapKey?: string): boolean {
+  if (
+    user.status === 'suspended' &&
+    user.suspendedUntil &&
+    Date.now() >= new Date(user.suspendedUntil).getTime()
+  ) {
+    user.status = 'active';
+    delete user.suspendedAt;
+    delete user.suspendedUntil;
+    delete user.suspensionReason;
+    (user as any).updatedAt = new Date().toISOString();
+    if (mapKey) {
+      usersByPhone.set(mapKey, user);
+    }
+    return true;
+  }
+  return false;
 }
 
 const usersByPhone = new Map<string, RegisteredUser>();
@@ -5075,6 +5097,11 @@ app.get('/api/users/lookup', (req: Request, res: Response) => {
 app.get('/api/users', async (_req: Request, res: Response) => {
   try {
     await syncUsersFromSupabase();
+    let expiredAny = false;
+    for (const [k, u] of usersByPhone.entries()) {
+      if (expireUserSuspensionIfElapsed(u, k)) expiredAny = true;
+    }
+    if (expiredAny) saveUsersFile();
     const cleanUsers = Array.from(usersByPhone.values()).filter((u) => !isSyntheticTestAccount(u));
     res.json({ users: cleanUsers });
   } catch (err: any) {
@@ -6710,7 +6737,18 @@ app.patch('/api/admin/users/:phone/badge', async (req: Request, res: Response) =
 app.patch('/api/admin/users/:phone/status', async (req: Request, res: Response) => {
   try {
     const { phone } = req.params;
-    const { status, verificationBadge, role, walletBalanceNgn, reason, phoneNumber, fullName, avatarUrl } = req.body || {};
+    const {
+      status,
+      verificationBadge,
+      role,
+      walletBalanceNgn,
+      reason,
+      durationHours,
+      suspendedUntil,
+      phoneNumber,
+      fullName,
+      avatarUrl,
+    } = req.body || {};
     const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
     if (match) {
       const { key, user } = match;
@@ -6721,6 +6759,9 @@ app.patch('/api/admin/users/:phone/status', async (req: Request, res: Response) 
           user.bannedAt = new Date().toISOString();
           user.banReason = reason || 'Account permanently banned by platform administrator.';
           user.isOnline = false;
+          delete user.suspendedAt;
+          delete user.suspendedUntil;
+          delete user.suspensionReason;
           io.to(`phone:${cleanKey}`).emit('account_banned', {
             banned: true,
             reason: user.banReason,
@@ -6734,9 +6775,27 @@ app.patch('/api/admin/users/:phone/status', async (req: Request, res: Response) 
               s.disconnect(true);
             }
           }
+        } else if (status === 'suspended') {
+          user.suspendedAt = new Date().toISOString();
+          const numericHours = Number(durationHours);
+          if (suspendedUntil) {
+            user.suspendedUntil = String(suspendedUntil);
+          } else if (Number.isFinite(numericHours) && numericHours > 0) {
+            user.suspendedUntil = new Date(Date.now() + numericHours * 3_600_000).toISOString();
+          } else {
+            delete user.suspendedUntil;
+          }
+          if (reason) {
+            user.suspensionReason = String(reason).trim();
+          } else {
+            delete user.suspensionReason;
+          }
         } else if (status === 'active') {
           delete user.bannedAt;
           delete user.banReason;
+          delete user.suspendedAt;
+          delete user.suspendedUntil;
+          delete user.suspensionReason;
         }
       }
       if (verificationBadge !== undefined) user.verificationBadge = verificationBadge;
@@ -6752,7 +6811,9 @@ app.patch('/api/admin/users/:phone/status', async (req: Request, res: Response) 
         actorRole: 'Super Admin',
         action: `Account ${user.status || 'updated'}`,
         target: `${user.fullName} (${user.phoneNumber})`,
-        details: `Role: ${user.role} · Status: ${user.status}`,
+        details: `Role: ${user.role} · Status: ${user.status}${
+          user.suspendedUntil ? ` (until ${new Date(user.suspendedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})` : ''
+        }`,
       });
       io.emit('user_updated', user);
       return res.json({ success: true, user });
@@ -7784,6 +7845,7 @@ io.on('connection', (socket: Socket) => {
           socket.disconnect(true);
           return;
         }
+        expireUserSuspensionIfElapsed(existing, storeKey);
         existing.isOnline = true;
         existing.lastSeen = 'online';
         if (userData.userName && userData.userName !== 'AGC User' && (!existing.fullName || existing.fullName === 'AGC User' || existing.fullName === 'User' || existing.fullName === 'Registered User')) {

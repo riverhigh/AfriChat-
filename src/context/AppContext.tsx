@@ -1457,7 +1457,11 @@ interface AppContextType {
   updateAdminFeatureFlag: (key: keyof FeatureFlags, val?: boolean) => Promise<boolean>;
   cmsData: AdminCmsData;
   updateCmsData: (updates: Partial<AdminCmsData>) => Promise<boolean>;
-  setUserStatus: (userIdOrPhone: string, status: 'active' | 'suspended' | 'banned' | 'flagged') => Promise<boolean>;
+  setUserStatus: (
+    userIdOrPhone: string,
+    status: 'active' | 'suspended' | 'banned' | 'flagged',
+    options?: { durationHours?: number; reason?: string }
+  ) => Promise<boolean>;
   setUserRole: (userIdOrPhone: string, role: 'user' | 'creator' | 'merchant' | 'admin') => Promise<boolean>;
   banUser: (phoneOrId: string, reason?: string) => Promise<void>;
   unbanUser: (phoneOrId: string) => Promise<void>;
@@ -19178,6 +19182,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     status: u.status || 'active',
     bannedAt: u.bannedAt,
     banReason: u.banReason,
+    suspendedAt: u.suspendedAt,
+    suspendedUntil: u.suspendedUntil,
+    suspensionReason: u.suspensionReason,
     kycStatus: u.kycStatus,
     kycType: u.kycType,
     adminWalletAdjustedAt: u.adminWalletAdjustedAt,
@@ -19500,15 +19507,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const setUserStatus = async (
     userIdOrPhone: string,
-    status: 'active' | 'suspended' | 'banned' | 'flagged'
+    status: 'active' | 'suspended' | 'banned' | 'flagged',
+    options?: { durationHours?: number; reason?: string }
   ): Promise<boolean> => {
     const target = findAdminUserTarget(userIdOrPhone);
     const clean = userIdOrPhone.replace(/\D/g, '');
-    const optimisticUser = target ? { ...target, status } : { id: userIdOrPhone, phoneNumber: userIdOrPhone, status };
+    const durationHours = options?.durationHours;
+    const reason = options?.reason?.trim() || undefined;
+    const nowIso = new Date().toISOString();
+    const suspendedAt = status === 'suspended' ? nowIso : undefined;
+    const suspendedUntil =
+      status === 'suspended' && durationHours && durationHours > 0
+        ? new Date(Date.now() + durationHours * 3_600_000).toISOString()
+        : undefined;
+    const suspensionReason = status === 'suspended' ? reason : undefined;
+
+    const patchFields: Partial<AdminUserRecord> = {
+      status,
+      ...(status === 'suspended'
+        ? { suspendedAt, suspendedUntil, suspensionReason }
+        : status === 'active'
+        ? { suspendedAt: undefined, suspendedUntil: undefined, suspensionReason: undefined, bannedAt: undefined, banReason: undefined }
+        : {}),
+    };
+
+    const optimisticUser = target
+      ? { ...target, ...patchFields }
+      : { id: userIdOrPhone, phoneNumber: userIdOrPhone, ...patchFields };
     setAdminUsers((prev) => {
       const next = prev.map((u) =>
         u.id === userIdOrPhone || u.phoneNumber === userIdOrPhone || (clean && phonesMatch(u.phoneNumber, userIdOrPhone))
-          ? { ...u, status }
+          ? { ...u, ...patchFields }
           : u
       );
       adminUsersRef.current = next;
@@ -19523,6 +19552,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           status,
+          durationHours,
+          suspendedUntil,
+          reason,
           phoneNumber: target?.phoneNumber,
           fullName: target?.fullName,
           avatarUrl: target?.avatarUrl,
@@ -19530,6 +19562,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }),
       upsertSupabaseAdminUserOverride(target?.phoneNumber || identifier, {
         status,
+        ...(status === 'suspended'
+          ? { suspendedAt, suspendedUntil, suspensionReason }
+          : status === 'active'
+          ? { suspendedAt: undefined, suspendedUntil: undefined, suspensionReason: undefined }
+          : {}),
         phoneNumber: target?.phoneNumber,
         fullName: target?.fullName,
         avatarUrl: target?.avatarUrl,
