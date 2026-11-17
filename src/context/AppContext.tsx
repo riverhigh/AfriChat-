@@ -5,6 +5,7 @@ import {
   joinChatRoom,
   leaveChatRoom,
   emitLiveMessage,
+  emitLiveGameUpdate,
   emitMessageReaction,
   emitGroupInvite,
   emitGroupInviteResponse,
@@ -6830,6 +6831,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     []
   );
 
+  // Reliable Supabase broadcast helper: uses active joined WebSocket channel if open, otherwise REST httpSend (avoids join races & listener channel collisions)
+  const sendSupabaseBroadcastSafe = useCallback((channelName: string, event: string, payload: any) => {
+    if (!isSupabaseConfigured || !channelName) return;
+    try {
+      const targetTopic = `realtime:${channelName}`;
+      const existingJoined = supabase
+        .getChannels()
+        .find((c) => c.topic === targetTopic && c.state === 'joined');
+      if (existingJoined) {
+        existingJoined.send({ type: 'broadcast', event, payload }).catch(() => {});
+        return;
+      }
+      const cacheKey = `out_${channelName}`;
+      let outbound = inboxChannelRefsRef.current.get(cacheKey);
+      if (!outbound || outbound.state === 'closed' || outbound.state === 'errored') {
+        outbound = supabase.channel(channelName, { config: { broadcast: { self: false } } });
+        inboxChannelRefsRef.current.set(cacheKey, outbound);
+      }
+      if (typeof (outbound as any).httpSend === 'function') {
+        (outbound as any).httpSend(event, payload).catch(() => {});
+      } else {
+        outbound.send({ type: 'broadcast', event, payload }).catch(() => {});
+      }
+    } catch (_) {}
+  }, []);
+
   const reactToMessage = (chatId: string, messageId: string, emoji: string) => {
     const myName = currentUser.fullName || 'You';
     setMessages((prev) => {
@@ -6871,42 +6898,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (_) {}
 
     if (isSupabaseConfigured) {
-      try {
-        const getOrSubscribeCh = (name: string): ReturnType<typeof supabase.channel> => {
-          const existing = inboxChannelRefsRef.current.get(name);
-          if (existing) return existing;
-          const ch = supabase.channel(name, { config: { broadcast: { self: false } } });
-          ch.subscribe();
-          inboxChannelRefsRef.current.set(name, ch);
-          return ch;
-        };
-        const chatCh = getOrSubscribeCh(`chat_${chatId}`);
-        chatCh.send({
-          type: 'broadcast',
-          event: 'message_reaction',
-          payload: { chatId, messageId, emoji, reactorName: myName, senderId: currentUser.id },
-        }).catch(() => {});
-        if (targetCleanPhone) {
-          const targets = new Set([targetCleanPhone, normalizePhoneDigits(targetCleanPhone)].filter(Boolean));
-          targets.forEach((t) => {
-            getOrSubscribeCh(`inbox_${t}`).send({
-              type: 'broadcast',
-              event: 'message_reaction',
-              payload: { chatId, messageId, emoji, reactorName: myName, senderId: currentUser.id },
-            }).catch(() => {});
-          });
-        }
-        memberPhones.forEach((p) => {
-          const cp = p.replace(/\D/g, '');
-          if (cp && !phonesMatch(cp, myCleanPhone)) {
-            getOrSubscribeCh(`inbox_${cp}`).send({
-              type: 'broadcast',
-              event: 'message_reaction',
-              payload: { chatId, messageId, emoji, reactorName: myName, senderId: currentUser.id },
-            }).catch(() => {});
-          }
+      const reactionPayload = { chatId, messageId, emoji, reactorName: myName, senderId: currentUser.id };
+      sendSupabaseBroadcastSafe(`chat_${chatId}`, 'message_reaction', reactionPayload);
+      if (targetCleanPhone) {
+        const targets = new Set([targetCleanPhone, normalizePhoneDigits(targetCleanPhone)].filter(Boolean));
+        targets.forEach((t) => {
+          sendSupabaseBroadcastSafe(`inbox_${t}`, 'message_reaction', reactionPayload);
         });
-      } catch (_) {}
+      }
+      memberPhones.forEach((p) => {
+        const cp = p.replace(/\D/g, '');
+        if (cp && !phonesMatch(cp, myCleanPhone)) {
+          sendSupabaseBroadcastSafe(`inbox_${cp}`, 'message_reaction', reactionPayload);
+        }
+      });
     }
   };
 
@@ -6914,7 +6919,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const broadcastLiveMessage = async (chatId: string, msg: ChatMessage, overrideChat?: ChatThread) => {
     const currentChat = overrideChat || chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
     const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
-    let targetCleanPhone = currentChat?.phone?.replace(/\D/g, '');
+    let targetCleanPhone = (currentChat?.phone || (currentChat as any)?.phoneNumber || '')?.replace(/\D/g, '');
 
     if (!targetCleanPhone && chatId.startsWith('dm_')) {
       const parts = chatId.replace('dm_', '').split('_');
@@ -6929,6 +6934,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const memberPhones = currentChat?.memberPhones || [];
+    const wireChat = currentChat
+      ? {
+          id: currentChat.id,
+          name: currentChat.name,
+          avatar:
+            currentChat.avatar && (!currentChat.avatar.startsWith('data:') || currentChat.avatar.length <= 16000)
+              ? currentChat.avatar
+              : undefined,
+          isGroup: Boolean(currentChat.isGroup),
+          isChannel: Boolean(currentChat.isChannel),
+          membersCount: currentChat.membersCount,
+          members: currentChat.members,
+          memberPhones: currentChat.memberPhones,
+          phone: currentChat.phone || (currentChat as any).phoneNumber,
+        }
+      : undefined;
     const isDeviceOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
 
     // Encrypt message text with WebCrypto AES-GCM 256-bit for wire transport
@@ -6944,7 +6965,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 1. BroadcastChannel (instant same-computer tab/window sync)
     try {
       const bc = new BroadcastChannel('AGC_chats_sync');
-      bc.postMessage({ chatId, message: wireMessage, senderId: currentUser.id, targetPhone: targetCleanPhone, memberPhones, isGroup: Boolean(currentChat?.isGroup), chat: currentChat });
+      bc.postMessage({ chatId, message: wireMessage, senderId: currentUser.id, targetPhone: targetCleanPhone, memberPhones, isGroup: Boolean(currentChat?.isGroup), chat: wireChat });
       bc.close();
     } catch (e) {
       console.warn('BroadcastChannel error:', e);
@@ -6970,47 +6991,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 2. Socket.io Live WebSocket Relay
-    emitLiveMessage(chatId, wireMessage, targetCleanPhone, memberPhones, currentChat);
+    emitLiveMessage(chatId, wireMessage, targetCleanPhone, memberPhones, wireChat);
 
     // 3. Supabase Realtime (Cross-device & background inbox channel)
-    // Uses pre-subscribed persistent channels -- no per-message subscribe() handshake delay
     if (isSupabaseConfigured) {
       try {
-        // Helper: get-or-create a pre-subscribed channel for instant sends
-        const getOrSubscribeCh = (name: string): ReturnType<typeof supabase.channel> => {
-          const existing = inboxChannelRefsRef.current.get(name);
-          if (existing) return existing;
-          const ch = supabase.channel(name, { config: { broadcast: { self: false } } });
-          ch.subscribe(); // fire-and-forget; future .send() calls are instant once SUBSCRIBED
-          inboxChannelRefsRef.current.set(name, ch);
-          return ch;
-        };
+        sendSupabaseBroadcastSafe('agc_chat_global', 'new_message', {
+          chatId,
+          message: wireMessage,
+          senderId: currentUser.id,
+          chat: wireChat,
+        });
 
-        // Ensure global chat broadcast channel is pre-subscribed
-        if (!chatBroadcastChannelRef.current) {
-          chatBroadcastChannelRef.current = supabase.channel('agc_chat_global', {
-            config: { broadcast: { self: false } },
-          });
-          chatBroadcastChannelRef.current.subscribe();
-        }
-
-        // Send instantly — no waiting for SUBSCRIBED
-        chatBroadcastChannelRef.current.send({
-          type: 'broadcast',
-          event: 'new_message',
-          payload: { chatId, message: wireMessage, senderId: currentUser.id, chat: currentChat },
-        }).catch(() => {});
+        sendSupabaseBroadcastSafe(`chat_${chatId}`, 'new_message', {
+          chatId,
+          message: wireMessage,
+          senderId: currentUser.id,
+          targetPhone: targetCleanPhone,
+          isGroup: Boolean(currentChat?.isGroup),
+          chat: wireChat,
+        });
 
         // Recipient personal inbox channels
         if (targetCleanPhone) {
           const targets = new Set([targetCleanPhone, normalizePhoneDigits(targetCleanPhone)].filter(Boolean));
           targets.forEach((t) => {
-            const ch = getOrSubscribeCh(`inbox_${t}`);
-            ch.send({
-              type: 'broadcast',
-              event: 'new_message',
-              payload: { chatId, message: wireMessage, senderId: currentUser.id, targetPhone: targetCleanPhone, chat: currentChat },
-            }).catch(() => {});
+            sendSupabaseBroadcastSafe(`inbox_${t}`, 'new_message', {
+              chatId,
+              message: wireMessage,
+              senderId: currentUser.id,
+              targetPhone: targetCleanPhone,
+              chat: wireChat,
+            });
           });
         }
 
@@ -7019,24 +7031,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           memberPhones.forEach((p) => {
             const cp = p.replace(/\D/g, '');
             if (cp && !phonesMatch(cp, myCleanPhone)) {
-              const ch = getOrSubscribeCh(`inbox_${cp}`);
-              ch.send({
-                type: 'broadcast',
-                event: 'new_message',
-                payload: { chatId, message: wireMessage, senderId: currentUser.id, isGroup: true, chat: currentChat },
-              }).catch(() => {});
+              const normCp = normalizePhoneDigits(cp);
+              new Set([cp, normCp].filter(Boolean)).forEach((t) => {
+                sendSupabaseBroadcastSafe(`inbox_${t}`, 'new_message', {
+                  chatId,
+                  message: wireMessage,
+                  senderId: currentUser.id,
+                  isGroup: true,
+                  chat: wireChat,
+                });
+              });
             }
           });
         }
 
         // Town community feed
         if (chatId.startsWith('town_comm_')) {
-          const ch = getOrSubscribeCh('town_community_feed');
-          ch.send({
-            type: 'broadcast',
-            event: 'new_message',
-            payload: { chatId, message: wireMessage, senderId: currentUser.id },
-          }).catch(() => {});
+          sendSupabaseBroadcastSafe('town_community_feed', 'new_message', {
+            chatId,
+            message: wireMessage,
+            senderId: currentUser.id,
+          });
         }
       } catch (e) {
         console.warn('Supabase chat broadcast notice:', e);
@@ -9386,61 +9401,103 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return (incoming.updatedAt || '') >= (existing.updatedAt || '');
   };
 
+  const ensureChatThreadForIncomingGame = useCallback(
+    (
+      resolvedCid: string,
+      challengerPhone: string,
+      challengerName: string,
+      challengerAvatar: string | undefined,
+      previewText: string,
+      timestamp: string
+    ) => {
+      const userNow = currentUserRef.current;
+      const myPhone = userNow?.phoneNumber || '';
+      const isFromMe = Boolean(myPhone && challengerPhone && phonesMatch(myPhone, challengerPhone));
+      setChats((prev) => {
+        const idx = prev.findIndex((c) => c.id === resolvedCid);
+        const activeNow = activeChatIdRef.current;
+        if (idx >= 0) {
+          const updated = [...prev];
+          const matched = { ...updated[idx] };
+          matched.lastMessage = previewText;
+          matched.lastMessageTime = timestamp;
+          if (!isFromMe && activeNow !== resolvedCid) {
+            matched.unreadCount = (matched.unreadCount || 0) + 1;
+          }
+          updated.splice(idx, 1);
+          const finalUpdated = [matched, ...updated];
+          persistPartitionedChats(finalUpdated, myPhone);
+          return finalUpdated;
+        }
+        if (!resolvedCid.startsWith('dm_')) return prev;
+        const newThread: ChatThread = {
+          id: resolvedCid,
+          name: isFromMe ? 'Direct Chat' : (challengerName || 'AGC Contact'),
+          avatar: challengerAvatar || DEFAULT_AVATAR_SVG,
+          verifiedStore: false,
+          location: 'Direct Chat',
+          unreadCount: !isFromMe && activeNow !== resolvedCid ? 1 : 0,
+          lastMessage: previewText,
+          lastMessageTime: timestamp,
+          catalog: [],
+          isOnline: true,
+          phone: isFromMe ? '' : challengerPhone,
+        };
+        const finalUpdated = [newThread, ...prev];
+        persistPartitionedChats(finalUpdated, myPhone);
+        return finalUpdated;
+      });
+    },
+    []
+  );
+
   const broadcastXoGameState = useCallback(
     (game: TicTacToeGameState, extraPhones: string[] = []) => {
       if (!game?.id || !game?.chatId) return;
+      const targetPhones = [
+        game.challengerPhone,
+        game.opponentPhone || '',
+        game.xPlayerPhone || '',
+        game.oPlayerPhone || '',
+        ...extraPhones,
+      ].filter(Boolean);
+
+      // 1. Socket.io live WebSocket relay (primary low-latency transport)
+      emitLiveGameUpdate('xo_game_update', game.chatId, game, targetPhones);
+
+      // 2. BroadcastChannel (same-browser tabs)
       try {
         const bc = new BroadcastChannel('AGC_chats_sync');
         bc.postMessage({ type: 'xo_game_update', game, senderId: currentUser.id });
         bc.close();
       } catch (_) {}
 
+      // 3. Supabase Realtime broadcast (cross-device backup)
       if (isSupabaseConfigured) {
         try {
-          const getOrSubscribeCh = (name: string): ReturnType<typeof supabase.channel> => {
-            const existing = inboxChannelRefsRef.current.get(name);
-            if (existing) return existing;
-            const ch = supabase.channel(name, { config: { broadcast: { self: false } } });
-            ch.subscribe();
-            inboxChannelRefsRef.current.set(name, ch);
-            return ch;
-          };
-
-          const chatCh = getOrSubscribeCh(`chat_${game.chatId}`);
-          chatCh.send({
-            type: 'broadcast',
-            event: 'xo_game_update',
-            payload: { game, senderId: currentUser.id },
-          }).catch(() => {});
+          sendSupabaseBroadcastSafe(`chat_${game.chatId}`, 'xo_game_update', {
+            game,
+            senderId: currentUser.id,
+          });
 
           const phoneSet = new Set<string>();
-          [
-            game.challengerPhone,
-            game.opponentPhone,
-            game.xPlayerPhone,
-            game.oPlayerPhone,
-            ...extraPhones,
-          ]
-            .filter(Boolean)
-            .forEach((p) => {
-              const rawDigits = String(p).replace(/\D/g, '');
-              const norm = normalizePhoneDigits(String(p));
-              if (rawDigits) phoneSet.add(rawDigits);
-              if (norm) phoneSet.add(norm);
-            });
+          targetPhones.forEach((p) => {
+            const rawDigits = String(p).replace(/\D/g, '');
+            const norm = normalizePhoneDigits(String(p));
+            if (rawDigits) phoneSet.add(rawDigits);
+            if (norm) phoneSet.add(norm);
+          });
 
           phoneSet.forEach((p) => {
-            const ch = getOrSubscribeCh(`inbox_${p}`);
-            ch.send({
-              type: 'broadcast',
-              event: 'xo_game_update',
-              payload: { game, senderId: currentUser.id },
-            }).catch(() => {});
+            sendSupabaseBroadcastSafe(`inbox_${p}`, 'xo_game_update', {
+              game,
+              senderId: currentUser.id,
+            });
           });
         } catch (_) {}
       }
     },
-    [currentUser.id]
+    [currentUser.id, sendSupabaseBroadcastSafe]
   );
 
   const applyXoGameUpdate = useCallback(
@@ -9453,6 +9510,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         phonesMatch(myPhone, incomingGame.opponentPhone) ||
         phonesMatch(myPhone, incomingGame.xPlayerPhone) ||
         phonesMatch(myPhone, incomingGame.oPlayerPhone);
+
+      let insertedNewCard = false;
+      let insertedCid = incomingGame.chatId;
+      const cardPreview =
+        incomingGame.mode === 'bet'
+          ? `🎮 X/O Challenge (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
+          : '🎮 Friendly X/O Challenge';
+      const cardTs = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
       // Update chat message holding this X/O game (or insert it if missing)
       setMessages((prev) => {
@@ -9491,6 +9556,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             i === existingIdx ? { ...m, xoGame: nextXo } : m
           );
         } else {
+          insertedNewCard = true;
+          insertedCid = resolvedCid;
           const newCard: ChatMessage = {
             id: `msg_xo_${incomingGame.id}`,
             chatId: resolvedCid,
@@ -9500,23 +9567,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             senderAvatar: incomingGame.challengerAvatar,
             type: 'game_xo',
             xoGame: incomingGame,
-            text:
-              incomingGame.mode === 'bet'
-                ? `🎮 X/O Challenge (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
-                : '🎮 Friendly X/O Challenge',
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            text: cardPreview,
+            timestamp: cardTs,
             status: 'delivered',
           };
           nextList = [...list, newCard];
         }
 
         const updated = { ...prev, [resolvedCid]: nextList };
-        try {
-          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
-          localStorage.setItem(userKey, JSON.stringify(updated));
-        } catch (_) {}
+        persistPartitionedMessages(updated, currentUser.phoneNumber);
         return updated;
       });
+
+      if (insertedNewCard) {
+        ensureChatThreadForIncomingGame(
+          insertedCid,
+          incomingGame.challengerPhone,
+          incomingGame.challengerName,
+          incomingGame.challengerAvatar,
+          cardPreview,
+          cardTs
+        );
+      }
 
       // Authoritative Idempotent Server Wallet Settlement on Terminal States
       if (
@@ -9544,7 +9616,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
     },
-    [currentUser.phoneNumber, CURRENCY_SYMBOLS]
+    [currentUser.phoneNumber, CURRENCY_SYMBOLS, ensureChatThreadForIncomingGame]
   );
 
   const getGameBetLimit = (): { isVerified: boolean; maxBet: number } => {
@@ -9730,9 +9802,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!isAiChat) {
       const memberPhones = targetChat?.memberPhones || [];
-      await upsertXoGameInSupabase(newGame);
-      broadcastLiveMessage(chatId, cardMsg);
+      const wireOverrideChat =
+        targetChat ||
+        (opponentPhone
+          ? ({
+              id: chatId,
+              name: currentUser.fullName || 'Direct Chat',
+              avatar: '',
+              verifiedStore: false,
+              location: 'Direct Chat',
+              unreadCount: 0,
+              lastMessage: '',
+              lastMessageTime: '',
+              catalog: [],
+              isOnline: true,
+              phone: opponentPhone,
+            } as ChatThread)
+          : undefined);
+      broadcastLiveMessage(chatId, cardMsg, wireOverrideChat);
       broadcastXoGameState(newGame, memberPhones);
+      void upsertXoGameInSupabase(newGame).catch(() => {});
     }
 
     return { success: true, game: newGame, message: 'X/O Challenge sent!' };
@@ -9765,7 +9854,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Fetch latest persisted state from Supabase to avoid accepting a cancelled/already-accepted game
-    const latestFromDb = await fetchXoGameByIdFromSupabase(game.id);
+    const latestFromDb = await fetchXoGameByIdFromSupabase(game.id).catch(() => null);
     const baseGame = latestFromDb && shouldReplaceXoGame(game, latestFromDb) ? latestFromDb : (latestFromDb || game);
 
     if (baseGame.status !== 'pending') {
@@ -9815,12 +9904,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    const persisted = await upsertXoGameInSupabase(acceptedGame);
-    const finalGame = persisted.game || acceptedGame;
-
-    applyXoGameUpdate(finalGame);
-    const chatObj = chats.find((c) => c.id === finalGame.chatId);
-    broadcastXoGameState(finalGame, chatObj?.memberPhones || []);
+    applyXoGameUpdate(acceptedGame);
+    const chatObj = chats.find((c) => c.id === acceptedGame.chatId);
+    broadcastXoGameState(acceptedGame, chatObj?.memberPhones || []);
+    void upsertXoGameInSupabase(acceptedGame).catch(() => {});
     return { success: true, message: 'Challenge accepted! Match started.' };
   };
 
@@ -9828,7 +9915,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     game: TicTacToeGameState
   ): Promise<{ success: boolean; message?: string }> => {
     const myPhone = currentUser.phoneNumber || currentUser.id;
-    const latestFromDb = await fetchXoGameByIdFromSupabase(game.id);
+    const latestFromDb = await fetchXoGameByIdFromSupabase(game.id).catch(() => null);
     const baseGame = latestFromDb || game;
 
     if (baseGame.status !== 'pending') {
@@ -9856,12 +9943,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
-    const persisted = await upsertXoGameInSupabase(declinedGame);
-    const finalGame = persisted.game || declinedGame;
-
-    applyXoGameUpdate(finalGame);
-    const chatObj = chats.find((c) => c.id === finalGame.chatId);
-    broadcastXoGameState(finalGame, chatObj?.memberPhones || []);
+    applyXoGameUpdate(declinedGame);
+    const chatObj = chats.find((c) => c.id === declinedGame.chatId);
+    broadcastXoGameState(declinedGame, chatObj?.memberPhones || []);
+    void upsertXoGameInSupabase(declinedGame).catch(() => {});
     return { success: true, message: 'Challenge closed.' };
   };
 
@@ -9871,7 +9956,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): Promise<{ success: boolean; message?: string }> => {
     const myPhone = currentUser.phoneNumber || currentUser.id;
     const isAiMatch = Boolean(game.isAiOpponent || phonesMatch(game.opponentPhone, AFRIBOT_PHONE) || game.chatId === AFRIBOT_ID);
-    const latestFromDb = isAiMatch ? null : await fetchXoGameByIdFromSupabase(game.id);
+    const latestFromDb = isAiMatch ? null : await fetchXoGameByIdFromSupabase(game.id).catch(() => null);
     const baseGame = latestFromDb && shouldReplaceXoGame(game, latestFromDb) ? latestFromDb : game;
 
     if (baseGame.status !== 'active') {
@@ -9967,7 +10052,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isAiMatch) {
       const chatObj = chats.find((c) => c.id === nextGame.chatId);
       broadcastXoGameState(nextGame, chatObj?.memberPhones || []);
-      await upsertXoGameInSupabase(nextGame);
+      void upsertXoGameInSupabase(nextGame).catch(() => {});
     }
 
     return { success: true };
@@ -10063,25 +10148,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       chatId: string,
       extraPhones: string[] = []
     ) => {
+      // 1. Socket.io live WebSocket relay (primary low-latency transport)
+      emitLiveGameUpdate(eventName, chatId, payloadData, extraPhones);
+
+      // 2. BroadcastChannel (same-browser tabs)
       try {
         const bc = new BroadcastChannel('AGC_chats_sync');
         bc.postMessage({ type: eventName, payload: payloadData, senderId: currentUser.id });
         bc.close();
       } catch (_) {}
 
+      // 3. Supabase Realtime broadcast (cross-device backup)
       if (isSupabaseConfigured) {
         try {
-          const getOrSub = (name: string): ReturnType<typeof supabase.channel> => {
-            const existing = inboxChannelRefsRef.current.get(name);
-            if (existing) return existing;
-            const ch = supabase.channel(name, { config: { broadcast: { self: false } } });
-            ch.subscribe();
-            inboxChannelRefsRef.current.set(name, ch);
-            return ch;
-          };
-          getOrSub(`chat_${chatId}`)
-            .send({ type: 'broadcast', event: eventName, payload: { payload: payloadData, senderId: currentUser.id } })
-            .catch(() => {});
+          sendSupabaseBroadcastSafe(`chat_${chatId}`, eventName, {
+            payload: payloadData,
+            senderId: currentUser.id,
+          });
 
           const phoneSet = new Set<string>();
           extraPhones.filter(Boolean).forEach((p) => {
@@ -10091,14 +10174,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (norm) phoneSet.add(norm);
           });
           phoneSet.forEach((p) => {
-            getOrSub(`inbox_${p}`)
-              .send({ type: 'broadcast', event: eventName, payload: { payload: payloadData, senderId: currentUser.id } })
-              .catch(() => {});
+            sendSupabaseBroadcastSafe(`inbox_${p}`, eventName, {
+              payload: payloadData,
+              senderId: currentUser.id,
+            });
           });
         } catch (_) {}
       }
     },
-    [currentUser.id]
+    [currentUser.id, sendSupabaseBroadcastSafe]
   );
 
   const settleBetGameEscrowIfNeeded = (params: {
@@ -10158,6 +10242,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         phonesMatch(myPhone, incomingGame.challengerPhone) ||
         phonesMatch(myPhone, incomingGame.opponentPhone);
 
+      let insertedNewCard = false;
+      let insertedCid = incomingGame.chatId;
+      const cardPreview =
+        incomingGame.mode === 'bet'
+          ? `🃏 Whot! Challenge (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
+          : '🃏 Friendly Whot! Challenge';
+      const cardTs = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
       setMessages((prev) => {
         let targetCid = incomingGame.chatId;
         if (targetCid.startsWith('dm_') && myPhone) {
@@ -10182,6 +10274,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           nextList = list.map((m, i) => (i === existingIdx ? { ...m, whotGame: incomingGame } : m));
         } else {
+          insertedNewCard = true;
+          insertedCid = resolvedCid;
           const newCard: ChatMessage = {
             id: `msg_whot_${incomingGame.id}`,
             chatId: resolvedCid,
@@ -10191,22 +10285,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             senderAvatar: incomingGame.challengerAvatar,
             type: 'game_whot',
             whotGame: incomingGame,
-            text:
-              incomingGame.mode === 'bet'
-                ? `🃏 Whot! Challenge (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
-                : '🃏 Friendly Whot! Challenge',
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            text: cardPreview,
+            timestamp: cardTs,
             status: 'delivered',
           };
           nextList = [...list, newCard];
         }
         const updated = { ...prev, [resolvedCid]: nextList };
-        try {
-          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
-          localStorage.setItem(userKey, JSON.stringify(updated));
-        } catch (_) {}
+        persistPartitionedMessages(updated, currentUser.phoneNumber);
         return updated;
       });
+
+      if (insertedNewCard) {
+        ensureChatThreadForIncomingGame(
+          insertedCid,
+          incomingGame.challengerPhone,
+          incomingGame.challengerName,
+          incomingGame.challengerAvatar,
+          cardPreview,
+          cardTs
+        );
+      }
 
       settleBetGameEscrowIfNeeded({
         gameId: incomingGame.id,
@@ -10225,7 +10324,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isParticipant,
       });
     },
-    [currentUser.phoneNumber, CURRENCY_SYMBOLS]
+    [currentUser.phoneNumber, CURRENCY_SYMBOLS, ensureChatThreadForIncomingGame]
   );
 
   const applyLudoGameUpdate = useCallback(
@@ -10235,6 +10334,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const isParticipant =
         phonesMatch(myPhone, incomingGame.challengerPhone) ||
         phonesMatch(myPhone, incomingGame.opponentPhone);
+
+      let insertedNewCard = false;
+      let insertedCid = incomingGame.chatId;
+      const cardPreview =
+        incomingGame.mode === 'bet'
+          ? `🎲 Ludo Challenge (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
+          : '🎲 Friendly Ludo Challenge';
+      const cardTs = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
       setMessages((prev) => {
         let targetCid = incomingGame.chatId;
@@ -10260,6 +10367,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           nextList = list.map((m, i) => (i === existingIdx ? { ...m, ludoGame: incomingGame } : m));
         } else {
+          insertedNewCard = true;
+          insertedCid = resolvedCid;
           const newCard: ChatMessage = {
             id: `msg_ludo_${incomingGame.id}`,
             chatId: resolvedCid,
@@ -10269,22 +10378,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             senderAvatar: incomingGame.challengerAvatar,
             type: 'game_ludo',
             ludoGame: incomingGame,
-            text:
-              incomingGame.mode === 'bet'
-                ? `🎲 Ludo Challenge (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
-                : '🎲 Friendly Ludo Challenge',
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            text: cardPreview,
+            timestamp: cardTs,
             status: 'delivered',
           };
           nextList = [...list, newCard];
         }
         const updated = { ...prev, [resolvedCid]: nextList };
-        try {
-          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
-          localStorage.setItem(userKey, JSON.stringify(updated));
-        } catch (_) {}
+        persistPartitionedMessages(updated, currentUser.phoneNumber);
         return updated;
       });
+
+      if (insertedNewCard) {
+        ensureChatThreadForIncomingGame(
+          insertedCid,
+          incomingGame.challengerPhone,
+          incomingGame.challengerName,
+          incomingGame.challengerAvatar,
+          cardPreview,
+          cardTs
+        );
+      }
 
       settleBetGameEscrowIfNeeded({
         gameId: incomingGame.id,
@@ -10303,7 +10417,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isParticipant,
       });
     },
-    [currentUser.phoneNumber, CURRENCY_SYMBOLS]
+    [currentUser.phoneNumber, CURRENCY_SYMBOLS, ensureChatThreadForIncomingGame]
   );
 
   const applyPokerGameUpdate = useCallback(
@@ -10313,6 +10427,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const isParticipant =
         phonesMatch(myPhone, incomingGame.challengerPhone) ||
         phonesMatch(myPhone, incomingGame.opponentPhone);
+
+      let insertedNewCard = false;
+      let insertedCid = incomingGame.chatId;
+      const cardPreview =
+        incomingGame.mode === 'bet'
+          ? `♠️ Texas Hold'em Poker (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
+          : "♠️ Friendly Texas Hold'em Poker";
+      const cardTs = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
       setMessages((prev) => {
         let targetCid = incomingGame.chatId;
@@ -10338,6 +10460,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           nextList = list.map((m, i) => (i === existingIdx ? { ...m, pokerGame: incomingGame } : m));
         } else {
+          insertedNewCard = true;
+          insertedCid = resolvedCid;
           const newCard: ChatMessage = {
             id: `msg_poker_${incomingGame.id}`,
             chatId: resolvedCid,
@@ -10347,22 +10471,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             senderAvatar: incomingGame.challengerAvatar,
             type: 'game_poker',
             pokerGame: incomingGame,
-            text:
-              incomingGame.mode === 'bet'
-                ? `♠️ Texas Hold'em Poker (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
-                : "♠️ Friendly Texas Hold'em Poker",
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            text: cardPreview,
+            timestamp: cardTs,
             status: 'delivered',
           };
           nextList = [...list, newCard];
         }
         const updated = { ...prev, [resolvedCid]: nextList };
-        try {
-          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
-          localStorage.setItem(userKey, JSON.stringify(updated));
-        } catch (_) {}
+        persistPartitionedMessages(updated, currentUser.phoneNumber);
         return updated;
       });
+
+      if (insertedNewCard) {
+        ensureChatThreadForIncomingGame(
+          insertedCid,
+          incomingGame.challengerPhone,
+          incomingGame.challengerName,
+          incomingGame.challengerAvatar,
+          cardPreview,
+          cardTs
+        );
+      }
 
       settleBetGameEscrowIfNeeded({
         gameId: incomingGame.id,
@@ -10381,7 +10510,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isParticipant,
       });
     },
-    [currentUser.phoneNumber, CURRENCY_SYMBOLS]
+    [currentUser.phoneNumber, CURRENCY_SYMBOLS, ensureChatThreadForIncomingGame]
   );
 
   const applyBillRequestUpdate = useCallback(
@@ -10565,7 +10694,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (!isAiChat) {
-      broadcastLiveMessage(chatId, cardMsg);
+      const wireOverrideChat =
+        targetChat ||
+        (opponentPhone
+          ? ({
+              id: chatId,
+              name: currentUser.fullName || 'Direct Chat',
+              avatar: '',
+              verifiedStore: false,
+              location: 'Direct Chat',
+              unreadCount: 0,
+              lastMessage: '',
+              lastMessageTime: '',
+              catalog: [],
+              isOnline: true,
+              phone: opponentPhone,
+            } as ChatThread)
+          : undefined);
+      broadcastLiveMessage(chatId, cardMsg, wireOverrideChat);
       broadcastGamePayload('whot_game_update', newGame, chatId, [myPhone, opponentPhone, ...(targetChat?.memberPhones || [])]);
     }
     return { success: true, game: newGame, message: 'Whot! Challenge sent!' };
@@ -11209,7 +11355,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (!isAiChat) {
-      broadcastLiveMessage(chatId, cardMsg);
+      const wireOverrideChat =
+        targetChat ||
+        (opponentPhone
+          ? ({
+              id: chatId,
+              name: currentUser.fullName || 'Direct Chat',
+              avatar: '',
+              verifiedStore: false,
+              location: 'Direct Chat',
+              unreadCount: 0,
+              lastMessage: '',
+              lastMessageTime: '',
+              catalog: [],
+              isOnline: true,
+              phone: opponentPhone,
+            } as ChatThread)
+          : undefined);
+      broadcastLiveMessage(chatId, cardMsg, wireOverrideChat);
       broadcastGamePayload('ludo_game_update', newGame, chatId, [myPhone, opponentPhone, ...(targetChat?.memberPhones || [])]);
     }
     return { success: true, game: newGame, message: 'Ludo Challenge sent!' };
@@ -11715,7 +11878,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (!isAiChat) {
-      broadcastLiveMessage(chatId, cardMsg);
+      const wireOverrideChat =
+        targetChat ||
+        (opponentPhone
+          ? ({
+              id: chatId,
+              name: currentUser.fullName || 'Direct Chat',
+              avatar: '',
+              verifiedStore: false,
+              location: 'Direct Chat',
+              unreadCount: 0,
+              lastMessage: '',
+              lastMessageTime: '',
+              catalog: [],
+              isOnline: true,
+              phone: opponentPhone,
+            } as ChatThread)
+          : undefined);
+      broadcastLiveMessage(chatId, cardMsg, wireOverrideChat);
       broadcastGamePayload('poker_game_update', newGame, chatId, [myPhone, opponentPhone, ...(targetChat?.memberPhones || [])]);
     }
     return { success: true, game: newGame, message: 'Poker Challenge sent!' };
@@ -15271,14 +15451,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 nextXo = message.xoGame;
               }
 
+              const pickNewerGameState = <T extends { status?: string; moveCount?: number; updatedAt?: string }>(
+                cur?: T,
+                inc?: T
+              ): T | undefined => {
+                if (!inc) return cur;
+                if (!cur) return inc;
+                const curRank = getXoStatusRank(cur.status as any);
+                const incRank = getXoStatusRank(inc.status as any);
+                if (incRank > curRank) return inc;
+                if (incRank < curRank) return cur;
+                if (curRank === 3) return cur;
+                if ((inc.moveCount || 0) > (cur.moveCount || 0)) return inc;
+                if ((inc.moveCount || 0) < (cur.moveCount || 0)) return cur;
+                return (inc.updatedAt || '') >= (cur.updatedAt || '') ? inc : cur;
+              };
+
               return {
                 ...m,
                 financialPoll: nextPoll,
                 ajoGroup: message.ajoGroup ?? m.ajoGroup,
                 xoGame: nextXo,
-                whotGame: message.whotGame ?? m.whotGame,
-                ludoGame: message.ludoGame ?? m.ludoGame,
-                pokerGame: message.pokerGame ?? m.pokerGame,
+                whotGame: pickNewerGameState(m.whotGame, message.whotGame),
+                ludoGame: pickNewerGameState(m.ludoGame, message.ludoGame),
+                pokerGame: pickNewerGameState(m.pokerGame, message.pokerGame),
                 billRequest: message.billRequest ?? m.billRequest,
               };
             });
@@ -15474,8 +15670,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket.on('connect', registerRoomsOnConnect);
 
     // 1. Socket.io listeners
+    const handleXoGameSocket = (payload: any) => {
+      if (payload?.game) applyXoGameUpdate(payload.game);
+    };
+    const handleWhotGameSocket = (payload: any) => {
+      if (payload?.payload) applyWhotGameUpdate(payload.payload);
+    };
+    const handleLudoGameSocket = (payload: any) => {
+      if (payload?.payload) applyLudoGameUpdate(payload.payload);
+    };
+    const handlePokerGameSocket = (payload: any) => {
+      if (payload?.payload) applyPokerGameUpdate(payload.payload);
+    };
+    const handleBillRequestSocket = (payload: any) => {
+      if (payload?.payload) applyBillRequestUpdate(payload.payload);
+    };
+
     socket.on('new_message', handleIncomingMessage);
     socket.on('message_reaction', applyRemoteMessageReaction);
+    socket.on('xo_game_update', handleXoGameSocket);
+    socket.on('whot_game_update', handleWhotGameSocket);
+    socket.on('ludo_game_update', handleLudoGameSocket);
+    socket.on('poker_game_update', handlePokerGameSocket);
+    socket.on('bill_request_update', handleBillRequestSocket);
 
     const handleGroupCreated = (payload: any) => {
       if (!payload?.chat) return;
@@ -15940,6 +16157,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('account_banned', handleAccountBanned);
       socket.off('new_message', handleIncomingMessage);
       socket.off('message_reaction', applyRemoteMessageReaction);
+      socket.off('xo_game_update', handleXoGameSocket);
+      socket.off('whot_game_update', handleWhotGameSocket);
+      socket.off('ludo_game_update', handleLudoGameSocket);
+      socket.off('poker_game_update', handlePokerGameSocket);
+      socket.off('bill_request_update', handleBillRequestSocket);
       socket.off('group_created', handleGroupCreated);
       socket.off('group_invite', handleGroupInviteSocket);
       socket.off('group_invite_response', handleGroupInviteResponse);

@@ -5145,6 +5145,118 @@ function serializeSpaceRoom(room: SpaceRoomState) {
   };
 }
 
+// Live Multiplayer Game State Cache (authoritative relay + reconnect sync for X/O, Whot!, Ludo, Poker & Bill Requests)
+type LiveGameEventName =
+  | 'xo_game_update'
+  | 'whot_game_update'
+  | 'ludo_game_update'
+  | 'poker_game_update'
+  | 'bill_request_update';
+
+interface CachedLiveGameEntry {
+  id: string;
+  event: LiveGameEventName;
+  chatId: string;
+  data: any;
+  phones: string[];
+  updatedAtMs: number;
+}
+
+const liveGamesById = new Map<string, CachedLiveGameEntry>();
+const liveGamesByChat = new Map<string, Set<string>>();
+
+function getLiveGameStatusRank(status?: string): number {
+  if (status === 'won' || status === 'draw' || status === 'declined' || status === 'cancelled' || status === 'paid') return 3;
+  if (status === 'active') return 2;
+  return 1;
+}
+
+function shouldReplaceLiveGameEntry(existing: any, incoming: any): boolean {
+  if (!existing) return true;
+  if (!incoming) return false;
+  const exRank = getLiveGameStatusRank(existing.status);
+  const inRank = getLiveGameStatusRank(incoming.status);
+  if (inRank > exRank) return true;
+  if (inRank < exRank) return false;
+  if (exRank === 3) return false;
+  const exMoves = typeof existing.moveCount === 'number'
+    ? existing.moveCount
+    : Array.isArray(existing.board)
+    ? existing.board.filter(Boolean).length
+    : 0;
+  const inMoves = typeof incoming.moveCount === 'number'
+    ? incoming.moveCount
+    : Array.isArray(incoming.board)
+    ? incoming.board.filter(Boolean).length
+    : 0;
+  if (inMoves > exMoves) return true;
+  if (inMoves < exMoves) return false;
+  return String(incoming.updatedAt || '') >= String(existing.updatedAt || '');
+}
+
+function phonesMatchServer(p1?: string, p2?: string): boolean {
+  if (!p1 || !p2) return false;
+  const v1 = getPhoneVariants(p1);
+  if (v1.length === 0) return false;
+  const v2Set = new Set(getPhoneVariants(p2));
+  return v1.some((v) => v2Set.has(v));
+}
+
+function cacheLiveGameEntry(
+  event: LiveGameEventName,
+  chatId: string,
+  data: any,
+  phones: string[] = []
+) {
+  if (!data?.id || !chatId) return;
+  const existing = liveGamesById.get(data.id);
+  if (existing && !shouldReplaceLiveGameEntry(existing.data, data)) {
+    return;
+  }
+  const collectedPhones = new Set<string>(
+    [
+      ...phones,
+      data.challengerPhone,
+      data.opponentPhone,
+      data.xPlayerPhone,
+      data.oPlayerPhone,
+      data.requesterPhone,
+      data.payerPhone,
+      ...(existing?.phones || []),
+    ].filter(Boolean)
+  );
+  liveGamesById.set(data.id, {
+    id: data.id,
+    event,
+    chatId,
+    data,
+    phones: Array.from(collectedPhones),
+    updatedAtMs: Date.now(),
+  });
+  let chatSet = liveGamesByChat.get(chatId);
+  if (!chatSet) {
+    chatSet = new Set<string>();
+    liveGamesByChat.set(chatId, chatSet);
+  }
+  chatSet.add(data.id);
+
+  // Cap memory cache to 1000 most recent games
+  if (liveGamesById.size > 1000) {
+    const oldestKey = liveGamesById.keys().next().value;
+    if (oldestKey) {
+      const oldEntry = liveGamesById.get(oldestKey);
+      liveGamesById.delete(oldestKey);
+      if (oldEntry) {
+        liveGamesByChat.get(oldEntry.chatId)?.delete(oldestKey);
+      }
+    }
+  }
+}
+
+function buildGameEventPayload(event: LiveGameEventName, data: any) {
+  return event === 'xo_game_update' ? { game: data } : { payload: data };
+}
+
 // Real-Time Socket Connection Handlers
 io.on('connection', (socket: Socket) => {
   console.log(`âš¡ [Socket Connected]: ${socket.id}`);
@@ -5289,8 +5401,20 @@ io.on('connection', (socket: Socket) => {
 
   // 1. Join Chat Conversation Room (1-on-1 or Group)
   socket.on('join_chat', (chatId: string) => {
+    if (!chatId) return;
     socket.join(`chat:${chatId}`);
     console.log(`👤 Socket ${socket.id} joined room chat:${chatId}`);
+
+    // Immediately sync any recent live games in this chat room
+    const gameIds = liveGamesByChat.get(chatId);
+    if (gameIds && gameIds.size > 0) {
+      gameIds.forEach((gid) => {
+        const entry = liveGamesById.get(gid);
+        if (entry) {
+          socket.emit(entry.event, buildGameEventPayload(entry.event, entry.data));
+        }
+      });
+    }
   });
 
   // Leave Chat Room
@@ -5364,44 +5488,117 @@ io.on('connection', (socket: Socket) => {
 
   // 2. Live Chat Message Broadcast
   socket.on('send_message', (payload: { chatId: string; message: any; targetPhone?: string; memberPhones?: string[]; chat?: any }) => {
-    const { chatId, message, targetPhone, memberPhones, chat } = payload;
+    const { chatId, message, targetPhone, memberPhones, chat } = payload || ({} as any);
+    if (!chatId || !message) return;
 
-    // Derive target phone if not explicitly provided
+    const senderPhone = (socket as any)._agcPhone || (message?.senderPhone || '').replace(/\D/g, '');
+    const senderVariants = new Set(getPhoneVariants(senderPhone));
+
+    // Derive target phone if not explicitly provided (normalize before comparing!)
     let finalTarget = targetPhone ? targetPhone.replace(/\D/g, '') : '';
     if (!finalTarget && chatId.startsWith('dm_')) {
-      const senderPhone = (socket as any)._agcPhone || (message?.senderPhone || '').replace(/\D/g, '');
-      const parts = chatId.replace('dm_', '').split('_');
-      finalTarget = parts.find((p: string) => p !== senderPhone) || '';
+      const parts = chatId.replace('dm_', '').split('_').filter(Boolean);
+      finalTarget = parts.find((p: string) => !senderVariants.has(p) && !phonesMatchServer(p, senderPhone)) || '';
     }
 
-    // Broadcast to everyone else in this chat room
-    socket.to(`chat:${chatId}`).emit('new_message', { chatId, message, targetPhone: finalTarget, chat, isGroup: Boolean(chatId.startsWith('group_')) });
+    const isGroup = Boolean(chatId.startsWith('group_') || chatId.startsWith('channel_') || chat?.isGroup || chat?.isChannel);
+    const outPayload = { chatId, message, targetPhone: finalTarget, chat, isGroup };
 
-    // Also broadcast to target user's phone channel so incoming messages update their chat list
+    // Emit at most once per remote socket across chat room + phone variant rooms
+    const deliveredSockets = new Set<string>([socket.id]);
+    const emitOnceToRoom = (roomName: string, skipSenderCheck = false) => {
+      const room = io.sockets.adapter.rooms.get(roomName);
+      if (!room) return;
+      for (const targetSocketId of room) {
+        if (deliveredSockets.has(targetSocketId)) continue;
+        if (skipSenderCheck && senderPhone) {
+          const targetSock = io.sockets.sockets.get(targetSocketId) as any;
+          if (targetSock?._agcPhone && phonesMatchServer(targetSock._agcPhone, senderPhone) && !chatId.includes('self')) {
+            continue;
+          }
+        }
+        deliveredSockets.add(targetSocketId);
+        io.to(targetSocketId).emit('new_message', outPayload);
+      }
+    };
+
+    emitOnceToRoom(`chat:${chatId}`);
+
     if (finalTarget) {
-      const targetVariants = getPhoneVariants(finalTarget);
-      targetVariants.forEach((v) => {
-        socket.to(`phone:${v}`).emit('new_message', { chatId, message, targetPhone: finalTarget, chat });
+      getPhoneVariants(finalTarget).forEach((v) => {
+        emitOnceToRoom(`phone:${v}`);
       });
     }
 
-    // If it is a group with member phones, broadcast to all members' personal phone channels
     if (Array.isArray(memberPhones) && memberPhones.length > 0) {
-      const senderPhone = (socket as any)._agcPhone || (message?.senderPhone || '').replace(/\D/g, '');
       memberPhones.forEach((phone: string) => {
-        const variants = getPhoneVariants(phone);
-        variants.forEach((v) => {
-          if (v !== senderPhone) {
-            socket.to(`phone:${v}`).emit('new_message', { chatId, message, isGroup: true, chat });
-          }
+        if (senderPhone && phonesMatchServer(phone, senderPhone)) return;
+        getPhoneVariants(phone).forEach((v) => {
+          emitOnceToRoom(`phone:${v}`, true);
         });
       });
     }
+  });
 
-    // Scoped to joined room chat:${chatId} and memberPhones (never global broadcast for town_comm_)
-    if (chatId.startsWith('town_comm_')) {
-      socket.to(`chat:${chatId}`).emit('new_message', { chatId, message, chat });
+  // 2a-bis. Live Multiplayer Game State Relay (X/O, Whot!, Ludo, Poker, Bill Requests)
+  const relayLiveGameUpdate = (
+    event: LiveGameEventName,
+    chatId: string,
+    data: any,
+    targetPhones: string[] = []
+  ) => {
+    if (!chatId || !data?.id) return;
+    const senderPhone = (socket as any)._agcPhone || '';
+    const senderVariants = new Set(getPhoneVariants(senderPhone));
+
+    const phoneTargets = new Set<string>(
+      [
+        ...targetPhones,
+        data.challengerPhone,
+        data.opponentPhone,
+        data.xPlayerPhone,
+        data.oPlayerPhone,
+        data.requesterPhone,
+        data.payerPhone,
+      ].filter(Boolean)
+    );
+
+    if (chatId.startsWith('dm_')) {
+      chatId
+        .replace('dm_', '')
+        .split('_')
+        .filter(Boolean)
+        .forEach((p) => phoneTargets.add(p));
     }
+
+    cacheLiveGameEntry(event, chatId, data, Array.from(phoneTargets));
+
+    const outPayload = buildGameEventPayload(event, data);
+    const deliveredSockets = new Set<string>([socket.id]);
+    const emitOnceToRoom = (roomName: string) => {
+      const room = io.sockets.adapter.rooms.get(roomName);
+      if (!room) return;
+      for (const targetSocketId of room) {
+        if (deliveredSockets.has(targetSocketId)) continue;
+        deliveredSockets.add(targetSocketId);
+        io.to(targetSocketId).emit(event, outPayload);
+      }
+    };
+
+    emitOnceToRoom(`chat:${chatId}`);
+
+    phoneTargets.forEach((phone) => {
+      const variants = getPhoneVariants(phone);
+      if (variants.some((v) => senderVariants.has(v))) {
+        // Still allow other devices logged into same phone, just never sender socket (already in deliveredSockets)
+      }
+      variants.forEach((v) => emitOnceToRoom(`phone:${v}`));
+    });
+  };
+
+  socket.on('game_update', (payload: { event?: LiveGameEventName; chatId?: string; data?: any; targetPhones?: string[] }) => {
+    if (!payload?.event || !payload?.chatId || !payload?.data) return;
+    relayLiveGameUpdate(payload.event, payload.chatId, payload.data, payload.targetPhones || []);
   });
 
   // 2a. Live Message Emoji Reaction Relay
@@ -5736,6 +5933,19 @@ io.on('connection', (socket: Socket) => {
     (socket as any)._agcPhone = clean;
     phoneToSocketId.set(clean, socket.id);
     console.log(`📱 [Phone Registered]: ${clean} (joined ${variants.length} variant rooms) -> socket ${socket.id}`);
+
+    // Push any recent pending/active live games targeting this user's phone so they sync immediately
+    const variantSet = new Set(variants);
+    liveGamesById.forEach((entry) => {
+      if (entry.data?.status !== 'pending' && entry.data?.status !== 'active') return;
+      const matchesUser = entry.phones.some((p) => {
+        const pv = getPhoneVariants(p);
+        return pv.some((v) => variantSet.has(v));
+      });
+      if (matchesUser) {
+        socket.emit(entry.event, buildGameEventPayload(entry.event, entry.data));
+      }
+    });
   });
 
   // 6. WebRTC Call Room Signaling Relay

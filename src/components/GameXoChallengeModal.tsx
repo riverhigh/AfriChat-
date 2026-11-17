@@ -99,11 +99,20 @@ export const GameXoChallengeModal: React.FC = () => {
   const [badgeSuccessMsg, setBadgeSuccessMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const currentChat = chats.find(
-    (c) =>
-      c.id === activeChatId ||
-      (activeChatId?.startsWith('dm_') && c.phone && activeChatId.includes(c.phone.replace(/\D/g, '')))
-  );
+  const normPhoneDigits = (p?: string) => {
+    const d = (p || '').replace(/\D/g, '');
+    if (d.length === 11 && d.startsWith('0')) return '234' + d.slice(1);
+    return d;
+  };
+  const currentChat = chats.find((c) => {
+    if (c.id === activeChatId) return true;
+    if (activeChatId?.startsWith('dm_')) {
+      const chatPhone = normPhoneDigits(c.phone || (c as any).phoneNumber);
+      if (chatPhone && activeChatId.includes(chatPhone)) return true;
+      if (chatPhone.length >= 9 && activeChatId.includes(chatPhone.slice(-9))) return true;
+    }
+    return false;
+  });
   const resolvedChatId = currentChat?.id || activeChatId || '';
   const isAiChat = Boolean(currentChat?.isBot || resolvedChatId === 'chat_afribot_ai');
 

@@ -452,10 +452,32 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
+  const normPhone = (p?: string) => {
+    const d = (p || '').replace(/\D/g, '');
+    if (d.length === 11 && d.startsWith('0')) return '234' + d.slice(1);
+    return d;
+  };
+  const samePhone = (a?: string, b?: string) => {
+    if (!a || !b) return false;
+    if (a.trim() === b.trim()) return true;
+    const na = normPhone(a);
+    const nb = normPhone(b);
+    if (!na || !nb) return false;
+    if (na === nb) return true;
+    return na.length >= 9 && nb.length >= 9 && na.slice(-9) === nb.slice(-9);
+  };
+
   const currentChat =
     chats.find((c) => c.id === activeChatId) ||
     (activeChatId?.startsWith('dm_')
-      ? chats.find((c) => c.phone && activeChatId.includes(c.phone.replace(/\D/g, '')))
+      ? chats.find((c) => {
+          const digits = normPhone(c.phone || (c as any).phoneNumber);
+          return Boolean(
+            digits &&
+              (activeChatId.includes(digits) ||
+                (digits.length >= 9 && activeChatId.includes(digits.slice(-9))))
+          );
+        })
       : undefined);
   const isGroupChat = Boolean(currentChat?.isGroup);
   const isGroupAdmin = Boolean(
@@ -477,20 +499,6 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   );
   const isChannelMember = currentChat?.isChannel && !isChannelAdmin;
 
-  const normPhone = (p?: string) => {
-    const d = (p || '').replace(/\D/g, '');
-    if (d.length === 11 && d.startsWith('0')) return '234' + d.slice(1);
-    return d;
-  };
-  const samePhone = (a?: string, b?: string) => {
-    if (!a || !b) return false;
-    if (a.trim() === b.trim()) return true;
-    const na = normPhone(a);
-    const nb = normPhone(b);
-    if (!na || !nb) return false;
-    if (na === nb) return true;
-    return na.length >= 9 && nb.length >= 9 && na.slice(-9) === nb.slice(-9);
-  };
   const myPhoneRaw = currentUser.phoneNumber || currentUser.id || '';
   const myVoterKey = normPhone(myPhoneRaw) || currentUser.id || 'local_user';
   const currentMessages =
@@ -1538,9 +1546,10 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
               )
             : currentMessages;
           const isOngoingGame = (m: ChatMessage) =>
-            m.type === 'game_xo' &&
-            Boolean(m.xoGame) &&
-            (m.xoGame!.status === 'active' || m.xoGame!.status === 'pending');
+            (m.type === 'game_xo' && Boolean(m.xoGame) && (m.xoGame!.status === 'active' || m.xoGame!.status === 'pending')) ||
+            (m.type === 'game_whot' && Boolean(m.whotGame) && (m.whotGame!.status === 'active' || m.whotGame!.status === 'pending')) ||
+            (m.type === 'game_ludo' && Boolean(m.ludoGame) && (m.ludoGame!.status === 'active' || m.ludoGame!.status === 'pending')) ||
+            (m.type === 'game_poker' && Boolean(m.pokerGame) && (m.pokerGame!.status === 'active' || m.pokerGame!.status === 'pending'));
           const nonOngoing = filtered.filter((m) => !isOngoingGame(m));
           const ongoingGames = filtered.filter((m) => isOngoingGame(m));
           return [...nonOngoing, ...ongoingGames];

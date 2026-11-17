@@ -112,6 +112,17 @@ export const emitMessageReaction = (
   s?.emit('message_reaction', { chatId, messageId, emoji, reactorName, memberPhones, targetPhone });
 };
 
+export const emitLiveGameUpdate = (
+  event: 'xo_game_update' | 'whot_game_update' | 'ludo_game_update' | 'poker_game_update' | 'bill_request_update',
+  chatId: string,
+  data: any,
+  targetPhones: string[] = []
+) => {
+  const s = getSocket();
+  if (!s || !chatId || !data) return;
+  s.emit('game_update', { event, chatId, data, targetPhones: targetPhones.filter(Boolean) });
+};
+
 export const emitCreateGroup = (chat: any, memberPhones: string[]) => {
   const s = getSocket();
   s?.emit('create_group', { chat, memberPhones });
