@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Search,
   CheckCheck,
@@ -93,11 +93,11 @@ export const ChatList: React.FC = () => {
     }
 
     const matchesSearch =
-      chat.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      chat.lastMessage.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (chat.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (chat.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (chat.storeCategory && chat.storeCategory.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (chat.label && chat.label.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      chat.location.toLowerCase().includes(searchQuery.toLowerCase());
+      (chat.location || '').toLowerCase().includes(searchQuery.toLowerCase());
 
     if (!matchesSearch) return false;
     if (filterType === 'stores') return chat.verifiedStore;

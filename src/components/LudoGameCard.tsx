@@ -83,10 +83,11 @@ function getTokenCenter(
   totalSeeds: number
 ): { cx: number; cy: number } {
   const cellSize = 20;
-  const isCastleB = totalSeeds > 4 && tokenIndex >= 4;
-  const localSlot = tokenIndex % 4;
+  const safeIdx = Number.isFinite(tokenIndex) && tokenIndex >= 0 ? tokenIndex : 0;
+  const isCastleB = totalSeeds > 4 && safeIdx >= 4;
+  const localSlot = Math.max(0, Math.min(3, safeIdx % 4));
 
-  if (step < 0) {
+  if (!Number.isFinite(step) || step < 0) {
     const slots = isChallenger
       ? isCastleB
         ? PURPLE_CASTLE_B_SLOTS
@@ -94,7 +95,7 @@ function getTokenCenter(
       : isCastleB
       ? AMBER_CASTLE_B_SLOTS
       : AMBER_CASTLE_A_SLOTS;
-    const [r, c] = slots[localSlot];
+    const [r, c] = slots[localSlot] || slots[0];
     return { cx: (c + 0.5) * cellSize, cy: (r + 0.5) * cellSize };
   }
   if (step >= 56) {
@@ -109,7 +110,7 @@ function getTokenCenter(
       : { cx: 136, cy: 150 + spread };
   }
   if (step >= 51) {
-    const colIdx = Math.min(4, step - 51);
+    const colIdx = Math.max(0, Math.min(4, step - 51));
     const homeArr = isChallenger
       ? isCastleB
         ? PURPLE_HOME_COL_B
@@ -117,13 +118,13 @@ function getTokenCenter(
       : isCastleB
       ? AMBER_HOME_COL_B
       : AMBER_HOME_COL_A;
-    const [r, c] = homeArr[colIdx];
+    const [r, c] = homeArr[colIdx] || homeArr[0];
     return { cx: (c + 0.5) * cellSize, cy: (r + 0.5) * cellSize };
   }
 
-  const offset = getLudoSeedOffset(tokenIndex, isChallenger, totalSeeds);
-  const trackIdx = (step + offset) % 52;
-  const [r, c] = LUDO_MAIN_TRACK[trackIdx];
+  const offset = getLudoSeedOffset(safeIdx, isChallenger, totalSeeds);
+  const trackIdx = (((Math.floor(step) + offset) % 52) + 52) % 52;
+  const [r, c] = LUDO_MAIN_TRACK[trackIdx] || LUDO_MAIN_TRACK[0];
   return { cx: (c + 0.5) * cellSize, cy: (r + 0.5) * cellSize };
 }
 
@@ -165,8 +166,8 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
       ? 'R'
       : '₦';
 
-  const myTokens = isChallenger ? game.challengerTokens : game.opponentTokens;
-  const totalSeeds = myTokens?.length || 8;
+  const myTokens = (isChallenger ? game.challengerTokens : game.opponentTokens) || [];
+  const totalSeeds = myTokens.length || 8;
   const canRoll = isMyTurn && !game.hasRolled && !busy;
 
   const remainingDice = useMemo(() => {

@@ -2412,7 +2412,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
                       {/* Interactive 3x3 Board */}
                       <div className="grid grid-cols-3 gap-2 p-2 rounded-2xl bg-slate-100 dark:bg-[#17142b] border border-slate-200 dark:border-white/10">
-                        {game.board.map((cell, idx) => {
+                        {(Array.isArray(game.board) && game.board.length === 9 ? game.board : Array(9).fill(null)).map((cell, idx) => {
                           const isWinCell = winSet.has(idx);
                           const canPlayCell =
                             game.status === 'active' &&

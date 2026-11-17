@@ -89,12 +89,12 @@ export const PokerGameCard: React.FC<PokerGameCardProps> = ({ game }) => {
     (!game.opponentPhone || phonesMatch(myPhone, game.opponentPhone));
   const isParticipant = isChallenger || isOpponent;
 
-  const myHole = isChallenger ? game.challengerHole : game.opponentHole;
-  const oppHole = isChallenger ? game.opponentHole : game.challengerHole;
-  const myChips = isChallenger ? game.challengerChips : game.opponentChips;
-  const oppChips = isChallenger ? game.opponentChips : game.challengerChips;
-  const myBet = isChallenger ? game.challengerBet : game.opponentBet;
-  const oppBet = isChallenger ? game.opponentBet : game.challengerBet;
+  const myHole = (isChallenger ? game.challengerHole : game.opponentHole) || [];
+  const oppHole = (isChallenger ? game.opponentHole : game.challengerHole) || [];
+  const myChips = (isChallenger ? game.challengerChips : game.opponentChips) ?? 0;
+  const oppChips = (isChallenger ? game.opponentChips : game.challengerChips) ?? 0;
+  const myBet = (isChallenger ? game.challengerBet : game.opponentBet) ?? 0;
+  const oppBet = (isChallenger ? game.opponentBet : game.challengerBet) ?? 0;
 
   const isMyTurn =
     game.status === 'active' && phonesMatch(myPhone, game.currentTurnPhone);
@@ -112,7 +112,7 @@ export const PokerGameCard: React.FC<PokerGameCardProps> = ({ game }) => {
     ? game.opponentName || 'Opponent'
     : game.challengerName || 'Challenger';
   const showOppHole =
-    game.phase === 'showdown' && (game.status === 'won' || game.status === 'draw') && game.communityCards.length >= 5;
+    game.phase === 'showdown' && (game.status === 'won' || game.status === 'draw') && (game.communityCards?.length ?? 0) >= 5;
 
   const handleAccept = async () => {
     setBusy(true);

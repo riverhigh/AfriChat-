@@ -141,5 +141,47 @@
     "walletBalanceNgn": 0,
     "isOnline": false,
     "lastSeen": "2026-11-16T13:48:30.384+00:00"
+  },
+  {
+    "id": "usr_test",
+    "fullName": "Test User",
+    "phoneNumber": "+2348000000001",
+    "cleanPhone": "2348000000001",
+    "avatarUrl": "",
+    "registeredAt": "2026-11-17T01:09:59.033Z",
+    "role": "user",
+    "status": "active",
+    "verificationBadge": null,
+    "walletBalanceNgn": 0,
+    "isOnline": false,
+    "lastSeen": "2026-11-17T01:11:41.058Z"
+  },
+  {
+    "id": "usr_test_1",
+    "fullName": "Chidi Okafor",
+    "phoneNumber": "+2348099988877",
+    "cleanPhone": "2348099988877",
+    "avatarUrl": "",
+    "registeredAt": "2026-11-17T01:13:30.355Z",
+    "role": "user",
+    "status": "active",
+    "verificationBadge": null,
+    "walletBalanceNgn": 0,
+    "isOnline": false,
+    "lastSeen": "2026-11-17T01:14:06.425Z"
+  },
+  {
+    "id": "usr_fresh_test_2",
+    "fullName": "Amaka Nwosu",
+    "phoneNumber": "+2348055511122",
+    "cleanPhone": "2348055511122",
+    "avatarUrl": "",
+    "registeredAt": "2026-11-17T01:14:49.424Z",
+    "role": "user",
+    "status": "active",
+    "verificationBadge": null,
+    "walletBalanceNgn": 0,
+    "isOnline": false,
+    "lastSeen": "2026-11-17T01:15:56.690Z"
   }
 ]

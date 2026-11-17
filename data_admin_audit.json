@@ -2,6 +2,15 @@
   "auditTrail": [],
   "securityEvents": [
     {
+      "id": "sec_1794877779305_0791",
+      "timestamp": "2026-11-17T01:09:39.305Z",
+      "type": "bot_block",
+      "severity": "medium",
+      "ip": "127.0.0.1",
+      "path": "/api/users",
+      "reason": "Blocked automated UA: curl/7.88.1"
+    },
+    {
       "id": "sec_1794742091456_g2pi",
       "timestamp": "2026-11-15T11:28:11.456Z",
       "type": "bot_block",

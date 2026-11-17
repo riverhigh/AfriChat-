@@ -110,6 +110,7 @@ export function pickHardXoMove(board: TicTacToeCell[], aiSymbol: 'X' | 'O' = 'O'
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export function isWhotCardPlayable(card: WhotCard, game: WhotGameState): boolean {
+  if (!card || !game) return false;
   const pending = game.pendingDrawCount || 0;
   if (pending > 0) {
     if (game.pendingDrawType === 'pick_three') return card.number === 5;
@@ -118,6 +119,7 @@ export function isWhotCardPlayable(card: WhotCard, game: WhotGameState): boolean
   }
   if (card.shape === 'whot' || card.number === 20) return true;
   if (game.requestedShape) return card.shape === game.requestedShape;
+  if (!game.topCard) return true;
   return card.shape === game.topCard.shape || card.number === game.topCard.number;
 }
 
@@ -126,6 +128,7 @@ export function pickHardWhotMove(
   aiHand: WhotCard[],
   humanCardCount: number
 ): { action: 'play'; card: WhotCard; requestedShape?: WhotShape } | { action: 'draw' } {
+  if (!game || !Array.isArray(aiHand) || aiHand.length === 0) return { action: 'draw' };
   const legal = aiHand.filter((c) => isWhotCardPlayable(c, game));
   if (legal.length === 0) return { action: 'draw' };
 
@@ -172,7 +175,7 @@ export function pickHardWhotMove(
       // Strictly prefer maximum count in hand; break ties with point shedding & card-counting probability
       const isMaxCountBonus = maxSuitCount > 0 && handCounts[sh] === maxSuitCount ? 100 : 0;
       const discardSupplyBonus = Math.min(discardCounts[sh], 8) * 0.15;
-      const avoidSameShapePenalty = humanCardCount <= 2 && game.topCard.shape === sh ? -0.4 : 0;
+      const avoidSameShapePenalty = humanCardCount <= 2 && game.topCard?.shape === sh ? -0.4 : 0;
       const val =
         isMaxCountBonus +
         handCounts[sh] * 10 +
@@ -229,7 +232,7 @@ export function pickHardWhotMove(
         score += 150; // Only Whot cards are playable
       } else if (humanThreatening) {
         const nextShape = pickBestRequestedShape(remaining);
-        score += nextShape !== game.topCard.shape ? 320 : 60;
+        score += nextShape !== game.topCard?.shape ? 320 : 60;
       } else {
         score -= 260; // Hold wild Whot (20) for emergencies or late game
       }
@@ -328,6 +331,7 @@ export function canMoveLudoCombinedDice(step: number, d1: number, d2: number): b
 }
 
 export function hasAnyLegalLudoMove(tokens: number[], remainingDice: number[]): boolean {
+  if (!Array.isArray(tokens) || !Array.isArray(remainingDice)) return false;
   for (const die of remainingDice) {
     if (tokens.some((s) => canMoveLudoSingleDie(s, die))) return true;
   }
@@ -479,10 +483,13 @@ export function pickHardLudoPlan(
   remainingDice: number[],
   isAiChallenger: boolean = false
 ): LudoAiMovePlan | null {
+  if (!game) return null;
   const aiTokens = isAiChallenger ? game.challengerTokens : game.opponentTokens;
   const humanTokens = isAiChallenger ? game.opponentTokens : game.challengerTokens;
 
-  if (!remainingDice || remainingDice.length === 0) return null;
+  if (!Array.isArray(aiTokens) || !Array.isArray(humanTokens) || !Array.isArray(remainingDice) || remainingDice.length === 0) {
+    return null;
+  }
 
   // If only 1 die left in turn, pick best single-die move
   if (remainingDice.length === 1) {
@@ -834,8 +841,10 @@ export function pickHardPokerAction(
   aiCurrentBet: number,
   humanCurrentBet: number
 ): { action: 'fold' | 'check' | 'call' | 'raise'; raiseBy?: number } {
-  const toCall = Math.max(0, humanCurrentBet - aiCurrentBet);
-  const pot = Math.max(1, game.pot);
+  const safeAiHole = Array.isArray(aiHole) ? aiHole : [];
+  const safeCommunity = Array.isArray(game?.communityCards) ? game.communityCards : [];
+  const toCall = Math.max(0, (humanCurrentBet || 0) - (aiCurrentBet || 0));
+  const pot = Math.max(1, game?.pot || 1);
   const potOdds = toCall > 0 ? toCall / (pot + toCall) : 0;
 
   // Deterministic-feeling per-turn bluff roll mixed with true randomness
@@ -843,8 +852,8 @@ export function pickHardPokerAction(
   const bluffTriggered = bluffRoll < 0.17;
 
   // Layer 1: Pre-Flop
-  if (game.phase === 'preflop' || game.communityCards.length === 0) {
-    const strength = scorePreFlopStrength(aiHole);
+  if (!game || game.phase === 'preflop' || safeCommunity.length === 0) {
+    const strength = scorePreFlopStrength(safeAiHole);
     if (toCall === 0) {
       if ((strength >= 0.68 || bluffTriggered) && aiChips >= 40) {
         const raiseSize = Math.min(aiChips, strength >= 0.85 ? 80 : 40);
@@ -854,24 +863,25 @@ export function pickHardPokerAction(
     }
 
     // Facing a bet/raise pre-flop
-    if (strength < 0.34 && toCall > game.bigBlind * 2 && !bluffTriggered) {
+    const bb = game?.bigBlind || 20;
+    if (strength < 0.34 && toCall > bb * 2 && !bluffTriggered) {
       return { action: 'fold' };
     }
     if (strength >= 0.78 && aiChips > toCall + 40 && Math.random() < 0.65) {
       const raiseSize = Math.min(aiChips - toCall, 60);
       return { action: 'raise', raiseBy: raiseSize };
     }
-    if (strength >= potOdds + 0.15 || toCall <= game.bigBlind) {
+    if (strength >= potOdds + 0.15 || toCall <= bb) {
       return { action: 'call' };
     }
     return { action: 'fold' };
   }
 
   // Layer 2: Post-Flop 7-Card Hand Evaluation + Draw Equity
-  const myEval = evaluateBest5PokerHand([...aiHole, ...game.communityCards]);
+  const myEval = evaluateBest5PokerHand([...safeAiHole, ...safeCommunity]);
   const boardOnlyEval =
-    game.communityCards.length >= 5
-      ? evaluateBest5PokerHand(game.communityCards)
+    safeCommunity.length >= 5
+      ? evaluateBest5PokerHand(safeCommunity)
       : null;
 
   // Base normalized strength 0..1 from poker hand category
@@ -895,7 +905,7 @@ export function pickHardPokerAction(
   if (boardOnlyEval && comparePokerEvaluations(myEval, boardOnlyEval) === 0 && myEval.category > 0) {
     handStrength = Math.max(0.24, handStrength - 0.25);
   }
-  handStrength = Math.min(0.99, handStrength + estimateDrawBonus(aiHole, game.communityCards));
+  handStrength = Math.min(0.99, handStrength + estimateDrawBonus(safeAiHole, safeCommunity));
 
   // Layer 3: Pot Odds + Behavioral Bluff Engine
   if (toCall === 0) {

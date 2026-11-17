@@ -5870,6 +5870,17 @@ async function startServer() {
       appType: 'spa',
     });
     viteServerRef = vite;
+    app.use((req: Request, res: Response, next: any) => {
+      if (
+        req.method === 'GET' &&
+        !req.path.startsWith('/api/') &&
+        !req.path.startsWith('/socket.io/') &&
+        (req.path === '/' || req.path.endsWith('.html') || (req.headers.accept || '').includes('text/html'))
+      ) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      }
+      next();
+    });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(__dirname, 'dist');

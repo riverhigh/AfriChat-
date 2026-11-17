@@ -76,14 +76,15 @@ const WhotShapeSvg: React.FC<{ shape: WhotShape; className?: string }> = ({
 };
 
 const WhotPlayingCard: React.FC<{
-  card: WhotCard;
+  card?: WhotCard | null;
   playable?: boolean;
   disabled?: boolean;
   compact?: boolean;
   onClick?: () => void;
 }> = ({ card, playable = false, disabled = false, compact = false, onClick }) => {
+  if (!card) return null;
   const meta = SHAPE_COLORS[card.shape] || SHAPE_COLORS.circle;
-  const displayNum = card.shape === 'whot' ? '20' : String(card.number);
+  const displayNum = card.shape === 'whot' ? '20' : String(card.number ?? '');
   const tag = ACTION_TAG[card.shape === 'whot' ? 20 : card.number];
 
   return (
@@ -350,10 +351,10 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
 
             {/* Call Card */}
             <div className="flex flex-col items-center gap-1">
-              <WhotPlayingCard card={game.topCard} />
+              <WhotPlayingCard card={game.topCard || { id: 'fallback_card', shape: 'circle', number: 1 }} />
               <span className="text-[10px] font-semibold text-slate-500 dark:text-neutral-400">
                 {game.requestedShape
-                  ? `Need: ${SHAPE_COLORS[game.requestedShape]?.label}`
+                  ? `Need: ${SHAPE_COLORS[game.requestedShape]?.label || game.requestedShape}`
                   : 'Call Card'}
               </span>
               {(game.reshuffleCount || 0) > 0 && (

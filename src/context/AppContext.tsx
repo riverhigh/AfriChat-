@@ -1,3 +1,4 @@
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   initSocket,
   getSocket,
@@ -19,6 +20,210 @@ import {
   emitLikeStatus,
 } from '../services/socket';
 import { encryptChatMessage, decryptChatMessage, getConversationSecret } from '../utils/cryptoUtils';
+import { safeLocalStorage, safeSessionStorage } from '../utils/safeStorage';
+import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
+import {
+  compressAvatarImage,
+  compressChatMediaImage,
+  downsampleDataUrl,
+  isPlaceholderAvatar,
+} from '../utils/imageUtils';
+import {
+  saveUserChatsBackupToSupabase,
+  fetchUserChatsBackupFromSupabase,
+  mergeChatThreadsAndMessages,
+} from '../services/supabaseChatSync';
+import {
+  askGroqAi,
+  AFRIBOT_ID,
+  AFRIBOT_NAME,
+  AFRIBOT_PHONE,
+  AFRIBOT_AVATAR,
+  GroqMessage,
+} from '../services/groq';
+import {
+  pickHardXoMove,
+  pickHardWhotMove,
+  isWhotCardPlayable,
+  pickHardLudoPlan,
+  getLudoSeedOffset,
+  canMoveLudoSingleDie,
+  canMoveLudoCombinedDice,
+  hasAnyLegalLudoMove,
+  evaluateBest5PokerHand,
+  comparePokerEvaluations,
+  pickHardPokerAction,
+} from '../utils/gameAiEngine';
+import { playAnimalSound, getNotificationSound } from '../utils/soundUtils';
+import {
+  supabase,
+  isSupabaseConfigured,
+  fetchProfile,
+  mapProfileToUser,
+  fetchLiveTownCommunities,
+  createTownCommunityInDb,
+  updateTownCommunityInDb,
+  deleteTownCommunityInDb,
+  isHiddenOrInvalidCommunityRow,
+  fetchLiveAudioSpaces,
+  createAudioSpaceInDb,
+  updateAudioSpaceInDb,
+  mapAudioSpaceRow,
+  getActiveSpacesTable,
+  fetchStatusFeedWithAds,
+  trackAdClickInDb,
+  fetchLiveArtisanStations,
+  createArtisanStationInDb,
+  fetchLiveStoreSubscriptions,
+  createStoreSubscriptionInDb,
+  fetchServiceProviders,
+  fetchScamReportByTarget,
+  fetchAllScamReports,
+  broadcastScamReport,
+  upsertScamReportInDb,
+  upsertXoGameInSupabase,
+  fetchXoGameByIdFromSupabase,
+  fetchXoGamesForChatFromSupabase,
+  subscribeToXoGamesInChat,
+} from '../services/supabase';
+import {
+  ADMIN_SYS_CONFIG_KEY,
+  ADMIN_SYS_CMS_KEY,
+  ADMIN_SYS_USERS_KEY,
+  ADMIN_SYS_STORES_KEY,
+  canonicalAdminUserKey,
+  safeJsonFetch,
+  fetchSupabaseAdminSlice,
+  saveSupabaseAdminSlice,
+  upsertSupabaseAdminUserOverride,
+} from '../services/supabaseAdminSync';
+import {
+  FeatureFlags,
+  ErrandRunner,
+  ErrandItem,
+  ErrandOrder,
+  GamifyMilestone,
+  CurrencyCode,
+  LanguageCode,
+  Product,
+  EscrowOrder,
+  ChatMessage,
+  ChatThread,
+  CallLogItem,
+  UserStatus,
+  UserWallet,
+  WalletTransaction,
+  MemeSticker,
+  AudioSpace,
+  ScamEntity,
+  InvoiceData,
+  FinancialPoll,
+  AjoGroup,
+  TicTacToeGameState,
+  WhotShape,
+  WhotCard,
+  WhotGameState,
+  LudoGameState,
+  PokerSuit,
+  PokerCard,
+  PokerPhase,
+  PokerGameState,
+  STANDARD_GAME_BET_LIMIT,
+  VERIFIED_GAME_BET_LIMIT,
+  BillRequest,
+  AGC_BILL_CATEGORIES,
+  LocationPinMeta,
+  UserProfile,
+  DeviceContact,
+  ContactRequest,
+  GroupInvitation,
+  UserUploadedMeme,
+  DispatchDeliveryOrder,
+  JobPosting,
+  SecurityQuestionEntry,
+  SecuritySettings,
+  ServiceProvider,
+  ServiceBooking,
+  PayrollEmployee,
+  PayrollRunLog,
+  AppFontSize,
+  TownCommunity,
+  DoctorProfile,
+  HospitalQueueToken,
+  MedicationReminder,
+  HealthVaultRecord,
+  LawyerProfile,
+  LegalContractTemplate,
+  GeneratedLegalContract,
+  CreatorProfile,
+  CreatorPost,
+  CreatorShowTicket,
+  CreatorSong,
+  ArtisanStation,
+  ArtisanStaff,
+  ArtisanTask,
+  ServiceOffering,
+  ReferredUser,
+  ReferralProgram,
+  StoreTier,
+  StoreSubscription,
+  CreatorDigitalFile,
+  CreatorVipService,
+  AfriBook,
+  BookChapter,
+  GroupReadSession,
+  CelebrityVerificationApplication,
+  Course,
+  TutorProfile,
+  AdminUserRecord,
+  AdminSystemBroadcast,
+  AdminSystemConfig,
+  AdminCmsData,
+  CmsAnnouncement,
+  CmsMarqueeBanner,
+  CmsFaqItem,
+} from '../types';
+import {
+  LOCALIZED_STRINGS,
+  MOCK_CHATS,
+  INITIAL_MESSAGES,
+  MOCK_CALLS,
+  MOCK_STATUSES,
+  MOCK_MEME_TEMPLATES,
+  MOCK_AUDIO_SPACES,
+  MOCK_SCAM_DATABASE,
+  MOCK_AJO_BALOGUN,
+  INITIAL_CURRENT_USER,
+  MOCK_DEVICE_CONTACTS,
+  MOCK_DISPATCH_ORDERS,
+  MOCK_JOB_POSTINGS,
+  MOCK_SERVICE_PROVIDERS,
+  MOCK_SERVICE_BOOKINGS,
+  MOCK_PAYROLL_EMPLOYEES,
+  MOCK_PAYROLL_LOGS,
+  MOCK_TOWN_COMMUNITIES,
+  MOCK_DOCTORS,
+  MOCK_QUEUE_TOKENS,
+  MOCK_MEDICATION_REMINDERS,
+  MOCK_HEALTH_VAULT,
+  MOCK_LAWYERS,
+  MOCK_CONTRACT_TEMPLATES,
+  MOCK_GENERATED_CONTRACTS,
+  MOCK_CREATORS,
+  MOCK_CREATOR_POSTS,
+  MOCK_CREATOR_SHOWS,
+  MOCK_CREATOR_SONGS,
+  MOCK_ARTISAN_STATION,
+  MOCK_REFERRAL_PROGRAM,
+  MOCK_STORE_SUBSCRIPTION,
+  MOCK_CREATOR_FILES,
+  MOCK_AFRI_BOOKS,
+  MOCK_GROUP_READ_SESSIONS,
+  MOCK_COURSES,
+  INITIAL_TUTOR_PROFILE,
+  MOCK_ADMIN_USERS,
+  INITIAL_ADMIN_BROADCAST,
+} from '../data/mockData';
 
 export const normalizePhoneDigits = (raw?: string): string => {
   if (!raw) return '';
@@ -110,8 +315,10 @@ function sanitizeLoadedMessages(parsed: unknown): Record<string, ChatMessage[]> 
   const cleaned: Record<string, ChatMessage[]> = {};
   for (const [cid, msgs] of Object.entries(parsed as Record<string, ChatMessage[]>)) {
     if (!Array.isArray(msgs)) continue;
-    cleaned[cid] = msgs.map((m) => {
-      if (m.type === 'voice' && m.voiceNote?.expiresAt) {
+    cleaned[cid] = msgs
+      .filter((m): m is ChatMessage => Boolean(m && typeof m === 'object' && m.id))
+      .map((m) => {
+        if (m.type === 'voice' && m.voiceNote?.expiresAt) {
         const exp = new Date(m.voiceNote.expiresAt).getTime();
         if (!isNaN(exp) && now > exp) {
           return {
@@ -122,8 +329,74 @@ function sanitizeLoadedMessages(parsed: unknown): Record<string, ChatMessage[]> 
           };
         }
       }
-      return m;
-    });
+        if (m.type === 'game_xo' && m.xoGame) {
+          const board = Array.isArray(m.xoGame.board) && m.xoGame.board.length === 9
+            ? m.xoGame.board
+            : Array(9).fill(null);
+          return { ...m, xoGame: { ...m.xoGame, board } };
+        }
+        if (m.type === 'game_whot' && m.whotGame) {
+          const wg = m.whotGame;
+          const challengerHand = Array.isArray(wg.challengerHand) ? wg.challengerHand : [];
+          const opponentHand = Array.isArray(wg.opponentHand) ? wg.opponentHand : [];
+          const deck = Array.isArray(wg.deck) ? wg.deck : [];
+          const discardPile = Array.isArray(wg.discardPile)
+            ? wg.discardPile
+            : wg.topCard
+            ? [wg.topCard]
+            : [];
+          const topCard = wg.topCard || discardPile[discardPile.length - 1] || { id: 'whot_fallback', shape: 'circle' as const, number: 1 };
+          return {
+            ...m,
+            whotGame: {
+              ...wg,
+              challengerHand,
+              opponentHand,
+              deck,
+              discardPile,
+              topCard,
+              pendingDrawCount: wg.pendingDrawCount || 0,
+              pendingDrawType: wg.pendingDrawType ?? null,
+              reshuffleCount: wg.reshuffleCount || 0,
+            },
+          };
+        }
+        if (m.type === 'game_ludo' && m.ludoGame) {
+          const lg = m.ludoGame;
+          const challengerTokens = Array.isArray(lg.challengerTokens) ? lg.challengerTokens : [-1, -1, -1, -1, -1, -1, -1, -1];
+          const opponentTokens = Array.isArray(lg.opponentTokens) ? lg.opponentTokens : [-1, -1, -1, -1, -1, -1, -1, -1];
+          const diceValues = Array.isArray(lg.diceValues)
+            ? lg.diceValues
+            : lg.diceValue
+            ? [lg.diceValue]
+            : [];
+          return {
+            ...m,
+            ludoGame: {
+              ...lg,
+              challengerTokens,
+              opponentTokens,
+              diceValues,
+              consecutiveSixes: lg.consecutiveSixes || 0,
+            },
+          };
+        }
+        if (m.type === 'game_poker' && m.pokerGame) {
+          const pg = m.pokerGame;
+          return {
+            ...m,
+            pokerGame: {
+              ...pg,
+              deck: Array.isArray(pg.deck) ? pg.deck : [],
+              challengerHole: Array.isArray(pg.challengerHole) ? pg.challengerHole : [],
+              opponentHole: Array.isArray(pg.opponentHole) ? pg.opponentHole : [],
+              communityCards: Array.isArray(pg.communityCards) ? pg.communityCards : [],
+              actedThisPhase: Array.isArray(pg.actedThisPhase) ? pg.actedThisPhase : [],
+            },
+          };
+        }
+        return m;
+      });
   }
   return cleaned;
 }
@@ -379,214 +652,6 @@ function loadPartitionedUserChatsAndMessages(phoneNumber?: string): {
 
   return { chats: mergedChats, messages: mergedMsgs };
 }
-
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { safeLocalStorage, safeSessionStorage } from '../utils/safeStorage';
-import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
-import {
-  compressAvatarImage,
-  compressChatMediaImage,
-  downsampleDataUrl,
-  isPlaceholderAvatar,
-} from '../utils/imageUtils';
-import {
-  saveUserChatsBackupToSupabase,
-  fetchUserChatsBackupFromSupabase,
-  mergeChatThreadsAndMessages,
-} from '../services/supabaseChatSync';
-import {
-  askGroqAi,
-  AFRIBOT_ID,
-  AFRIBOT_NAME,
-  AFRIBOT_PHONE,
-  AFRIBOT_AVATAR,
-  GroqMessage,
-} from '../services/groq';
-import {
-  pickHardXoMove,
-  pickHardWhotMove,
-  isWhotCardPlayable,
-  pickHardLudoPlan,
-  getLudoSeedOffset,
-  canMoveLudoSingleDie,
-  canMoveLudoCombinedDice,
-  hasAnyLegalLudoMove,
-  evaluateBest5PokerHand,
-  comparePokerEvaluations,
-  pickHardPokerAction,
-} from '../utils/gameAiEngine';
-import { playAnimalSound, getNotificationSound } from '../utils/soundUtils';
-import {
-  supabase,
-  isSupabaseConfigured,
-  fetchProfile,
-  mapProfileToUser,
-  fetchLiveTownCommunities,
-  createTownCommunityInDb,
-  updateTownCommunityInDb,
-  deleteTownCommunityInDb,
-  isHiddenOrInvalidCommunityRow,
-  fetchLiveAudioSpaces,
-  createAudioSpaceInDb,
-  updateAudioSpaceInDb,
-  mapAudioSpaceRow,
-  getActiveSpacesTable,
-  fetchStatusFeedWithAds,
-  trackAdClickInDb,
-  fetchLiveArtisanStations,
-  createArtisanStationInDb,
-  fetchLiveStoreSubscriptions,
-  createStoreSubscriptionInDb,
-  fetchServiceProviders,
-  fetchScamReportByTarget,
-  fetchAllScamReports,
-  broadcastScamReport,
-  upsertScamReportInDb,
-  upsertXoGameInSupabase,
-  fetchXoGameByIdFromSupabase,
-  fetchXoGamesForChatFromSupabase,
-  subscribeToXoGamesInChat,
-} from '../services/supabase';
-import {
-  ADMIN_SYS_CONFIG_KEY,
-  ADMIN_SYS_CMS_KEY,
-  ADMIN_SYS_USERS_KEY,
-  ADMIN_SYS_STORES_KEY,
-  canonicalAdminUserKey,
-  safeJsonFetch,
-  fetchSupabaseAdminSlice,
-  saveSupabaseAdminSlice,
-  upsertSupabaseAdminUserOverride,
-} from '../services/supabaseAdminSync';
-import {
-  FeatureFlags,
-  ErrandRunner,
-  ErrandItem,
-  ErrandOrder,
-  GamifyMilestone,
-  CurrencyCode,
-  LanguageCode,
-  Product,
-  EscrowOrder,
-  ChatMessage,
-  ChatThread,
-  CallLogItem,
-  UserStatus,
-  UserWallet,
-  WalletTransaction,
-  MemeSticker,
-  AudioSpace,
-  ScamEntity,
-  InvoiceData,
-  FinancialPoll,
-  AjoGroup,
-  TicTacToeGameState,
-  WhotShape,
-  WhotCard,
-  WhotGameState,
-  LudoGameState,
-  PokerSuit,
-  PokerCard,
-  PokerPhase,
-  PokerGameState,
-  STANDARD_GAME_BET_LIMIT,
-  VERIFIED_GAME_BET_LIMIT,
-  BillRequest,
-  AGC_BILL_CATEGORIES,
-  LocationPinMeta,
-  UserProfile,
-  DeviceContact,
-  ContactRequest,
-  GroupInvitation,
-  UserUploadedMeme,
-  DispatchDeliveryOrder,
-  JobPosting,
-  SecurityQuestionEntry,
-  SecuritySettings,
-  ServiceProvider,
-  ServiceBooking,
-  PayrollEmployee,
-  PayrollRunLog,
-  AppFontSize,
-  TownCommunity,
-  DoctorProfile,
-  HospitalQueueToken,
-  MedicationReminder,
-  HealthVaultRecord,
-  LawyerProfile,
-  LegalContractTemplate,
-  GeneratedLegalContract,
-  CreatorProfile,
-  CreatorPost,
-  CreatorShowTicket,
-  CreatorSong,
-  ArtisanStation,
-  ArtisanStaff,
-  ArtisanTask,
-  ServiceOffering,
-  ReferredUser,
-  ReferralProgram,
-  StoreTier,
-  StoreSubscription,
-  CreatorDigitalFile,
-  CreatorVipService,
-  AfriBook,
-  BookChapter,
-  GroupReadSession,
-  CelebrityVerificationApplication,
-  Course,
-  TutorProfile,
-  AdminUserRecord,
-  AdminSystemBroadcast,
-  AdminSystemConfig,
-  AdminCmsData,
-  CmsAnnouncement,
-  CmsMarqueeBanner,
-  CmsFaqItem,
-} from '../types';
-import {
-  LOCALIZED_STRINGS,
-  MOCK_CHATS,
-  INITIAL_MESSAGES,
-  MOCK_CALLS,
-  MOCK_STATUSES,
-  MOCK_MEME_TEMPLATES,
-  MOCK_AUDIO_SPACES,
-  MOCK_SCAM_DATABASE,
-  MOCK_AJO_BALOGUN,
-
-  INITIAL_CURRENT_USER,
-  MOCK_DEVICE_CONTACTS,
-
-  MOCK_DISPATCH_ORDERS,
-  MOCK_JOB_POSTINGS,
-  MOCK_SERVICE_PROVIDERS,
-  MOCK_SERVICE_BOOKINGS,
-  MOCK_PAYROLL_EMPLOYEES,
-  MOCK_PAYROLL_LOGS,
-  MOCK_TOWN_COMMUNITIES,
-  MOCK_DOCTORS,
-  MOCK_QUEUE_TOKENS,
-  MOCK_MEDICATION_REMINDERS,
-  MOCK_HEALTH_VAULT,
-  MOCK_LAWYERS,
-  MOCK_CONTRACT_TEMPLATES,
-  MOCK_GENERATED_CONTRACTS,
-  MOCK_CREATORS,
-  MOCK_CREATOR_POSTS,
-  MOCK_CREATOR_SHOWS,
-  MOCK_CREATOR_SONGS,
-  MOCK_ARTISAN_STATION,
-  MOCK_REFERRAL_PROGRAM,
-  MOCK_STORE_SUBSCRIPTION,
-  MOCK_CREATOR_FILES,
-  MOCK_AFRI_BOOKS,
-  MOCK_GROUP_READ_SESSIONS,
-  MOCK_COURSES,
-  INITIAL_TUTOR_PROFILE,
-  MOCK_ADMIN_USERS,
-  INITIAL_ADMIN_BROADCAST,
-} from '../data/mockData';
 
 export interface ActiveCallState {
   name: string;
@@ -1213,7 +1278,7 @@ export const CURRENCY_RATES: Record<CurrencyCode, number> = {
 export const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
   NGN: '₦',
   KES: 'KSh ',
-  GHS: 'GHâ‚µ ',
+  GHS: 'GH₵ ',
   ZAR: 'R ',
 };
 
@@ -10596,8 +10661,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Not your turn.' };
     }
     const isChallenger = phonesMatch(myPhone, game.challengerPhone);
-    const hand = isChallenger ? [...game.challengerHand] : [...game.opponentHand];
-    const oppHand = isChallenger ? [...game.opponentHand] : [...game.challengerHand];
+    const hand = isChallenger ? [...(game.challengerHand || [])] : [...(game.opponentHand || [])];
+    const oppHand = isChallenger ? [...(game.opponentHand || [])] : [...(game.challengerHand || [])];
     const cardIdx = hand.findIndex((c) => c.id === cardId);
     if (cardIdx < 0) return { success: false, message: 'Card not found in hand.' };
 
@@ -10616,8 +10681,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     hand.splice(cardIdx, 1);
-    let nextDeck = [...game.deck];
-    let nextDiscard = [...game.discardPile, card];
+    let nextDeck = [...(game.deck || [])];
+    let nextDiscard = [...(game.discardPile || []), card];
     let nextReshuffles = game.reshuffleCount || 0;
 
     const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
@@ -10740,13 +10805,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Not your turn.' };
     }
     const isChallenger = phonesMatch(myPhone, game.challengerPhone);
-    const hand = isChallenger ? [...game.challengerHand] : [...game.opponentHand];
-    const oppHand = isChallenger ? [...game.opponentHand] : [...game.challengerHand];
+    const hand = isChallenger ? [...(game.challengerHand || [])] : [...(game.opponentHand || [])];
+    const oppHand = isChallenger ? [...(game.opponentHand || [])] : [...(game.challengerHand || [])];
     const drawQty = game.pendingDrawCount && game.pendingDrawCount > 0 ? game.pendingDrawCount : 1;
 
     const drawRes = drawCardsFromWhotMarket(
-      game.deck,
-      game.discardPile,
+      game.deck || [],
+      game.discardPile || [],
       drawQty,
       game.reshuffleCount || 0
     );
@@ -10850,8 +10915,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     dieChoice: 'die0' | 'die1' | 'combined' = 'die0'
   ): { error?: string; nextGame?: LudoGameState; finishedNow?: boolean } => {
     const isChallenger = phonesMatch(moverPhone, game.challengerPhone);
-    const myTokens = [...(isChallenger ? game.challengerTokens : game.opponentTokens)];
-    const oppTokens = [...(isChallenger ? game.opponentTokens : game.challengerTokens)];
+    const myTokens = [...((isChallenger ? game.challengerTokens : game.opponentTokens) || [])];
+    const oppTokens = [...((isChallenger ? game.opponentTokens : game.challengerTokens) || [])];
     const curStep = myTokens[tokenIndex];
     if (curStep === undefined || curStep >= 56) {
       return { error: 'Seed already finished.' };
@@ -11302,9 +11367,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let oppChips = isChallenger ? game.opponentChips : game.challengerChips;
     let myBet = isChallenger ? game.challengerBet : game.opponentBet;
     let oppBet = isChallenger ? game.opponentBet : game.challengerBet;
-    let pot = game.pot;
-    const deck = [...game.deck];
-    let communityCards = [...game.communityCards];
+    let pot = game.pot || 0;
+    const deck = [...(game.deck || [])];
+    let communityCards = [...(game.communityCards || [])];
     let phase: PokerPhase = game.phase;
     let acted = Array.isArray(game.actedThisPhase) ? [...game.actedThisPhase] : [];
     const nowIso = new Date().toISOString();
@@ -11388,8 +11453,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       if (phase === 'showdown') {
-        const chEval = evaluateBest5PokerHand([...game.challengerHole, ...communityCards]);
-        const opEval = evaluateBest5PokerHand([...game.opponentHole, ...communityCards]);
+        const chEval = evaluateBest5PokerHand([...(game.challengerHole || []), ...communityCards]);
+        const opEval = evaluateBest5PokerHand([...(game.opponentHole || []), ...communityCards]);
         const cmp = comparePokerEvaluations(chEval, opEval);
         const finalChallengerChips = isChallenger ? myChips : oppChips;
         const finalOpponentChips = isChallenger ? oppChips : myChips;
@@ -11781,21 +11846,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const aiName = 'AgcBot (Hard AI)';
     const allChatIds = Object.keys(messages || {});
     for (const cid of allChatIds) {
-      const list = messages[cid] || [];
+      const list = messages[cid];
+      if (!Array.isArray(list)) continue;
       for (const msg of list) {
+        if (!msg || typeof msg !== 'object') continue;
         // 1. X/O Hard AI Turn
         if (msg.type === 'game_xo' && msg.xoGame) {
           const g = msg.xoGame;
+          const board = Array.isArray(g.board) && g.board.length === 9 ? g.board : Array(9).fill(null);
           const isAiGame = Boolean(g.isAiOpponent || phonesMatch(g.oPlayerPhone, AFRIBOT_PHONE) || g.chatId === AFRIBOT_ID);
           if (isAiGame && g.status === 'active' && g.currentTurn === 'O') {
-            const movesPlayed = g.board.filter((c) => c !== null).length;
+            const movesPlayed = board.filter((c) => c !== null).length;
             const key = `xo:${g.id}:${movesPlayed}:${g.currentTurn}`;
             if (!scheduledAiTurnKeysRef.current.has(key)) {
               scheduledAiTurnKeysRef.current.add(key);
               setTimeout(() => {
-                const cellIdx = pickHardXoMove(g.board, 'O');
-                if (cellIdx < 0 || g.board[cellIdx] !== null) return;
-                const nextBoard = [...g.board];
+                const cellIdx = pickHardXoMove(board, 'O');
+                if (cellIdx < 0 || board[cellIdx] !== null) return;
+                const nextBoard = [...board];
                 nextBoard[cellIdx] = 'O';
                 const nowIso = new Date().toISOString();
                 let winningLine: number[] | undefined;
@@ -11842,8 +11910,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (msg.type === 'game_whot' && msg.whotGame) {
           const g = msg.whotGame;
           const isAiGame = Boolean(g.isAiOpponent || phonesMatch(g.opponentPhone, AFRIBOT_PHONE) || g.chatId === AFRIBOT_ID);
-          if (isAiGame && g.status === 'active' && phonesMatch(g.currentTurnPhone, AFRIBOT_PHONE)) {
-            const key = `whot:${g.id}:${g.moveCount}`;
+          if (
+            isAiGame &&
+            g.status === 'active' &&
+            phonesMatch(g.currentTurnPhone, AFRIBOT_PHONE) &&
+            Array.isArray(g.opponentHand) &&
+            Array.isArray(g.challengerHand)
+          ) {
+            const key = `whot:${g.id}:${g.moveCount || 0}`;
             if (!scheduledAiTurnKeysRef.current.has(key)) {
               scheduledAiTurnKeysRef.current.add(key);
               setTimeout(() => {
@@ -11980,8 +12054,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (msg.type === 'game_ludo' && msg.ludoGame) {
           const g = msg.ludoGame;
           const isAiGame = Boolean(g.isAiOpponent || phonesMatch(g.opponentPhone, AFRIBOT_PHONE) || g.chatId === AFRIBOT_ID);
-          if (isAiGame && g.status === 'active' && phonesMatch(g.currentTurnPhone, AFRIBOT_PHONE)) {
-            const key = `ludo:${g.id}:${g.moveCount}:${g.hasRolled ? 'r' : 'nr'}`;
+          if (
+            isAiGame &&
+            g.status === 'active' &&
+            phonesMatch(g.currentTurnPhone, AFRIBOT_PHONE) &&
+            Array.isArray(g.challengerTokens) &&
+            Array.isArray(g.opponentTokens)
+          ) {
+            const key = `ludo:${g.id}:${g.moveCount || 0}:${g.hasRolled ? 'r' : 'nr'}`;
             if (!scheduledAiTurnKeysRef.current.has(key)) {
               scheduledAiTurnKeysRef.current.add(key);
               if (!g.hasRolled) {
@@ -12034,8 +12114,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (msg.type === 'game_poker' && msg.pokerGame) {
           const g = msg.pokerGame;
           const isAiGame = Boolean(g.isAiOpponent || phonesMatch(g.opponentPhone, AFRIBOT_PHONE) || g.chatId === AFRIBOT_ID);
-          if (isAiGame && g.status === 'active' && phonesMatch(g.currentTurnPhone, AFRIBOT_PHONE)) {
-            const key = `poker:${g.id}:${g.moveCount}:${g.phase}`;
+          if (
+            isAiGame &&
+            g.status === 'active' &&
+            phonesMatch(g.currentTurnPhone, AFRIBOT_PHONE) &&
+            Array.isArray(g.opponentHole)
+          ) {
+            const key = `poker:${g.id}:${g.moveCount || 0}:${g.phase}`;
             if (!scheduledAiTurnKeysRef.current.has(key)) {
               scheduledAiTurnKeysRef.current.add(key);
               setTimeout(() => {
@@ -16541,6 +16626,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           applyLudoGameUpdate(payload.payload);
         }
       })
+      .on('broadcast', { event: 'poker_game_update' }, ({ payload }) => {
+        if (payload?.payload) {
+          applyPokerGameUpdate(payload.payload);
+        }
+      })
       .on('broadcast', { event: 'bill_request_update' }, ({ payload }) => {
         if (payload?.payload) {
           applyBillRequestUpdate(payload.payload);
@@ -16553,7 +16643,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       sbChannel.unsubscribe();
       if (sbXoChannel) sbXoChannel.unsubscribe();
     };
-  }, [activeChatId, currentUser.id, handleIncomingMessage, applyXoGameUpdate, applyRemoteMessageReaction]);
+  }, [
+    activeChatId,
+    currentUser.id,
+    handleIncomingMessage,
+    applyXoGameUpdate,
+    applyWhotGameUpdate,
+    applyLudoGameUpdate,
+    applyPokerGameUpdate,
+    applyBillRequestUpdate,
+    applyRemoteMessageReaction,
+  ]);
 
   const checkIsAdminUrl = () => {
     if (typeof window === 'undefined') return false;
