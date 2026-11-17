@@ -647,6 +647,7 @@ export interface ChatThread {
   unreadCount: number;
   lastMessage: string;
   lastMessageTime: string;
+  lastMessageAtMs?: number;
   catalog: Product[];
   isOnline: boolean;
   phone?: string;
@@ -748,6 +749,7 @@ export interface UserStatus {
   createdAt: string;
   /** ISO-8601 for precise live countdown e.g. 2026-11-12T14:00:00.000Z */
   createdAtISO?: string;
+  expiresAt?: string;
   expiresInHours: number;
   viewsCount: number;
   likesCount: number;

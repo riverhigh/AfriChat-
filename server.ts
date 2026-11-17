@@ -416,12 +416,13 @@ interface RegisteredUser {
 
 const usersByPhone = new Map<string, RegisteredUser>();
 
-// â”€â”€ Single-Session Enforcement: phone â†’ active socket id â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Single-Session Enforcement: phone → active socket id ──────────────────────
 // When a phone logs in on a new device/tab, the old socket receives 'force_logout'
 const phoneToSocketId = new Map<string, string>();
 const USERS_FILE = path.join(__dirname, 'data_users.json');
 const COMMUNITIES_FILE = path.join(__dirname, 'data_communities.json');
 const STATUSES_FILE = path.join(__dirname, 'data_statuses.json');
+const MESSAGES_FILE = path.join(__dirname, 'data_messages.json');
 const DISPATCH_FILE = path.join(__dirname, 'data_dispatch_orders.json');
 const CONFIG_FILE = path.join(__dirname, 'data_admin_config.json');
 const CMS_FILE = path.join(__dirname, 'data_admin_cms.json');
@@ -875,8 +876,13 @@ async function syncUsersFromSupabase(force = false): Promise<void> {
         if (match) {
           const { key, user } = match;
           let rowChanged = false;
-          if ((!user.fullName || user.fullName === 'AGC User' || user.fullName === 'User') && row.username) {
+          const remoteTs = row.updated_at ? Date.parse(row.updated_at) || 0 : 0;
+          const localTs = user.updatedAt ? Date.parse(user.updatedAt) || 0 : 0;
+          const isLocalGeneric = !user.fullName || user.fullName === 'AGC User' || user.fullName === 'User' || user.fullName === 'Registered User';
+          if (row.username && row.username !== 'AGC User' && (isLocalGeneric || (remoteTs > localTs && row.username !== user.fullName))) {
             user.fullName = row.username;
+            user.username = row.username;
+            if (row.updated_at) user.updatedAt = row.updated_at;
             rowChanged = true;
           }
           if (!user.avatarUrl && row.avatar_url) {
@@ -995,20 +1001,54 @@ function saveDispatchFile() {
   }
 }
 
-try {
-  if (fs.existsSync(STATUSES_FILE)) {
-    const raw = JSON.parse(fs.readFileSync(STATUSES_FILE, 'utf8'));
-    if (Array.isArray(raw)) {
-      const now = Date.now();
-      for (const s of raw) {
-        if (s.id && (!s.expiresAt || new Date(s.expiresAt).getTime() > now)) {
-          statusesMap.set(s.id, s);
-        }
-      }
+function resolveServerStatusExpiresAtMs(s: any): number | null {
+  if (!s || typeof s !== 'object') return 0;
+  if (s.expiresAt) {
+    const expMs = typeof s.expiresAt === 'number' ? s.expiresAt : Date.parse(String(s.expiresAt));
+    if (Number.isFinite(expMs) && expMs > 0) return expMs;
+  }
+  const expiresHours = Number(s.expiresInHours) > 0 ? Number(s.expiresInHours) : 24;
+  let createdMs = 0;
+  if (s.createdAtISO) {
+    const parsed = Date.parse(String(s.createdAtISO));
+    if (Number.isFinite(parsed) && parsed > 0) createdMs = parsed;
+  }
+  if (!createdMs && s.created_at) {
+    const parsed = Date.parse(String(s.created_at));
+    if (Number.isFinite(parsed) && parsed > 0) createdMs = parsed;
+  }
+  if (!createdMs && typeof s.id === 'string') {
+    const m = s.id.match(/\d{12,14}/);
+    if (m) {
+      const n = parseInt(m[0], 10);
+      if (Number.isFinite(n) && n > 1_500_000_000_000) createdMs = n;
     }
   }
-} catch (e) {
-  console.warn('Notice loading local statuses registry:', e);
+  if (createdMs > 0) {
+    return createdMs + expiresHours * 3_600_000;
+  }
+  return null;
+}
+
+function isServerStatusExpired(s: any, now = Date.now()): boolean {
+  if (!s || !s.id) return true;
+  const expMs = resolveServerStatusExpiresAtMs(s);
+  if (expMs !== null) {
+    return expMs <= now;
+  }
+  return false;
+}
+
+function normalizeServerStatus(s: any): any {
+  const now = Date.now();
+  const createdISO = s.createdAtISO || s.created_at || new Date(now).toISOString();
+  const expMs = resolveServerStatusExpiresAtMs({ ...s, createdAtISO: createdISO }) || (now + 24 * 3_600_000);
+  return {
+    ...s,
+    createdAtISO: createdISO,
+    expiresAt: new Date(expMs).toISOString(),
+    expiresInHours: Number(s.expiresInHours) > 0 ? Number(s.expiresInHours) : 24,
+  };
 }
 
 function saveStatusesFile() {
@@ -1017,6 +1057,157 @@ function saveStatusesFile() {
   } catch (e) {
     console.warn('Notice saving statuses registry:', e);
   }
+}
+
+function purgeExpiredServerStatuses(emitDeleted = false): string[] {
+  const now = Date.now();
+  const removedIds: string[] = [];
+  for (const [id, st] of statusesMap.entries()) {
+    if (isServerStatusExpired(st, now)) {
+      statusesMap.delete(id);
+      removedIds.push(id);
+    }
+  }
+  if (removedIds.length > 0) {
+    saveStatusesFile();
+    if (emitDeleted) {
+      io.emit('status_purged', { ids: removedIds });
+    }
+    // Best-effort cleanup of expired rows in Supabase user_statuses
+    if (SUPABASE_URL && (SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY)) {
+      const sbKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+      fetch(`${SUPABASE_URL}/rest/v1/user_statuses?expires_at=lt.${encodeURIComponent(new Date(now).toISOString())}`, {
+        method: 'DELETE',
+        headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
+        signal: AbortSignal.timeout(4000),
+      }).catch(() => {});
+    }
+  }
+  return removedIds;
+}
+
+try {
+  if (fs.existsSync(STATUSES_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(STATUSES_FILE, 'utf8'));
+    if (Array.isArray(raw)) {
+      const now = Date.now();
+      let dirty = false;
+      for (const s of raw) {
+        if (s?.id && !isServerStatusExpired(s, now)) {
+          statusesMap.set(s.id, normalizeServerStatus(s));
+        } else {
+          dirty = true;
+        }
+      }
+      if (dirty) saveStatusesFile();
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading local statuses registry:', e);
+}
+
+// ── Durable Store-and-Forward Chat Message Buffer ──────────────────────────
+interface StoredChatRelayEntry {
+  id: string;
+  chatId: string;
+  message: any;
+  senderPhone?: string;
+  targetPhone?: string;
+  memberPhones?: string[];
+  chat?: any;
+  isGroup?: boolean;
+  createdAtMs: number;
+}
+
+const storedMessagesList: StoredChatRelayEntry[] = [];
+const storedMessagesById = new Map<string, StoredChatRelayEntry>();
+const MAX_STORED_MESSAGES = 2500;
+const MESSAGE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+let messagesSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleSaveMessagesFile() {
+  if (messagesSaveTimer) return;
+  messagesSaveTimer = setTimeout(() => {
+    messagesSaveTimer = null;
+    try {
+      const cutoff = Date.now() - MESSAGE_RETENTION_MS;
+      const pruned = storedMessagesList.filter((m) => m.createdAtMs >= cutoff).slice(-MAX_STORED_MESSAGES);
+      fs.writeFileSync(MESSAGES_FILE, JSON.stringify(pruned));
+    } catch (e) {
+      console.warn('Notice saving messages buffer:', e);
+    }
+  }, 600);
+}
+
+function recordStoredMessage(entry: Omit<StoredChatRelayEntry, 'createdAtMs'> & { createdAtMs?: number }) {
+  if (!entry?.chatId || !entry?.message?.id) return;
+  const id = String(entry.message.id);
+  const createdAtMs = entry.createdAtMs || Date.now();
+  const existing = storedMessagesById.get(id);
+  if (existing) {
+    existing.message = { ...existing.message, ...entry.message };
+    existing.createdAtMs = Math.max(existing.createdAtMs, createdAtMs);
+    if (entry.chat) existing.chat = entry.chat;
+    scheduleSaveMessagesFile();
+    return;
+  }
+  const normalized: StoredChatRelayEntry = {
+    id,
+    chatId: entry.chatId,
+    message: entry.message,
+    senderPhone: entry.senderPhone,
+    targetPhone: entry.targetPhone,
+    memberPhones: entry.memberPhones,
+    chat: entry.chat,
+    isGroup: entry.isGroup,
+    createdAtMs,
+  };
+  storedMessagesList.push(normalized);
+  storedMessagesById.set(id, normalized);
+  if (storedMessagesList.length > MAX_STORED_MESSAGES) {
+    const removed = storedMessagesList.splice(0, storedMessagesList.length - MAX_STORED_MESSAGES);
+    removed.forEach((r) => storedMessagesById.delete(r.id));
+  }
+  scheduleSaveMessagesFile();
+}
+
+function doesStoredMessageMatchPhone(entry: StoredChatRelayEntry, phoneVariantsSet: Set<string>): boolean {
+  if (!entry || phoneVariantsSet.size === 0) return false;
+  const checkPhone = (raw?: string) => {
+    if (!raw) return false;
+    return getPhoneVariants(raw).some((v) => phoneVariantsSet.has(v));
+  };
+  if (checkPhone(entry.targetPhone) || checkPhone(entry.senderPhone) || checkPhone(entry.message?.senderPhone)) {
+    return true;
+  }
+  if (Array.isArray(entry.memberPhones) && entry.memberPhones.some((p) => checkPhone(p))) {
+    return true;
+  }
+  if (Array.isArray(entry.chat?.memberPhones) && entry.chat.memberPhones.some((p: string) => checkPhone(p))) {
+    return true;
+  }
+  if (entry.chatId.startsWith('dm_')) {
+    const parts = entry.chatId.replace('dm_', '').split('_').filter(Boolean);
+    if (parts.some((p) => checkPhone(p))) return true;
+  }
+  return false;
+}
+
+try {
+  if (fs.existsSync(MESSAGES_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf8'));
+    if (Array.isArray(raw)) {
+      const cutoff = Date.now() - MESSAGE_RETENTION_MS;
+      for (const item of raw) {
+        if (item?.id && item?.chatId && item?.message && (item.createdAtMs || 0) >= cutoff) {
+          storedMessagesList.push(item);
+          storedMessagesById.set(item.id, item);
+        }
+      }
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading messages buffer:', e);
 }
 
 function isInvalidServerCommunity(c: any): boolean {
@@ -1431,7 +1622,7 @@ app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
 
 // REST: Register user
 app.post('/api/users/register', (req: Request, res: Response) => {
-  const { id, fullName, phoneNumber, avatarUrl, about, role, email, sessionToken, socketId, skipSessionKick } = req.body || {};
+  const { id, fullName, username, phoneNumber, avatarUrl, about, role, email, sessionToken, socketId, skipSessionKick, updatedAt } = req.body || {};
   if (!phoneNumber) {
     return res.status(400).json({ error: 'Phone number required' });
   }
@@ -1453,16 +1644,44 @@ app.post('/api/users/register', (req: Request, res: Response) => {
       code: 'REGISTRATIONS_DISABLED',
     });
   }
+
+  const incomingName = typeof (username || fullName) === 'string' ? String(username || fullName).trim() : '';
+  const isIncomingGeneric = !incomingName || incomingName === 'AGC User' || incomingName === 'User' || incomingName === 'Registered User';
+  const existingName = existingCheck?.username || existingCheck?.fullName || '';
+  const isExistingGeneric = !existingName || existingName === 'AGC User' || existingName === 'User' || existingName === 'Registered User';
+  const existingUpdatedTs = existingCheck?.updatedAt ? Date.parse(existingCheck.updatedAt) || 0 : 0;
+  const incomingUpdatedTs = updatedAt ? Date.parse(String(updatedAt)) || 0 : 0;
+
+  let resolvedFullName = existingCheck?.fullName || 'AGC User';
+  let resolvedUsername = existingCheck?.username;
+  if (!isIncomingGeneric) {
+    // Allow updating existing name if existing is generic OR incoming has a newer/current profile sync (when skipSessionKick is true it's syncProfileToAllRegistries)
+    if (isExistingGeneric || incomingUpdatedTs >= existingUpdatedTs || (skipSessionKick && incomingName !== existingName && !existingUpdatedTs)) {
+      resolvedFullName = incomingName;
+      resolvedUsername = username ? normalizeUsernameHandle(String(username)) : (existingCheck?.username || incomingName);
+    }
+  } else if (!isExistingGeneric) {
+    resolvedFullName = existingCheck!.fullName;
+    resolvedUsername = existingCheck!.username;
+  }
+
+  const resolvedAvatar =
+    avatarUrl && typeof avatarUrl === 'string' && !avatarUrl.startsWith('data:image/svg+xml')
+      ? avatarUrl
+      : existingCheck?.avatarUrl || avatarUrl;
+
   const user: RegisteredUser & { email?: string; sessionToken?: string } = {
     ...(existingCheck || {}),
     id: existingCheck?.id || id || `usr_${Date.now()}`,
-    fullName: fullName || existingCheck?.fullName || 'AGC User',
+    fullName: resolvedFullName,
+    ...(resolvedUsername ? { username: resolvedUsername } : {}),
     phoneNumber: existingCheck?.phoneNumber || phoneNumber,
     cleanPhone: existingCheck?.cleanPhone || cleanPhone,
-    avatarUrl: avatarUrl || existingCheck?.avatarUrl,
+    avatarUrl: resolvedAvatar,
     about: about || existingCheck?.about || 'Available · Using AGC',
     ...(email ? { email: String(email).trim() } : {}),
     registeredAt: existingCheck?.registeredAt || new Date().toISOString(),
+    updatedAt: (!isIncomingGeneric && resolvedFullName !== existingName) ? (updatedAt || new Date().toISOString()) : existingCheck?.updatedAt,
     role: existingCheck?.role || role || 'user',
     status: existingCheck?.status || 'active',
     verificationBadge: existingCheck?.verificationBadge ?? null,
@@ -1476,7 +1695,7 @@ app.post('/api/users/register', (req: Request, res: Response) => {
   usersByPhone.set(storeKey, user);
   saveUsersFile();
   console.log(`✅ [User Registered]: ${user.fullName} (${user.phoneNumber})`);
-  io.emit('user_registered', user);
+  io.emit(existingCheck ? 'user_updated' : 'user_registered', user);
 
   // 🔒 Single-session: only kick an existing socket if it explicitly belongs to an OLDER sessionToken (never self-kick!)
   const existingSocketId = phoneToSocketId.get(cleanPhone) || phoneToSocketId.get(storeKey);
@@ -3579,20 +3798,112 @@ app.post('/api/email/send', async (req: Request, res: Response) => {
 });
 
 app.get('/api/statuses', (_req: Request, res: Response) => {
+  purgeExpiredServerStatuses(true);
   const now = Date.now();
-  const list = Array.from(statusesMap.values()).filter(
-    (s: any) => !s.expiresAt || new Date(s.expiresAt).getTime() > now
-  );
+  const list = Array.from(statusesMap.values()).filter((s: any) => !isServerStatusExpired(s, now));
   res.json(list);
 });
 
 app.post('/api/statuses', (req: Request, res: Response) => {
   const st = req.body;
   if (!st || !st.id) return res.status(400).json({ error: 'Status data required' });
-  statusesMap.set(st.id, st);
+  const normalized = normalizeServerStatus(st);
+  if (isServerStatusExpired(normalized, Date.now())) {
+    return res.status(410).json({ error: 'Status already expired' });
+  }
+  statusesMap.set(normalized.id, normalized);
   saveStatusesFile();
-  io.emit('new_status', { status: st });
-  res.json({ success: true, status: st });
+  io.emit('new_status', { status: normalized });
+  res.json({ success: true, status: normalized });
+});
+
+app.delete('/api/statuses/:id', (req: Request, res: Response) => {
+  const statusId = String(req.params.id || '').trim();
+  if (!statusId) return res.status(400).json({ error: 'Status id required' });
+  const existed = statusesMap.delete(statusId);
+  if (existed) saveStatusesFile();
+  io.emit('status_purged', { ids: [statusId] });
+  res.json({ success: true, deleted: existed, id: statusId });
+});
+
+// ── REST: Store-and-Forward Reliable Message Relay & Missed Message Sync ─────
+app.post('/api/messages/send', (req: Request, res: Response) => {
+  try {
+    const { chatId, message, targetPhone, memberPhones, chat, isGroup, senderSocketId } = req.body || {};
+    if (!chatId || !message || !message.id) {
+      return res.status(400).json({ success: false, error: 'chatId and message required' });
+    }
+    const senderPhone = String(message.senderPhone || '').replace(/\D/g, '');
+    let finalTarget = targetPhone ? String(targetPhone).replace(/\D/g, '') : '';
+    if (!finalTarget && String(chatId).startsWith('dm_')) {
+      const senderVariants = new Set(getPhoneVariants(senderPhone));
+      const parts = String(chatId).replace('dm_', '').split('_').filter(Boolean);
+      finalTarget = parts.find((p) => !senderVariants.has(p) && !phonesMatchServer(p, senderPhone)) || '';
+    }
+
+    const groupFlag = Boolean(isGroup || String(chatId).startsWith('group_') || String(chatId).startsWith('channel_') || chat?.isGroup || chat?.isChannel);
+    recordStoredMessage({
+      id: String(message.id),
+      chatId: String(chatId),
+      message,
+      senderPhone,
+      targetPhone: finalTarget || undefined,
+      memberPhones: Array.isArray(memberPhones) ? memberPhones : undefined,
+      chat,
+      isGroup: groupFlag,
+    });
+
+    const outPayload = { chatId, message, targetPhone: finalTarget, chat, isGroup: groupFlag };
+    const deliveredSockets = new Set<string>(senderSocketId ? [String(senderSocketId)] : []);
+    const emitOnce = (roomName: string) => {
+      const room = io.sockets.adapter.rooms.get(roomName);
+      if (!room) return;
+      for (const sid of room) {
+        if (deliveredSockets.has(sid)) continue;
+        deliveredSockets.add(sid);
+        io.to(sid).emit('new_message', outPayload);
+      }
+    };
+
+    emitOnce(`chat:${chatId}`);
+    if (finalTarget) {
+      getPhoneVariants(finalTarget).forEach((v) => emitOnce(`phone:${v}`));
+    }
+    if (senderPhone && !String(chatId).includes('self')) {
+      // Sync sender's other open tabs/devices too
+      getPhoneVariants(senderPhone).forEach((v) => emitOnce(`phone:${v}`));
+    }
+    if (Array.isArray(memberPhones)) {
+      memberPhones.forEach((p: string) => {
+        getPhoneVariants(p).forEach((v) => emitOnce(`phone:${v}`));
+      });
+    }
+
+    return res.json({ success: true, id: message.id, relayedSockets: Math.max(0, deliveredSockets.size - (senderSocketId ? 1 : 0)) });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to store message' });
+  }
+});
+
+app.get('/api/messages/sync', (req: Request, res: Response) => {
+  const rawPhone = String(req.query.phone || '').trim();
+  if (!rawPhone) return res.status(400).json({ success: false, error: 'phone required', messages: [] });
+  const sinceMs = Number(req.query.sinceMs) || (Date.now() - 3 * 24 * 60 * 60 * 1000);
+  const variantsSet = new Set(getPhoneVariants(rawPhone));
+  const matched = storedMessagesList
+    .filter((entry) => entry.createdAtMs > sinceMs && doesStoredMessageMatchPhone(entry, variantsSet))
+    .slice(-300);
+  return res.json({ success: true, messages: matched, serverTimeMs: Date.now() });
+});
+
+app.get('/api/messages/chat/:chatId', (req: Request, res: Response) => {
+  const chatId = decodeURIComponent(String(req.params.chatId || ''));
+  const sinceMs = Number(req.query.sinceMs) || 0;
+  if (!chatId) return res.json({ success: true, messages: [] });
+  const list = storedMessagesList
+    .filter((entry) => entry.chatId === chatId && entry.createdAtMs > sinceMs)
+    .slice(-150);
+  return res.json({ success: true, messages: list, serverTimeMs: Date.now() });
 });
 
 app.post('/api/statuses/ad-click', (req: Request, res: Response) => {
@@ -5290,10 +5601,13 @@ io.on('connection', (socket: Socket) => {
       const existingMatch = findUserEntry(userData.phoneNumber) || findUserEntry(clean);
       const storeKey = existingMatch?.key || clean;
       (socket as any)._userCleanPhone = storeKey;
+      (socket as any)._agcPhone = clean;
       phoneToSocketId.set(clean, socket.id);
       if (storeKey !== clean) phoneToSocketId.set(storeKey, socket.id);
-      socket.join(`phone:${clean}`);
-      if (storeKey !== clean) socket.join(`phone:${storeKey}`);
+      getPhoneVariants(clean).forEach((v) => socket.join(`phone:${v}`));
+      if (storeKey !== clean) {
+        getPhoneVariants(storeKey).forEach((v) => socket.join(`phone:${v}`));
+      }
 
       const existing = existingMatch?.user || usersByPhone.get(clean);
       if (existing) {
@@ -5309,10 +5623,10 @@ io.on('connection', (socket: Socket) => {
         }
         existing.isOnline = true;
         existing.lastSeen = 'online';
-        if (userData.userName && (!existing.fullName || existing.fullName === 'AGC User' || existing.fullName === 'User')) {
+        if (userData.userName && userData.userName !== 'AGC User' && (!existing.fullName || existing.fullName === 'AGC User' || existing.fullName === 'User' || existing.fullName === 'Registered User')) {
           existing.fullName = userData.userName;
         }
-        if (userData.avatar) existing.avatarUrl = userData.avatar;
+        if (userData.avatar && !String(userData.avatar).startsWith('data:image/svg+xml')) existing.avatarUrl = userData.avatar;
         if (!existing.role && userData.role) existing.role = userData.role;
         if (userData.deviceInfo) existing.deviceInfo = userData.deviceInfo;
         usersByPhone.set(storeKey, existing);
@@ -5352,15 +5666,24 @@ io.on('connection', (socket: Socket) => {
     const existingMatch = findUserEntry(userData.phoneNumber) || findUserEntry(clean);
     const storeKey = existingMatch?.key || clean;
     const existing = existingMatch?.user;
+    (socket as any)._userCleanPhone = storeKey;
+    (socket as any)._agcPhone = clean;
     phoneToSocketId.set(clean, socket.id);
     if (storeKey !== clean) phoneToSocketId.set(storeKey, socket.id);
+    getPhoneVariants(clean).forEach((v) => socket.join(`phone:${v}`));
+    const incomingRegName = userData.fullName || userData.name || '';
+    const isIncomingRegGeneric = !incomingRegName || incomingRegName === 'AGC User' || incomingRegName === 'User';
+    const resolvedRegName =
+      !isIncomingRegGeneric && (!existing?.fullName || existing.fullName === 'AGC User' || existing.fullName === 'User')
+        ? incomingRegName
+        : (existing?.fullName || incomingRegName || 'AGC User');
     const reg: RegisteredUser = {
       ...(existing || {}),
       id: existing?.id || userData.id || `usr_${Date.now()}`,
-      fullName: userData.fullName || userData.name || existing?.fullName || 'AGC User',
+      fullName: resolvedRegName,
       phoneNumber: existing?.phoneNumber || userData.phoneNumber,
       cleanPhone: existing?.cleanPhone || clean,
-      avatarUrl: userData.avatarUrl || userData.avatar || existing?.avatarUrl,
+      avatarUrl: (userData.avatarUrl && !String(userData.avatarUrl).startsWith('data:image/svg+xml')) ? userData.avatarUrl : (existing?.avatarUrl || userData.avatar || userData.avatarUrl),
       about: userData.about || existing?.about || 'Available · Using AGC',
       registeredAt: existing?.registeredAt || new Date().toISOString(),
       role: existing?.role || userData.role || 'user',
@@ -5372,7 +5695,6 @@ io.on('connection', (socket: Socket) => {
     };
     usersByPhone.set(storeKey, reg);
     saveUsersFile();
-    socket.join(`phone:${clean}`);
     io.emit(existing ? 'user_updated' : 'user_registered', reg);
   });
 
@@ -5488,7 +5810,7 @@ io.on('connection', (socket: Socket) => {
     emitToPhoneVariantsOnce(targetPhone, 'friend_request_accepted', payload);
   });
 
-  // 2. Live Chat Message Broadcast
+  // 2. Live Chat Message Broadcast + Store-and-Forward Durability
   socket.on('send_message', (payload: { chatId: string; message: any; targetPhone?: string; memberPhones?: string[]; chat?: any }) => {
     const { chatId, message, targetPhone, memberPhones, chat } = payload || ({} as any);
     if (!chatId || !message) return;
@@ -5505,6 +5827,17 @@ io.on('connection', (socket: Socket) => {
 
     const isGroup = Boolean(chatId.startsWith('group_') || chatId.startsWith('channel_') || chat?.isGroup || chat?.isChannel);
     const outPayload = { chatId, message, targetPhone: finalTarget, chat, isGroup };
+
+    recordStoredMessage({
+      id: String(message.id || `msg_${Date.now()}`),
+      chatId,
+      message,
+      senderPhone,
+      targetPhone: finalTarget || undefined,
+      memberPhones,
+      chat,
+      isGroup,
+    });
 
     // Emit at most once per remote socket across chat room + phone variant rooms
     const deliveredSockets = new Set<string>([socket.id]);
@@ -5660,12 +5993,21 @@ io.on('connection', (socket: Socket) => {
 
   // 2b. Live 24h Status (Stories) Handlers
   socket.on('post_status', (payload: any) => {
-    const status = payload?.status || payload;
-    if (status?.id) {
-      statusesMap.set(status.id, status);
+    const rawStatus = payload?.status || payload;
+    if (rawStatus?.id) {
+      const normalized = normalizeServerStatus(rawStatus);
+      if (isServerStatusExpired(normalized, Date.now())) return;
+      statusesMap.set(normalized.id, normalized);
       saveStatusesFile();
-      socket.broadcast.emit('new_status', { status });
+      socket.broadcast.emit('new_status', { status: normalized });
     }
+  });
+
+  socket.on('delete_status', (payload: { statusId?: string; id?: string }) => {
+    const id = payload?.statusId || payload?.id;
+    if (!id) return;
+    if (statusesMap.delete(id)) saveStatusesFile();
+    socket.broadcast.emit('status_purged', { ids: [id] });
   });
 
   socket.on('view_status', (payload: { statusId: string; viewer: any }) => {
@@ -6263,8 +6605,10 @@ async function startServer() {
       console.log(`🚀 AGC Live Gateway running on http://${HOST}:${PORT}`);
       console.log(`📡 WebSocket & User Registry ready (${usersByPhone.size} users loaded)`);
       // Sync Supabase registry & global admin state asynchronously so port binding is never delayed
+      purgeExpiredServerStatuses(false);
       Promise.all([syncUsersFromSupabase(true), syncAdminStateFromSupabase()]).catch(() => {});
       syncIntervalRef = setInterval(() => {
+        purgeExpiredServerStatuses(true);
         Promise.all([syncUsersFromSupabase(), syncAdminStateFromSupabase()]).catch(() => {});
       }, 30000);
       resolve();

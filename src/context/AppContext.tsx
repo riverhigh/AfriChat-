@@ -22,7 +22,7 @@ import {
   emitViewStatus,
   emitLikeStatus,
 } from '../services/socket';
-import { encryptChatMessage, decryptChatMessage, getConversationSecret } from '../utils/cryptoUtils';
+import { encryptChatMessage, decryptChatMessage, getConversationSecret, getConversationSecretFallbacks } from '../utils/cryptoUtils';
 import { safeLocalStorage, safeSessionStorage } from '../utils/safeStorage';
 import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
 import {
@@ -283,6 +283,68 @@ export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
   return '';
 };
 
+export const isStatusExpiredClient = (
+  s?: Partial<UserStatus> | null,
+  nowMs: number = Date.now()
+): boolean => {
+  if (!s) return true;
+  if (s.expiresAt) {
+    const expMs = Date.parse(s.expiresAt);
+    if (Number.isFinite(expMs) && expMs > 0) return expMs <= nowMs;
+  }
+  if (s.isSponsored || s.statusType === 'sponsored') {
+    return false;
+  }
+  const expiresInHours = s.expiresInHours ?? 24;
+  let createdMs = 0;
+  if (s.createdAtISO) {
+    const isoMs = Date.parse(s.createdAtISO);
+    if (Number.isFinite(isoMs) && isoMs > 0) createdMs = isoMs;
+  }
+  if (!createdMs && s.id) {
+    const match = s.id.match(/\d{12,14}/);
+    if (match) createdMs = parseInt(match[0], 10);
+  }
+  if (!createdMs && s.createdAt) {
+    const parsed = Date.parse(s.createdAt);
+    if (Number.isFinite(parsed) && parsed > 0) createdMs = parsed;
+  }
+  if (!createdMs) return false;
+  return createdMs + expiresInHours * 3_600_000 <= nowMs;
+};
+
+export function sortChatsByRecency(list: ChatThread[]): ChatThread[] {
+  return [...list].sort((a, b) => (b.lastMessageAtMs || 0) - (a.lastMessageAtMs || 0));
+}
+
+function bumpChatThreadToTop(
+  prev: ChatThread[],
+  chatId: string,
+  patch: Partial<ChatThread>,
+  createFallback?: () => ChatThread
+): ChatThread[] {
+  const idx = prev.findIndex((c) => c.id === chatId);
+  const ts = patch.lastMessageAtMs || Date.now();
+  if (idx >= 0) {
+    const updatedThread: ChatThread = {
+      ...prev[idx],
+      ...patch,
+      lastMessageAtMs: Math.max(prev[idx].lastMessageAtMs || 0, ts),
+    };
+    const rest = prev.filter((_, i) => i !== idx);
+    return sortChatsByRecency([updatedThread, ...rest]);
+  }
+  if (createFallback) {
+    const created: ChatThread = {
+      ...createFallback(),
+      ...patch,
+      lastMessageAtMs: ts,
+    };
+    return sortChatsByRecency([created, ...prev]);
+  }
+  return prev;
+}
+
 export const getSavedUserCleanPhone = (): string => {
   try {
     const s = safeLocalStorage.getItem('AGC_user_profile_v2');
@@ -312,8 +374,29 @@ function getCandidatePhoneKeys(phoneNumber?: string): string[] {
 
 function sanitizeLoadedChats(parsed: unknown): ChatThread[] {
   if (!Array.isArray(parsed)) return [];
-  return parsed.filter(
-    (c: ChatThread) => c && c.id && c.id !== 'chat_balogun_ajo' && c.id !== 'chat_mama_chidinma'
+  return sortChatsByRecency(
+    parsed
+      .filter((c: ChatThread) => c && c.id && c.id !== 'chat_balogun_ajo' && c.id !== 'chat_mama_chidinma')
+      .map((c: ChatThread) => {
+        const isBot = c.id === AFRIBOT_ID || Boolean(c.isBot);
+        const fixedMembers = Array.isArray(c.members)
+          ? c.members.map((m) => (m === 'AfriBot AI' ? AFRIBOT_NAME : m))
+          : c.members;
+        const fixedAdmins = Array.isArray(c.admins)
+          ? c.admins.map((a) => (a === 'AfriBot AI' ? AFRIBOT_NAME : a))
+          : c.admins;
+        const fixedLast =
+          typeof c.lastMessage === 'string' && c.lastMessage.includes('AfriBot AI')
+            ? c.lastMessage.replace(/AfriBot AI/g, AFRIBOT_NAME)
+            : c.lastMessage;
+        return {
+          ...c,
+          ...(isBot && (!c.name || c.name === 'AfriBot AI') ? { name: AFRIBOT_NAME } : {}),
+          ...(fixedLast !== c.lastMessage ? { lastMessage: fixedLast } : {}),
+          ...(fixedMembers !== c.members ? { members: fixedMembers } : {}),
+          ...(fixedAdmins !== c.admins ? { admins: fixedAdmins } : {}),
+        };
+      })
   );
 }
 
@@ -702,6 +785,8 @@ function loadPartitionedUserChatsAndMessages(phoneNumber?: string): {
       });
     }
   }
+
+  mergedChats = sortChatsByRecency(mergedChats);
 
   // Ensure canonical key is populated for fast future lookups
   const canonical = normalizePhoneDigits(targetPhone);
@@ -3267,13 +3352,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return [];
   });
-    const [statuses, setStatuses] = useState<UserStatus[]>(() => {
+  const [statuses, setStatuses] = useState<UserStatus[]>(() => {
     try {
       const saved = localStorage.getItem('AGC_statuses_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed;
+          const now = Date.now();
+          return parsed.filter((s: UserStatus) => !isStatusExpiredClient(s, now));
         }
       }
     } catch (e) {
@@ -3525,6 +3611,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const chatBackupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoginAtRef = useRef<number>(0);
   const baselineDbSessionTokenRef = useRef<string | null>(null);
+  const lastLocalProfileEditAtRef = useRef<number>(0);
+  const propagateUserProfileUpdateRef = useRef<
+    (u: { id?: string; phoneNumber?: string; fullName?: string; username?: string; avatarUrl?: string }) => void
+  >(() => {});
+  const syncMissedMessagesRef = useRef<(specificChatId?: string) => void>(() => {});
 
   useEffect(() => {
     chatsRef.current = chats;
@@ -3652,33 +3743,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             remote.chats,
             remote.messages
           );
-          setChats(merged.chats);
+          const sortedMergedChats = sortChatsByRecency(merged.chats);
+          setChats(sortedMergedChats);
           setMessages(merged.messages);
-          persistPartitionedChats(merged.chats, phone);
+          persistPartitionedChats(sortedMergedChats, phone);
           persistPartitionedMessages(merged.messages, phone);
         }
 
         // Security rule: never overwrite authoritative server wallet balances from client backup snapshots.
 
-        // Restore custom profile fields from Supabase if local missed them
+        // Restore custom profile fields from Supabase if local missed them (or remote is newer and not during fresh edit)
         const remoteProf = remote.accountSnapshot?.userProfile;
         if (remoteProf && phonesMatch(remoteProf.phoneNumber || phone, phone)) {
+          const localEditTsKey = getUserStorageKey('AGC_profile_updated_at', phone);
+          const localEditTs = Number(safeLocalStorage.getItem(localEditTsKey) || 0);
+          const remoteTs = remote.updatedAt ? Date.parse(remote.updatedAt) || 0 : 0;
+          const isRecentLocalEdit = Date.now() - lastLocalProfileEditAtRef.current < 25000;
+          const remoteIsNewer = !isRecentLocalEdit && remoteTs > localEditTs && localEditTs > 0;
           setCurrentUser((prev) => {
+            const remoteName = remoteProf.username || remoteProf.fullName;
+            const useRemoteName =
+              remoteName &&
+              remoteName !== 'AGC User' &&
+              remoteName !== 'Registered User' &&
+              (remoteIsNewer || !prev.fullName || prev.fullName === 'AGC User');
             const mergedUser: UserProfile = {
               ...prev,
-              fullName:
-                prev.fullName && prev.fullName !== 'AGC User'
-                  ? prev.fullName
-                  : remoteProf.fullName || prev.fullName,
+              fullName: useRemoteName ? remoteName! : prev.fullName,
               avatarUrl:
                 !isPlaceholderAvatar(prev.avatarUrl)
                   ? prev.avatarUrl
                   : remoteProf.avatarUrl || prev.avatarUrl,
               about:
-                prev.about && prev.about !== 'Available · Using AGC'
+                prev.about && prev.about !== 'Available · Using AGC' && !remoteIsNewer
                   ? prev.about
                   : remoteProf.about || prev.about,
-              username: prev.username || remoteProf.username,
+              username: useRemoteName ? (remoteProf.username || remoteName) : (prev.username || remoteProf.username),
               email: prev.email || remoteProf.email,
               verificationBadge: prev.verificationBadge ?? remoteProf.verificationBadge ?? null,
               isCelebrityVerified: prev.isCelebrityVerified ?? remoteProf.isCelebrityVerified,
@@ -3806,28 +3906,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
+    const handleGlobalUserPayload = (payload: any) => {
+      if (!payload || !payload.phoneNumber) return;
+      const clean = payload.phoneNumber.replace(/\D/g, '');
+      const core = clean.replace(/^234|^233|^254|^27|^256|^250|^225|^255|^237|^20|^44|^1/, '').replace(/^0+/, '');
+      try {
+        const regMap = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
+        regMap[clean] = payload;
+        regMap[payload.phoneNumber] = payload;
+        if (core) {
+          regMap[core] = payload;
+          if (core.length >= 9) regMap[core.slice(-9)] = payload;
+        }
+        localStorage.setItem('AGC_registered_phones', JSON.stringify(regMap));
+
+        const allUsers: UserProfile[] = JSON.parse(localStorage.getItem('AGC_all_registered_users') || '[]');
+        const nextAll = allUsers.filter((u) => !phonesMatch(u.phoneNumber, payload.phoneNumber));
+        nextAll.push(payload);
+        localStorage.setItem('AGC_all_registered_users', JSON.stringify(nextAll));
+      } catch (_) {}
+      propagateUserProfileUpdateRef.current(payload);
+    };
+
     const userSyncCh = supabase.channel('global_user_sync', { config: { broadcast: { self: false } } });
     userSyncCh
       .on('broadcast', { event: 'user_registered' }, ({ payload }: any) => {
-        if (!payload || !payload.phoneNumber) return;
-        const clean = payload.phoneNumber.replace(/\D/g, '');
-        const core = clean.replace(/^234|^233|^254|^27|^256|^250|^225|^255|^237|^20|^44|^1/, '').replace(/^0+/, '');
-        try {
-          const regMap = JSON.parse(localStorage.getItem('AGC_registered_phones') || '{}');
-          regMap[clean] = payload;
-          regMap[payload.phoneNumber] = payload;
-          if (core) {
-            regMap[core] = payload;
-            if (core.length >= 9) regMap[core.slice(-9)] = payload;
-          }
-          localStorage.setItem('AGC_registered_phones', JSON.stringify(regMap));
-
-          const allUsers: UserProfile[] = JSON.parse(localStorage.getItem('AGC_all_registered_users') || '[]');
-          if (!allUsers.some((u) => u.phoneNumber === payload.phoneNumber)) {
-            allUsers.push(payload);
-            localStorage.setItem('AGC_all_registered_users', JSON.stringify(allUsers));
-          }
-        } catch (_) {}
+        handleGlobalUserPayload(payload);
+      })
+      .on('broadcast', { event: 'user_updated' }, ({ payload }: any) => {
+        handleGlobalUserPayload(payload);
       })
       .subscribe();
 
@@ -4678,10 +4785,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [isAuthenticated, currentUser?.phoneNumber, currentUser?.id, currentUser?.fullName]);
 
-  // Status Feed: fetch existing statuses from contacts + subscribe to live updates
+  // Status Feed: fetch existing statuses from contacts + subscribe to live updates + auto-purge after 24h
   useEffect(() => {
     if (!isAuthenticated || !currentUser?.phoneNumber) return;
     const myCleanPhone = currentUser.phoneNumber.replace(/\D/g, '');
+
+    const purgeExpiredLocally = () => {
+      const now = Date.now();
+      setStatuses((prev) => {
+        const filtered = prev.filter((s) => !isStatusExpiredClient(s, now));
+        if (filtered.length === prev.length) return prev;
+        try {
+          localStorage.setItem('AGC_statuses_v2', JSON.stringify(filtered));
+        } catch (_) {}
+        return filtered;
+      });
+      setActiveViewingStatus((curr) => (curr && isStatusExpiredClient(curr, now) ? null : curr));
+    };
+
+    purgeExpiredLocally();
+    const purgeInterval = setInterval(purgeExpiredLocally, 30_000);
 
     // 1. Fetch contact statuses from Supabase (active 24h stories)
     if (isSupabaseConfigured) {
@@ -4696,6 +4819,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       fetchStatusFeedWithAds(200).then(({ data }: any) => {
         if (!data || !Array.isArray(data)) return;
+        const now = Date.now();
         const incoming = data
           .filter((row: any) => {
             if (row.is_sponsored) return true;
@@ -4725,6 +4849,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 ? new Date(row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                 : 'Recently',
               createdAtISO: row.created_at || undefined,
+              expiresAt: row.expires_at || undefined,
               expiresInHours: 24,
               viewsCount: row.views_count || 0,
               likesCount: row.likes_count || 0,
@@ -4736,11 +4861,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               targetUrl: row.target_url || undefined,
               adClicksCount: row.ad_clicks_count || 0,
             };
-          });
+          })
+          .filter((s: UserStatus) => !isStatusExpiredClient(s, now));
         if (incoming.length > 0) {
           setStatuses((prev) => {
-            const myStatuses = prev.filter((s) => s.isMe);
-            const otherStatuses = prev.filter((s) => !s.isMe);
+            const validPrev = prev.filter((s) => !isStatusExpiredClient(s, now));
+            const myStatuses = validPrev.filter((s) => s.isMe);
+            const otherStatuses = validPrev.filter((s) => !s.isMe);
             const existingIds = new Set(otherStatuses.map((s) => s.id));
             const newOnes = incoming.filter((s) => !existingIds.has(s.id));
             return [...myStatuses, ...newOnes, ...otherStatuses];
@@ -4755,7 +4882,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .then((r) => (r.ok ? r.json() : null))
         .then((serverStatuses) => {
           if (Array.isArray(serverStatuses) && serverStatuses.length > 0) {
+            const now = Date.now();
             const incoming = serverStatuses
+              .filter((s: any) => !isStatusExpiredClient(s, now))
               .filter((s: any) => {
                 const isDifferentUser = s.userId ? s.userId !== currentUser.id : true;
                 const rp = (s.userPhone || s.phoneNumber || '').replace(/\D/g, '');
@@ -4765,9 +4894,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               .map((s: any) => ({ ...s, isMe: false }));
             if (incoming.length > 0) {
               setStatuses((prev) => {
-                const existingIds = new Set(prev.map((item) => item.id));
+                const validPrev = prev.filter((item) => !isStatusExpiredClient(item, now));
+                const existingIds = new Set(validPrev.map((item) => item.id));
                 const newItems = incoming.filter((item) => !existingIds.has(item.id));
-                return [...prev, ...newItems];
+                return [...validPrev, ...newItems];
               });
             }
           }
@@ -4781,6 +4911,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       bcStatus.onmessage = (e) => {
         if (e.data?.type === 'new_status' && e.data.status) {
           const incoming: UserStatus = e.data.status;
+          if (isStatusExpiredClient(incoming)) return;
           if (incoming.userId === currentUser.id) return;
           const senderPhone = (incoming.userPhone || '').replace(/\D/g, '');
           if (myCleanPhone && senderPhone && senderPhone === myCleanPhone) return;
@@ -4790,6 +4921,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
         } else if (e.data?.type === 'delete_status' && e.data.statusId) {
           setStatuses((prev) => prev.filter((s) => s.id !== e.data.statusId));
+          setActiveViewingStatus((curr) => (curr?.id === e.data.statusId ? null : curr));
         }
       };
     } catch (_) {}
@@ -4797,7 +4929,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 4. Real-Time Socket.io Status Listeners
     const socket = getSocket();
     const onSocketNewStatus = ({ status }: any) => {
-      if (!status) return;
+      if (!status || isStatusExpiredClient(status)) return;
       if (status.userId && status.userId === currentUser.id) return;
       const senderPhone = (status.userPhone || '').replace(/\D/g, '');
       if (myCleanPhone && senderPhone && senderPhone === myCleanPhone) return;
@@ -4805,6 +4937,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (prev.some((s) => s.id === status.id)) return prev;
         return [{ ...status, isMe: false }, ...prev];
       });
+    };
+
+    const onSocketStatusPurged = (payload: any) => {
+      const ids: string[] = Array.isArray(payload?.ids)
+        ? payload.ids
+        : payload?.statusId
+        ? [String(payload.statusId)]
+        : [];
+      if (ids.length === 0) return;
+      const idSet = new Set(ids);
+      setStatuses((prev) => prev.filter((s) => !idSet.has(s.id)));
+      setActiveViewingStatus((curr) => (curr && idSet.has(curr.id) ? null : curr));
     };
 
     const onSocketViewed = (payload: any) => {
@@ -4838,13 +4982,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     socket?.on('new_status', onSocketNewStatus);
+    socket?.on('status_purged', onSocketStatusPurged);
     socket?.on('status_viewed', onSocketViewed);
     socket?.on('status_liked', onSocketLiked);
 
     // 5. Subscribe to real-time status feed via Supabase (Broadcast + Postgres CDC)
     if (!isSupabaseConfigured) return () => {
+      clearInterval(purgeInterval);
       if (bcStatus) bcStatus.close();
       socket?.off('new_status', onSocketNewStatus);
+      socket?.off('status_purged', onSocketStatusPurged);
       socket?.off('status_viewed', onSocketViewed);
       socket?.off('status_liked', onSocketLiked);
     };
@@ -4855,6 +5002,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .on('broadcast', { event: 'new_status' }, ({ payload }: any) => {
         if (!payload?.status) return;
         const incoming: UserStatus = payload.status;
+        if (isStatusExpiredClient(incoming)) return;
         if (incoming.userId === currentUser.id) return;
         const senderPhone = (incoming.userPhone || '').replace(/\D/g, '');
         if (myCleanPhone && senderPhone && senderPhone === myCleanPhone) return;
@@ -4862,6 +5010,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (prev.some((s) => s.id === incoming.id)) return prev;
           return [{ ...incoming, isMe: false }, ...prev];
         });
+      })
+      .on('broadcast', { event: 'delete_status' }, ({ payload }: any) => {
+        if (!payload?.statusId) return;
+        setStatuses((prev) => prev.filter((s) => s.id !== payload.statusId));
+        setActiveViewingStatus((curr) => (curr?.id === payload.statusId ? null : curr));
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'user_statuses' }, (payload: any) => {
         if (!payload?.new) return;
@@ -4886,6 +5039,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           caption: row.caption || '',
           createdAt: isSponsored ? 'Sponsored' : 'Just now',
           createdAtISO: row.created_at || new Date().toISOString(),
+          expiresAt: row.expires_at || undefined,
           expiresInHours: 24,
           viewsCount: row.views_count || 0,
           likesCount: row.likes_count || 0,
@@ -4897,6 +5051,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           targetUrl: row.target_url || undefined,
           adClicksCount: row.ad_clicks_count || 0,
         };
+        if (isStatusExpiredClient(incoming)) return;
         setStatuses((prev) => {
           if (prev.some((s) => s.id === incoming.id)) return prev;
           return [incoming, ...prev];
@@ -4905,6 +5060,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'user_statuses' }, (payload: any) => {
         if (!payload?.old?.id) return;
         setStatuses((prev) => prev.filter((s) => s.id !== payload.old.id));
+        setActiveViewingStatus((curr) => (curr?.id === payload.old.id ? null : curr));
       })
       // Cross-device sync: catch views_count / likes_count DB updates from other devices
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_statuses' }, (payload: any) => {
@@ -4952,9 +5108,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .subscribe();
 
     return () => {
+      clearInterval(purgeInterval);
       if (bcStatus) bcStatus.close();
       if (statusSub) statusSub.unsubscribe();
       socket?.off('new_status', onSocketNewStatus);
+      socket?.off('status_purged', onSocketStatusPurged);
       socket?.off('status_viewed', onSocketViewed);
       socket?.off('status_liked', onSocketLiked);
     };
@@ -5496,12 +5654,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Multi-Transport Live Status Broadcaster (BroadcastChannel + Socket.io + Supabase Realtime + DB)
+  // Multi-Transport Live Status Broadcaster (BroadcastChannel + Socket.io + REST + Supabase Realtime + DB)
   const publishStatusLive = (newStatus: UserStatus) => {
-    const cleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    const cleanPhone = currentUserRef.current.phoneNumber?.replace(/\D/g, '') || '';
     const outgoingStatus = {
       ...newStatus,
       userPhone: cleanPhone,
+      expiresAt: newStatus.expiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
       isMe: false,
     };
 
@@ -5515,16 +5674,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 2. Socket.io Relay
     emitPostStatus(outgoingStatus);
 
-    // 3. Supabase Database Persistence + Realtime Broadcast
+    // 3. Server REST fallback
+    try {
+      fetch('/api/statuses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(outgoingStatus),
+      }).catch(() => {});
+    } catch (_) {}
+
+    // 4. Supabase Database Persistence + Realtime Broadcast
     if (isSupabaseConfigured) {
       supabase
         .from('user_statuses')
         .upsert({
           id: newStatus.id,
-          user_id: currentUser.id,
+          user_id: currentUserRef.current.id,
           user_phone: cleanPhone,
-          user_name: newStatus.sponsorBrand || currentUser.fullName || 'AGC User',
-          user_avatar: currentUser.avatarUrl || '',
+          user_name: newStatus.sponsorBrand || currentUserRef.current.fullName || 'AGC User',
+          user_avatar: currentUserRef.current.avatarUrl || '',
           status_type: newStatus.statusType || 'thought',
           media_url: newStatus.mediaUrl || null,
           video_url: newStatus.videoUrl || null,
@@ -5534,7 +5702,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sponsor_brand: newStatus.sponsorBrand || null,
           cta_label: newStatus.ctaLabel || null,
           target_url: newStatus.targetUrl || null,
-          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          expires_at: outgoingStatus.expiresAt,
           views_count: 0,
           likes_count: 0,
         })
@@ -5578,6 +5746,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       bc.close();
     } catch (_) {}
 
+    try {
+      const s = getSocket();
+      s?.emit('delete_status', { statusId });
+      fetch(`/api/statuses/${encodeURIComponent(statusId)}`, { method: 'DELETE' }).catch(() => {});
+    } catch (_) {}
+
+    if (statusFeedChannelRef.current) {
+      try {
+        statusFeedChannelRef.current.send({
+          type: 'broadcast',
+          event: 'delete_status',
+          payload: { statusId },
+        });
+      } catch (_) {}
+    }
+
     if (isSupabaseConfigured) {
       supabase.from('user_statuses').delete().eq('id', statusId).then(({ error }) => {
         if (error) console.warn('Status delete notice:', error?.message);
@@ -5586,8 +5770,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addStatus = (caption: string, mediaUrl?: string) => {
+    const nowMs = Date.now();
     const newStatus: UserStatus = {
-      id: `status_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `status_${nowMs}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
       userPhone: currentUser.phoneNumber,
       userName: currentUser.fullName,
@@ -5597,7 +5782,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       mediaUrl: mediaUrl || '/src/assets/images/african_textiles_wax_1794210824926.jpg',
       caption: caption || 'New post on AGC 24h Status!',
       createdAt: 'Just now',
-      createdAtISO: new Date().toISOString(),
+      createdAtISO: new Date(nowMs).toISOString(),
+      expiresAt: new Date(nowMs + 24 * 60 * 60 * 1000).toISOString(),
       isReshared: caption.startsWith('Reshared') || false,
       expiresInHours: 24,
       viewsCount: 0,
@@ -5619,8 +5805,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addThoughtStatus = (thoughtText: string, themeBg: string) => {
+    const nowMs = Date.now();
     const newStatus: UserStatus = {
-      id: `status_thought_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `status_thought_${nowMs}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
       userPhone: currentUser.phoneNumber,
       userName: currentUser.fullName,
@@ -5630,7 +5817,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       thoughtBg: themeBg || 'from-indigo-600 via-purple-600 to-pink-600',
       caption: thoughtText,
       createdAt: 'Just now',
-      createdAtISO: new Date().toISOString(),
+      createdAtISO: new Date(nowMs).toISOString(),
+      expiresAt: new Date(nowMs + 24 * 60 * 60 * 1000).toISOString(),
       expiresInHours: 24,
       viewsCount: 0,
       likesCount: 0,
@@ -5740,8 +5928,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
 
+    const nowMs = Date.now();
     const newStatus: UserStatus = {
-      id: `status_media_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `status_media_${nowMs}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
       userPhone: currentUser.phoneNumber,
       userName: currentUser.fullName,
@@ -5752,7 +5941,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       videoUrl: mediaType === 'video' ? finalMediaUrl : undefined,
       caption: caption || (mediaType === 'video' ? 'Video Status 🎥' : 'Photo Status 📸'),
       createdAt: 'Just now',
-      createdAtISO: new Date().toISOString(),
+      createdAtISO: new Date(nowMs).toISOString(),
+      expiresAt: new Date(nowMs + 24 * 60 * 60 * 1000).toISOString(),
       expiresInHours: 24,
       viewsCount: 0,
       likesCount: 0,
@@ -5773,8 +5963,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addDeviceVideoStatus = (caption: string, videoUrl: string, thumbnail?: string) => {
+    const nowMs = Date.now();
     const newStatus: UserStatus = {
-      id: `status_vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `status_vid_${nowMs}_${Math.random().toString(36).substring(2, 6)}`,
       userId: currentUser.id,
       userPhone: currentUser.phoneNumber,
       userName: currentUser.fullName,
@@ -5785,6 +5976,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       mediaUrl: thumbnail || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=500&auto=format&fit=crop&q=80',
       caption: caption || 'Video Status 🎥',
       createdAt: 'Just now',
+      createdAtISO: new Date(nowMs).toISOString(),
+      expiresAt: new Date(nowMs + 24 * 60 * 60 * 1000).toISOString(),
       expiresInHours: 24,
       viewsCount: 0,
       likesCount: 0,
@@ -5808,6 +6001,105 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   currentUserRef.current = currentUser;
   const deviceContactsRef = useRef(deviceContacts);
   deviceContactsRef.current = deviceContacts;
+
+  const propagateUserProfileUpdate = useCallback(
+    (u: { id?: string; phoneNumber?: string; fullName?: string; username?: string; avatarUrl?: string }) => {
+      const phone = u?.phoneNumber;
+      const rawName = u?.username || u?.fullName;
+      const validName =
+        rawName && rawName !== 'AGC User' && rawName !== 'Registered User' ? rawName : undefined;
+      const validAvatar =
+        u?.avatarUrl && !isPlaceholderAvatar(u.avatarUrl) ? u.avatarUrl : undefined;
+      if (!phone || (!validName && !validAvatar)) return;
+
+      const myPhoneNow = currentUserRef.current?.phoneNumber;
+      const isSelf = Boolean(myPhoneNow && phonesMatch(myPhoneNow, phone));
+
+      // Update deviceContacts cache
+      setDeviceContacts((prev) => {
+        let changed = false;
+        const next = prev.map((ct) => {
+          const cp = ct.normalizedPhoneNumber || ct.rawPhoneNumber;
+          if (!cp || !phonesMatch(cp, phone)) return ct;
+          const nextName = validName || ct.name;
+          const nextAvatar = validAvatar || ct.avatar;
+          if (
+            nextName === ct.name &&
+            nextAvatar === ct.avatar &&
+            (!ct.registeredUser || ct.registeredUser.fullName === nextName)
+          ) {
+            return ct;
+          }
+          changed = true;
+          return {
+            ...ct,
+            name: nextName,
+            avatar: nextAvatar,
+            registeredUser: ct.registeredUser
+              ? {
+                  ...ct.registeredUser,
+                  fullName: nextName,
+                  avatarUrl: nextAvatar || ct.registeredUser.avatarUrl || '',
+                }
+              : ct.registeredUser,
+          };
+        });
+        if (!changed) return prev;
+        try {
+          const userKey = getUserStorageKey('AGC_device_contacts', currentUserRef.current?.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify(next));
+        } catch (_) {}
+        return next;
+      });
+
+      // Update DM chat threads belonging to that contact
+      setChats((prev) => {
+        let changed = false;
+        const next = prev.map((c) => {
+          if (c.isGroup || c.isChannel || c.isBot || c.id === AFRIBOT_ID) return c;
+          const dmParts = c.id.startsWith('dm_') && !c.id.includes('self')
+            ? c.id.replace('dm_', '').split('_')
+            : [];
+          const matchesDirectPhone =
+            (c.phone && phonesMatch(c.phone, phone)) ||
+            (c.phoneNumber && phonesMatch(c.phoneNumber, phone)) ||
+            (c.id.includes('self') && isSelf) ||
+            (!isSelf && dmParts.some((p) => phonesMatch(p, phone)));
+          if (!matchesDirectPhone) return c;
+
+          const nextName = validName
+            ? c.id.includes('self') || c.name.includes('(Message yourself)')
+              ? `${validName} (Message yourself)`
+              : validName
+            : c.name;
+          const nextAvatar = validAvatar || c.avatar;
+          if (nextName === c.name && nextAvatar === c.avatar) return c;
+          changed = true;
+          return { ...c, name: nextName, avatar: nextAvatar };
+        });
+        if (!changed) return prev;
+        persistPartitionedChats(next, currentUserRef.current?.phoneNumber);
+        return next;
+      });
+
+      // Update active statuses userName / userAvatar
+      setStatuses((prev) => {
+        let changed = false;
+        const next = prev.map((s) => {
+          if (s.isSponsored || s.statusType === 'sponsored') return s;
+          if (!s.userPhone || !phonesMatch(s.userPhone, phone)) return s;
+          const nextName = validName || s.userName;
+          const nextAvatar = validAvatar || s.userAvatar;
+          if (nextName === s.userName && nextAvatar === s.userAvatar) return s;
+          changed = true;
+          return { ...s, userName: nextName, userAvatar: nextAvatar };
+        });
+        return changed ? next : prev;
+      });
+    },
+    []
+  );
+  propagateUserProfileUpdateRef.current = propagateUserProfileUpdate;
 
   // Helper: send a one-shot Supabase Realtime broadcast without tearing down live listener channels
   const sendSupabaseBroadcastOnce = useCallback(
@@ -7159,21 +7451,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Unified Multi-Transport Live Message Broadcaster
+  // Unified Multi-Transport Live Message Broadcaster (BroadcastChannel + Socket.io + Durable REST + Supabase)
   const broadcastLiveMessage = async (chatId: string, msg: ChatMessage, overrideChat?: ChatThread) => {
-    const currentChat = overrideChat || chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
-    const myCleanPhone = currentUser.phoneNumber?.replace(/\D/g, '') || '';
+    const userNow = currentUserRef.current;
+    const chatsNow = chatsRef.current;
+    const contactsNow = deviceContactsRef.current;
+    const currentChat = overrideChat || chatsNow.find((c) => c.id === chatId);
+    const myCleanPhone = userNow.phoneNumber?.replace(/\D/g, '') || '';
     let targetCleanPhone = (currentChat?.phone || (currentChat as any)?.phoneNumber || '')?.replace(/\D/g, '');
 
-    if (!targetCleanPhone && chatId.startsWith('dm_')) {
-      const parts = chatId.replace('dm_', '').split('_');
-      targetCleanPhone = parts.find((p) => !phonesMatch(p, myCleanPhone)) || parts[0];
+    if (!targetCleanPhone && chatId.startsWith('dm_') && !chatId.includes('self')) {
+      const parts = chatId.replace('dm_', '').split('_').filter(Boolean);
+      targetCleanPhone = parts.find((p) => !phonesMatch(p, myCleanPhone)) || parts[0] || '';
     }
 
     if (!targetCleanPhone && currentChat?.id) {
-      const contactMatch = deviceContacts.find((ct) => ct.id === currentChat.id || ct.name === currentChat.name);
-      if (contactMatch?.rawPhoneNumber) {
-        targetCleanPhone = contactMatch.rawPhoneNumber.replace(/\D/g, '');
+      const contactMatch = contactsNow.find((ct) => ct.id === currentChat.id || ct.name === currentChat.name);
+      if (contactMatch?.normalizedPhoneNumber || contactMatch?.rawPhoneNumber) {
+        targetCleanPhone = (contactMatch.normalizedPhoneNumber || contactMatch.rawPhoneNumber || '').replace(/\D/g, '');
       }
     }
 
@@ -7209,7 +7504,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 1. BroadcastChannel (instant same-computer tab/window sync)
     try {
       const bc = new BroadcastChannel('AGC_chats_sync');
-      bc.postMessage({ chatId, message: wireMessage, senderId: currentUser.id, targetPhone: targetCleanPhone, memberPhones, isGroup: Boolean(currentChat?.isGroup), chat: wireChat });
+      bc.postMessage({
+        chatId,
+        message: wireMessage,
+        senderId: userNow.id,
+        targetPhone: targetCleanPhone,
+        memberPhones,
+        isGroup: Boolean(currentChat?.isGroup),
+        chat: wireChat,
+      });
       bc.close();
     } catch (e) {
       console.warn('BroadcastChannel error:', e);
@@ -7221,37 +7524,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    // If online, transition single check ('sent') -> double check ('delivered')
-    if (msg.status === 'sent') {
-      msg.status = 'delivered';
-      setMessages((prev) => {
-        const list = prev[chatId] || [];
-        const updated = list.map((m) => (m.id === msg.id ? { ...m, status: 'delivered' as const } : m));
-        try {
-          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
-          localStorage.setItem(userKey, JSON.stringify({ ...prev, [chatId]: updated }));
-        } catch (_) {}
-        return { ...prev, [chatId]: updated };
-      });
-    }
-
     // 2. Socket.io Live WebSocket Relay
     emitLiveMessage(chatId, wireMessage, targetCleanPhone, memberPhones, wireChat);
 
-    // 3. Supabase Realtime (Cross-device & background inbox channel)
+    // 3. Durable HTTP Store-and-Forward Relay (/api/messages/send)
+    let restDelivered = false;
+    try {
+      const resp = await fetch('/api/messages/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId,
+          message: wireMessage,
+          targetPhone: targetCleanPhone,
+          memberPhones,
+          chat: wireChat,
+          isGroup: Boolean(currentChat?.isGroup || currentChat?.isChannel),
+          senderSocketId: getSocket()?.id,
+        }),
+        keepalive: true,
+      });
+      restDelivered = resp.ok;
+    } catch (_) {
+      enqueueOfflineOutboxItem(chatId, msg);
+    }
+
+    if ((restDelivered || getSocket()?.connected) && msg.status === 'sent') {
+      msg.status = 'delivered';
+      setMessages((prev) => {
+        const list = prev[chatId] || [];
+        const updatedList = list.map((m) => (m.id === msg.id ? { ...m, status: 'delivered' as const } : m));
+        const nextMap = { ...prev, [chatId]: updatedList };
+        persistPartitionedMessages(nextMap, userNow.phoneNumber);
+        return nextMap;
+      });
+    }
+
+    // 4. Supabase Realtime (Cross-device & background inbox channel)
     if (isSupabaseConfigured) {
       try {
         sendSupabaseBroadcastSafe('agc_chat_global', 'new_message', {
           chatId,
           message: wireMessage,
-          senderId: currentUser.id,
+          senderId: userNow.id,
           chat: wireChat,
         });
 
         sendSupabaseBroadcastSafe(`chat_${chatId}`, 'new_message', {
           chatId,
           message: wireMessage,
-          senderId: currentUser.id,
+          senderId: userNow.id,
           targetPhone: targetCleanPhone,
           isGroup: Boolean(currentChat?.isGroup),
           chat: wireChat,
@@ -7264,7 +7586,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             sendSupabaseBroadcastSafe(`inbox_${t}`, 'new_message', {
               chatId,
               message: wireMessage,
-              senderId: currentUser.id,
+              senderId: userNow.id,
               targetPhone: targetCleanPhone,
               chat: wireChat,
             });
@@ -7281,7 +7603,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 sendSupabaseBroadcastSafe(`inbox_${t}`, 'new_message', {
                   chatId,
                   message: wireMessage,
-                  senderId: currentUser.id,
+                  senderId: userNow.id,
                   isGroup: true,
                   chat: wireChat,
                 });
@@ -7295,7 +7617,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sendSupabaseBroadcastSafe('town_community_feed', 'new_message', {
             chatId,
             message: wireMessage,
-            senderId: currentUser.id,
+            senderId: userNow.id,
           });
         }
       } catch (e) {
@@ -7322,8 +7644,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const useOneTime = Boolean(oneTimeView);
     const targetChat = chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
     const ghostMs = parseGhostDurationMs(targetChat?.disappearingTimer);
+    const nowMs = Date.now();
     const newMsg: ChatMessage = {
-      id: 'msg_img_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      id: 'msg_img_' + nowMs + '_' + Math.random().toString(36).substring(2, 6),
       chatId,
       sender: 'user',
       senderName: currentUser.fullName || 'AGC User',
@@ -7333,7 +7656,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       imageUrl: finalImageUrl,
       text: caption || '',
       oneTimeView: useOneTime,
-      ...(ghostMs > 0 ? { isGhost: true, disappearingDurationMs: ghostMs, expiresAt: Date.now() + ghostMs } : {}),
+      ...(ghostMs > 0 ? { isGhost: true, disappearingDurationMs: ghostMs, expiresAt: nowMs + ghostMs } : {}),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'sent',
     };
@@ -7348,42 +7671,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     setChats((prev) => {
-      const exists = prev.some((c) => c.id === chatId);
-      if (exists) {
-        return prev.map((c) =>
-          c.id === chatId
-            ? {
-                ...c,
-                lastMessage: previewLabel,
-                lastMessageTime: newMsg.timestamp,
-              }
-            : c
-        );
-      }
-      const contactMatch = deviceContacts.find(
-        (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
+      const updated = bumpChatThreadToTop(
+        prev,
+        chatId,
+        {
+          lastMessage: previewLabel,
+          lastMessageTime: newMsg.timestamp,
+          lastMessageAtMs: nowMs,
+        },
+        () => {
+          const contactMatch = deviceContacts.find(
+            (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
+          );
+          return {
+            id: chatId,
+            name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
+            avatar: contactMatch?.avatar || DEFAULT_AVATAR_SVG,
+            verifiedStore: false,
+            location: 'Direct Chat',
+            unreadCount: 0,
+            lastMessage: previewLabel,
+            lastMessageTime: newMsg.timestamp,
+            lastMessageAtMs: nowMs,
+            catalog: [],
+            isOnline: true,
+            phone: contactMatch?.rawPhoneNumber || '',
+          };
+        }
       );
-      const newThread: ChatThread = {
-        id: chatId,
-        name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
-        avatar:
-          contactMatch?.avatar ||
-          DEFAULT_AVATAR_SVG,
-        verifiedStore: false,
-        location: 'Direct Chat',
-        unreadCount: 0,
-        lastMessage: previewLabel,
-        lastMessageTime: newMsg.timestamp,
-        catalog: [],
-        isOnline: true,
-        phone: contactMatch?.rawPhoneNumber || '',
-      };
-      return [newThread, ...prev];
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
     });
 
     if (useOneTime) setIsOneTimeViewEnabled(false);
 
-    // Broadcast live across all transports (Socket.io, BroadcastChannel, Supabase Realtime)
+    // Broadcast live across all transports (Socket.io, REST store-and-forward, BroadcastChannel, Supabase Realtime)
     broadcastLiveMessage(chatId, newMsg);
   };
 
@@ -7501,40 +7823,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
+    const sentNowMs = Date.now();
     setChats((prev) => {
-      const exists = prev.some((c) => c.id === chatId);
-      let updated: ChatThread[];
-      if (exists) {
-        updated = prev.map((c) =>
-          c.id === chatId
-            ? {
-                ...c,
-                lastMessage: previewLabel,
-                lastMessageTime: newMsg.timestamp,
-              }
-            : c
-        );
-      } else {
-        const contactMatch = deviceContacts.find(
-          (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
-        );
-        const newThread: ChatThread = {
-          id: chatId,
-          name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
-          avatar:
-            contactMatch?.avatar ||
-            "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-          verifiedStore: false,
-          location: 'Direct Chat',
-          unreadCount: 0,
+      const updated = bumpChatThreadToTop(
+        prev,
+        chatId,
+        {
           lastMessage: previewLabel,
           lastMessageTime: newMsg.timestamp,
-          catalog: [],
-          isOnline: true,
-          phone: contactMatch?.rawPhoneNumber || '',
-        };
-        updated = [newThread, ...prev];
-      }
+          lastMessageAtMs: sentNowMs,
+        },
+        () => {
+          const contactMatch = deviceContacts.find(
+            (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
+          );
+          return {
+            id: chatId,
+            name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
+            avatar:
+              contactMatch?.avatar ||
+              "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+            verifiedStore: false,
+            location: 'Direct Chat',
+            unreadCount: 0,
+            lastMessage: previewLabel,
+            lastMessageTime: newMsg.timestamp,
+            lastMessageAtMs: sentNowMs,
+            catalog: [],
+            isOnline: true,
+            phone: contactMatch?.rawPhoneNumber || '',
+          };
+        }
+      );
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -7544,13 +7865,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastLiveMessage(chatId, newMsg);
 
     // 3. AI Chatbot Auto-Response (AgcBot)
-    const targetChat = chats.find((c) => c.id === chatId);
+    const targetChat = chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
     const isBotChat = chatId === AFRIBOT_ID || Boolean(targetChat?.isBot);
     const isGroupWithBot = Boolean(
       targetChat?.isGroup &&
-      (targetChat.members?.includes(AFRIBOT_NAME) || targetChat.admins?.includes(AFRIBOT_NAME))
+      (targetChat.members?.includes(AFRIBOT_NAME) ||
+        targetChat.admins?.includes(AFRIBOT_NAME) ||
+        targetChat.members?.includes('AfriBot AI') ||
+        targetChat.admins?.includes('AfriBot AI'))
     );
-    const mentionsBot = /(^|\s)@(bot|afribot|ai)\b/i.test(text) || replyTo?.sender?.includes('AgcBot');
+    const mentionsBot = /(^|\s)@(bot|agcbot|afribot|ai)\b/i.test(text) || replyTo?.sender?.includes('AgcBot');
 
     if (isBotChat || (isGroupWithBot && mentionsBot)) {
       setTypingUsers((prev) => ({
@@ -7559,7 +7883,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
 
       const cleanedPrompt = isGroupWithBot
-        ? text.replace(/@(bot|afribot|ai)\b/gi, '').trim() || text
+        ? text.replace(/@(bot|agcbot|afribot|ai)\b/gi, '').trim() || text
         : text;
 
       const prevMsgs = messages[chatId] || [];
@@ -7584,8 +7908,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return copy;
           });
 
+          const botNowMs = Date.now();
           const botResponseMsg: ChatMessage = {
-            id: `msg_bot_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            id: `msg_bot_${botNowMs}_${Math.random().toString(36).substring(2, 6)}`,
             chatId,
             sender: 'other',
             senderName: AFRIBOT_NAME,
@@ -7617,17 +7942,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return updated;
           });
 
-          setChats((prev) =>
-            prev.map((c) =>
-              c.id === chatId
-                ? {
-                    ...c,
-                    lastMessage: aiReply,
-                    lastMessageTime: botResponseMsg.timestamp,
-                  }
-                : c
-            )
-          );
+          setChats((prev) => {
+            const updated = bumpChatThreadToTop(prev, chatId, {
+              lastMessage: aiReply,
+              lastMessageTime: botResponseMsg.timestamp,
+              lastMessageAtMs: botNowMs,
+            });
+            persistPartitionedChats(updated, currentUser.phoneNumber);
+            return updated;
+          });
 
           broadcastLiveMessage(chatId, botResponseMsg);
         })
@@ -7773,19 +8096,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
 
+    const fwdNowMs = Date.now();
     setChats((prev) => {
       let next = [...prev];
       prepared.forEach(({ chatId: cid, thread }) => {
-        const exists = next.some((c) => c.id === cid);
-        if (exists) {
-          next = next.map((c) =>
-            c.id === cid
-              ? { ...c, lastMessage: thread.lastMessage, lastMessageTime: thread.lastMessageTime }
-              : c
-          );
-        } else {
-          next = [thread, ...next];
-        }
+        next = bumpChatThreadToTop(
+          next,
+          cid,
+          {
+            lastMessage: thread.lastMessage,
+            lastMessageTime: thread.lastMessageTime,
+            lastMessageAtMs: fwdNowMs,
+          },
+          () => ({ ...thread, lastMessageAtMs: fwdNowMs })
+        );
       });
       chatsRef.current = next;
       persistPartitionedChats(next, currentUser.phoneNumber);
@@ -7854,40 +8178,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
+    const vnNowMs = Date.now();
     setChats((prev) => {
-      const exists = prev.some((c) => c.id === chatId);
-      let updated: ChatThread[];
-      if (exists) {
-        updated = prev.map((c) =>
-          c.id === chatId
-            ? {
-                ...c,
-                lastMessage: previewLabel,
-                lastMessageTime: newMsg.timestamp,
-              }
-            : c
-        );
-      } else {
-        const contactMatch = deviceContacts.find(
-          (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
-        );
-        const newThread: ChatThread = {
-          id: chatId,
-          name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
-          avatar:
-            contactMatch?.avatar ||
-            "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-          verifiedStore: false,
-          location: 'Direct Chat',
-          unreadCount: 0,
+      const updated = bumpChatThreadToTop(
+        prev,
+        chatId,
+        {
           lastMessage: previewLabel,
           lastMessageTime: newMsg.timestamp,
-          catalog: [],
-          isOnline: true,
-          phone: contactMatch?.rawPhoneNumber || '',
-        };
-        updated = [newThread, ...prev];
-      }
+          lastMessageAtMs: vnNowMs,
+        },
+        () => {
+          const contactMatch = deviceContacts.find(
+            (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
+          );
+          return {
+            id: chatId,
+            name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
+            avatar:
+              contactMatch?.avatar ||
+              "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+            verifiedStore: false,
+            location: 'Direct Chat',
+            unreadCount: 0,
+            lastMessage: previewLabel,
+            lastMessageTime: newMsg.timestamp,
+            lastMessageAtMs: vnNowMs,
+            catalog: [],
+            isOnline: true,
+            phone: contactMatch?.rawPhoneNumber || '',
+          };
+        }
+      );
       persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
@@ -7898,8 +8220,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const sendProductCard = (chatId: string, product: Product, fromSelf: boolean = true) => {
+    const nowMs = Date.now();
     const newMsg: ChatMessage = {
-      id: `msg_prod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `msg_prod_${nowMs}_${Math.random().toString(36).substring(2, 6)}`,
       chatId,
       sender: fromSelf ? 'user' : 'other',
       senderName: fromSelf ? (currentUser.fullName || product.sellerName) : product.sellerName,
@@ -7917,17 +8240,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
 
-    setChats((prev) =>
-      prev.map((c) =>
-        c.id === chatId
-          ? {
-              ...c,
-              lastMessage: ` ${product.title}`,
-              lastMessageTime: newMsg.timestamp,
-            }
-          : c
-      )
-    );
+    setChats((prev) => {
+      const updated = bumpChatThreadToTop(prev, chatId, {
+        lastMessage: `🛍️ ${product.title}`,
+        lastMessageTime: newMsg.timestamp,
+        lastMessageAtMs: nowMs,
+      });
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
 
     broadcastLiveMessage(chatId, newMsg);
   };
@@ -7938,9 +8259,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     const label = locationData.addressName?.trim() || `${locationData.latitude.toFixed(4)}, ${locationData.longitude.toFixed(4)}`;
     const previewLabel = `📍 ${label}`;
+    const nowMs = Date.now();
 
     const newMsg: ChatMessage = {
-      id: `msg_loc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `msg_loc_${nowMs}_${Math.random().toString(36).substring(2, 6)}`,
       chatId,
       sender: 'user',
       senderName: currentUser.fullName || 'AGC User',
@@ -7978,43 +8300,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     setChats((prev) => {
-      const exists = prev.some((c) => c.id === chatId);
-      let updated: ChatThread[];
-      if (exists) {
-        updated = prev.map((c) =>
-          c.id === chatId
-            ? {
-                ...c,
-                lastMessage: previewLabel,
-                lastMessageTime: newMsg.timestamp,
-              }
-            : c
-        );
-      } else {
-        const contactMatch = deviceContacts.find(
-          (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
-        );
-        const newThread: ChatThread = {
-          id: chatId,
-          name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
-          avatar:
-            contactMatch?.avatar ||
-            "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-          verifiedStore: false,
-          location: 'Direct Chat',
-          unreadCount: 0,
+      const updated = bumpChatThreadToTop(
+        prev,
+        chatId,
+        {
           lastMessage: previewLabel,
           lastMessageTime: newMsg.timestamp,
-          catalog: [],
-          isOnline: true,
-          phone: contactMatch?.rawPhoneNumber || '',
-        };
-        updated = [newThread, ...prev];
-      }
-      try {
-        const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
-        localStorage.setItem(userKey, JSON.stringify(updated));
-      } catch (_) {}
+          lastMessageAtMs: nowMs,
+        },
+        () => {
+          const contactMatch = deviceContacts.find(
+            (ct) => ct.id === chatId || (ct.rawPhoneNumber && chatId.includes(ct.rawPhoneNumber.replace(/\D/g, '')))
+          );
+          return {
+            id: chatId,
+            name: contactMatch?.name || (chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat'),
+            avatar:
+              contactMatch?.avatar ||
+              "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+            verifiedStore: false,
+            location: 'Direct Chat',
+            unreadCount: 0,
+            lastMessage: previewLabel,
+            lastMessageTime: newMsg.timestamp,
+            lastMessageAtMs: nowMs,
+            catalog: [],
+            isOnline: true,
+            phone: contactMatch?.rawPhoneNumber || '',
+          };
+        }
+      );
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -8117,6 +8433,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       [chatId]: [...(prev[chatId] || []), receiptMsg],
     }));
 
+    setChats((prev) =>
+      bumpChatThreadToTop(prev, chatId, {
+        lastMessage: `🔒 Escrow Vault: ${product.title}`,
+        lastMessageTime: receiptMsg.timestamp,
+        lastMessageAtMs: Date.now(),
+      })
+    );
+
     closeCheckout();
     return { success: true, order: newOrder };
   };
@@ -8167,6 +8491,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       [order.chatId]: [...(prev[order.chatId] || []), releaseMsg],
     }));
 
+    setChats((prev) =>
+      bumpChatThreadToTop(prev, order.chatId, {
+        lastMessage: `✅ Escrow released (${CURRENCY_SYMBOLS[order.currency]}${order.totalAmount.toLocaleString()})`,
+        lastMessageTime: releaseMsg.timestamp,
+        lastMessageAtMs: Date.now(),
+      })
+    );
+
     return {
       success: true,
       message: `Payment of ${CURRENCY_SYMBOLS[order.currency]}${order.totalAmount.toLocaleString()} released to ${order.sellerName}.`,
@@ -8175,6 +8507,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const openChatWithProduct = (chatId: string, product: Product) => {
     setActiveTab('chats');
+    const nowMs = Date.now();
     setChats((prev) => {
       if (prev.some((c) => c.id === chatId)) return prev;
       const newThread: ChatThread = {
@@ -8186,11 +8519,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         unreadCount: 0,
         lastMessage: `Product: ${product.title}`,
         lastMessageTime: 'Just now',
+        lastMessageAtMs: nowMs,
         catalog: [product],
         isOnline: true,
         storeCategory: product.category,
       };
-      return [newThread, ...prev];
+      return sortChatsByRecency([newThread, ...prev]);
     });
     setActiveChatId(chatId);
     sendProductCard(chatId, product);
@@ -8198,8 +8532,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 1. Meme & Sticker Studio Handler
   const sendMemeSticker = (chatId: string, meme: MemeSticker) => {
+    const nowMs = Date.now();
     const newMsg: ChatMessage = {
-      id: `msg_meme_${Date.now()}`,
+      id: `msg_meme_${nowMs}`,
       chatId,
       sender: 'user',
       senderName: currentUser.fullName || 'AGC User',
@@ -8218,32 +8553,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
 
     setChats((prev) => {
-      const exists = prev.some((c) => c.id === chatId);
-      if (exists) {
-        return prev.map((c) =>
-          c.id === chatId
-            ? {
-                ...c,
-                lastMessage: `🎭 Meme: ${meme.title}`,
-                lastMessageTime: newMsg.timestamp,
-              }
-            : c
-        );
-      }
-      const newThread: ChatThread = {
-        id: chatId,
-        name: chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat',
-        avatar:
-          "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-        verifiedStore: false,
-        location: 'Direct Chat',
-        unreadCount: 0,
-        lastMessage: `🎭 Meme: ${meme.title}`,
-        lastMessageTime: newMsg.timestamp,
-        catalog: [],
-        isOnline: true,
-      };
-      return [newThread, ...prev];
+      const updated = bumpChatThreadToTop(
+        prev,
+        chatId,
+        {
+          lastMessage: `🎭 Meme: ${meme.title}`,
+          lastMessageTime: newMsg.timestamp,
+          lastMessageAtMs: nowMs,
+        },
+        () => ({
+          id: chatId,
+          name: chatId.startsWith('dm_') ? 'Direct Chat' : 'Chat',
+          avatar:
+            "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
+          verifiedStore: false,
+          location: 'Direct Chat',
+          unreadCount: 0,
+          lastMessage: `🎭 Meme: ${meme.title}`,
+          lastMessageTime: newMsg.timestamp,
+          lastMessageAtMs: nowMs,
+          catalog: [],
+          isOnline: true,
+        })
+      );
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
     });
 
     broadcastLiveMessage(chatId, newMsg);
@@ -9264,17 +9598,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
 
-    setChats((prev) =>
-      prev.map((c) =>
-        c.id === chatId
-          ? {
-              ...c,
-              lastMessage: `📄 Invoice #${invoice.invoiceNumber}`,
-              lastMessageTime: newMsg.timestamp,
-            }
-          : c
-      )
-    );
+    setChats((prev) => {
+      const updated = bumpChatThreadToTop(prev, chatId, {
+        lastMessage: `📄 Invoice #${invoice.invoiceNumber}`,
+        lastMessageTime: newMsg.timestamp,
+        lastMessageAtMs: Date.now(),
+      });
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
 
     broadcastLiveMessage(chatId, newMsg);
   };
@@ -9371,19 +9703,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     setChats((prev) => {
-      const updated = prev.map((c) =>
-        c.id === chatId
-          ? {
-              ...c,
-              lastMessage: `📊 Stake Poll: ${title}`,
-              lastMessageTime: newMsg.timestamp,
-            }
-          : c
-      );
-      try {
-        const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
-        localStorage.setItem(userKey, JSON.stringify(updated));
-      } catch (_) {}
+      const updated = bumpChatThreadToTop(prev, chatId, {
+        lastMessage: `📊 Stake Poll: ${title}`,
+        lastMessageTime: newMsg.timestamp,
+        lastMessageAtMs: nowTs,
+      });
+      persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -9552,9 +9877,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
     setChats((prev) => {
-      const updated = prev.map((c) =>
-        c.id === chatId ? { ...c, lastMessage: `📊 Poll: ${cleanQuestion}`, lastMessageTime: newMsg.timestamp } : c
-      );
+      const updated = bumpChatThreadToTop(prev, chatId, {
+        lastMessage: `📊 Poll: ${cleanQuestion}`,
+        lastMessageTime: newMsg.timestamp,
+        lastMessageAtMs: nowTs,
+      });
       persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
@@ -12789,35 +13116,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'sent',
     };
 
-    // Ensure DM thread exists & is selected
+    // Ensure DM thread exists & is bumped to top
+    const billNowMs = Date.now();
     setChats((prev) => {
       const existingIdx = prev.findIndex(
         (c) => c.id === dmChatId || (!c.isGroup && !c.isChannel && phonesMatch(c.phone || c.phoneNumber, params.recipientPhone))
       );
-      if (existingIdx >= 0) {
-        const updated = prev.map((c, idx) =>
-          idx === existingIdx
-            ? { ...c, id: dmChatId, lastMessage: msg.text || '🧾 Bill Request', lastMessageTime: msg.timestamp }
-            : c
-        );
-        persistPartitionedChats(updated, currentUser.phoneNumber);
-        return updated;
-      }
-      const newThread: ChatThread = {
-        id: dmChatId,
-        name: params.recipientName || params.recipientPhone,
-        avatar: params.recipientAvatar || DEFAULT_AVATAR_SVG,
-        verifiedStore: false,
-        location: 'Direct Chat',
-        unreadCount: 0,
-        lastMessage: msg.text || '🧾 Bill Request',
-        lastMessageTime: msg.timestamp,
-        catalog: [],
-        isOnline: false,
-        phone: params.recipientPhone,
-        phoneNumber: params.recipientPhone,
-      };
-      const updated = [newThread, ...prev];
+      const updated =
+        existingIdx >= 0
+          ? bumpChatThreadToTop(prev, prev[existingIdx].id, {
+              id: dmChatId,
+              lastMessage: msg.text || '🧾 Bill Request',
+              lastMessageTime: msg.timestamp,
+              lastMessageAtMs: billNowMs,
+            })
+          : sortChatsByRecency([
+              {
+                id: dmChatId,
+                name: params.recipientName || params.recipientPhone,
+                avatar: params.recipientAvatar || DEFAULT_AVATAR_SVG,
+                verifiedStore: false,
+                location: 'Direct Chat',
+                unreadCount: 0,
+                lastMessage: msg.text || '🧾 Bill Request',
+                lastMessageTime: msg.timestamp,
+                lastMessageAtMs: billNowMs,
+                catalog: [],
+                isOnline: false,
+                phone: params.recipientPhone,
+                phoneNumber: params.recipientPhone,
+              },
+              ...prev,
+            ]);
       persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
@@ -12970,17 +13300,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
 
-    setChats((prev) =>
-      prev.map((c) =>
-        c.id === chatId
-          ? {
-              ...c,
-              lastMessage: `🪙 Paid ₦${amount.toLocaleString()} to Ajo Round ${roundNum}`,
-              lastMessageTime: newMsg.timestamp,
-            }
-          : c
-      )
-    );
+    setChats((prev) => {
+      const updated = bumpChatThreadToTop(prev, chatId, {
+        lastMessage: `🪙 Paid ₦${amount.toLocaleString()} to Ajo Round ${roundNum}`,
+        lastMessageTime: newMsg.timestamp,
+        lastMessageAtMs: Date.now(),
+      });
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
 
     broadcastLiveMessage(chatId, newMsg);
 
@@ -13132,17 +13460,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...prev,
         [activeChatId]: [...(prev[activeChatId] || []), ajoMsg],
       }));
-      setChats((prev) =>
-        prev.map((c) =>
-          c.id === activeChatId
-            ? {
-                ...c,
-                lastMessage: `🪙 Ajo Club: ${newGroup.name}`,
-                lastMessageTime: ajoMsg.timestamp,
-              }
-            : c
-        )
-      );
+      setChats((prev) => {
+        const updated = bumpChatThreadToTop(prev, activeChatId, {
+          lastMessage: `🪙 Ajo Club: ${newGroup.name}`,
+          lastMessageTime: ajoMsg.timestamp,
+          lastMessageAtMs: Date.now(),
+        });
+        persistPartitionedChats(updated, currentUser.phoneNumber);
+        return updated;
+      });
       broadcastLiveMessage(activeChatId, ajoMsg);
     }
 
@@ -13166,8 +13492,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     }
 
+    const nowIso = new Date().toISOString();
     const userWithCompactAvatar: UserProfile = {
       ...userProfile,
+      username: userProfile.username || userProfile.fullName,
       avatarUrl: compactAvatar || userProfile.avatarUrl,
     };
 
@@ -13178,8 +13506,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const entry = {
         phoneNumber: userWithCompactAvatar.phoneNumber,
         fullName: userWithCompactAvatar.fullName,
+        username: userWithCompactAvatar.username,
         avatarUrl: userWithCompactAvatar.avatarUrl,
-        registeredAt: userWithCompactAvatar.createdAt || new Date().toISOString(),
+        registeredAt: userWithCompactAvatar.createdAt || nowIso,
+        updatedAt: nowIso,
       };
       if (cleanPhone) regMap[cleanPhone] = entry;
       if (normPhone) regMap[normPhone] = entry;
@@ -13284,6 +13614,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...userWithCompactAvatar,
+          updatedAt: nowIso,
           sessionToken: safeLocalStorage.getItem('AGC_session_token') || undefined,
           socketId: getSocket()?.id,
           skipSessionKick: true,
@@ -13633,24 +13964,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateUserProfile = (updates: Partial<UserProfile>) => {
-    setCurrentUser((prev) => {
-      const updated = { ...prev, ...updates };
-      persistPartitionedUserProfile(updated);
+    lastLocalProfileEditAtRef.current = Date.now();
+    const baseUser = currentUserRef.current;
+    const updated: UserProfile = {
+      ...baseUser,
+      ...updates,
+      username: updates.username ?? (updates.fullName && updates.fullName !== 'AGC User' ? updates.fullName : baseUser.username),
+    };
+    if (updated.phoneNumber) {
+      safeLocalStorage.setItem(
+        getUserStorageKey('AGC_profile_updated_at', updated.phoneNumber),
+        String(lastLocalProfileEditAtRef.current)
+      );
+    }
+    currentUserRef.current = updated;
+    setCurrentUser(updated);
+    persistPartitionedUserProfile(updated);
+    propagateUserProfileUpdate(updated);
 
-      // Persist compressed avatar/profile asynchronously to agc_phone_registry, local registries, and Supabase
-      (async () => {
-        const compacted = await syncProfileToAllRegistries(updated);
-        if (compacted.avatarUrl !== updated.avatarUrl) {
-          setCurrentUser((curr) =>
-            phonesMatch(curr.phoneNumber, compacted.phoneNumber)
-              ? { ...curr, avatarUrl: compacted.avatarUrl }
-              : curr
-          );
-        }
-      })();
+    // Emit updated identity on Socket.IO + BroadcastChannel
+    try {
+      const sock = getSocket();
+      if (sock?.connected) {
+        sock.emit('register_user', {
+          ...updated,
+          sessionToken: safeLocalStorage.getItem('AGC_session_token') || undefined,
+        });
+      }
+    } catch (_) {}
 
-      return updated;
-    });
+    // Persist compressed avatar/profile asynchronously to agc_phone_registry, local registries, and Supabase
+    (async () => {
+      const compacted = await syncProfileToAllRegistries(updated);
+      if (compacted.avatarUrl !== updated.avatarUrl) {
+        setCurrentUser((curr) =>
+          phonesMatch(curr.phoneNumber, compacted.phoneNumber)
+            ? { ...curr, avatarUrl: compacted.avatarUrl }
+            : curr
+        );
+      }
+      if (updated.phoneNumber) {
+        saveUserChatsBackupToSupabase(updated.phoneNumber, chatsRef.current, messagesRef.current, {
+          wallet: walletRef.current,
+          userProfile: compacted,
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
+      }
+    })();
   };
 
   const updateUsername = async (
@@ -13676,6 +14036,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .replace(/^@+/, '');
 
     // Server uniqueness + profile update
+    let serverUser: any = null;
     try {
       const checkResp = await fetch(
         `/api/users/check-username?username=${encodeURIComponent(clean)}&excludePhone=${encodeURIComponent(myPhone)}`
@@ -13701,6 +14062,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!patchResp.ok) {
           return { success: false, error: patchData?.error || 'Could not update username.' };
         }
+        if (patchData?.user) {
+          serverUser = patchData.user;
+        }
       }
     } catch (_) {}
 
@@ -13712,10 +14076,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('AGC_taken_usernames', JSON.stringify(nextTaken));
     } catch (_) {}
 
+    const resolvedAbout =
+      newAbout !== undefined
+        ? newAbout.trim() || 'Available · Using AGC'
+        : serverUser?.about ?? currentUserRef.current?.about;
+
     updateUserProfile({
       fullName: clean,
       username: clean,
-      ...(newAbout !== undefined ? { about: newAbout.trim() || 'Available · Using AGC' } : {}),
+      ...(resolvedAbout !== undefined ? { about: resolvedAbout } : {}),
     });
 
     return { success: true, username: clean };
@@ -13991,6 +14360,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const startAiChat = () => {
+    const nowMs = Date.now();
     let aiChat = chats.find((c) => c.id === AFRIBOT_ID || c.isBot);
     if (!aiChat) {
       aiChat = {
@@ -13998,21 +14368,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         name: AFRIBOT_NAME,
         avatar: AFRIBOT_AVATAR,
         verifiedStore: false,
-        location: 'AI Assistant â€¢ Groq LPU',
+        location: 'AI Assistant · Groq LPU',
         unreadCount: 0,
-        lastMessage: 'Hello! I am AfriBot AI. Ask me anything, or invite me to your groups as an Admin! 🤖✓¨',
+        lastMessage: 'Hello! I am AgcBot. Ask me anything, or invite me to your groups as an Admin! 🤖✨',
         lastMessageTime: 'Just now',
+        lastMessageAtMs: nowMs,
         catalog: [],
         isOnline: true,
         isBot: true,
         phone: AFRIBOT_PHONE,
       };
       setChats((prev) => {
-        const updated = [aiChat!, ...prev.filter((c) => c.id !== AFRIBOT_ID)];
-        try {
-          const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
-          localStorage.setItem(userKey, JSON.stringify(updated));
-        } catch (_) {}
+        const updated = sortChatsByRecency([aiChat!, ...prev.filter((c) => c.id !== AFRIBOT_ID)]);
+        persistPartitionedChats(updated, currentUser.phoneNumber);
+        return updated;
+      });
+    } else if (aiChat.name !== AFRIBOT_NAME || aiChat.lastMessage?.includes('AfriBot')) {
+      setChats((prev) => {
+        const updated = prev.map((c) =>
+          c.id === AFRIBOT_ID || c.isBot
+            ? {
+                ...c,
+                name: AFRIBOT_NAME,
+                lastMessage: c.lastMessage?.replace(/AfriBot AI/g, AFRIBOT_NAME),
+              }
+            : c
+        );
+        persistPartitionedChats(updated, currentUser.phoneNumber);
         return updated;
       });
     }
@@ -14021,13 +14403,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const currentMsgs = prev[AFRIBOT_ID] || [];
       if (currentMsgs.length === 0) {
         const welcomeMsg: ChatMessage = {
-          id: `msg_bot_welcome_${Date.now()}`,
+          id: `msg_bot_welcome_${nowMs}`,
           chatId: AFRIBOT_ID,
           sender: 'other',
           senderName: AFRIBOT_NAME,
           senderAvatar: AFRIBOT_AVATAR,
           senderPhone: AFRIBOT_PHONE,
-          text: `Habari & Greetings! 👋 I am **AfriBot AI**, powered by Groq ultra-fast LPU inference.\n\nI am your personal AI companion right inside AfriChat. Here are things you can ask me:\n- 💡 Brainstorm business & trade ideas\n- 💰 Explain Ajo savings, crypto, or escrow rules\n-  Translate between English, Pidgin, Swahili, Yoruba, Hausa, French\n-  Draft contracts, essays, emails, or marketing pitches\n- 👥 **Add me to your Groups as an Admin** to help answer questions, moderate, or summarize chats!\n\nHow can I assist you today?`,
+          text: `Habari & Greetings! 👋 I am **AgcBot**, powered by Groq ultra-fast LPU inference.\n\nI am your personal AI companion right inside AGC. Here are things you can ask me:\n- 💡 Brainstorm business & trade ideas\n- 💰 Explain Ajo savings, crypto, or escrow rules\n- 🌍 Translate between English, Pidgin, Swahili, Yoruba, Hausa, French\n- ✍️ Draft contracts, essays, emails, or marketing pitches\n- 👥 **Add me to your Groups as an Admin** to help answer questions, moderate, or summarize chats!\n\nHow can I assist you today?`,
           type: 'text',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           status: 'read',
@@ -14048,8 +14430,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setChats((prev) =>
       prev.map((c) => {
         if (c.id !== groupId) return c;
-        const currentMembers = c.members || [];
-        const currentAdmins = c.admins || [];
+        const currentMembers = (c.members || []).filter((m) => m !== 'AfriBot AI');
+        const currentAdmins = (c.admins || []).filter((a) => a !== 'AfriBot AI');
         const newMembers = currentMembers.includes(AFRIBOT_NAME)
           ? currentMembers
           : [...currentMembers, AFRIBOT_NAME];
@@ -14072,8 +14454,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderName: AFRIBOT_NAME,
       senderAvatar: AFRIBOT_AVATAR,
       text: makeAdmin
-        ? `🤖 AfriBot AI was added to this group as an Admin! Tag @AfriBot or @bot anytime to ask questions, settle debates, or get AI assistance.`
-        : `🤖 AfriBot AI joined the group! Tag @AfriBot or @bot to chat with the AI.`,
+        ? `🤖 AgcBot was added to this group as an Admin! Tag @AgcBot or @bot anytime to ask questions, settle debates, or get AI assistance.`
+        : `🤖 AgcBot joined the group! Tag @AgcBot or @bot to chat with the AI.`,
       type: 'text',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'delivered',
@@ -14088,7 +14470,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    showLocalNotification('AfriBot AI Added', `🤖 AfriBot AI added to group${makeAdmin ? ' as Admin' : ''}!`);
+    showLocalNotification('AgcBot Added', `🤖 AgcBot added to group${makeAdmin ? ' as Admin' : ''}!`);
   };
 
   // 10. Meme Handlers
@@ -14114,8 +14496,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const sendMemeFromDrawer = (chatId: string, meme: UserUploadedMeme) => {
+    const nowMs = Date.now();
     const newMsg: ChatMessage = {
-      id: `msg_umeme_${Date.now()}`,
+      id: `msg_umeme_${nowMs}`,
       chatId,
       sender: 'user',
       type: 'image',
@@ -14131,17 +14514,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
 
-    setChats((prev) =>
-      prev.map((c) =>
-        c.id === chatId
-          ? {
-              ...c,
-              lastMessage: `🖼️ï¸ Meme: ${meme.title || 'Custom Upload'}`,
-              lastMessageTime: newMsg.timestamp,
-            }
-          : c
-      )
-    );
+    setChats((prev) => {
+      const updated = bumpChatThreadToTop(prev, chatId, {
+        lastMessage: `🖼️ Meme: ${meme.title || 'Custom Upload'}`,
+        lastMessageTime: newMsg.timestamp,
+        lastMessageAtMs: nowMs,
+      });
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
 
     setIsEmojiMemeDrawerOpen(false);
     broadcastLiveMessage(chatId, newMsg);
@@ -15730,7 +16111,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Real-Time Multi-Transport Live Chat Connection (Socket.io + BroadcastChannel + Supabase)
   const handleIncomingMessage = useCallback(
-    async ({ chatId, message, senderId, targetPhone, isGroup, chat }: { chatId: string; message: ChatMessage; senderId?: string; targetPhone?: string; isGroup?: boolean; chat?: any }) => {
+    async ({
+      chatId,
+      message,
+      senderId,
+      targetPhone,
+      isGroup,
+      chat,
+      createdAtMs,
+    }: {
+      chatId: string;
+      message: ChatMessage;
+      senderId?: string;
+      targetPhone?: string;
+      isGroup?: boolean;
+      chat?: any;
+      createdAtMs?: number;
+    }) => {
       if (!message || !chatId) return;
       // CRITICAL: Never accept or persist incoming messages while logged out or hydrating!
       // Otherwise prev state ({} / []) overwrites the user's saved localStorage history.
@@ -15771,7 +16168,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      // If a target phone was explicitly addressed, verify recipient matches my phone
+      // If a target phone was explicitly addressed, verify recipient matches my phone (allow self sync)
       if (targetPhone && !isFromMe && !isGroupChat) {
         if (!phonesMatch(targetPhone, myCleanPhone)) {
           return;
@@ -15793,15 +16190,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      // Decrypt message text if encrypted with E2EE
+      // Decrypt message text if encrypted with E2EE (try normalized + legacy phone secrets)
       let plainText = message.text;
       let wasEncrypted = Boolean(message.isEncrypted);
       if (message.text && typeof message.text === 'string' && message.text.startsWith('AGC_E2EE:')) {
-        const secret = getConversationSecret(resolvedChatId, myCleanPhone, senderCleanPhone || otherCleanPhone);
-        try {
-          plainText = await decryptChatMessage(message.text, secret);
-          wasEncrypted = true;
-        } catch (_) {}
+        const peerPhoneForSecret = isFromMe
+          ? (otherCleanPhone || (targetPhone || '').replace(/\D/g, ''))
+          : (senderCleanPhone || otherCleanPhone);
+        const secretCandidates = getConversationSecretFallbacks(resolvedChatId, myCleanPhone, peerPhoneForSecret);
+        for (const candidateSecret of secretCandidates) {
+          try {
+            const decrypted = await decryptChatMessage(message.text, candidateSecret);
+            if (decrypted && !decrypted.startsWith('AGC_E2EE:')) {
+              plainText = decrypted;
+              wasEncrypted = true;
+              break;
+            }
+          } catch (_) {}
+        }
       }
 
       // 3. Filter duplicates by message ID (merge live polls / ajo cards / X/O game states)
@@ -15938,15 +16344,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (index >= 0) {
           const updated = [...prev];
           const matched = { ...updated[index] };
+          const incomingTs = createdAtMs || Date.now();
+          const prevTs = matched.lastMessageAtMs || 0;
+          const isNewerMsg = incomingTs >= prevTs;
           const activeNow = activeChatIdRef.current;
           const isOpenNow = activeNow === resolvedChatId || activeNow === matched.id || activeNow === chatId;
           if (matched.id !== resolvedChatId && activeNow === matched.id) {
             setActiveChatId(resolvedChatId);
           }
           matched.id = resolvedChatId;
-          matched.lastMessage = msgText;
-          matched.lastMessageTime = message.timestamp;
-          matched.unreadCount = isOpenNow ? 0 : (matched.unreadCount || 0) + 1;
+          if (isNewerMsg) {
+            matched.lastMessage = msgText;
+            matched.lastMessageTime = message.timestamp;
+          }
+          matched.lastMessageAtMs = Math.max(prevTs, incomingTs);
+          matched.unreadCount = isOpenNow || isFromMe ? (matched.unreadCount || 0) : (matched.unreadCount || 0) + 1;
           if (mentionedMe) {
             matched.unreadMentions = (matched.unreadMentions || 0) + 1;
             matched.lastMentionMessageId = message.id;
@@ -15959,11 +16371,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           }
           updated.splice(index, 1);
-          const finalUpdated = [matched, ...updated];
-          try {
-            const userKey = getUserStorageKey('AGC_chats_v2', userNow.phoneNumber);
-            localStorage.setItem(userKey, JSON.stringify(finalUpdated));
-          } catch (_) {}
+          const finalUpdated = sortChatsByRecency([matched, ...updated]);
+          persistPartitionedChats(finalUpdated, userNow.phoneNumber);
           return finalUpdated;
         } else {
           // Never auto-insert unjoined Town communities, channels, declined groups, or pending invites into personal chats
@@ -15978,19 +16387,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return prev;
           }
           const activeNow = activeChatIdRef.current;
+          const incomingTs = createdAtMs || Date.now();
+          const dirMatch = !isGroupChat && otherCleanPhone
+            ? adminUsersRef.current.find((u) => u.phoneNumber && phonesMatch(u.phoneNumber, otherCleanPhone))
+            : undefined;
+          const resolvedPeerName = isGroupChat
+            ? (chat?.name || (isChannelChat ? 'Broadcast Channel' : 'Group Chat'))
+            : isSelfChat
+            ? `${userNow.fullName || 'You'} (Message yourself)`
+            : (dirMatch?.fullName || dirMatch?.username || message.senderName || 'AGC Contact');
           const newThread: ChatThread = {
             id: resolvedChatId,
-            name: isGroupChat
-              ? (chat?.name || (isChannelChat ? 'Broadcast Channel' : 'Group Chat'))
-              : isSelfChat
-              ? `${userNow.fullName || 'You'} (Message yourself)`
-              : (message.senderName || 'AGC Contact'),
+            name: resolvedPeerName,
             avatar:
               (isGroupChat
                 ? chat?.avatar
                 : isSelfChat
                 ? userNow.avatarUrl
-                : message.senderAvatar) ||
+                : (dirMatch?.avatarUrl || message.senderAvatar)) ||
               "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
             verifiedStore: false,
             location: isChannelChat
@@ -16000,9 +16414,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               : isSelfChat
               ? 'Notes to Self'
               : (resolvedChatId.startsWith('town_comm_') ? 'Town Community' : 'Direct Chat'),
-            unreadCount: activeNow === resolvedChatId || activeNow === chatId ? 0 : 1,
+            unreadCount: activeNow === resolvedChatId || activeNow === chatId || isFromMe ? 0 : 1,
             lastMessage: msgText,
             lastMessageTime: message.timestamp,
+            lastMessageAtMs: incomingTs,
             catalog: [],
             isOnline: true,
             isGroup: isGroupChat && !isChannelChat,
@@ -16012,11 +16427,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             memberPhones: chat?.memberPhones || [],
             phone: isSelfChat ? userNow.phoneNumber : (message.senderPhone || ''),
           };
-          const finalUpdated = [newThread, ...prev];
-          try {
-            const userKey = getUserStorageKey('AGC_chats_v2', userNow.phoneNumber);
-            localStorage.setItem(userKey, JSON.stringify(finalUpdated));
-          } catch (_) {}
+          const finalUpdated = sortChatsByRecency([newThread, ...prev]);
+          persistPartitionedChats(finalUpdated, userNow.phoneNumber);
           return finalUpdated;
         }
       });
@@ -16036,13 +16448,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           `💬 ${message.senderName || 'AGC User'}`,
           message.type === 'location'
             ? `📍 ${message.locationData?.addressName || 'Shared a pin location'}`
-            : (message.text || (message.type === 'image' ? '📷 Sent a photo' : 'Sent you an attachment')),
+            : (plainText || (message.type === 'image' ? '📷 Sent a photo' : 'Sent you an attachment')),
           message.senderAvatar || '/icon-192.png'
         );
       }
     },
     []
   );
+
+  // Store-and-forward missed-message recovery from server buffer
+  const syncMissedMessagesFromServer = useCallback(async (specificChatId?: string) => {
+    if (!isAuthenticatedRef.current || isHydratingChatsRef.current) return;
+    const phone = currentUserRef.current?.phoneNumber;
+    const norm = normalizePhoneDigits(phone);
+    if (!norm || loadedPhoneForChatsRef.current !== norm) return;
+
+    const watermarkKey = `AGC_last_msg_sync_${norm}`;
+    const lastWatermark = Number(safeLocalStorage.getItem(watermarkKey) || 0);
+    const sinceMs = lastWatermark > 0 ? Math.max(0, lastWatermark - 60_000) : Date.now() - 3 * 24 * 60 * 60 * 1000;
+
+    try {
+      const requests: Promise<any>[] = [
+        fetch(`/api/messages/sync?phone=${encodeURIComponent(norm)}&sinceMs=${sinceMs}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+      ];
+      if (specificChatId && specificChatId !== AFRIBOT_ID) {
+        requests.push(
+          fetch(`/api/messages/chat/${encodeURIComponent(specificChatId)}?sinceMs=${sinceMs}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null)
+        );
+      }
+      const results = await Promise.all(requests);
+      let newestServerTs = lastWatermark;
+      const seenIds = new Set<string>();
+
+      for (const res of results) {
+        if (!res?.success || !Array.isArray(res.messages)) continue;
+        if (typeof res.serverTimeMs === 'number' && res.serverTimeMs > newestServerTs) {
+          newestServerTs = res.serverTimeMs;
+        }
+        for (const entry of res.messages) {
+          if (!entry?.message?.id || seenIds.has(entry.message.id)) continue;
+          seenIds.add(entry.message.id);
+          await handleIncomingMessage({
+            chatId: entry.chatId,
+            message: entry.message,
+            targetPhone: entry.targetPhone,
+            isGroup: entry.isGroup,
+            chat: entry.chat,
+            createdAtMs: entry.createdAtMs,
+          });
+        }
+      }
+      if (newestServerTs > lastWatermark) {
+        safeLocalStorage.setItem(watermarkKey, String(newestServerTs));
+      }
+    } catch (_) {}
+  }, [handleIncomingMessage]);
+  syncMissedMessagesRef.current = (specificChatId?: string) => {
+    void syncMissedMessagesFromServer(specificChatId);
+  };
 
   useEffect(() => {
     const userAtMount = currentUserRef.current;
@@ -16075,12 +16542,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (activeChatIdRef.current) {
         joinChatRoom(activeChatIdRef.current);
       }
+      void syncMissedMessagesFromServer(activeChatIdRef.current || undefined);
     };
 
     if (socket.connected) {
       registerRoomsOnConnect();
+    } else {
+      void syncMissedMessagesFromServer(activeChatIdRef.current || undefined);
     }
     socket.on('connect', registerRoomsOnConnect);
+
+    const handleInboxFocusOrVis = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        void syncMissedMessagesFromServer(activeChatIdRef.current || undefined);
+      }
+    };
+    window.addEventListener('focus', handleInboxFocusOrVis);
+    document.addEventListener('visibilitychange', handleInboxFocusOrVis);
+    const missedSyncInterval = setInterval(() => {
+      void syncMissedMessagesFromServer(activeChatIdRef.current || undefined);
+    }, 10_000);
 
     // 1. Socket.io listeners
     const handleXoGameSocket = (payload: any) => {
@@ -16623,6 +17104,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return () => {
+      clearInterval(missedSyncInterval);
+      window.removeEventListener('focus', handleInboxFocusOrVis);
+      document.removeEventListener('visibilitychange', handleInboxFocusOrVis);
       window.removeEventListener('online', handleOnlineFlushOutbox);
       socket.off('connect', registerRoomsOnConnect);
       socket.off('account_banned', handleAccountBanned);
@@ -16649,14 +17133,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
       if (sbTownFeed) sbTownFeed.unsubscribe();
     };
-  }, [currentUser.id, currentUser.phoneNumber, isAuthenticated, handleIncomingMessage, applyXoGameUpdate, applyWhotGameUpdate, applyLudoGameUpdate, applyPokerGameUpdate, applyBillRequestUpdate, applyRemoteMessageReaction]);
+  }, [currentUser.id, currentUser.phoneNumber, isAuthenticated, handleIncomingMessage, syncMissedMessagesFromServer, applyXoGameUpdate, applyWhotGameUpdate, applyLudoGameUpdate, applyPokerGameUpdate, applyBillRequestUpdate, applyRemoteMessageReaction]);
 
   const syncCurrentUserFromRecord = useCallback((me?: AdminUserRecord) => {
-    if (!me || !currentUser?.phoneNumber) return;
-    if (me.verificationBadge !== currentUser.verificationBadge || (me.role && me.role !== currentUser.role)) {
+    const cur = currentUserRef.current;
+    if (!me || !cur?.phoneNumber) return;
+
+    const remoteName = me.username || me.fullName;
+    const isValidRemoteName =
+      Boolean(remoteName) && remoteName !== 'AGC User' && remoteName !== 'Registered User';
+    const isRecentLocalEdit = Date.now() - lastLocalProfileEditAtRef.current < 20_000;
+    const shouldSyncName =
+      !isRecentLocalEdit &&
+      isValidRemoteName &&
+      remoteName !== cur.fullName;
+    const shouldSyncAvatar =
+      !isRecentLocalEdit &&
+      Boolean(me.avatarUrl) &&
+      !isPlaceholderAvatar(me.avatarUrl) &&
+      (isPlaceholderAvatar(cur.avatarUrl) || me.avatarUrl !== cur.avatarUrl);
+
+    if (
+      me.verificationBadge !== cur.verificationBadge ||
+      (me.role && me.role !== cur.role) ||
+      shouldSyncName ||
+      shouldSyncAvatar
+    ) {
       setCurrentUser((prev) => {
         const updated: UserProfile = {
           ...prev,
+          fullName: shouldSyncName ? remoteName! : prev.fullName,
+          username: shouldSyncName ? (me.username || remoteName) : prev.username,
+          avatarUrl: shouldSyncAvatar ? me.avatarUrl : prev.avatarUrl,
           verificationBadge: me.verificationBadge !== undefined ? me.verificationBadge : prev.verificationBadge,
           role: (me.role as UserProfile['role']) || prev.role,
         };
@@ -16677,7 +17185,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           isBanned: true,
           reason: nextBan.reason,
           bannedAt: nextBan.bannedAt,
-          phone: currentUser.phoneNumber,
+          phone: cur.phoneNumber,
         }));
       } catch (_) {}
     } else if (me.status === 'active') {
@@ -16687,7 +17195,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const savedBan = localStorage.getItem('AGC_banned_state');
         if (savedBan) {
           const parsed = JSON.parse(savedBan);
-          if (!parsed?.phone || phonesMatch(parsed.phone, currentUser.phoneNumber)) {
+          if (!parsed?.phone || phonesMatch(parsed.phone, cur.phoneNumber)) {
             localStorage.removeItem('AGC_banned_state');
           }
         }
@@ -16696,7 +17204,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (me.adminWalletAdjustedAt && me.walletBalanceNgn !== undefined) {
       const adjTs = Date.parse(me.adminWalletAdjustedAt) || 0;
-      const walletTsKey = getUserStorageKey('AGC_last_admin_wallet_ts', currentUser.phoneNumber);
+      const walletTsKey = getUserStorageKey('AGC_last_admin_wallet_ts', cur.phoneNumber);
       let lastSeenTs = 0;
       try {
         lastSeenTs = Number(localStorage.getItem(walletTsKey) || 0);
@@ -16706,7 +17214,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         try { localStorage.setItem(walletTsKey, String(adjTs)); } catch (_) {}
       }
     }
-  }, [currentUser.phoneNumber, currentUser.verificationBadge, currentUser.role]);
+  }, []);
 
   // Global live sync for Admin Feature Flags, System Config, CMS, Broadcasts & Registered Users
   const refreshAdminUsers = async (): Promise<void> => {
@@ -16974,6 +17482,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         adminUsersRef.current = merged;
         return merged;
       });
+      propagateUserProfileUpdateRef.current(u);
     };
     const onUserUpdated = (u: any) => {
       if (!u) return;
@@ -16983,7 +17492,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         adminUsersRef.current = merged;
         return merged;
       });
-      if (currentUser.id === u.id || (currentUser.phoneNumber && u.phoneNumber && phonesMatch(currentUser.phoneNumber, u.phoneNumber))) {
+      propagateUserProfileUpdateRef.current(u);
+      const latestSelf = currentUserRef.current;
+      if (latestSelf.id === u.id || (latestSelf.phoneNumber && u.phoneNumber && phonesMatch(latestSelf.phoneNumber, u.phoneNumber))) {
         syncCurrentUserFromRecord(mapped);
       }
     };
@@ -17189,6 +17700,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   adminUsersRef.current = merged;
                   return merged;
                 });
+                propagateUserProfileUpdateRef.current({
+                  phoneNumber: sbUser.phoneNumber,
+                  fullName: sbUser.fullName,
+                  username: row.username || undefined,
+                  avatarUrl: row.avatar_url || undefined,
+                });
               }
             }
           )
@@ -17263,11 +17780,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
         });
         if (hasPending) {
-          persistPartitionedMessages(updated, currentUser.phoneNumber);
+          persistPartitionedMessages(updated, currentUserRef.current.phoneNumber);
           return updated;
         }
         return prev;
       });
+      syncMissedMessagesRef.current(activeChatIdRef.current || undefined);
     };
 
     window.addEventListener('online', handleOnline);
@@ -17279,6 +17797,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!activeChatId) return;
 
     joinChatRoom(activeChatId);
+    syncMissedMessagesRef.current(activeChatId);
 
     // Hydrate persisted X/O game boards from Supabase so refreshes/reconnects restore live state
     fetchXoGamesForChatFromSupabase(activeChatId)

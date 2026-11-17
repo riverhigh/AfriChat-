@@ -121,17 +121,56 @@ export async function decryptChatMessage(payload: string, conversationSecret: st
 }
 
 /**
+ * Canonical phone normalizer matching AppContext.normalizePhoneDigits
+ * Converts local 11-digit 080... -> 23480... so both peers always derive identical E2EE secrets.
+ */
+function normalizePhoneForSecret(phone?: string): string {
+  if (!phone) return '';
+  let d = phone.replace(/\D/g, '');
+  if (d.startsWith('0') && d.length === 11) {
+    d = '234' + d.slice(1);
+  }
+  return d;
+}
+
+/**
  * Computes deterministic conversation secret for DMs or Group Chats
  */
 export function getConversationSecret(chatId: string, myPhone?: string, otherPhone?: string): string {
   if (chatId.startsWith('group_') || chatId.startsWith('town_comm_') || chatId.startsWith('channel_')) {
     return `AGC_GROUP_SECRET_${chatId}`;
   }
-  if (myPhone && otherPhone) {
-    const cleanA = myPhone.replace(/\D/g, '');
-    const cleanB = otherPhone.replace(/\D/g, '');
-    const sorted = [cleanA, cleanB].sort().join('_');
+  const normA = normalizePhoneForSecret(myPhone);
+  const normB = normalizePhoneForSecret(otherPhone);
+  if (normA && normB) {
+    const sorted = [normA, normB].sort().join('_');
     return `AGC_DM_SECRET_${sorted}`;
   }
   return `AGC_SECRET_${chatId}`;
+}
+
+/**
+ * Candidate secrets to try on decryption if the sender used raw phone formatting or chatId fallback.
+ */
+export function getConversationSecretFallbacks(chatId: string, myPhone?: string, otherPhone?: string): string[] {
+  const candidates: string[] = [];
+  const primary = getConversationSecret(chatId, myPhone, otherPhone);
+  candidates.push(primary);
+  if (myPhone && otherPhone) {
+    const rawA = myPhone.replace(/\D/g, '');
+    const rawB = otherPhone.replace(/\D/g, '');
+    if (rawA && rawB) {
+      candidates.push(`AGC_DM_SECRET_${[rawA, rawB].sort().join('_')}`);
+    }
+  }
+  if (chatId.startsWith('dm_')) {
+    const parts = chatId.replace('dm_', '').split('_').filter(Boolean);
+    if (parts.length >= 2) {
+      const normParts = [normalizePhoneForSecret(parts[0]), normalizePhoneForSecret(parts[1])].sort().join('_');
+      candidates.push(`AGC_DM_SECRET_${normParts}`);
+      candidates.push(`AGC_DM_SECRET_${[parts[0], parts[1]].sort().join('_')}`);
+    }
+  }
+  candidates.push(`AGC_SECRET_${chatId}`);
+  return Array.from(new Set(candidates.filter(Boolean)));
 }

@@ -1,4 +1,4 @@
-﻿import { supabase, isSupabaseConfigured } from './supabase';
+import { supabase, isSupabaseConfigured } from './supabase';
 import type { ChatMessage, ChatThread, UserProfile, UserWallet } from '../types';
 
 const CHAT_BACKUP_PREFIX = '__agc_sys_chats_';
@@ -106,12 +106,17 @@ export function mergeChatThreadsAndMessages(
     if (!prev) {
       chatMap.set(c.id, c);
     } else {
+      const prevTs = prev.lastMessageAtMs || 0;
+      const curTs = c.lastMessageAtMs || 0;
+      const newer = curTs >= prevTs ? c : prev;
+      const older = curTs >= prevTs ? prev : c;
       chatMap.set(c.id, {
-        ...prev,
-        ...c,
-        avatar: c.avatar || prev.avatar,
-        lastMessage: c.lastMessage || prev.lastMessage,
-        lastMessageTime: c.lastMessageTime || prev.lastMessageTime,
+        ...older,
+        ...newer,
+        avatar: newer.avatar || older.avatar,
+        lastMessage: newer.lastMessage || older.lastMessage,
+        lastMessageTime: newer.lastMessageTime || older.lastMessageTime,
+        lastMessageAtMs: Math.max(prevTs, curTs) || undefined,
       });
     }
   }

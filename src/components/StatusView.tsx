@@ -18,7 +18,7 @@ import {
   ExternalLink,
   Flame,
 } from 'lucide-react';
-import { useApp, phonesMatch } from '../context/AppContext';
+import { useApp, phonesMatch, isStatusExpiredClient } from '../context/AppContext';
 import { UserStatus } from '../types';
 import { compressChatMediaImage } from '../utils/imageUtils';
 import { BillboardModal } from './BillboardModal';
@@ -128,7 +128,16 @@ export const StatusView: React.FC = () => {
   const [adSubmittedNotice, setAdSubmittedNotice] = useState<string | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
-  const myStatuses = useMemo(() => statuses.filter((s) => s.isMe && !s.isSponsored), [statuses]);
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const myStatuses = useMemo(
+    () => statuses.filter((s) => s.isMe && !s.isSponsored && !isStatusExpiredClient(s, nowMs)),
+    [statuses, nowMs]
+  );
 
   const myPendingAds = useMemo(() => {
     const rawAds = Array.isArray(cmsData?.sponsoredStatuses) ? cmsData.sponsoredStatuses : [];
@@ -145,47 +154,46 @@ export const StatusView: React.FC = () => {
   const sponsoredStatuses = useMemo(() => {
     return statuses.filter(
       (s) =>
+        !isStatusExpiredClient(s, nowMs) &&
         Boolean(s.isSponsored || s.statusType === 'sponsored') &&
         s.approvalStatus !== 'pending' &&
         s.approvalStatus !== 'rejected'
     );
-  }, [statuses]);
+  }, [statuses, nowMs]);
 
   // Strict Privacy for personal stories: only show non-sponsored statuses from saved device contacts
   const otherStatuses = useMemo(() => {
     return statuses.filter((s) => {
       if (s.isMe || s.isSponsored || s.statusType === 'sponsored') return false;
+      if (isStatusExpiredClient(s, nowMs)) return false;
       if (!s.userPhone) return false;
       return deviceContacts.some((c) => {
         const cp = c.normalizedPhoneNumber || c.rawPhoneNumber;
         return phonesMatch(s.userPhone, cp);
       });
     });
-  }, [statuses, deviceContacts]);
+  }, [statuses, deviceContacts, nowMs]);
 
-  const [nowMs, setNowMs] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNowMs(Date.now()), 60_000);
-    return () => clearInterval(id);
-  }, []);
-
-  const getStatusTimeLeft = (s: { id?: string; createdAtISO?: string; createdAt?: string; expiresInHours?: number }): string => {
-    const expiresInHours = s.expiresInHours ?? 24;
-    let createdMs = 0;
-    if (s.createdAtISO) {
-      createdMs = new Date(s.createdAtISO).getTime();
-    } else if (s.id) {
-      const match = s.id.match(/\d{12,14}/);
-      if (match) createdMs = parseInt(match[0], 10);
+  const getStatusTimeLeft = (s: { id?: string; expiresAt?: string; createdAtISO?: string; createdAt?: string; expiresInHours?: number }): string => {
+    let expiresAt = s.expiresAt ? new Date(s.expiresAt).getTime() : NaN;
+    if (isNaN(expiresAt)) {
+      const expiresInHours = s.expiresInHours ?? 24;
+      let createdMs = 0;
+      if (s.createdAtISO) {
+        createdMs = new Date(s.createdAtISO).getTime();
+      } else if (s.id) {
+        const match = s.id.match(/\d{12,14}/);
+        if (match) createdMs = parseInt(match[0], 10);
+      }
+      if (!createdMs && s.createdAt) {
+        const parsed = Date.parse(s.createdAt);
+        if (!isNaN(parsed)) createdMs = parsed;
+      }
+      if (!createdMs) return '23h left';
+      expiresAt = createdMs + expiresInHours * 3_600_000;
     }
-    if (!createdMs && s.createdAt) {
-      const parsed = Date.parse(s.createdAt);
-      if (!isNaN(parsed)) createdMs = parsed;
-    }
-    if (!createdMs) return '23h left';
-    const expiresAt = createdMs + expiresInHours * 3_600_000;
     const ms = expiresAt - nowMs;
-    if (ms <= 0) return 'Expired';
+    if (ms <= 0) return '';
     const totalMins = Math.floor(ms / 60_000);
     if (totalMins < 1) return '< 1m left';
     const h = Math.floor(totalMins / 60);

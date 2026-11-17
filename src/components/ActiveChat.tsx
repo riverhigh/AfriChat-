@@ -68,7 +68,7 @@ import {
   WifiOff,
   AtSign,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, isStatusExpiredClient, phonesMatch } from '../context/AppContext';
 import { ChatMessage, GhostTimerSetting, Product, LanguageCode } from '../types';
 import { EmojiMemeDrawer } from './EmojiMemeDrawer';
 import { DisplayWallpaperModal } from './DisplayWallpaperModal';
@@ -1000,13 +1000,19 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
           {/* Avatar (Click opens Contact Profile, with status ring flow if recent update) */}
           {(() => {
+            const dmPeerDigits =
+              currentChat.id?.startsWith('dm_') && !currentChat.id.includes('self')
+                ? currentChat.id.replace('dm_', '').split('_').find((part) => !phonesMatch(part, currentUser?.phoneNumber))
+                : undefined;
+            const peerPhone = currentChat.phoneNumber || currentChat.phone || dmPeerDigits;
             const contactStatus = statuses.find(
               (s) =>
                 !s.isMe &&
-                (s.userId === currentChat.id ||
-                  s.userName.toLowerCase().trim() === currentChat.name.toLowerCase().trim() ||
-                  currentChat.name.toLowerCase().includes(s.userName.toLowerCase()) ||
-                  s.userName.toLowerCase().includes(currentChat.name.toLowerCase()))
+                !s.isSponsored &&
+                !isStatusExpiredClient(s) &&
+                ((peerPhone && s.userPhone && phonesMatch(s.userPhone, peerPhone)) ||
+                  s.userId === currentChat.id ||
+                  s.userName.toLowerCase().trim() === currentChat.name.toLowerCase().trim())
             );
             const hasRecentStatus = Boolean(contactStatus);
 
@@ -1076,7 +1082,35 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   title="View contact info"
                 >
                   <div className="font-bold text-sm leading-tight text-white group-hover:text-purple-300 truncate flex items-center gap-1.5 transition-colors">
-                    <span>{currentChat.name}</span>
+                    <span>
+                      {(() => {
+                        if (currentChat.isBot || currentChat.id === 'chat_afribot_ai') {
+                          return currentChat.name === 'AfriBot AI' ? 'AgcBot' : currentChat.name;
+                        }
+                        if (!currentChat.isGroup && !currentChat.isChannel) {
+                          const dmPeerDigits =
+                            currentChat.id?.startsWith('dm_') && !currentChat.id.includes('self')
+                              ? currentChat.id.replace('dm_', '').split('_').find((part) => !phonesMatch(part, currentUser?.phoneNumber))
+                              : undefined;
+                          const peerPhone = currentChat.phoneNumber || currentChat.phone || dmPeerDigits;
+                          const matched = peerPhone
+                            ? (adminUsers || []).find((u) => u.phoneNumber && phonesMatch(u.phoneNumber, peerPhone))
+                            : null;
+                          const resolved =
+                            (matched?.username && matched.username.trim()) ||
+                            (matched?.fullName && matched.fullName !== 'New User' && matched.fullName !== 'AGC User'
+                              ? matched.fullName
+                              : '');
+                          if (resolved) {
+                            const isSelf = currentChat.id.includes('self') || phonesMatch(peerPhone, currentUser?.phoneNumber);
+                            return isSelf && !resolved.includes('(Message yourself)')
+                              ? `${resolved} (Message yourself)`
+                              : resolved;
+                          }
+                        }
+                        return currentChat.name;
+                      })()}
+                    </span>
                     {(() => {
                       const liveBadge =
                         !currentChat.isGroup && !currentChat.isChannel
@@ -1139,7 +1173,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     {(currentChat.isBot || currentChat.id === 'chat_afribot_ai') && (
                       <span
                         className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-purple-500/25 to-pink-500/25 border border-pink-400/50 text-pink-200 text-[9px] font-extrabold shadow-2xs shrink-0"
-                        title="AfriBot AI Assistant (Groq)"
+                        title="AgcBot AI Assistant (Groq)"
                       >
                         <Bot className="w-3 h-3 text-pink-400" />
                         <span>BOT</span>
@@ -1194,7 +1228,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         return (
                           <span className="text-pink-300 font-medium flex items-center gap-1.5">
                             <span className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-pulse" />
-                            <span>Online â€¢ Groq AI Assistant</span>
+                            <span>Online · Groq AI Assistant</span>
                           </span>
                         );
                       }
@@ -1207,12 +1241,16 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         );
                       }
                       if (currentChat.isGroup || currentChat.isChannel) {
-                        const hasBot = currentChat.members?.includes('AfriBot AI') || currentChat.admins?.includes('AfriBot AI');
+                        const hasBot =
+                          currentChat.members?.includes('AgcBot') ||
+                          currentChat.admins?.includes('AgcBot') ||
+                          currentChat.members?.includes('AfriBot AI') ||
+                          currentChat.admins?.includes('AfriBot AI');
                         if (hasBot) {
                           return (
                             <span className="text-purple-300/90 font-medium flex items-center gap-1">
                               <Bot className="w-3 h-3 text-pink-400" />
-                              <span>AfriBot Admin active (type @bot to ask)</span>
+                              <span>AgcBot Admin active (type @AgcBot or @bot to ask)</span>
                             </span>
                           );
                         }
@@ -2153,8 +2191,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   {/* Group sender name (colored per sender) */}
                   {currentChat?.isGroup && !isUser && msg.senderName && (
                     <div className={`text-[11px] font-bold mb-1 flex items-center gap-1.5 ${getSenderColor(msg.senderName)}`}>
-                      <span>{msg.senderName}</span>
-                      {msg.senderName === 'AfriBot AI' && (
+                      <span>{msg.senderName === 'AfriBot AI' ? 'AgcBot' : msg.senderName}</span>
+                      {(msg.senderName === 'AgcBot' || msg.senderName === 'AfriBot AI') && (
                         <span className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded-full bg-pink-500/20 text-pink-400 text-[8px] font-black uppercase tracking-wider border border-pink-500/30">
                           <Bot className="w-2.5 h-2.5" /> BOT ADMIN
                         </span>

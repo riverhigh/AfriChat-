@@ -900,15 +900,15 @@ export const ContactsModal: React.FC = () => {
               </div>
               <div className="flex gap-1.5 overflow-x-auto pb-1 max-h-24 flex-wrap">
                 {(() => {
-                  const isBotSelected = selectedGroupMembers.some((m) => m.name === 'AfriBot AI');
+                  const isBotSelected = selectedGroupMembers.some((m) => m.name === 'AgcBot' || m.name === 'AfriBot AI');
                   return (
                     <button
                       type="button"
                       onClick={() => {
                         if (isBotSelected) {
-                          setSelectedGroupMembers(selectedGroupMembers.filter((m) => m.name !== 'AfriBot AI'));
+                          setSelectedGroupMembers(selectedGroupMembers.filter((m) => m.name !== 'AgcBot' && m.name !== 'AfriBot AI'));
                         } else {
-                          setSelectedGroupMembers([...selectedGroupMembers, { name: 'AfriBot AI', phone: '+234 BOT AI' }]);
+                          setSelectedGroupMembers([...selectedGroupMembers, { name: 'AgcBot', phone: '+234 BOT AI' }]);
                         }
                       }}
                       className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1 border transition-colors ${
@@ -918,7 +918,7 @@ export const ContactsModal: React.FC = () => {
                       }`}
                     >
                       <Bot className="w-3 h-3" />
-                      <span>AfriBot AI (Admin)</span>
+                      <span>AgcBot (Admin)</span>
                       {isBotSelected && <Check className="w-3 h-3" />}
                     </button>
                   );

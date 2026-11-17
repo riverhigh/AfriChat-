@@ -25,7 +25,7 @@ import {
   ShieldCheck,
   Bot,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, isStatusExpiredClient, phonesMatch } from '../context/AppContext';
 import { ChatThread } from '../types';
 import { ContactProfileModal } from './ContactProfileModal';
 
@@ -47,6 +47,7 @@ export const ChatList: React.FC = () => {
     declineGroupInvite,
     startAiChat,
     adminUsers,
+    currentUser,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -80,32 +81,34 @@ export const ChatList: React.FC = () => {
   const shelvedCount = chats.filter((c) => c.isShelved).length;
   const userLabels = Array.from(new Set(chats.map((c) => c.label).filter(Boolean))) as string[];
 
-  const filteredChats = chats.filter((chat) => {
-    // Shelved filter: WhatsApp behavior
-    if (showShelvedOnly) {
-      if (!chat.isShelved) return false;
-    } else {
-      if (chat.isShelved) return false;
-    }
+  const filteredChats = chats
+    .filter((chat) => {
+      // Shelved filter: WhatsApp behavior
+      if (showShelvedOnly) {
+        if (!chat.isShelved) return false;
+      } else {
+        if (chat.isShelved) return false;
+      }
 
-    if (selectedLabelFilter) {
-      if (chat.label !== selectedLabelFilter) return false;
-    }
+      if (selectedLabelFilter) {
+        if (chat.label !== selectedLabelFilter) return false;
+      }
 
-    const matchesSearch =
-      (chat.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (chat.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (chat.storeCategory && chat.storeCategory.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (chat.label && chat.label.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (chat.location || '').toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesSearch =
+        (chat.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (chat.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (chat.storeCategory && chat.storeCategory.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (chat.label && chat.label.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (chat.location || '').toLowerCase().includes(searchQuery.toLowerCase());
 
-    if (!matchesSearch) return false;
-    if (filterType === 'stores') return chat.verifiedStore;
-    if (filterType === 'unread') return chat.unreadCount > 0;
-    if (filterType === 'groups') return chat.isGroup || Boolean(chat.ajoGroup);
-    if (filterType === 'channels') return chat.isChannel;
-    return true;
-  });
+      if (!matchesSearch) return false;
+      if (filterType === 'stores') return chat.verifiedStore;
+      if (filterType === 'unread') return chat.unreadCount > 0;
+      if (filterType === 'groups') return chat.isGroup || Boolean(chat.ajoGroup);
+      if (filterType === 'channels') return chat.isChannel;
+      return true;
+    })
+    .sort((a, b) => (b.lastMessageAtMs || 0) - (a.lastMessageAtMs || 0));
 
   // Touch gesture handlers for right-to-left swipe
   const handleTouchStart = (chatId: string, e: React.TouchEvent) => {
@@ -386,13 +389,19 @@ export const ChatList: React.FC = () => {
       {/* Chat Thread List with Swipe-to-Reveal Actions */}
       <div className="divide-y divide-slate-100 dark:divide-neutral-900 overflow-hidden">
         {filteredChats.map((chat: ChatThread) => {
+          const dmPeerDigits =
+            chat.id?.startsWith('dm_') && !chat.id.includes('self')
+              ? chat.id.replace('dm_', '').split('_').find((part) => !phonesMatch(part, currentUser?.phoneNumber))
+              : undefined;
+          const peerPhone = chat.phoneNumber || chat.phone || dmPeerDigits;
           const contactStatus = statuses.find(
             (s) =>
               !s.isMe &&
-              (s.userId === chat.id ||
-                s.userName.toLowerCase().trim() === chat.name.toLowerCase().trim() ||
-                chat.name.toLowerCase().includes(s.userName.toLowerCase()) ||
-                s.userName.toLowerCase().includes(chat.name.toLowerCase()))
+              !s.isSponsored &&
+              !isStatusExpiredClient(s) &&
+              ((peerPhone && s.userPhone && phonesMatch(s.userPhone, peerPhone)) ||
+                s.userId === chat.id ||
+                s.userName.toLowerCase().trim() === chat.name.toLowerCase().trim())
           );
           const hasRecentStatus = Boolean(contactStatus);
           const isSwiped = swipedChatId === chat.id;
@@ -540,7 +549,27 @@ export const ChatList: React.FC = () => {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-                      <span className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">{(() => { const matched = (!chat.isGroup && !chat.isChannel) ? (adminUsers || []).find((u) => u.phoneNumber && chat.phone && u.phoneNumber.replace(/\D/g,"").slice(-9) === chat.phone.replace(/\D/g,"").slice(-9)) : null; return matched?.fullName || matched?.username || chat.name; })()}
+                      <span className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">
+                        {(() => {
+                          if (chat.isGroup || chat.isChannel || chat.isBot || chat.id === 'chat_afribot_ai') {
+                            return chat.name === 'AfriBot AI' ? 'AgcBot' : chat.name;
+                          }
+                          const matched = peerPhone
+                            ? (adminUsers || []).find((u) => u.phoneNumber && phonesMatch(u.phoneNumber, peerPhone))
+                            : null;
+                          const resolved =
+                            (matched?.username && matched.username.trim()) ||
+                            (matched?.fullName && matched.fullName !== 'New User' && matched.fullName !== 'AGC User'
+                              ? matched.fullName
+                              : '');
+                          if (resolved) {
+                            const isSelf = chat.id.includes('self') || phonesMatch(peerPhone, currentUser?.phoneNumber);
+                            return isSelf && !resolved.includes('(Message yourself)')
+                              ? `${resolved} (Message yourself)`
+                              : resolved;
+                          }
+                          return chat.name;
+                        })()}
                       </span>
                       {(chat.isBot || chat.id === 'chat_afribot_ai') && (
                         <span
@@ -724,31 +753,31 @@ export const ChatList: React.FC = () => {
         ) : null}
       </div>
 
-      {/* Floating AI Chatbot Bubble (Stacked on top of Start New Chat button) */}
-      <button
-        type="button"
-        onClick={startAiChat}
-        className="fixed bottom-[136px] right-5 w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-pink-500 hover:from-purple-500 hover:to-pink-400 text-white flex items-center justify-center shadow-lg shadow-purple-600/30 border border-white/20 transition-all hover:scale-105 active:scale-95 z-20 group"
-        aria-label="Chat with AgcBot"
-        title="Chat with AgcBot AI"
-      >
-        <div className="relative flex items-center justify-center">
-          <Bot className="w-4.5 h-4.5 text-white group-hover:rotate-12 transition-transform duration-300" />
-          <span className="absolute -top-2.5 -right-3 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider bg-pink-500 text-white rounded-full shadow-xs animate-pulse">
+      {/* Floating AI Chatbot & New Chat Rounded FAB Stack (positioned clearly above BottomNav) */}
+      <div className="fixed bottom-24 right-4 z-30 flex flex-col items-center gap-3">
+        <button
+          type="button"
+          onClick={startAiChat}
+          className="relative w-12 h-12 rounded-full bg-gradient-to-tr from-purple-600 via-indigo-600 to-pink-500 hover:from-purple-500 hover:to-pink-400 text-white flex items-center justify-center shadow-lg shadow-purple-600/35 border border-white/20 transition-all hover:scale-105 active:scale-95 group"
+          aria-label="Chat with AgcBot"
+          title="Chat with AgcBot AI"
+        >
+          <Bot className="w-5 h-5 text-white group-hover:rotate-12 transition-transform duration-300" />
+          <span className="absolute -top-1 -right-1 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider bg-pink-500 text-white rounded-full shadow-xs border border-black/30">
             AI
           </span>
-        </div>
-      </button>
+        </button>
 
-      {/* Floating Action Button (FAB) */}
-      <button
-        onClick={() => setIsContactsModalOpen(true)}
-        className="fixed bottom-20 right-5 w-14 h-14 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center shadow-lg shadow-purple-600/30 transition-transform active:scale-95 z-20"
-        aria-label="New chat / Sync contacts"
-        title="Start New Chat / Sync Contacts"
-      >
-        <MessageSquarePlus className="w-6 h-6" />
-      </button>
+        <button
+          type="button"
+          onClick={() => setIsContactsModalOpen(true)}
+          className="w-14 h-14 rounded-full bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center shadow-xl shadow-purple-600/35 border border-white/15 transition-all hover:scale-105 active:scale-95"
+          aria-label="New chat / Sync contacts"
+          title="Start New Chat / Sync Contacts"
+        >
+          <MessageSquarePlus className="w-6 h-6" />
+        </button>
+      </div>
 
       {/* Add to List / Label Modal */}
       {labelingChat && (

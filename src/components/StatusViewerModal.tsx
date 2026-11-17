@@ -12,7 +12,7 @@ import {
   ExternalLink,
   Megaphone,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, isStatusExpiredClient } from '../context/AppContext';
 
 const FALLBACK_AVATAR =
   "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%232e1065'/><circle cx='50' cy='38' r='16' fill='%23a855f7'/><path d='M20 86c0-16.5 13.5-30 30-30s30 13.5 30 30' fill='%23a855f7'/></svg>";
@@ -39,27 +39,30 @@ export const StatusViewerModal: React.FC = () => {
 
   const [nowMs, setNowMs] = React.useState(Date.now());
   React.useEffect(() => {
-    const id = setInterval(() => setNowMs(Date.now()), 60_000);
+    const id = setInterval(() => setNowMs(Date.now()), 30_000);
     return () => clearInterval(id);
   }, []);
 
-  const getTimeLeft = (s: { id?: string; createdAtISO?: string; createdAt?: string; expiresInHours: number; isSponsored?: boolean }): string => {
+  const getTimeLeft = (s: { id?: string; expiresAt?: string; createdAtISO?: string; createdAt?: string; expiresInHours: number; isSponsored?: boolean }): string => {
     if (s.isSponsored) return 'Promoted';
-    let createdMs = 0;
-    if (s.createdAtISO) {
-      createdMs = new Date(s.createdAtISO).getTime();
-    } else if (s.id) {
-      const match = s.id.match(/\d{12,14}/);
-      if (match) createdMs = parseInt(match[0], 10);
+    let expiresAt = s.expiresAt ? new Date(s.expiresAt).getTime() : NaN;
+    if (isNaN(expiresAt)) {
+      let createdMs = 0;
+      if (s.createdAtISO) {
+        createdMs = new Date(s.createdAtISO).getTime();
+      } else if (s.id) {
+        const match = s.id.match(/\d{12,14}/);
+        if (match) createdMs = parseInt(match[0], 10);
+      }
+      if (!createdMs && s.createdAt) {
+        const parsed = Date.parse(s.createdAt);
+        if (!isNaN(parsed)) createdMs = parsed;
+      }
+      if (!createdMs) return `${s.expiresInHours}h left`;
+      expiresAt = createdMs + s.expiresInHours * 3600_000;
     }
-    if (!createdMs && s.createdAt) {
-      const parsed = Date.parse(s.createdAt);
-      if (!isNaN(parsed)) createdMs = parsed;
-    }
-    if (!createdMs) return `${s.expiresInHours}h left`;
-    const expiresAt = createdMs + s.expiresInHours * 3600_000;
     const ms = expiresAt - nowMs;
-    if (ms <= 0) return 'Expired';
+    if (ms <= 0) return '';
     const totalMins = Math.floor(ms / 60_000);
     if (totalMins < 1) return '< 1m left';
     const h = Math.floor(totalMins / 60);
@@ -76,25 +79,38 @@ export const StatusViewerModal: React.FC = () => {
 
   const userStories = useMemo(() => {
     if (!activeViewingStatus) return [];
+    if (isStatusExpiredClient(activeViewingStatus, nowMs)) return [];
     if (activeViewingStatus.isSponsored || activeViewingStatus.statusType === 'sponsored') {
       const adSlides = statuses.filter(
-        (s) => (s.isSponsored || s.statusType === 'sponsored') && s.id === activeViewingStatus.id
+        (s) =>
+          !isStatusExpiredClient(s, nowMs) &&
+          (s.isSponsored || s.statusType === 'sponsored') &&
+          s.id === activeViewingStatus.id
       );
       return adSlides.length > 0 ? adSlides : [activeViewingStatus];
     }
     if (activeViewingStatus.isMe) {
-      return statuses.filter((s) => s.isMe && !s.isSponsored).sort((a, b) => a.id.localeCompare(b.id));
+      return statuses
+        .filter((s) => s.isMe && !s.isSponsored && !isStatusExpiredClient(s, nowMs))
+        .sort((a, b) => a.id.localeCompare(b.id));
     }
     return statuses
       .filter(
         (s) =>
           !s.isMe &&
           !s.isSponsored &&
+          !isStatusExpiredClient(s, nowMs) &&
           (s.userId === activeViewingStatus.userId ||
             (s.userPhone && activeViewingStatus.userPhone && s.userPhone === activeViewingStatus.userPhone))
       )
       .sort((a, b) => a.id.localeCompare(b.id));
-  }, [statuses, activeViewingStatus]);
+  }, [statuses, activeViewingStatus, nowMs]);
+
+  useEffect(() => {
+    if (activeViewingStatus && userStories.length === 0) {
+      setActiveViewingStatus(null);
+    }
+  }, [activeViewingStatus, userStories.length, setActiveViewingStatus]);
 
   useEffect(() => {
     if (activeViewingStatus && userStories.length > 0) {
@@ -120,7 +136,7 @@ export const StatusViewerModal: React.FC = () => {
     return () => clearTimeout(timer);
   }, [currentIndex, userStories.length, activeViewingStatus, showViewersSheet, currentStory?.id]);
 
-  if (!activeViewingStatus || !currentStory) return null;
+  if (!activeViewingStatus || userStories.length === 0 || !currentStory) return null;
 
   const status = currentStory;
   const isMe = status.isMe;
