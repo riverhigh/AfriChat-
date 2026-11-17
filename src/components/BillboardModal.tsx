@@ -61,6 +61,7 @@ export const BillboardModal: React.FC<BillboardModalProps> = ({ isOpen, onClose 
 
   const trendingTown = useMemo(() => {
     return [...(townCommunities || [])]
+      .filter((c) => !(c.isPrivate || c.type === 'group') || c.isJoined)
       .sort((a, b) => (b.membersCount || 0) - (a.membersCount || 0))
       .slice(0, 6);
   }, [townCommunities]);

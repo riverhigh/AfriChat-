@@ -17,8 +17,9 @@ import {
   PawPrint,
   Trash2,
   ChevronLeft,
+  Copy,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, phonesMatch } from '../context/AppContext';
 import { TownCommunity } from '../types';
 import { SpacesDashboard } from './SpacesDashboard';
 
@@ -36,6 +37,7 @@ export const TownView: React.FC = () => {
     createAudioSpace,
     setIsPetShopModalOpen,
     deleteTownCommunity,
+    joinGroupByCodeOrLink,
     isFeatureEnabled,
   } = useApp();
 
@@ -46,6 +48,8 @@ export const TownView: React.FC = () => {
   const [showJoinCodeModal, setShowJoinCodeModal] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [joinCodeError, setJoinCodeError] = useState<string | null>(null);
+  const [isJoiningByCode, setIsJoiningByCode] = useState(false);
+  const [copiedGroupId, setCopiedGroupId] = useState<string | null>(null);
 
   // Swipe gesture & delete confirm state for Town communities
   const [swipedCommunityId, setSwipedCommunityId] = useState<string | null>(null);
@@ -74,13 +78,13 @@ export const TownView: React.FC = () => {
     }
   };
 
-  const handleJoinByCode = () => {
+  const handleJoinByCode = async () => {
     const raw = joinCodeInput.trim();
-    if (!raw) return;
+    if (!raw || isJoiningByCode) return;
     setJoinCodeError(null);
     const cleanCode = raw.toUpperCase().replace(/^.*\//, '');
 
-    // Check Audio Spaces
+    // Check Audio Spaces first
     const spaceMatch = audioSpaces.find(
       (s) => s.id.toUpperCase().includes(cleanCode) || s.title.toUpperCase().includes(cleanCode)
     );
@@ -92,20 +96,21 @@ export const TownView: React.FC = () => {
       return;
     }
 
-    // Check Town Communities
-    const commMatch = townCommunities.find(
-      (c) => c.id.toUpperCase().includes(cleanCode) || c.name.toUpperCase().includes(cleanCode)
-    );
-    if (commMatch) {
-      if (!commMatch.isJoined) toggleJoinTownCommunity(commMatch.id);
-      openCommunityChat(commMatch);
-      setShowJoinCodeModal(false);
-      setJoinCodeInput('');
-      setJoinCodeError(null);
-      return;
+    setIsJoiningByCode(true);
+    try {
+      const res = await joinGroupByCodeOrLink(raw);
+      if (res.success) {
+        setShowJoinCodeModal(false);
+        setJoinCodeInput('');
+        setJoinCodeError(null);
+        return;
+      }
+      setJoinCodeError(
+        res.error || 'No matching group, community, or live space found for that invite link or code.'
+      );
+    } finally {
+      setIsJoiningByCode(false);
     }
-
-    setJoinCodeError('No matching community or live space found for that invite code. Please check the code and try again.');
   };
 
   const [newCommunityName, setNewCommunityName] = useState('');
@@ -156,6 +161,18 @@ export const TownView: React.FC = () => {
       lowerDesc.includes('mock account')
     ) {
       return false;
+    }
+
+    // 2. Private groups stay hidden unless the user created, joined, or is a member
+    if (item.type === 'group' || item.isPrivate) {
+      const isCreator =
+        (item.creatorId && item.creatorId === currentUser.id) ||
+        (item.creatorPhone && phonesMatch(item.creatorPhone, currentUser.phoneNumber));
+      const isMember = Boolean(
+        item.isJoined ||
+          item.memberPhones?.some((p) => phonesMatch(p, currentUser.phoneNumber))
+      );
+      if (!isCreator && !isMember) return false;
     }
 
     if (activeFilter === 'channels' && item.type !== 'channel') return false;
@@ -549,18 +566,46 @@ export const TownView: React.FC = () => {
                             )}
                           </div>
 
-                          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 dark:text-purple-300/70">
+                          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 dark:text-purple-300/70 flex-wrap">
                             <span
-                              className={`px-1.5 py-0.2 rounded font-bold uppercase text-[9px] ${
+                              className={`px-1.5 py-0.2 rounded font-bold uppercase text-[9px] inline-flex items-center gap-0.5 ${
                                 item.type === 'channel'
                                   ? 'bg-purple-600/15 text-purple-700 dark:text-purple-300'
                                   : 'bg-emerald-600/15 text-emerald-700 dark:text-emerald-400'
                               }`}
                             >
-                              {item.type}
+                              {(item.type === 'group' || item.isPrivate) && <Lock className="w-2.5 h-2.5" />}
+                              <span>{item.type === 'group' || item.isPrivate ? 'Private Group' : item.type}</span>
                             </span>
                             <span>•</span>
                             <span className="truncate">{item.category}</span>
+                            {item.inviteCode && (item.type === 'group' || item.isPrivate) && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://agc.chat';
+                                  const link = `${origin}/?join=${item.inviteCode}`;
+                                  navigator.clipboard.writeText(link).catch(() => {});
+                                  setCopiedGroupId(item.id);
+                                  setTimeout(() => setCopiedGroupId(null), 2000);
+                                }}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded bg-purple-600/10 hover:bg-purple-600/20 text-purple-600 dark:text-purple-300 font-mono text-[9px] font-bold transition-colors"
+                                title="Copy private invite link"
+                              >
+                                {copiedGroupId === item.id ? (
+                                  <>
+                                    <Check className="w-2.5 h-2.5 text-emerald-500" />
+                                    <span className="text-emerald-500">Copied Link</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-2.5 h-2.5" />
+                                    <span>{item.inviteCode}</span>
+                                  </>
+                                )}
+                              </button>
+                            )}
                           </div>
 
                           {item.description && (
@@ -612,7 +657,9 @@ export const TownView: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-500 dark:text-purple-300/70 mb-3 leading-relaxed">
-              Start a public broadcast channel, discussion group, or street radio space. Your phone number is masked under your username.
+              {newCommunityType === 'group'
+                ? 'Groups are strictly private — hidden from other users until you invite them or share your invite link/code.'
+                : 'Start a public broadcast channel or live street radio space. Your phone number is masked under your username.'}
             </p>
 
             <div className="space-y-3">
@@ -851,11 +898,11 @@ export const TownView: React.FC = () => {
 
             <button
               type="button"
-              disabled={!joinCodeInput.trim()}
+              disabled={!joinCodeInput.trim() || isJoiningByCode}
               onClick={handleJoinByCode}
               className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
             >
-              Join Room Now
+              {isJoiningByCode ? 'Joining Room...' : 'Join Room Now'}
             </button>
           </div>
         </div>

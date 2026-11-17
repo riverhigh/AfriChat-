@@ -69,6 +69,7 @@ import {
   createTownCommunityInDb,
   updateTownCommunityInDb,
   deleteTownCommunityInDb,
+  fetchTownCommunityByInviteOrId,
   isHiddenOrInvalidCommunityRow,
   fetchLiveAudioSpaces,
   createAudioSpaceInDb,
@@ -1259,6 +1260,7 @@ interface AppContextType {
   toggleJoinTownCommunity: (id: string) => void;
   addTownCommunity: (name: string, type: 'group' | 'channel', category: TownCommunity['category'], description: string) => void;
   deleteTownCommunity: (id: string) => void;
+  joinGroupByCodeOrLink: (codeOrLink: string) => Promise<{ success: boolean; name?: string; error?: string }>;
   // Feature Flags System
   featureFlags: FeatureFlags;
   isFeatureEnabled: (key: keyof FeatureFlags) => boolean;
@@ -2189,6 +2191,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const isUserAuthorizedForTownCommunity = useCallback(
+    (c: Partial<TownCommunity> | null | undefined, myPhone?: string, myId?: string): boolean => {
+      if (!c || !c.id) return false;
+      const isPrivate = c.isPrivate === true || (c.type || 'group') === 'group';
+      if (!isPrivate) return true;
+      if (myId && c.creatorId && c.creatorId === myId) return true;
+      if (myPhone && c.creatorPhone && phonesMatch(c.creatorPhone, myPhone)) return true;
+      if (myPhone && Array.isArray(c.memberPhones) && c.memberPhones.some((p) => phonesMatch(p, myPhone))) return true;
+      if (myPhone && Array.isArray(c.invitedPhones) && c.invitedPhones.some((p) => phonesMatch(p, myPhone))) return true;
+      if (
+        chatsRef.current.some(
+          (ch) =>
+            ch.id === `town_comm_${c.id}` &&
+            ch.invitationStatus !== 'pending' &&
+            ch.invitationStatus !== 'declined'
+        )
+      ) {
+        return true;
+      }
+      if (townCommunitiesRef.current.some((tc) => tc.id === c.id && tc.isJoined)) return true;
+      return false;
+    },
+    []
+  );
+
   // Town Communities & Anonymous Privacy
   const [townCommunities, setTownCommunities] = useState<TownCommunity[]>(() => {
     try {
@@ -2200,6 +2227,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const clean: TownCommunity[] = [];
           parsed.forEach((c: TownCommunity) => {
             if (isInvalidCommunityClientItem(c)) return;
+            // Never hydrate unjoined private groups from stale localStorage
+            if ((c.type === 'group' || c.isPrivate) && !c.isJoined) return;
             const dedupeKey = `${String(c.name || '').trim().toLowerCase()}::${c.type || 'group'}`;
             if (seenKeys.has(c.id) || seenKeys.has(dedupeKey)) return;
             seenKeys.add(c.id);
@@ -2234,6 +2263,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('AGC_town_communities_v2', JSON.stringify(townCommunities));
     } catch (e) {}
   }, [townCommunities]);
+
+  const syncLiveCommunitiesRef = useRef<(() => void) | null>(null);
 
   // Sync communities across devices from Supabase & Gateway server
   useEffect(() => {
@@ -2287,6 +2318,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const threadSyncUpdates = new Map<string, { name: string; commType: 'group' | 'channel'; actualCount: number; parsedMembers: string[] }>();
       let gotSupabaseAuth = false;
       let gotServerAuth = false;
+      const myPhone = currentUserRef.current?.phoneNumber || '';
+      const myId = currentUserRef.current?.id || '';
 
       if (isSupabaseConfigured) {
         try {
@@ -2304,22 +2337,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const commType = typeTag
                 ? (typeTag.replace('type:', '') as 'group' | 'channel')
                 : (row.category === 'Broadcast' ? 'channel' : 'group');
+              const isPrivate = commType === 'group' || tags.some((t: string) => t.toLowerCase() === 'private:true');
+              const inviteTag = tags.find((t: string) => t.toLowerCase().startsWith('invite:'));
+              const inviteCode = inviteTag ? inviteTag.slice(7).trim().toUpperCase() : undefined;
+              const creatorIdTag = tags.find((t: string) => t.startsWith('creator_id:'));
+              const rowCreatorId = creatorIdTag ? creatorIdTag.replace('creator_id:', '') : undefined;
+              const creatorPhoneTag = tags.find((t: string) => t.startsWith('creator_phone:'));
+              const rowCreatorPhone = creatorPhoneTag ? creatorPhoneTag.replace('creator_phone:', '') : undefined;
               const membersTag = tags.find((t: string) => t.startsWith('members:'));
               let parsedMembers: string[] = [];
               if (membersTag) {
                 try { parsedMembers = JSON.parse(membersTag.replace('members:', '')); } catch (_) {}
               }
               const actualCount = row.members_count || (parsedMembers.length > 0 ? parsedMembers.length + 1 : 1);
-              const dedupeKey = `${lowerName}::${commType}`;
-              if (seenIds.has(row.id) || seenNames.has(dedupeKey)) return;
-              seenIds.add(row.id);
-              seenNames.add(dedupeKey);
-
               const existingLocal = townCommunitiesRef.current.find((c) => c.id === row.id);
               const chatId = `town_comm_${row.id}`;
               const alreadyInChats = chatsRef.current.some((c) => c.id === chatId);
 
-              authoritativeRows.push({
+              const candidateComm: TownCommunity = {
                 id: row.id,
                 name: row.name,
                 type: commType,
@@ -2331,7 +2366,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 isJoined: Boolean(existingLocal?.isJoined || alreadyInChats),
                 recentActivity: parsedMembers.length > 0 ? `${parsedMembers.length} members connected` : 'Active community',
                 adminName: existingLocal?.adminName || 'AGC Admin',
-              });
+                creatorId: rowCreatorId || existingLocal?.creatorId,
+                creatorPhone: rowCreatorPhone || existingLocal?.creatorPhone,
+                isPrivate,
+                inviteCode: inviteCode || existingLocal?.inviteCode,
+                memberPhones: parsedMembers.length > 0 ? parsedMembers : existingLocal?.memberPhones,
+              };
+
+              // Strict privacy gate: private groups are hidden unless user is creator, invited, or joined member
+              if (!isUserAuthorizedForTownCommunity(candidateComm, myPhone, myId)) {
+                return;
+              }
+
+              const dedupeKey = isPrivate ? `id::${row.id}` : `${lowerName}::${commType}`;
+              if (seenIds.has(row.id) || seenNames.has(dedupeKey)) return;
+              seenIds.add(row.id);
+              seenNames.add(dedupeKey);
+
+              authoritativeRows.push(candidateComm);
 
               threadSyncUpdates.set(chatId, {
                 name: row.name,
@@ -2345,7 +2397,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       try {
-        const res = await fetch('/api/communities');
+        const res = await fetch(
+          `/api/communities?phone=${encodeURIComponent(myPhone)}&userId=${encodeURIComponent(myId)}`
+        );
         if (res.ok) {
           const json = await res.json();
           if (Array.isArray(json?.communities)) {
@@ -2353,14 +2407,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             json.communities.forEach((c: TownCommunity) => {
               if (isInvalidCommunityClientItem(c)) return;
               if (deletedCommunityIdsRef.current.has(c.id)) return;
+              if (!isUserAuthorizedForTownCommunity(c, myPhone, myId)) return;
               const lowerName = String(c.name || '').trim().toLowerCase();
               if (deletedCommunityNamesRef.current.has(lowerName)) return;
               const commType = c.type === 'channel' ? 'channel' : 'group';
-              const dedupeKey = `${lowerName}::${commType}`;
+              const isPrivate = commType === 'group' || Boolean(c.isPrivate);
+              const dedupeKey = isPrivate ? `id::${c.id}` : `${lowerName}::${commType}`;
               if (seenIds.has(c.id) || seenNames.has(dedupeKey)) return;
               seenIds.add(c.id);
               seenNames.add(dedupeKey);
-              authoritativeRows.push(c);
+              const existingLocal = townCommunitiesRef.current.find((lc) => lc.id === c.id);
+              const alreadyInChats = chatsRef.current.some((ch) => ch.id === `town_comm_${c.id}`);
+              authoritativeRows.push({
+                ...c,
+                isPrivate,
+                isJoined: Boolean(c.isJoined || existingLocal?.isJoined || alreadyInChats),
+              });
             });
           }
         }
@@ -2376,6 +2438,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (isInvalidCommunityClientItem(c)) return false;
             if (deletedCommunityIdsRef.current.has(c.id)) return false;
             if (seenIds.has(c.id)) return false;
+            if (!isUserAuthorizedForTownCommunity(c, myPhone, myId)) return false;
             const createdTs = recentCommunityCreateRef.current.get(`${c.name.trim().toLowerCase()}::${c.type}`);
             return Boolean(createdTs && now - createdTs < 10000);
           });
@@ -2409,6 +2472,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    syncLiveCommunitiesRef.current = syncLiveCommunities;
     syncLiveCommunities();
 
     // 3. Socket.io community_created & community_deleted listeners
@@ -2416,13 +2480,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const handleCommunityCreated = (comm: TownCommunity) => {
       if (!comm || !comm.id || isInvalidCommunityClientItem(comm)) return;
       if (deletedCommunityIdsRef.current.has(comm.id)) return;
+      const myPhone = currentUserRef.current?.phoneNumber || '';
+      const myId = currentUserRef.current?.id || '';
+      if (!isUserAuthorizedForTownCommunity(comm, myPhone, myId)) return;
       const lowerKey = `${String(comm.name || '').trim().toLowerCase()}::${comm.type || 'group'}`;
       setTownCommunities((prev) => {
         if (
           prev.some(
             (c) =>
               c.id === comm.id ||
-              `${c.name.trim().toLowerCase()}::${c.type}` === lowerKey
+              (comm.type !== 'group' && `${c.name.trim().toLowerCase()}::${c.type}` === lowerKey)
           )
         ) {
           return prev;
@@ -2478,11 +2545,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       isMounted = false;
+      syncLiveCommunitiesRef.current = null;
       socket?.off('community_created', handleCommunityCreated);
       socket?.off('community_deleted', handleCommunityDeleted);
       if (commCh) commCh.unsubscribe();
     };
-  }, []);
+  }, [isUserAuthorizedForTownCommunity]);
 
   const toggleJoinTownCommunity = (id: string) => {
     setTownCommunities((prev) =>
@@ -2515,6 +2583,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     recentCommunityCreateRef.current.set(dedupeKey, now);
 
     const communityId = generateCommunityUuid();
+    const isPrivateGroup = type === 'group';
+    const inviteCode = isPrivateGroup
+      ? 'G' + Math.random().toString(36).substring(2, 7).toUpperCase()
+      : 'C' + Math.random().toString(36).substring(2, 7).toUpperCase();
+    const myPhone = currentUser.phoneNumber || '';
+
     const newCommunity: TownCommunity = {
       id: communityId,
       name: cleanName,
@@ -2522,11 +2596,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       category,
       membersCount: 1,
       avatar: `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(cleanName)}&backgroundColor=581c87&textColor=ffffff`,
-      description: cleanDesc || `${type === 'channel' ? 'Channel' : 'Group'} community`,
+      description: cleanDesc || `${type === 'channel' ? 'Channel' : 'Private group'} community`,
       isVerified: false,
       isJoined: true,
-      recentActivity: 'Just created',
+      recentActivity: isPrivateGroup ? 'Private · Invite only' : 'Just created',
       adminName: currentUser.fullName || 'You',
+      creatorId: currentUser.id,
+      creatorPhone: myPhone,
+      isPrivate: isPrivateGroup,
+      inviteCode,
+      memberPhones: myPhone ? [myPhone] : [],
     };
     setTownCommunities((prev) => {
       const updated = [newCommunity, ...prev.filter((c) => c.id !== communityId)];
@@ -2534,7 +2613,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    // LIVE SYSTEM: Persist once to Supabase and broadcast via shared channel helper
+    // LIVE SYSTEM: Persist once to Supabase; only broadcast publicly for non-private channels
     if (isSupabaseConfigured) {
       createTownCommunityInDb({
         id: newCommunity.id,
@@ -2544,13 +2623,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         description: newCommunity.description,
         avatar: newCommunity.avatar,
         members_count: 1,
-        members: currentUser.phoneNumber ? [currentUser.phoneNumber] : [],
+        members: myPhone ? [myPhone] : [],
+        isPrivate: isPrivateGroup,
+        inviteCode,
+        creatorId: currentUser.id,
+        creatorPhone: myPhone,
       }).catch((e) => console.warn('Supabase community create notice:', e));
 
-      sendSupabaseBroadcastOnce('live_town_communities', 'community_created', newCommunity);
+      if (!isPrivateGroup) {
+        sendSupabaseBroadcastOnce('live_town_communities', 'community_created', newCommunity);
+      }
     }
 
-    // Create corresponding ChatThread so the group/channel appears in chat list
+    // Create corresponding ChatThread so the group/channel appears in creator's chat list
     const communityChatId = `town_comm_${newCommunity.id}`;
     const creatorDisplay = currentUser.fullName || 'You';
     const newThread: ChatThread = {
@@ -2562,10 +2647,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       creatorId: currentUser.id,
       admins: [creatorDisplay, 'You'],
       adminIds: currentUser.id ? [currentUser.id] : [],
-      members: currentUser.phoneNumber ? [currentUser.phoneNumber] : [],
+      members: myPhone ? [myPhone] : [creatorDisplay],
+      memberPhones: myPhone ? [myPhone] : [],
       membersCount: 1,
+      inviteCode,
+      invitationStatus: 'accepted',
       verifiedStore: false,
-      location: `${type === 'channel' ? 'Broadcast Channel' : 'Town Group'} · ${category}`,
+      location: `${type === 'channel' ? 'Broadcast Channel' : 'Private Group'} · ${category}`,
       unreadCount: 0,
       lastMessage: newCommunity.description,
       lastMessageTime: 'Just now',
@@ -2756,6 +2844,231 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveTab('chats');
     setActiveChatId(chatId);
   };
+
+  const joinGroupByCodeOrLink = useCallback(
+    async (rawInput: string): Promise<{ success: boolean; name?: string; error?: string }> => {
+      const raw = String(rawInput || '').trim();
+      if (!raw) return { success: false, error: 'Please enter an invite link or code.' };
+
+      // Extract token from full URLs like https://agc.chat/join/group_123 or ?join=G9X7A2 or #join=G9X7A2
+      let extracted = raw;
+      try {
+        if (raw.includes('://') || raw.includes('?') || raw.includes('#')) {
+          const normalizedUrl = raw.startsWith('http') ? raw : `https://agc.chat/${raw.replace(/^\/+/, '')}`;
+          const u = new URL(normalizedUrl);
+          const qJoin = u.searchParams.get('join') || u.searchParams.get('code') || u.searchParams.get('invite');
+          if (qJoin) {
+            extracted = qJoin.trim();
+          } else if (u.hash && u.hash.includes('join=')) {
+            const m = u.hash.match(/join=([^&#]+)/i);
+            if (m?.[1]) extracted = decodeURIComponent(m[1]).trim();
+          } else {
+            const segs = u.pathname.split('/').filter(Boolean);
+            if (segs.length > 0) extracted = decodeURIComponent(segs[segs.length - 1]).trim();
+          }
+        } else {
+          extracted = raw.replace(/^.*\//, '').trim();
+        }
+      } catch (_) {
+        extracted = raw.replace(/^.*\//, '').trim();
+      }
+
+      const tokenUpper = extracted.toUpperCase();
+      const strippedTownUpper = tokenUpper.replace(/^TOWN_COMM_/, '');
+
+      // 1. Check already-loaded Chats
+      const existingChat = chatsRef.current.find(
+        (c) =>
+          (c.isGroup || c.isChannel) &&
+          (c.id.toUpperCase() === tokenUpper ||
+            (c.inviteCode && c.inviteCode.toUpperCase() === tokenUpper))
+      );
+      if (existingChat) {
+        if (existingChat.invitationStatus === 'pending') {
+          setChats((prev) => {
+            const updated = prev.map((c) =>
+              c.id === existingChat.id ? { ...c, invitationStatus: 'accepted' as const } : c
+            );
+            persistPartitionedChats(updated, currentUserRef.current?.phoneNumber);
+            return updated;
+          });
+        }
+        joinChatRoom(existingChat.id);
+        setActiveTab('chats');
+        setActiveChatId(existingChat.id);
+        return { success: true, name: existingChat.name };
+      }
+
+      // 2. Check already-loaded Town Communities
+      const localComm = townCommunitiesRef.current.find(
+        (c) =>
+          c.id.toUpperCase() === tokenUpper ||
+          c.id.toUpperCase() === strippedTownUpper ||
+          (c.inviteCode && c.inviteCode.toUpperCase() === tokenUpper)
+      );
+      if (localComm) {
+        if (!localComm.isJoined) toggleJoinTownCommunity(localComm.id);
+        openCommunityChat(localComm);
+        return { success: true, name: localComm.name };
+      }
+
+      const me = currentUserRef.current;
+      const myPhone = me?.phoneNumber || '';
+      const myName = me?.fullName || 'AGC Member';
+
+      // 3. Query server join endpoint (covers private groups & Town groups)
+      try {
+        const res = await fetch('/api/groups/join', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            codeOrLink: extracted,
+            phone: myPhone,
+            name: myName,
+            avatar: me?.avatarUrl,
+            userId: me?.id,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.success && data.kind === 'group' && data.group) {
+            const g = data.group;
+            const mergedMembers = Array.from(new Set([...(Array.isArray(g.members) ? g.members : []), myName]));
+            const mergedPhones = Array.from(
+              new Set([...(Array.isArray(g.memberPhones) ? g.memberPhones : []), myPhone].filter(Boolean))
+            );
+            const joinedThread: ChatThread = {
+              id: g.id,
+              name: g.name,
+              avatar: g.avatar || 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=150&auto=format&fit=crop&q=80',
+              verifiedStore: false,
+              location: g.isChannel ? 'Broadcast Channel' : 'Private Group',
+              unreadCount: 0,
+              lastMessage: `You joined via invite link`,
+              lastMessageTime: 'Just now',
+              lastMessageAtMs: Date.now(),
+              catalog: [],
+              isOnline: true,
+              isGroup: !g.isChannel,
+              isChannel: Boolean(g.isChannel),
+              creatorId: g.creatorId,
+              admins: Array.isArray(g.admins) ? g.admins : [],
+              adminIds: Array.isArray(g.adminIds) ? g.adminIds : [],
+              members: mergedMembers,
+              memberPhones: mergedPhones,
+              membersCount: Math.max(Number(g.membersCount || 1), mergedMembers.length, mergedPhones.length),
+              inviteCode: g.inviteCode,
+              description: g.description,
+              invitationStatus: 'accepted',
+            };
+            declinedGroupIdsRef.current.delete(g.id);
+            try {
+              const key = getUserStorageKey('AGC_declined_group_ids', myPhone);
+              const arr = Array.from(declinedGroupIdsRef.current).slice(-250);
+              localStorage.setItem(key, JSON.stringify(arr));
+            } catch (_) {}
+            setChats((prev) => {
+              const filtered = prev.filter((c) => c.id !== g.id);
+              const updated = [joinedThread, ...filtered];
+              persistPartitionedChats(updated, myPhone);
+              return updated;
+            });
+            setMessages((prev) => {
+              const list = prev[g.id] || [];
+              const sysMsg: ChatMessage = {
+                id: `msg_sys_linkjoin_${Date.now()}`,
+                chatId: g.id,
+                sender: 'system',
+                text: `You joined "${g.name}" using an invite link/code.`,
+                type: 'text',
+                timestamp: 'Just now',
+                status: 'sent',
+              };
+              const updated = { ...prev, [g.id]: [...list, sysMsg] };
+              persistPartitionedMessages(updated, myPhone);
+              return updated;
+            });
+            joinChatRoom(g.id);
+            setActiveTab('chats');
+            setActiveChatId(g.id);
+            return { success: true, name: g.name };
+          }
+
+          if (data?.success && data.kind === 'community' && data.community) {
+            const c = data.community;
+            const joinedComm: TownCommunity = {
+              ...c,
+              isJoined: true,
+              memberPhones: Array.from(
+                new Set([...(Array.isArray(c.memberPhones) ? c.memberPhones : []), myPhone].filter(Boolean))
+              ),
+            };
+            setTownCommunities((prev) => {
+              const filtered = prev.filter((item) => item.id !== joinedComm.id);
+              const updated = [joinedComm, ...filtered];
+              try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+              return updated;
+            });
+            openCommunityChat(joinedComm);
+            return { success: true, name: joinedComm.name };
+          }
+        }
+      } catch (_) {}
+
+      // 4. Fallback: query Supabase town_communities by invite tag or UUID
+      if (isSupabaseConfigured) {
+        try {
+          const { data: row } = await fetchTownCommunityByInviteOrId(extracted);
+          if (row && row.id) {
+            const tags: string[] = Array.isArray(row.tags) ? row.tags : [];
+            const typeTag = tags.find((t: string) => t.startsWith('type:'));
+            const commType = typeTag ? (typeTag.replace('type:', '') as 'group' | 'channel') : 'group';
+            const inviteTag = tags.find((t: string) => t.toLowerCase().startsWith('invite:'));
+            const membersTag = tags.find((t: string) => t.startsWith('members:'));
+            let parsedMembers: string[] = [];
+            if (membersTag) {
+              try { parsedMembers = JSON.parse(membersTag.replace('members:', '')); } catch (_) {}
+            }
+            const mergedMembers = Array.from(new Set([...parsedMembers, myPhone].filter(Boolean)));
+            const joinedComm: TownCommunity = {
+              id: row.id,
+              name: row.name,
+              type: commType,
+              category: row.category || 'Tech & Hustle',
+              description: row.description || '',
+              membersCount: Math.max(Number(row.members_count || 1) + 1, mergedMembers.length),
+              avatar: row.avatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(row.name)}&backgroundColor=581c87&textColor=ffffff`,
+              isVerified: Boolean(row.is_live),
+              isJoined: true,
+              recentActivity: 'Joined via invite',
+              adminName: 'AGC Admin',
+              isPrivate: commType === 'group' || tags.some((t: string) => t.toLowerCase() === 'private:true'),
+              inviteCode: inviteTag ? inviteTag.slice(7).trim().toUpperCase() : undefined,
+              memberPhones: mergedMembers,
+            };
+            setTownCommunities((prev) => {
+              const filtered = prev.filter((item) => item.id !== joinedComm.id);
+              const updated = [joinedComm, ...filtered];
+              try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+              return updated;
+            });
+            updateTownCommunityInDb(row.id, {
+              members_count: joinedComm.membersCount,
+              members: mergedMembers,
+            }).catch(() => {});
+            openCommunityChat(joinedComm);
+            return { success: true, name: joinedComm.name };
+          }
+        } catch (_) {}
+      }
+
+      return {
+        success: false,
+        error: 'No matching private group, community, or live space found for that invite link or code.',
+      };
+    },
+    []
+  );
 
   // Healthcare
   const [doctors, setDoctors] = useState<DoctorProfile[]>([]);
@@ -4665,6 +4978,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem(key, JSON.stringify(arr));
     } catch (_) {}
   }, [currentUser.phoneNumber]);
+
+  useEffect(() => {
+    syncLiveCommunitiesRef.current?.();
+  }, [currentUser.id, currentUser.phoneNumber, isAuthenticated]);
 
   const handleIncomingGroupInvite = useCallback((rawInvite: GroupInvitation, chatSnapshot?: ChatThread) => {
     if (!rawInvite || !rawInvite.id || !rawInvite.groupId) return;
@@ -7360,6 +7677,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         invitedBy: myName,
       };
 
+      // Register chat on backend so anyone given the invite link or code can join
+      if (!targetChat.id.startsWith('town_comm_')) {
+        try {
+          fetch('/api/groups/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: targetChat.id,
+              name: targetChat.name,
+              avatar: targetChat.avatar,
+              description: targetChat.description,
+              isGroup: targetChat.isGroup,
+              isChannel: targetChat.isChannel,
+              creatorId: targetChat.creatorId || currentUser.id,
+              creatorPhone: myPhone,
+              admins: targetChat.admins,
+              adminIds: targetChat.adminIds,
+              members: targetChat.members,
+              memberPhones: targetChat.memberPhones,
+              membersCount: targetChat.membersCount || 1,
+              inviteCode: targetChat.inviteCode,
+            }),
+          }).catch(() => {});
+        } catch (_) {}
+      }
+
       const seenCleanPhones = new Set<string>();
       targets.forEach(({ phone }) => {
         const cleanTarget = normalizePhoneDigits(phone) || (phone || '').replace(/\D/g, '');
@@ -7602,6 +7945,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
+
+    // Register private group on server so invite links and codes resolve for authorized joiners
+    try {
+      fetch('/api/groups/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: newThread.id,
+          name: newThread.name,
+          avatar: newThread.avatar,
+          description: newThread.description,
+          isGroup: true,
+          isChannel: false,
+          creatorId: currentUser.id,
+          creatorPhone: myPhone,
+          admins: newThread.admins,
+          adminIds: newThread.adminIds,
+          members: newThread.members,
+          memberPhones: newThread.memberPhones,
+          membersCount: 1,
+          inviteCode: shortInvite,
+        }),
+      }).catch(() => {});
+    } catch (_) {}
 
     // Send group invitations to selected members (prompts them to accept or decline)
     if (resolvedTargets.length > 0) {
@@ -9907,6 +10274,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .eq('status', 'pending')
           .then(() => {}, () => {});
       }
+    }
+
+    if (invite.groupId.startsWith('town_comm_')) {
+      const commId = invite.groupId.replace('town_comm_', '');
+      setTownCommunities((prev) => {
+        const exists = prev.some((c) => c.id === commId);
+        let updated: TownCommunity[];
+        if (exists) {
+          updated = prev.map((c) =>
+            c.id === commId
+              ? {
+                  ...c,
+                  isJoined: true,
+                  memberPhones: Array.from(new Set([...(c.memberPhones || []), myPhone].filter(Boolean))),
+                  membersCount: Math.max(c.membersCount || 1, (c.memberPhones?.length || 0) + 1),
+                }
+              : c
+          );
+        } else {
+          const newComm: TownCommunity = {
+            id: commId,
+            name: invite.groupName || 'Private Group',
+            type: isChannel ? 'channel' : 'group',
+            category: 'Tech & Hustle',
+            membersCount: invite.membersCount || 2,
+            avatar: invite.groupAvatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(invite.groupName || 'Group')}&backgroundColor=581c87&textColor=ffffff`,
+            description: invite.description || '',
+            isVerified: false,
+            isJoined: true,
+            recentActivity: 'Joined via invite',
+            adminName: invite.invitedByName || 'Group Admin',
+            isPrivate: !isChannel,
+            memberPhones: myPhone ? [myPhone] : [],
+          };
+          updated = [newComm, ...prev];
+        }
+        try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+        return updated;
+      });
     }
 
     notifyGroupInviteResponse(invite, true);
@@ -17058,16 +17464,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           persistPartitionedChats(finalUpdated, userNow.phoneNumber);
           return finalUpdated;
         } else {
-          // Never auto-insert unjoined Town communities, channels, declined groups, or pending invites into personal chats
+          // Never auto-insert unjoined Town communities, channels, declined groups, or uninvited groups into personal chats
           if (resolvedChatId.startsWith('town_comm_') || chatId.startsWith('town_comm_')) {
             return prev;
           }
-          if (
-            isGroupChat &&
-            (declinedGroupIdsRef.current.has(resolvedChatId) ||
-              groupInvitesRef.current.some((inv) => inv.groupId === resolvedChatId && inv.status === 'pending'))
-          ) {
-            return prev;
+          if (isGroupChat) {
+            const isExplicitMember =
+              isFromMe ||
+              (Array.isArray(chat?.memberPhones) &&
+                Boolean(userNow.phoneNumber) &&
+                chat.memberPhones.some((p: string) => phonesMatch(p, userNow.phoneNumber)));
+            if (
+              !isExplicitMember ||
+              declinedGroupIdsRef.current.has(resolvedChatId) ||
+              groupInvitesRef.current.some((inv) => inv.groupId === resolvedChatId && inv.status === 'pending')
+            ) {
+              return prev;
+            }
           }
           const activeNow = activeChatIdRef.current;
           const incomingTs = createdAtMs || Date.now();
@@ -17320,6 +17733,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (chat.name && chat.name.trim().startsWith('__')) return;
       const latestUser = currentUserRef.current;
       if (chat.creatorId && chat.creatorId === latestUser.id) return;
+      const isTargeted =
+        (payload.targetPhone && latestUser.phoneNumber && phonesMatch(payload.targetPhone, latestUser.phoneNumber)) ||
+        (Array.isArray(chat.memberPhones) &&
+          Boolean(latestUser.phoneNumber) &&
+          chat.memberPhones.some((p) => phonesMatch(p, latestUser.phoneNumber)));
+      if (!isTargeted) return;
       if (chatsRef.current.some((c) => c.id === chat.id && c.invitationStatus !== 'pending')) return;
       const syntheticInvite: GroupInvitation = {
         id: `ginv_${chat.id}_${myCleanPhone || 'me'}`,
@@ -18629,6 +19048,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  const pendingJoinCodeRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleUrlChange = () => {
@@ -18700,6 +19121,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         } catch (_) {}
       }
+      // Handle group invite link: ?join=CODE, #join=CODE, or /join/CODE
+      try {
+        const urlParams = new URLSearchParams(window.location.search || '');
+        const hashStr = hash.replace(/^#/, '');
+        const hashParams = new URLSearchParams(hashStr.includes('?') ? hashStr.split('?')[1] : hashStr);
+        const pathJoinMatch = (window.location.pathname || '').match(/\/join\/([^/]+)/i);
+        const joinToken =
+          urlParams.get('join') ||
+          hashParams.get('join') ||
+          (pathJoinMatch?.[1] ? decodeURIComponent(pathJoinMatch[1]) : '');
+        if (joinToken && joinToken.trim()) {
+          pendingJoinCodeRef.current = joinToken.trim();
+          window.history.replaceState(null, '', '/');
+          if (isAuthenticatedRef.current) {
+            const codeToJoin = pendingJoinCodeRef.current;
+            pendingJoinCodeRef.current = null;
+            if (codeToJoin) {
+              joinGroupByCodeOrLink(codeToJoin).catch(() => {});
+            }
+          }
+        }
+      } catch (_) {}
     };
 
     handleUrlChange();
@@ -18711,7 +19154,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       window.removeEventListener('popstate', handleUrlChange);
       window.removeEventListener('focus', handleUrlChange);
     };
-  }, []);
+  }, [joinGroupByCodeOrLink]);
+
+  useEffect(() => {
+    if (isAuthenticated && pendingJoinCodeRef.current) {
+      const code = pendingJoinCodeRef.current;
+      pendingJoinCodeRef.current = null;
+      joinGroupByCodeOrLink(code).catch(() => {});
+    }
+  }, [isAuthenticated, joinGroupByCodeOrLink]);
   const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>([]);
   const adminUsersRef = useRef<AdminUserRecord[]>([]);
   useEffect(() => { adminUsersRef.current = adminUsers; }, [adminUsers]);
@@ -19827,6 +20278,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleJoinTownCommunity,
         addTownCommunity,
         deleteTownCommunity,
+        joinGroupByCodeOrLink,
         // 19. Healthcare
         doctors,
         queueTokens,

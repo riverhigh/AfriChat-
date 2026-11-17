@@ -99,6 +99,7 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
     inviteBotToGroup,
   } = useApp();
   const [copied, setCopied] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
   const [announceMode, setAnnounceMode] = useState(false);
   const [members, setMembers] = useState<GroupMember[]>(() =>
     buildMemberList(chat, currentUser, deviceContacts)
@@ -106,13 +107,20 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
 
   if (!isOpen) return null;
 
-  const inviteLink = `https://agc.chat/join/${chat.id}`;
+  const joinToken = chat.inviteCode || chat.id;
+  const inviteLink = `${typeof window !== 'undefined' ? window.location.origin : 'https://agc.chat'}/?join=${joinToken}`;
   const isAdmin = members.find((m) => m.id === 'member_me')?.isAdmin ?? false;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(inviteLink).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
+  };
+
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(joinToken).catch(() => {});
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2500);
   };
 
   const handlePromote = (rawKey: string) => {
@@ -232,21 +240,35 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
             )}
           </div>
 
-          {/* Invite Link */}
-          <div className="px-5 py-4 border-b border-slate-100 dark:border-neutral-800">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-1.5">
-              <Link2 className="w-3.5 h-3.5" /> Invite Link
+          {/* Invite Link & Code */}
+          <div className="px-5 py-4 border-b border-slate-100 dark:border-neutral-800 space-y-2.5">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5">
+              <Link2 className="w-3.5 h-3.5" /> Private Invite Link &amp; Code
             </p>
             <div className="flex items-center gap-2 bg-slate-50 dark:bg-neutral-900 rounded-xl px-3 py-2 border border-slate-200 dark:border-neutral-800">
               <span className="flex-1 text-xs text-slate-600 dark:text-slate-300 truncate font-mono">
                 {inviteLink}
               </span>
               <button
+                type="button"
                 onClick={handleCopyLink}
                 className="p-1 text-purple-600 hover:text-purple-800 transition-colors"
                 title="Copy invite link"
               >
                 {copied ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
+            <div className="flex items-center justify-between bg-purple-50/70 dark:bg-purple-950/30 rounded-xl px-3 py-2 border border-purple-200/70 dark:border-purple-900/40">
+              <span className="text-[11px] text-slate-600 dark:text-purple-300">
+                Invite Code: <strong className="font-mono text-purple-700 dark:text-purple-200">{joinToken}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={handleCopyCode}
+                className="inline-flex items-center gap-1 text-[11px] font-bold text-purple-600 dark:text-purple-300 hover:underline"
+              >
+                {copiedCode ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedCode ? 'Copied' : 'Copy Code'}</span>
               </button>
             </div>
           </div>

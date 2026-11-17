@@ -507,6 +507,7 @@ const usersByPhone = new Map<string, RegisteredUser>();
 const phoneToSocketId = new Map<string, string>();
 const USERS_FILE = path.join(__dirname, 'data_users.json');
 const COMMUNITIES_FILE = path.join(__dirname, 'data_communities.json');
+const PRIVATE_GROUPS_FILE = path.join(__dirname, 'data_private_groups.json');
 const STATUSES_FILE = path.join(__dirname, 'data_statuses.json');
 const MESSAGES_FILE = path.join(__dirname, 'data_messages.json');
 const DISPATCH_FILE = path.join(__dirname, 'data_dispatch_orders.json');
@@ -1081,6 +1082,7 @@ async function ensureUserEntry(
   return match;
 }
 const communitiesMap = new Map<string, any>();
+const privateGroupsMap = new Map<string, any>();
 const statusesMap = new Map<string, any>();
 const dispatchOrdersMap = new Map<string, any>();
 
@@ -1362,6 +1364,70 @@ function saveCommunitiesFile() {
   } catch (e) {
     console.warn('Notice saving communities registry:', e);
   }
+}
+
+try {
+  if (fs.existsSync(PRIVATE_GROUPS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(PRIVATE_GROUPS_FILE, 'utf8'));
+    if (Array.isArray(raw)) {
+      for (const g of raw) {
+        if (g?.id && g?.name && !String(g.name).trim().startsWith('__')) {
+          privateGroupsMap.set(String(g.id), g);
+        }
+      }
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading private groups registry:', e);
+}
+
+function savePrivateGroupsFile() {
+  try {
+    fs.writeFileSync(PRIVATE_GROUPS_FILE, JSON.stringify(Array.from(privateGroupsMap.values()), null, 2));
+  } catch (e) {
+    console.warn('Notice saving private groups registry:', e);
+  }
+}
+
+function isPrivateServerCommunity(c: any): boolean {
+  if (!c) return false;
+  if (c.isPrivate === true) return true;
+  if ((c.type || 'group') === 'group') return true;
+  return false;
+}
+
+function canUserAccessServerCommunity(c: any, viewerPhone?: string, viewerId?: string): boolean {
+  if (!isPrivateServerCommunity(c)) return true;
+  if (viewerId && c.creatorId && String(c.creatorId) === String(viewerId)) return true;
+  if (!viewerPhone) return false;
+  if (c.creatorPhone && phonesMatchServer(viewerPhone, c.creatorPhone)) return true;
+  if (Array.isArray(c.memberPhones) && c.memberPhones.some((p: string) => phonesMatchServer(viewerPhone, p))) {
+    return true;
+  }
+  if (Array.isArray(c.invitedPhones) && c.invitedPhones.some((p: string) => phonesMatchServer(viewerPhone, p))) {
+    return true;
+  }
+  return false;
+}
+
+function extractInviteLookupCode(rawInput: string): string {
+  const raw = String(rawInput || '').trim();
+  if (!raw) return '';
+  try {
+    if (raw.includes('://') || raw.includes('?') || raw.includes('#')) {
+      const normalizedUrl = raw.startsWith('http') ? raw : `https://agc.chat/${raw.replace(/^\/+/, '')}`;
+      const u = new URL(normalizedUrl);
+      const qJoin = u.searchParams.get('join') || u.searchParams.get('code') || u.searchParams.get('invite');
+      if (qJoin) return qJoin.trim();
+      if (u.hash && u.hash.includes('join=')) {
+        const m = u.hash.match(/join=([^&#]+)/i);
+        if (m?.[1]) return decodeURIComponent(m[1]).trim();
+      }
+      const segments = u.pathname.split('/').filter(Boolean);
+      if (segments.length > 0) return decodeURIComponent(segments[segments.length - 1]).trim();
+    }
+  } catch (_) {}
+  return raw.replace(/^.*\//, '').trim();
 }
 
 try {
@@ -5016,8 +5082,12 @@ app.get('/api/users', async (_req: Request, res: Response) => {
 });
 
 // REST: Communities endpoints
-app.get('/api/communities', (_req: Request, res: Response) => {
-  const valid = Array.from(communitiesMap.values()).filter((c) => !isInvalidServerCommunity(c));
+app.get('/api/communities', (req: Request, res: Response) => {
+  const viewerPhone = String(req.query.phone || '').trim();
+  const viewerId = String(req.query.userId || '').trim();
+  const valid = Array.from(communitiesMap.values()).filter(
+    (c) => !isInvalidServerCommunity(c) && canUserAccessServerCommunity(c, viewerPhone, viewerId)
+  );
   res.json({ communities: valid });
 });
 
@@ -5029,18 +5099,131 @@ app.post('/api/communities', (req: Request, res: Response) => {
   }
   const normName = String(comm.name).trim().toLowerCase();
   const commType = comm.type || 'group';
+  const isPrivateGroup = isPrivateServerCommunity(comm);
   const duplicate = Array.from(communitiesMap.values()).find(
     (c) =>
       c.id === comm.id ||
-      (String(c.name || '').trim().toLowerCase() === normName && (c.type || 'group') === commType)
+      (!isPrivateGroup && String(c.name || '').trim().toLowerCase() === normName && (c.type || 'group') === commType)
   );
   if (duplicate) {
     return res.json({ success: true, community: duplicate, deduplicated: true });
   }
-  communitiesMap.set(comm.id, comm);
+  const stored = isPrivateGroup
+    ? {
+        ...comm,
+        isPrivate: true,
+        inviteCode: comm.inviteCode || `G${String(comm.id).replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase()}`,
+        memberPhones: Array.isArray(comm.memberPhones)
+          ? comm.memberPhones
+          : comm.creatorPhone
+          ? [comm.creatorPhone]
+          : [],
+      }
+    : comm;
+  communitiesMap.set(stored.id, stored);
   saveCommunitiesFile();
-  io.emit('community_created', comm);
-  res.json({ success: true, community: comm });
+  if (!isPrivateGroup) {
+    io.emit('community_created', stored);
+  }
+  res.json({ success: true, community: stored });
+});
+
+// REST: Private Groups Registry & Join-by-Link / Invite Code
+app.post('/api/groups/register', (req: Request, res: Response) => {
+  const g = req.body;
+  if (!g || !g.id || !g.name) return res.status(400).json({ error: 'Group id and name required' });
+  const existing = privateGroupsMap.get(String(g.id));
+  const mergedPhones = Array.from(
+    new Set([
+      ...(Array.isArray(existing?.memberPhones) ? existing.memberPhones : []),
+      ...(Array.isArray(g.memberPhones) ? g.memberPhones : []),
+      ...(g.creatorPhone ? [g.creatorPhone] : []),
+    ].filter(Boolean))
+  );
+  const mergedMembers = Array.from(
+    new Set([
+      ...(Array.isArray(existing?.members) ? existing.members : []),
+      ...(Array.isArray(g.members) ? g.members : []),
+    ].filter(Boolean))
+  );
+  const nextGroup = {
+    ...(existing || {}),
+    ...g,
+    id: String(g.id),
+    inviteCode: String(g.inviteCode || existing?.inviteCode || g.id).trim().toUpperCase(),
+    memberPhones: mergedPhones,
+    members: mergedMembers,
+    membersCount: Math.max(Number(g.membersCount || 1), mergedMembers.length, mergedPhones.length, 1),
+    updatedAt: new Date().toISOString(),
+  };
+  privateGroupsMap.set(nextGroup.id, nextGroup);
+  savePrivateGroupsFile();
+  return res.json({ success: true, group: nextGroup });
+});
+
+app.post('/api/groups/join', (req: Request, res: Response) => {
+  const { codeOrLink, phone, name, avatar, userId } = req.body || {};
+  const token = extractInviteLookupCode(String(codeOrLink || ''));
+  if (!token) return res.status(400).json({ success: false, error: 'Invite link or code required' });
+  const tokenUpper = token.toUpperCase();
+  const strippedTownUpper = tokenUpper.replace(/^TOWN_COMM_/, '');
+
+  // 1. Check private groups registry
+  const matchedGroup = Array.from(privateGroupsMap.values()).find((g) => {
+    const gId = String(g.id || '').toUpperCase();
+    const gCode = String(g.inviteCode || '').toUpperCase();
+    return gId === tokenUpper || gCode === tokenUpper;
+  });
+
+  if (matchedGroup) {
+    const nextPhones = Array.from(
+      new Set([...(Array.isArray(matchedGroup.memberPhones) ? matchedGroup.memberPhones : []), phone].filter(Boolean))
+    );
+    const nextMembers = Array.from(
+      new Set([...(Array.isArray(matchedGroup.members) ? matchedGroup.members : []), name || phone].filter(Boolean))
+    );
+    const updatedGroup = {
+      ...matchedGroup,
+      memberPhones: nextPhones,
+      members: nextMembers,
+      membersCount: Math.max(Number(matchedGroup.membersCount || 1), nextMembers.length, nextPhones.length),
+      updatedAt: new Date().toISOString(),
+    };
+    privateGroupsMap.set(updatedGroup.id, updatedGroup);
+    savePrivateGroupsFile();
+    io.to(`chat:${updatedGroup.id}`).emit('group_invite_response', {
+      groupId: updatedGroup.id,
+      responderPhone: phone || '',
+      responderName: name || phone || 'Member',
+      accepted: true,
+    });
+    return res.json({ success: true, kind: 'group', group: updatedGroup });
+  }
+
+  // 2. Check communities (Town groups & channels)
+  const matchedComm = Array.from(communitiesMap.values()).find((c) => {
+    if (isInvalidServerCommunity(c)) return false;
+    const cId = String(c.id || '').toUpperCase();
+    const cCode = String(c.inviteCode || '').toUpperCase();
+    return cId === tokenUpper || cId === strippedTownUpper || (cCode && cCode === tokenUpper);
+  });
+
+  if (matchedComm) {
+    const nextPhones = Array.from(
+      new Set([...(Array.isArray(matchedComm.memberPhones) ? matchedComm.memberPhones : []), phone].filter(Boolean))
+    );
+    const updatedComm = {
+      ...matchedComm,
+      memberPhones: nextPhones,
+      membersCount: Math.max(Number(matchedComm.membersCount || 1), nextPhones.length, 1),
+      ...(userId && !matchedComm.creatorId ? {} : {}),
+    };
+    communitiesMap.set(updatedComm.id, updatedComm);
+    saveCommunitiesFile();
+    return res.json({ success: true, kind: 'community', community: updatedComm });
+  }
+
+  return res.status(404).json({ success: false, error: 'Invalid or expired group invite link/code' });
 });
 
 app.delete('/api/communities/:id', (req: Request, res: Response) => {
@@ -7108,15 +7291,30 @@ io.on('connection', (socket: Socket) => {
     if (!comm || !comm.id || isInvalidServerCommunity(comm)) return;
     const normName = String(comm.name).trim().toLowerCase();
     const commType = comm.type || 'group';
+    const isPrivateGroup = isPrivateServerCommunity(comm);
     const duplicate = Array.from(communitiesMap.values()).find(
       (c) =>
         c.id === comm.id ||
-        (String(c.name || '').trim().toLowerCase() === normName && (c.type || 'group') === commType)
+        (!isPrivateGroup && String(c.name || '').trim().toLowerCase() === normName && (c.type || 'group') === commType)
     );
     if (duplicate) return;
-    communitiesMap.set(comm.id, comm);
+    const stored = isPrivateGroup
+      ? {
+          ...comm,
+          isPrivate: true,
+          inviteCode: comm.inviteCode || `G${String(comm.id).replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase()}`,
+          memberPhones: Array.isArray(comm.memberPhones)
+            ? comm.memberPhones
+            : comm.creatorPhone
+            ? [comm.creatorPhone]
+            : [],
+        }
+      : comm;
+    communitiesMap.set(stored.id, stored);
     saveCommunitiesFile();
-    socket.broadcast.emit('community_created', comm);
+    if (!isPrivateGroup) {
+      socket.broadcast.emit('community_created', stored);
+    }
   });
 
   socket.on('delete_community', (payload: { id?: string }) => {
@@ -7183,6 +7381,17 @@ io.on('connection', (socket: Socket) => {
     const senderVariants = new Set(getPhoneVariants(senderPhone));
     const targetVariants = getPhoneVariants(targetPhone);
     if (targetVariants.some((v) => senderVariants.has(v))) return;
+    // Record invited phone on server town community if applicable
+    const gid = String(payload?.invite?.groupId || '');
+    if (gid.startsWith('town_comm_')) {
+      const commId = gid.replace('town_comm_', '');
+      const comm = communitiesMap.get(commId);
+      if (comm) {
+        const nextInvited = Array.from(new Set([...(Array.isArray(comm.invitedPhones) ? comm.invitedPhones : []), targetPhone]));
+        communitiesMap.set(commId, { ...comm, invitedPhones: nextInvited });
+        saveCommunitiesFile();
+      }
+    }
     emitToPhoneVariantsOnce(targetPhone, 'group_invite', {
       invite: payload.invite,
       chat: payload.chat,
@@ -7192,6 +7401,34 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('group_invite_response', (payload: any) => {
     if (!payload?.groupId) return;
+    if (payload.accepted && payload.responderPhone) {
+      const gid = String(payload.groupId);
+      const priv = privateGroupsMap.get(gid);
+      if (priv) {
+        const nextPhones = Array.from(new Set([...(Array.isArray(priv.memberPhones) ? priv.memberPhones : []), payload.responderPhone]));
+        const nextMembers = Array.from(new Set([...(Array.isArray(priv.members) ? priv.members : []), payload.responderName || payload.responderPhone]));
+        privateGroupsMap.set(gid, {
+          ...priv,
+          memberPhones: nextPhones,
+          members: nextMembers,
+          membersCount: Math.max(Number(priv.membersCount || 1), nextMembers.length, nextPhones.length),
+        });
+        savePrivateGroupsFile();
+      }
+      if (gid.startsWith('town_comm_')) {
+        const commId = gid.replace('town_comm_', '');
+        const comm = communitiesMap.get(commId);
+        if (comm) {
+          const nextPhones = Array.from(new Set([...(Array.isArray(comm.memberPhones) ? comm.memberPhones : []), payload.responderPhone]));
+          communitiesMap.set(commId, {
+            ...comm,
+            memberPhones: nextPhones,
+            membersCount: Math.max(Number(comm.membersCount || 1), nextPhones.length),
+          });
+          saveCommunitiesFile();
+        }
+      }
+    }
     if (payload.targetPhone) {
       emitToPhoneVariantsOnce(payload.targetPhone, 'group_invite_response', payload);
     }

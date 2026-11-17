@@ -134,9 +134,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     getBadgeForPhone,
   } = useApp();
 
+  const activeBadge = currentUser.verificationBadge || getBadgeForPhone(currentUser.phoneNumber);
+  const isAdminUser =
+    currentUser.role === 'admin' ||
+    Boolean(currentUser.isAdmin) ||
+    activeBadge === 'admin';
+
   const eligibleHubToolRoles = React.useMemo(() => {
     const roles: string[] = [];
-    const activeBadge = currentUser.verificationBadge || getBadgeForPhone(currentUser.phoneNumber);
     const normalizedHandle = (currentUser.username || '')
       .trim()
       .toLowerCase()
@@ -191,6 +196,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         r.verificationStatus !== 'rejected'
     );
 
+    if (isAdminUser) roles.push('Admin');
     if (isCreatorMatched) roles.push('Creator');
     if (isStoreMatched) roles.push('Store');
     if (isArtisanMatched) roles.push('Artisan');
@@ -198,7 +204,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     return roles;
   }, [
     currentUser,
-    getBadgeForPhone,
+    activeBadge,
+    isAdminUser,
     creators,
     hasActiveStore,
     storeSubscription,
@@ -1482,7 +1489,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         isOpen={isAccountCenterOpen}
         onClose={() => setIsAccountCenterOpen(false)}
       />
-      <HubToolsDrawer eligibleRoles={eligibleHubToolRoles} />
+      <HubToolsDrawer eligibleRoles={eligibleHubToolRoles} isAdmin={isAdminUser} />
     </div>
   );
 };

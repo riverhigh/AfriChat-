@@ -1015,6 +1015,11 @@ export interface TownCommunity {
   recentActivity: string;
   adminName: string;
   creatorId?: string;
+  creatorPhone?: string;
+  isPrivate?: boolean;
+  inviteCode?: string;
+  memberPhones?: string[];
+  invitedPhones?: string[];
 }
 
 // 19. Healthcare & Telehealth System

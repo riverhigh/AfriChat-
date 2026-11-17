@@ -356,10 +356,26 @@ export async function createTownCommunityInDb(comm: {
   members_count?: number;
   members?: string[];
   tags?: string[];
+  isPrivate?: boolean;
+  inviteCode?: string;
+  creatorId?: string;
+  creatorPhone?: string;
 }) {
   const tags: string[] = Array.isArray(comm.tags) ? [...comm.tags] : [];
   if (comm.type && !tags.some((t) => t.startsWith('type:'))) {
     tags.push(`type:${comm.type}`);
+  }
+  if ((comm.isPrivate || comm.type === 'group') && !tags.some((t) => t.startsWith('private:'))) {
+    tags.push('private:true');
+  }
+  if (comm.inviteCode && !tags.some((t) => t.startsWith('invite:'))) {
+    tags.push(`invite:${comm.inviteCode.trim().toUpperCase()}`);
+  }
+  if (comm.creatorId && !tags.some((t) => t.startsWith('creator_id:'))) {
+    tags.push(`creator_id:${comm.creatorId}`);
+  }
+  if (comm.creatorPhone && !tags.some((t) => t.startsWith('creator_phone:'))) {
+    tags.push(`creator_phone:${comm.creatorPhone}`);
   }
   if (comm.members && comm.members.length > 0) {
     tags.push(`members:${JSON.stringify(comm.members)}`);
@@ -380,6 +396,34 @@ export async function createTownCommunityInDb(comm: {
   }
 
   return supabase.from('town_communities').insert(payload).select().maybeSingle();
+}
+
+export async function fetchTownCommunityByInviteOrId(codeOrId: string) {
+  const clean = String(codeOrId || '').trim();
+  if (!clean) return { data: null, error: null };
+  const cleanUpper = clean.toUpperCase();
+  const res = await supabase
+    .from('town_communities')
+    .select('*')
+    .neq('is_live', false)
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (res.error || !Array.isArray(res.data)) {
+    return { data: null, error: res.error };
+  }
+  const matched = res.data.find((row: any) => {
+    if (isHiddenOrInvalidCommunityRow(row)) return false;
+    const rowId = String(row.id || '').toUpperCase();
+    if (rowId === cleanUpper || `TOWN_COMM_${rowId}` === cleanUpper) return true;
+    const tags: string[] = Array.isArray(row.tags) ? row.tags : [];
+    const inviteTag = tags.find((t: string) => String(t).toLowerCase().startsWith('invite:'));
+    if (inviteTag) {
+      const code = inviteTag.slice(7).trim().toUpperCase();
+      if (code === cleanUpper) return true;
+    }
+    return false;
+  });
+  return { data: matched || null, error: null };
 }
 
 export async function deleteTownCommunityInDb(idOrName: string, fallbackName?: string) {
