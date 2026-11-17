@@ -119,6 +119,8 @@ import {
   UserStatus,
   UserWallet,
   WalletTransaction,
+  CreditAlertCategory,
+  CreditAlertEvent,
   MemeSticker,
   AudioSpace,
   ScamEntity,
@@ -881,6 +883,9 @@ interface AppContextType {
   deleteStatus: (statusId: string) => void;
   handleAdClick: (statusId: string, targetUrl?: string) => Promise<void>;
   wallet: UserWallet;
+  activeCreditAlert: CreditAlertEvent | null;
+  dismissCreditAlert: () => void;
+  triggerCreditAlert: (alert: Omit<CreditAlertEvent, 'id' | 'createdAt' | 'xpEarned'> & { id?: string; xpEarned?: number }) => void;
   isWalletModalOpen: boolean;
   setIsWalletModalOpen: (val: boolean) => void;
   refreshWalletFromServer: () => Promise<void>;
@@ -1050,6 +1055,9 @@ interface AppContextType {
     game: TicTacToeGameState,
     cellIndex: number
   ) => Promise<{ success: boolean; message?: string }>;
+  forfeitXoGame: (
+    game: TicTacToeGameState
+  ) => Promise<{ success: boolean; message?: string }>;
   // 6c. Real-Time Multiplayer Whot!, Ludo & Texas Hold'em Poker Games
   sendWhotChallenge: (
     chatId: string,
@@ -1068,6 +1076,9 @@ interface AppContextType {
     requestedShape?: WhotShape
   ) => Promise<{ success: boolean; message?: string }>;
   drawWhotCard: (
+    game: WhotGameState
+  ) => Promise<{ success: boolean; message?: string }>;
+  forfeitWhotGame: (
     game: WhotGameState
   ) => Promise<{ success: boolean; message?: string }>;
   sendLudoChallenge: (
@@ -1089,6 +1100,9 @@ interface AppContextType {
     tokenIndex: number,
     dieChoice?: 'die0' | 'die1' | 'combined'
   ) => Promise<{ success: boolean; message?: string }>;
+  forfeitLudoGame: (
+    game: LudoGameState
+  ) => Promise<{ success: boolean; message?: string }>;
   sendPokerChallenge: (
     chatId: string,
     mode: 'friendly' | 'bet',
@@ -1104,6 +1118,9 @@ interface AppContextType {
     game: PokerGameState,
     action: 'fold' | 'check' | 'call' | 'raise',
     raiseBy?: number
+  ) => Promise<{ success: boolean; message?: string }>;
+  forfeitPokerGame: (
+    game: PokerGameState
   ) => Promise<{ success: boolean; message?: string }>;
   // 7. Ajo / Esusu Group Savings
   activeAjoGroup: AjoGroup | null;
@@ -4486,6 +4503,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           transactions: Array.from(txMap.values()),
         };
         isHydratingWalletRef.current = true;
+        suppressInitialCreditForPhoneRef.current = norm;
         setWallet(serverWallet);
         walletRef.current = serverWallet;
         persistPartitionedWallet(serverWallet, phone);
@@ -6084,6 +6102,173 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const walletRef = useRef<UserWallet>(wallet);
   walletRef.current = wallet;
+
+  const [activeCreditAlert, setActiveCreditAlert] = useState<CreditAlertEvent | null>(null);
+  const suppressInitialCreditForPhoneRef = useRef<string>('');
+  const pendingCreditHintRef = useRef<{ note?: string; category?: CreditAlertCategory; label?: string; at: number } | null>(null);
+  const firedCreditAlertKeysRef = useRef<Set<string>>(new Set());
+  const creditTrackerRef = useRef<{
+    phoneNorm: string;
+    balance: number;
+    currency: CurrencyCode;
+    txIds: Set<string>;
+    ready: boolean;
+  }>({
+    phoneNorm: '',
+    balance: wallet.availableBalance || 0,
+    currency: wallet.currency || 'NGN',
+    txIds: new Set((wallet.transactions || []).map((t) => t.id).filter(Boolean)),
+    ready: false,
+  });
+
+  const dismissCreditAlert = useCallback(() => {
+    setActiveCreditAlert(null);
+  }, []);
+
+  const triggerCreditAlert = useCallback(
+    (alert: Omit<CreditAlertEvent, 'id' | 'createdAt' | 'xpEarned'> & { id?: string; xpEarned?: number }) => {
+      const amt = Number(alert.amount || 0);
+      if (!(amt > 0)) return;
+      const key = alert.id || `${alert.category}_${Math.round(amt)}_${Math.round(alert.newBalance)}`;
+      if (firedCreditAlertKeysRef.current.has(key)) return;
+      firedCreditAlertKeysRef.current.add(key);
+      if (firedCreditAlertKeysRef.current.size > 120) {
+        const first = firedCreditAlertKeysRef.current.values().next().value;
+        if (first) firedCreditAlertKeysRef.current.delete(first);
+      }
+      const computedXp = alert.xpEarned ?? Math.max(15, Math.min(250, Math.round(amt / 250) * 5 + 15));
+      setActiveCreditAlert({
+        id: key,
+        amount: amt,
+        currency: alert.currency || 'NGN',
+        newBalance: alert.newBalance,
+        category: alert.category,
+        categoryLabel: alert.categoryLabel,
+        title: alert.title,
+        subtitle: alert.subtitle,
+        xpEarned: computedXp,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    []
+  );
+
+  useEffect(() => {
+    const norm = normalizePhoneDigits(currentUser?.phoneNumber);
+    const curBal = Number(wallet.availableBalance || 0);
+    const curCurrency = wallet.currency || 'NGN';
+    const curTxIds = new Set((wallet.transactions || []).map((t) => t.id).filter(Boolean));
+
+    if (!isAuthenticated || !norm || loadedPhoneForWalletRef.current !== norm || isHydratingWalletRef.current) {
+      creditTrackerRef.current = {
+        phoneNorm: norm,
+        balance: curBal,
+        currency: curCurrency,
+        txIds: curTxIds,
+        ready: false,
+      };
+      return;
+    }
+
+    const prev = creditTrackerRef.current;
+    const hint =
+      pendingCreditHintRef.current && Date.now() - pendingCreditHintRef.current.at < 5000
+        ? pendingCreditHintRef.current
+        : null;
+
+    if (suppressInitialCreditForPhoneRef.current === norm && !hint) {
+      suppressInitialCreditForPhoneRef.current = '';
+      creditTrackerRef.current = {
+        phoneNorm: norm,
+        balance: curBal,
+        currency: curCurrency,
+        txIds: curTxIds,
+        ready: true,
+      };
+      return;
+    }
+
+    if (!prev.ready || prev.phoneNorm !== norm || prev.currency !== curCurrency) {
+      creditTrackerRef.current = {
+        phoneNorm: norm,
+        balance: curBal,
+        currency: curCurrency,
+        txIds: curTxIds,
+        ready: true,
+      };
+      return;
+    }
+
+    const delta = Number((curBal - prev.balance).toFixed(2));
+    if (delta > 0.5) {
+      const creditTypes = new Set([
+        'deposit',
+        'topup',
+        'game_win',
+        'escrow_release',
+        'refund',
+        'bill_received',
+        'transfer_in',
+        'received',
+        'referral_bonus',
+        'errand_release',
+      ]);
+      const newCreditTx = (wallet.transactions || []).find(
+        (t) => t?.id && !prev.txIds.has(t.id) && creditTypes.has(String(t.type))
+      );
+
+      let category: CreditAlertCategory = hint?.category || 'payout';
+      let categoryLabel = hint?.label || 'Wallet Credited';
+      let title = hint?.note || newCreditTx?.title || 'Funds added to your wallet';
+      let subtitle = newCreditTx?.description || undefined;
+
+      const rawText = `${newCreditTx?.title || ''} ${hint?.note || ''}`.toLowerCase();
+      if (newCreditTx?.metadata?.adminAdjusted || rawText.includes('admin')) {
+        category = 'admin_topup';
+        categoryLabel = 'Admin Top-Up';
+        title = newCreditTx?.title || hint?.note || 'Wallet credited by administrator';
+      } else if (newCreditTx?.type === 'game_win' || newCreditTx?.metadata?.gameBetEscrow || rawText.includes('win payout') || rawText.includes('bet win')) {
+        category = 'game_win';
+        categoryLabel = 'Bet Win Payout';
+      } else if (newCreditTx?.type === 'escrow_release' || newCreditTx?.type === 'errand_release' || rawText.includes('escrow')) {
+        category = 'escrow';
+        categoryLabel = 'Trade Escrow Release';
+      } else if (newCreditTx?.type === 'refund' || rawText.includes('refund')) {
+        category = 'refund';
+        categoryLabel = 'Stake Refunded';
+      } else if (newCreditTx?.type === 'bill_received' || rawText.includes('bill')) {
+        category = 'bill_received';
+        categoryLabel = 'Bill Paid';
+      } else if (newCreditTx?.type === 'referral_bonus' || rawText.includes('referral')) {
+        category = 'referral';
+        categoryLabel = 'Referral Bonus';
+      } else if (newCreditTx?.type === 'deposit' || newCreditTx?.type === 'topup' || rawText.includes('top up') || rawText.includes('paystack')) {
+        category = 'deposit';
+        categoryLabel = 'Wallet Top-Up';
+      }
+
+      pendingCreditHintRef.current = null;
+      const alertKey = newCreditTx?.id || `${category}_${Math.round(delta)}_${Math.round(curBal)}_${Math.floor(Date.now() / 2500)}`;
+      triggerCreditAlert({
+        id: alertKey,
+        amount: delta,
+        currency: curCurrency,
+        newBalance: curBal,
+        category,
+        categoryLabel,
+        title,
+        subtitle,
+      });
+    }
+
+    creditTrackerRef.current = {
+      phoneNorm: norm,
+      balance: curBal,
+      currency: curCurrency,
+      txIds: curTxIds,
+      ready: true,
+    };
+  }, [wallet, isAuthenticated, currentUser?.phoneNumber, triggerCreditAlert]);
 
   // Keep wallet persistently saved per user across logouts, reloads, and refreshes
   useEffect(() => {
@@ -11841,6 +12026,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
+  const forfeitXoGame = async (
+    game: TicTacToeGameState
+  ): Promise<{ success: boolean; message?: string }> => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    const isAiMatch = Boolean(game.isAiOpponent || phonesMatch(game.opponentPhone, AFRIBOT_PHONE) || game.chatId === AFRIBOT_ID);
+    if (game.status !== 'active') {
+      return { success: false, message: 'Only active matches can be forfeited.' };
+    }
+
+    const isX = phonesMatch(myPhone, game.xPlayerPhone) || phonesMatch(myPhone, game.challengerPhone);
+    const isO = phonesMatch(myPhone, game.oPlayerPhone) || (!isX && game.opponentPhone && phonesMatch(myPhone, game.opponentPhone));
+    if (!isX && !isO) {
+      return { success: false, message: 'Only match participants can forfeit.' };
+    }
+
+    const myName = isX
+      ? (game.xPlayerName || game.challengerName || currentUser.fullName || 'Player X')
+      : (game.oPlayerName || game.opponentName || currentUser.fullName || 'Player O');
+    const winSymbol: 'X' | 'O' = isX ? 'O' : 'X';
+    const winPhone = isX ? (game.oPlayerPhone || game.opponentPhone || AFRIBOT_PHONE) : (game.xPlayerPhone || game.challengerPhone);
+    const winName = isX ? (game.oPlayerName || game.opponentName || 'Opponent') : (game.xPlayerName || game.challengerName);
+    const totalPot = game.mode === 'bet' ? Number(game.betAmount || 0) * 2 : 0;
+    const platformFee = game.mode === 'bet' ? Math.round(totalPot * 0.01) : 0;
+    const nowIso = new Date().toISOString();
+
+    const forfeitedGame: TicTacToeGameState = {
+      ...game,
+      status: 'won',
+      winnerSymbol: winSymbol,
+      winnerPhone: winPhone,
+      winnerName: winName,
+      winningLine: undefined,
+      totalPot,
+      platformFeeRate: 0.01,
+      platformFee,
+      winnerPayout: totalPot - platformFee,
+      lastActionNote: `${myName} forfeited the match`,
+      settledAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    if (forfeitedGame.mode === 'bet' && forfeitedGame.betAmount > 0) {
+      await settleGameBetOnServer({
+        gameId: forfeitedGame.id,
+        gameType: 'xo',
+        status: 'won',
+        winnerPhone: forfeitedGame.winnerPhone,
+        winnerName: forfeitedGame.winnerName,
+        challengerPhone: forfeitedGame.challengerPhone,
+        opponentPhone: forfeitedGame.opponentPhone,
+        betAmount: forfeitedGame.betAmount,
+        currency: forfeitedGame.currency || 'NGN',
+      });
+    }
+
+    applyXoGameUpdate(forfeitedGame);
+    if (!isAiMatch) {
+      const chatObj = chats.find((c) => c.id === forfeitedGame.chatId);
+      broadcastXoGameState(forfeitedGame, chatObj?.memberPhones || []);
+      void upsertXoGameInSupabase(forfeitedGame).catch(() => {});
+    }
+    return { success: true, message: 'Match forfeited.' };
+  };
+
   // ── 6c. Lightweight Whot!, Ludo (8 seeds / 2 Castles / 2 Dice) & Texas Hold'em Poker + Send My Bill ──
   const shuffleArray = <T,>(items: T[]): T[] => {
     const arr = [...items];
@@ -12775,6 +13024,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
+  const forfeitWhotGame = async (game: WhotGameState) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (game.status !== 'active') {
+      return { success: false, message: 'Only active matches can be forfeited.' };
+    }
+    const isChallenger = phonesMatch(myPhone, game.challengerPhone);
+    const isOpp = !isChallenger && (!game.opponentPhone || phonesMatch(myPhone, game.opponentPhone));
+    if (!isChallenger && !isOpp) {
+      return { success: false, message: 'Only participants can forfeit.' };
+    }
+    const myName = isChallenger ? game.challengerName : (game.opponentName || currentUser.fullName || 'Player 2');
+    const winPhone = isChallenger ? (game.opponentPhone || AFRIBOT_PHONE) : game.challengerPhone;
+    const winName = isChallenger ? (game.opponentName || 'Opponent') : game.challengerName;
+    const nowIso = new Date().toISOString();
+
+    const forfeitedGame: WhotGameState = {
+      ...game,
+      status: 'won',
+      winnerPhone: winPhone,
+      winnerName: winName,
+      pendingDrawCount: 0,
+      pendingDrawType: null,
+      lastActionNote: `${myName} forfeited the match`,
+      moveCount: (game.moveCount || 0) + 1,
+      settledAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    if (forfeitedGame.mode === 'bet' && forfeitedGame.betAmount > 0) {
+      await settleGameBetOnServer({
+        gameId: forfeitedGame.id,
+        gameType: 'whot',
+        status: 'won',
+        winnerPhone: forfeitedGame.winnerPhone,
+        winnerName: forfeitedGame.winnerName,
+        challengerPhone: forfeitedGame.challengerPhone,
+        opponentPhone: forfeitedGame.opponentPhone,
+        betAmount: forfeitedGame.betAmount,
+        currency: forfeitedGame.currency || 'NGN',
+      });
+    }
+    applyWhotGameUpdate(forfeitedGame);
+    if (!forfeitedGame.isAiOpponent && forfeitedGame.chatId !== AFRIBOT_ID) {
+      broadcastGamePayload('whot_game_update', forfeitedGame, forfeitedGame.chatId, [forfeitedGame.challengerPhone, forfeitedGame.opponentPhone || '']);
+    }
+    return { success: true, message: 'Match forfeited.' };
+  };
+
   // Pure Ludo 2-Dice / 8-Seed / 2-Castle Helpers
   const resolveLudoRoll = (
     game: LudoGameState,
@@ -13297,6 +13594,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
+  const forfeitLudoGame = async (game: LudoGameState) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (game.status !== 'active') {
+      return { success: false, message: 'Only active matches can be forfeited.' };
+    }
+    const isChallenger = phonesMatch(myPhone, game.challengerPhone);
+    const isOpp = !isChallenger && (!game.opponentPhone || phonesMatch(myPhone, game.opponentPhone));
+    if (!isChallenger && !isOpp) {
+      return { success: false, message: 'Only participants can forfeit.' };
+    }
+    const myName = isChallenger ? game.challengerName : (game.opponentName || currentUser.fullName || 'Amber Player');
+    const winPhone = isChallenger ? (game.opponentPhone || AFRIBOT_PHONE) : game.challengerPhone;
+    const winName = isChallenger ? (game.opponentName || 'Opponent') : game.challengerName;
+    const nowIso = new Date().toISOString();
+
+    const forfeitedGame: LudoGameState = {
+      ...game,
+      diceValues: [],
+      diceValue: null,
+      hasRolled: false,
+      status: 'won',
+      winnerPhone: winPhone,
+      winnerName: winName,
+      lastActionNote: `${myName} forfeited the match`,
+      moveCount: (game.moveCount || 0) + 1,
+      settledAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    if (forfeitedGame.mode === 'bet' && forfeitedGame.betAmount > 0) {
+      await settleGameBetOnServer({
+        gameId: forfeitedGame.id,
+        gameType: 'ludo',
+        status: 'won',
+        winnerPhone: forfeitedGame.winnerPhone,
+        winnerName: forfeitedGame.winnerName,
+        challengerPhone: forfeitedGame.challengerPhone,
+        opponentPhone: forfeitedGame.opponentPhone,
+        betAmount: forfeitedGame.betAmount,
+        currency: forfeitedGame.currency || 'NGN',
+      });
+    }
+    applyLudoGameUpdate(forfeitedGame);
+    if (!forfeitedGame.isAiOpponent && forfeitedGame.chatId !== AFRIBOT_ID) {
+      broadcastGamePayload('ludo_game_update', forfeitedGame, forfeitedGame.chatId, [forfeitedGame.challengerPhone, forfeitedGame.opponentPhone || '']);
+    }
+    return { success: true, message: 'Match forfeited.' };
+  };
+
   // ── Texas Hold'em Poker Engine ──
   const resolvePokerAction = (
     game: PokerGameState,
@@ -13800,6 +14146,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       broadcastGamePayload('poker_game_update', updated, updated.chatId, [updated.challengerPhone, updated.opponentPhone || '']);
     }
     return { success: true };
+  };
+
+  const forfeitPokerGame = async (game: PokerGameState) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (game.status !== 'active') {
+      return { success: false, message: 'Only active matches can be forfeited.' };
+    }
+    const isChallenger = phonesMatch(myPhone, game.challengerPhone);
+    const isOpp = !isChallenger && (!game.opponentPhone || phonesMatch(myPhone, game.opponentPhone));
+    if (!isChallenger && !isOpp) {
+      return { success: false, message: 'Only participants can forfeit.' };
+    }
+    const myName = isChallenger ? game.challengerName : (game.opponentName || currentUser.fullName || 'Player 2');
+    const winPhone = isChallenger ? (game.opponentPhone || AFRIBOT_PHONE) : game.challengerPhone;
+    const winName = isChallenger ? (game.opponentName || 'Opponent') : game.challengerName;
+    const nowIso = new Date().toISOString();
+
+    const forfeitedGame: PokerGameState = {
+      ...game,
+      status: 'won',
+      winnerPhone: winPhone,
+      winnerName: winName,
+      winningHandLabel: `${myName} forfeited`,
+      lastActionNote: `${myName} forfeited · ${winName} wins the match`,
+      moveCount: (game.moveCount || 0) + 1,
+      settledAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    if (forfeitedGame.mode === 'bet' && forfeitedGame.betAmount > 0) {
+      await settleGameBetOnServer({
+        gameId: forfeitedGame.id,
+        gameType: 'poker',
+        status: 'won',
+        winnerPhone: forfeitedGame.winnerPhone,
+        winnerName: forfeitedGame.winnerName,
+        challengerPhone: forfeitedGame.challengerPhone,
+        opponentPhone: forfeitedGame.opponentPhone,
+        betAmount: forfeitedGame.betAmount,
+        currency: forfeitedGame.currency || 'NGN',
+      });
+    }
+    applyPokerGameUpdate(forfeitedGame);
+    if (!forfeitedGame.isAiOpponent && forfeitedGame.chatId !== AFRIBOT_ID) {
+      broadcastGamePayload('poker_game_update', forfeitedGame, forfeitedGame.chatId, [forfeitedGame.challengerPhone, forfeitedGame.opponentPhone || '']);
+    }
+    return { success: true, message: 'Match forfeited.' };
   };
 
   // Hard-Level AI Turn Runner for Friendly X/O, Whot!, Ludo, and Texas Hold'em Poker in AI Chat
@@ -18674,6 +19067,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return next;
         });
         if (currentUser.id === target || (currentUser.phoneNumber && target && phonesMatch(currentUser.phoneNumber, target))) {
+          pendingCreditHintRef.current = {
+            note: payload.note || 'Wallet credited by administrator',
+            category: 'admin_topup',
+            label: 'Admin Top-Up',
+            at: Date.now(),
+          };
           setWallet((w) => ({ ...w, availableBalance: payload.newBalance }));
           try {
             const walletTsKey = getUserStorageKey('AGC_last_admin_wallet_ts', currentUser.phoneNumber);
@@ -18701,6 +19100,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!payload) return;
       const phone = currentUserRef.current?.phoneNumber;
       if (!phone) return;
+      if (typeof payload.note === 'string' && payload.note.trim()) {
+        pendingCreditHintRef.current = {
+          note: payload.note.trim(),
+          at: Date.now(),
+        };
+      }
       setWallet((prev) => {
         const nextWallet: UserWallet = {
           availableBalance:
@@ -19338,6 +19743,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const targetClean = (msg.phoneOrId || '').replace(/\D/g, '');
           if (currentUser?.id === msg.phoneOrId || (myPhoneClean && targetClean && phonesMatch(myPhoneClean, msg.phoneOrId))) {
             if (msg.newBalance !== undefined) {
+              pendingCreditHintRef.current = {
+                note: 'Wallet credited by administrator',
+                category: 'admin_topup',
+                label: 'Admin Top-Up',
+                at: Date.now(),
+              };
               setWallet((prev) => ({ ...prev, availableBalance: msg.newBalance }));
             }
           }
@@ -19807,6 +20218,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (isTargetCurrentUser) {
+      pendingCreditHintRef.current = {
+        note: 'Wallet credited by administrator',
+        category: 'admin_topup',
+        label: 'Admin Top-Up',
+        at: Date.now(),
+      };
       walletRef.current = { ...walletRef.current, availableBalance: resolvedNewBal };
       setWallet((w) => ({ ...w, availableBalance: resolvedNewBal }));
       try {
@@ -20075,6 +20492,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteStatus,
         handleAdClick,
         wallet,
+        activeCreditAlert,
+        dismissCreditAlert,
+        triggerCreditAlert,
         isWalletModalOpen,
         setIsWalletModalOpen,
         refreshWalletFromServer,
@@ -20172,21 +20592,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         acceptXoChallenge,
         declineXoChallenge,
         makeXoMove,
+        forfeitXoGame,
         // 6c. Live Whot!, Ludo & Texas Hold'em Poker Games
         sendWhotChallenge,
         acceptWhotChallenge,
         declineWhotChallenge,
         playWhotCard,
         drawWhotCard,
+        forfeitWhotGame,
         sendLudoChallenge,
         acceptLudoChallenge,
         declineLudoChallenge,
         rollLudoDice,
         moveLudoToken,
+        forfeitLudoGame,
         sendPokerChallenge,
         acceptPokerChallenge,
         declinePokerChallenge,
         performPokerAction,
+        forfeitPokerGame,
         // 7. Ajo / Esusu Group Savings
         activeAjoGroup,
         setActiveAjoGroup,

@@ -21,6 +21,7 @@ import { EscrowModal } from './components/EscrowModal';
 import { VoiceRecorderModal } from './components/VoiceRecorderModal';
 import { LanguageSelectorModal } from './components/LanguageSelectorModal';
 import { WalletModal } from './components/WalletModal';
+import { CreditCelebrationModal } from './components/CreditCelebrationModal';
 import { MemeStickerStudioModal } from './components/MemeStickerStudioModal';
 import { AudioSpaceModal } from './components/AudioSpaceModal';
 import { AudioSpaceBar } from './components/AudioSpaceBar';
@@ -296,6 +297,7 @@ const AppContent: React.FC = () => {
           onClose={() => setIsLanguageModalOpen(false)}
         />
         {isFeatureEnabled('wallet') && <WalletModal />}
+        <CreditCelebrationModal />
 
         {/* African Super-App Features - Disappear completely when toggled off */}
         {isFeatureEnabled('memeStudio') && <MemeStickerStudioModal />}

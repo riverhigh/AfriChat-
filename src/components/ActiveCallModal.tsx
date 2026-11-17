@@ -103,6 +103,33 @@ const RemotePeerTile: React.FC<RemotePeerTileProps> = ({ peer, isVideoMode }) =>
   );
 };
 
+interface StreamVideoProps {
+  stream: MediaStream | null;
+  className?: string;
+}
+
+const StreamVideo: React.FC<StreamVideoProps> = ({ stream, className = '' }) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    if (stream) {
+      if (el.srcObject !== stream) {
+        el.srcObject = stream;
+      }
+      el.play().catch(() => {});
+    } else {
+      el.srcObject = null;
+    }
+    return () => {
+      if (el) el.srcObject = null;
+    };
+  }, [stream]);
+
+  return <video ref={videoRef} autoPlay playsInline muted className={className} />;
+};
+
 interface ActiveCallSessionProps {
   activeCall: ActiveCallState;
   onEndCall: () => void;
@@ -111,8 +138,10 @@ interface ActiveCallSessionProps {
 const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEndCall }) => {
   const { currentUser } = useApp();
   const [copiedLink, setCopiedLink] = useState(false);
-  const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [isLocalMain, setIsLocalMain] = useState(false);
+  const [swapToast, setSwapToast] = useState<string | null>(null);
+  const lastTouchTapRef = useRef<{ time: number; x: number; y: number }>({ time: 0, x: 0, y: 0 });
+  const swapToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const resolvedRoomId =
     activeCall.roomId || `call_${(activeCall.phone || '').replace(/\D/g, '') || 'room'}`;
@@ -145,40 +174,47 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
   });
 
   const isMultiPeer = remotePeers.length > 1;
+  const canSwapPip = isVideoMode && !isMultiPeer;
 
-  // Attach local stream to local video preview
   useEffect(() => {
-    const el = localVideoRef.current;
-    if (!el) return;
-    if (localStream && isVideoMode) {
-      if (el.srcObject !== localStream) {
-        el.srcObject = localStream;
-      }
-      el.play().catch(() => {});
-    } else {
-      el.srcObject = null;
-    }
     return () => {
-      if (el) el.srcObject = null;
+      if (swapToastTimerRef.current) clearTimeout(swapToastTimerRef.current);
     };
-  }, [localStream, isVideoMode]);
+  }, []);
 
-  // Attach primary remote stream to full-screen <video> when 1-on-1
-  useEffect(() => {
-    const videoEl = remoteVideoRef.current;
-    if (!videoEl) return;
-    if (remoteStream && isVideoMode && !isMultiPeer) {
-      if (videoEl.srcObject !== remoteStream) {
-        videoEl.srcObject = remoteStream;
-      }
-      videoEl.play().catch(() => {});
+  const toggleMainCamera = () => {
+    if (!canSwapPip) return;
+    setIsLocalMain((prev) => {
+      const next = !prev;
+      setSwapToast(next ? 'Your camera in main view' : `${activeCall.name || 'Caller'} in main view`);
+      if (swapToastTimerRef.current) clearTimeout(swapToastTimerRef.current);
+      swapToastTimerRef.current = setTimeout(() => setSwapToast(null), 1600);
+      return next;
+    });
+  };
+
+  const isInteractiveTarget = (target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement)) return false;
+    return Boolean(target.closest('button, a, [data-no-swap="true"]'));
+  };
+
+  const handleStageDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!canSwapPip || isInteractiveTarget(e.target)) return;
+    toggleMainCamera();
+  };
+
+  const handleStagePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!canSwapPip || e.pointerType !== 'touch' || isInteractiveTarget(e.target)) return;
+    const now = Date.now();
+    const dx = Math.abs(e.clientX - lastTouchTapRef.current.x);
+    const dy = Math.abs(e.clientY - lastTouchTapRef.current.y);
+    if (now - lastTouchTapRef.current.time < 340 && dx < 48 && dy < 48) {
+      lastTouchTapRef.current = { time: 0, x: 0, y: 0 };
+      toggleMainCamera();
     } else {
-      videoEl.srcObject = null;
+      lastTouchTapRef.current = { time: now, x: e.clientX, y: e.clientY };
     }
-    return () => {
-      if (videoEl) videoEl.srcObject = null;
-    };
-  }, [remoteStream, isVideoMode, isMultiPeer]);
+  };
 
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -218,17 +254,25 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
     onEndCall();
   };
 
+  const mainStream = canSwapPip ? (isLocalMain ? localStream : remoteStream) : null;
+  const pipStream = canSwapPip ? (isLocalMain ? remoteStream : localStream) : localStream;
+  const hasRemoteVideo = Boolean(remoteStream && remoteStream.getVideoTracks().length > 0);
+  const showMainLocalOff = canSwapPip && isLocalMain && isVideoOff;
+  const showMainVideo = canSwapPip && Boolean(mainStream) && !showMainLocalOff;
+  const showPipVideo =
+    isVideoMode &&
+    Boolean(pipStream) &&
+    (canSwapPip ? (isLocalMain ? hasRemoteVideo : !isVideoOff) : !isVideoOff);
+
   return (
-    <div className="fixed inset-0 z-50 bg-[#06060a] text-white flex flex-col justify-between overflow-hidden animate-in fade-in select-none">
-      {/* Background: 1-on-1 Remote Video or Deep Dark Ambience */}
-      {isVideoMode && !isMultiPeer && remoteStream ? (
-        <video
-          ref={remoteVideoRef}
-          autoPlay
-          playsInline
-          muted
-          className="absolute inset-0 w-full h-full object-cover"
-        />
+    <div
+      onDoubleClick={handleStageDoubleClick}
+      onPointerUp={handleStagePointerUp}
+      className="fixed inset-0 z-50 bg-[#06060a] text-white flex flex-col justify-between overflow-hidden animate-in fade-in select-none touch-manipulation"
+    >
+      {/* Background: 1-on-1 Remote (or Swapped Local) Video or Deep Dark Ambience */}
+      {showMainVideo && mainStream ? (
+        <StreamVideo stream={mainStream} className="absolute inset-0 w-full h-full object-cover" />
       ) : (
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           <div className="absolute -top-32 -left-32 w-96 h-96 bg-purple-900/20 rounded-full blur-[140px]" />
@@ -237,7 +281,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
       )}
 
       {/* Subtle overlay for legibility */}
-      <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/40 to-black/90 pointer-events-none" />
+      <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/35 to-black/90 pointer-events-none" />
 
       {/* Top Bar */}
       <div className="relative z-10 px-5 pb-4 text-center space-y-2" style={{ paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 12px), 28px)' }}>
@@ -253,7 +297,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
         </div>
 
         <h2 className="text-2xl font-black font-display tracking-tight text-white mt-2">
-          {activeCall.name}
+          {isLocalMain && canSwapPip ? `${activeCall.name} · Self View` : activeCall.name}
         </h2>
         <div className="text-xs font-mono text-white/50">
           {activeCall.isGroupCall
@@ -262,7 +306,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
         </div>
 
         {/* Dynamic Status Pill */}
-        <div className="pt-1">
+        <div className="pt-1 flex items-center justify-center gap-2 flex-wrap">
           {connectionState === 'requesting_permissions' && (
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-300 bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/20 animate-pulse">
               Requesting mic & camera permission...
@@ -280,7 +324,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
             </span>
           )}
           {connectionState === 'connected' && (
-            <span className="inline-flex items-center gap-1.5 text-xs font-mono font-bold text-emerald-400 bg-emerald-500/15 px-3 py-1 rounded-full border border-emerald-500/30">
+            <span className="inline-flex items-center gap-1.5 text-xs font-mono tabular-nums font-bold text-emerald-400 bg-emerald-500/15 px-3 py-1 rounded-full border border-emerald-500/30">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               {formatTimer(durationSeconds)}
             </span>
@@ -291,9 +335,22 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
             </span>
           )}
         </div>
+
+        {canSwapPip && (
+          <div className="text-[10px] font-medium text-white/60">
+            Double-tap screen to switch camera view
+          </div>
+        )}
       </div>
 
-      {/* Center Body: Group Mesh Grid or 1-on-1 Avatar */}
+      {/* Camera Swap Toast */}
+      {swapToast && (
+        <div className="absolute top-36 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-full bg-black/75 border border-white/15 backdrop-blur-md text-xs font-bold text-white shadow-xl pointer-events-none">
+          {swapToast}
+        </div>
+      )}
+
+      {/* Center Body: Group Mesh Grid, Camera Off State, or Audio Avatar */}
       <div className="relative z-10 flex-1 flex flex-col items-center justify-center p-6 overflow-y-auto">
         {isMultiPeer ? (
           <div className="w-full max-w-md grid grid-cols-2 gap-3">
@@ -301,7 +358,12 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
               <RemotePeerTile key={peer.peerId} peer={peer} isVideoMode={isVideoMode} />
             ))}
           </div>
-        ) : !isVideoMode || !remoteStream ? (
+        ) : showMainLocalOff ? (
+          <div className="flex flex-col items-center justify-center gap-2 text-white/65 bg-black/45 px-6 py-5 rounded-3xl border border-white/10 backdrop-blur-md">
+            <VideoOff className="w-9 h-9" />
+            <span className="text-xs font-semibold">Your Camera is Off</span>
+          </div>
+        ) : !isVideoMode || (!isLocalMain && !remoteStream) ? (
           <div className="relative flex items-center justify-center">
             {connectionState === 'ringing' && (
               <>
@@ -339,23 +401,46 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
         </div>
       </div>
 
-      {/* Video Call PiP Window (Local Camera Preview) */}
+      {/* Video Call PiP Window (Local Camera Preview OR Swapped Remote Preview) */}
       {isVideoMode && (
-        <div className="absolute top-20 right-4 z-20 w-28 h-40 rounded-2xl overflow-hidden shadow-2xl border-2 border-purple-500/60 bg-black/80">
-          <video
-            ref={localVideoRef}
-            autoPlay
-            playsInline
-            muted
-            className={`w-full h-full object-cover ${isVideoOff ? 'hidden' : 'block'}`}
-          />
-          {isVideoOff && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (canSwapPip) toggleMainCamera();
+          }}
+          title={canSwapPip ? 'Tap to swap camera views' : 'Your camera preview'}
+          className="absolute top-20 right-4 z-20 w-28 h-40 rounded-2xl overflow-hidden shadow-2xl border-2 border-purple-500/60 bg-black/80 text-left focus:outline-none focus:ring-2 focus:ring-purple-400 transition-transform active:scale-95"
+        >
+          {showPipVideo && pipStream ? (
+            <StreamVideo stream={pipStream} className="w-full h-full object-cover" />
+          ) : canSwapPip && isLocalMain ? (
+            <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 p-2 bg-neutral-900">
+              {activeCall.avatar ? (
+                <img
+                  src={activeCall.avatar}
+                  alt={activeCall.name}
+                  className="w-11 h-11 rounded-full object-cover border border-purple-400/50"
+                />
+              ) : (
+                <div className="w-11 h-11 rounded-full bg-purple-700/50 border border-purple-400/50 flex items-center justify-center text-sm font-black">
+                  {(activeCall.name || 'A').charAt(0).toUpperCase()}
+                </div>
+              )}
+              <span className="text-[9px] text-white/70 truncate max-w-full px-1">
+                {remoteStream ? 'Audio Only' : 'Connecting...'}
+              </span>
+            </div>
+          ) : (
             <div className="w-full h-full flex flex-col items-center justify-center text-white/50 bg-neutral-900">
               <VideoOff className="w-6 h-6 mb-1" />
               <span className="text-[9px]">Camera Off</span>
             </div>
           )}
-        </div>
+          <span className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded-md bg-black/65 text-[9px] font-bold text-white/90 truncate max-w-[92px]">
+            {canSwapPip && isLocalMain ? activeCall.name : 'You'}
+          </span>
+        </button>
       )}
 
       {/* Hidden remote audio elements — plays live audio for EVERY connected remote participant */}

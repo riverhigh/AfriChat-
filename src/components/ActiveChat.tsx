@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { playSwooshSound, playAnimalSound, getNotificationSound } from '../utils/soundUtils';
 import {
   ArrowLeft,
@@ -67,6 +68,7 @@ import {
   BarChart3,
   WifiOff,
   AtSign,
+  Flag,
 } from 'lucide-react';
 import { useApp, isStatusExpiredClient, phonesMatch } from '../context/AppContext';
 import { ChatMessage, GhostTimerSetting, Product, LanguageCode } from '../types';
@@ -127,6 +129,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     acceptXoChallenge,
     declineXoChallenge,
     makeXoMove,
+    forfeitXoGame,
     upgradeVerificationBadge,
     setIsWalletModalOpen,
     setIsSendBillModalOpen,
@@ -195,6 +198,17 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [pollCardErrors, setPollCardErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
   const [xoBusyId, setXoBusyId] = useState<string | null>(null);
   const [xoErrors, setXoErrors] = useState<Record<string, { msg: string; insufficient?: boolean; requiresVerifiedBadge?: boolean }>>({});
+  const [fullModeXoId, setFullModeXoId] = useState<string | null>(null);
+  const [xoConfirmForfeitId, setXoConfirmForfeitId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!fullModeXoId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFullModeXoId(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fullModeXoId]);
   const [billBusyId, setBillBusyId] = useState<string | null>(null);
   const [billErrors, setBillErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
   const [billPinPromptId, setBillPinPromptId] = useState<string | null>(null);
@@ -2940,44 +2954,66 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     game.status === 'won' &&
                     (samePhone(myPhoneRaw, game.winnerPhone) || (mySymbol !== null && game.winnerSymbol === mySymbol));
 
-                  return (
+                  const xoConfirming = xoConfirmForfeitId === game.id && game.status === 'active';
+
+                  const renderXoCardBody = (isFull: boolean) => (
                     <div
                       onPointerDown={(e) => e.stopPropagation()}
                       onMouseUp={(e) => e.stopPropagation()}
                       onClick={(e) => e.stopPropagation()}
-                      className="space-y-3 min-w-[260px] max-w-[300px] p-1 select-none"
+                      className={`select-none ${
+                        isFull
+                          ? 'space-y-4 w-full max-w-md mx-auto'
+                          : 'space-y-3 min-w-[260px] max-w-[300px] p-1'
+                      }`}
                     >
                       {/* Match Title & Mode */}
-                      <div className="flex items-center justify-between gap-2 pb-2 border-b border-black/10 dark:border-white/10">
-                        <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
-                          <Gamepad2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
-                          <span>X/O Challenge</span>
-                          {game.isAiOpponent && (
-                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 text-[9px] font-extrabold">
-                              <Bot className="w-2.5 h-2.5" />
-                              Hard AI
+                      {!isFull && (
+                        <div className="flex items-center justify-between gap-2 pb-2 border-b border-black/10 dark:border-white/10">
+                          <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white min-w-0">
+                            <Gamepad2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
+                            <span className="truncate">X/O Challenge</span>
+                            {game.isAiOpponent && (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 text-[9px] font-extrabold shrink-0">
+                                <Bot className="w-2.5 h-2.5" />
+                                Hard AI
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="font-mono tabular-nums text-[11px] font-bold text-emerald-700 dark:text-emerald-300 whitespace-nowrap">
+                              {game.mode === 'bet' ? `${formatPrice(game.betAmount, gCur)} Bet` : 'Friendly'}
                             </span>
-                          )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setFullModeXoId(game.id);
+                              }}
+                              title="Open Full Mode"
+                              aria-label="Open X/O in Full Mode"
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-700 dark:text-slate-200 transition-colors"
+                            >
+                              <Maximize2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
-                        <span className="font-mono tabular-nums text-[11px] font-bold text-emerald-700 dark:text-emerald-300 whitespace-nowrap">
-                          {game.mode === 'bet' ? `${formatPrice(game.betAmount, gCur)} Bet` : 'Friendly'}
-                        </span>
-                      </div>
+                      )}
 
                       {/* Players & Bet Breakdown */}
-                      <div className="space-y-1 text-[11px]">
+                      <div className={`space-y-1.5 ${isFull ? 'text-sm bg-white/80 dark:bg-[#1e1a36] p-3.5 rounded-2xl border border-slate-200 dark:border-white/10' : 'text-[11px]'}`}>
                         <div className="flex items-center justify-between text-slate-700 dark:text-slate-200 gap-2">
                           <span className="truncate font-semibold">
                             <span className="font-mono font-black text-indigo-600 dark:text-indigo-400">X</span> {game.xPlayerName}
                           </span>
-                          <span className="text-slate-400" aria-hidden="true">vs</span>
+                          <span className="text-slate-400 text-xs font-bold" aria-hidden="true">vs</span>
                           <span className="truncate font-semibold text-right">
                             {game.oPlayerName || game.opponentName || 'Waiting'}{' '}
                             <span className="font-mono font-black text-amber-600 dark:text-amber-400">O</span>
                           </span>
                         </div>
                         {game.mode === 'bet' && (
-                          <div className="flex items-center justify-between text-[10px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                          <div className={`flex items-center justify-between font-mono tabular-nums text-slate-500 dark:text-slate-400 ${isFull ? 'text-xs' : 'text-[10px]'}`}>
                             <span>Pot: {formatPrice(game.totalPot, gCur)} · 1% fee: {formatPrice(game.platformFee, gCur)}</span>
                             <span className="font-bold text-emerald-600 dark:text-emerald-400">
                               Win: {formatPrice(game.winnerPayout, gCur)}
@@ -2987,7 +3023,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       </div>
 
                       {/* Interactive 3x3 Board */}
-                      <div className="grid grid-cols-3 gap-2 p-2 rounded-2xl bg-slate-100 dark:bg-[#17142b] border border-slate-200 dark:border-white/10">
+                      <div className={`grid grid-cols-3 rounded-2xl bg-slate-100 dark:bg-[#17142b] border border-slate-200 dark:border-white/10 ${
+                        isFull ? 'gap-3 p-3.5 shadow-inner' : 'gap-2 p-2'
+                      }`}>
                         {(Array.isArray(game.board) && game.board.length === 9 ? game.board : Array(9).fill(null)).map((cell, idx) => {
                           const isWinCell = winSet.has(idx);
                           const canPlayCell =
@@ -3023,7 +3061,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                                 }
                               }}
                               aria-label={`Square ${idx + 1}${cell ? ` ${cell}` : ''}`}
-                              className={`min-h-[52px] aspect-square rounded-xl flex items-center justify-center font-display font-black text-2xl transition-all duration-150 ${
+                              className={`aspect-square rounded-xl flex items-center justify-center font-display font-black transition-all duration-150 ${
+                                isFull ? 'min-h-[88px] sm:min-h-[104px] text-4xl sm:text-5xl rounded-2xl' : 'min-h-[52px] text-2xl'
+                              } ${
                                 isWinCell
                                   ? 'bg-emerald-500/20 border-2 border-emerald-500 text-emerald-600 dark:text-emerald-300 scale-[1.02]'
                                   : cell !== null
@@ -3129,16 +3169,77 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       )}
 
                       {game.status === 'active' && (
-                        <div className={`px-3 py-2 rounded-xl text-[11px] font-semibold flex items-center justify-between gap-2 ${
-                          isMyTurn
-                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
-                            : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-300'
-                        }`}>
-                          <span>
-                            {isMyTurn
-                              ? `Your turn (${mySymbol}) · Tap any open square`
-                              : `${turnName}'s turn (${game.currentTurn})`}
-                          </span>
+                        <div className="space-y-2">
+                          <div className={`px-3 py-2 rounded-xl text-[11px] font-semibold flex items-center justify-between gap-2 ${
+                            isMyTurn
+                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                              : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-300'
+                          }`}>
+                            <span>
+                              {isMyTurn
+                                ? `Your turn (${mySymbol}) · Tap any open square`
+                                : `${turnName}'s turn (${game.currentTurn})`}
+                            </span>
+                            {mySymbol !== null && !xoConfirming && (
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setXoConfirmForfeitId(game.id);
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-600 dark:text-rose-300 text-[10px] font-bold whitespace-nowrap shrink-0 transition-colors"
+                              >
+                                <Flag className="w-3 h-3" />
+                                <span>Forfeit</span>
+                              </button>
+                            )}
+                          </div>
+
+                          {xoConfirming && mySymbol !== null && (
+                            <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 space-y-2">
+                              <p className="text-[11px] font-semibold text-rose-700 dark:text-rose-200 leading-snug">
+                                Forfeit this X/O match? Your opponent will be declared the winner
+                                {game.mode === 'bet' ? ` and collect ${formatPrice(game.winnerPayout, gCur)}` : ''}.
+                              </p>
+                              <div className="grid grid-cols-2 gap-2">
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setXoConfirmForfeitId(null);
+                                  }}
+                                  className="py-1.5 px-2.5 rounded-lg bg-white dark:bg-white/10 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-white/15 text-[11px] font-semibold"
+                                >
+                                  Keep Playing
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    setXoBusyId(game.id);
+                                    setXoConfirmForfeitId(null);
+                                    try {
+                                      const res = await forfeitXoGame(game);
+                                      if (!res.success && res.message) {
+                                        setXoErrors((prev) => ({
+                                          ...prev,
+                                          [game.id]: { msg: res.message! },
+                                        }));
+                                      }
+                                    } finally {
+                                      setXoBusyId(null);
+                                    }
+                                  }}
+                                  className="py-1.5 px-2.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold"
+                                >
+                                  Confirm Forfeit
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -3153,15 +3254,22 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                           }`}>
                             <div className="flex items-center gap-1.5 min-w-0">
                               <Trophy className="w-4 h-4 shrink-0 text-amber-500" />
-                              <span className="truncate">
-                                {game.status === 'won'
-                                  ? `${game.winnerName || 'Winner'} won (${game.winnerSymbol})`
-                                  : game.status === 'draw'
-                                  ? 'Match Draw'
-                                  : game.status === 'declined'
-                                  ? 'Challenge Declined'
-                                  : 'Challenge Cancelled'}
-                              </span>
+                              <div className="min-w-0">
+                                <div className="truncate">
+                                  {game.status === 'won'
+                                    ? `${game.winnerName || 'Winner'} won (${game.winnerSymbol})`
+                                    : game.status === 'draw'
+                                    ? 'Match Draw'
+                                    : game.status === 'declined'
+                                    ? 'Challenge Declined'
+                                    : 'Challenge Cancelled'}
+                                </div>
+                                {game.lastActionNote && (
+                                  <div className="text-[10px] opacity-80 truncate">
+                                    {game.lastActionNote}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                             {game.mode === 'bet' && (
                               <span className="font-mono tabular-nums text-[10px] shrink-0">
@@ -3175,6 +3283,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (isFull) setFullModeXoId(null);
                               setIsGameXoModalOpen(true);
                             }}
                             className="w-full py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition-colors"
@@ -3218,6 +3327,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    if (isFull) setFullModeXoId(null);
                                     setIsWalletModalOpen(true);
                                   }}
                                   className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold shrink-0 whitespace-nowrap"
@@ -3230,6 +3340,54 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         </div>
                       )}
                     </div>
+                  );
+
+                  return (
+                    <>
+                      {renderXoCardBody(false)}
+                      {fullModeXoId === game.id &&
+                        typeof document !== 'undefined' &&
+                        createPortal(
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="fixed inset-0 z-[75] flex flex-col bg-slate-50 dark:bg-[#0d0a1a] text-slate-900 dark:text-white animate-in fade-in duration-150"
+                          >
+                            {/* Full Mode Header */}
+                            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-200 dark:border-white/10 bg-white/95 dark:bg-[#141026]/95 backdrop-blur-md shrink-0">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setFullModeXoId(null);
+                                }}
+                                className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-800 dark:text-white text-xs font-bold transition-colors"
+                              >
+                                <ArrowLeft className="w-4 h-4" />
+                                <span>Back</span>
+                              </button>
+                              <div className="flex items-center gap-1.5 font-extrabold text-sm min-w-0">
+                                <Gamepad2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
+                                <span className="truncate">X/O Arena</span>
+                                {game.isAiOpponent && (
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 text-[10px] font-extrabold">
+                                    <Bot className="w-3 h-3" />
+                                    AI
+                                  </span>
+                                )}
+                              </div>
+                              <span className="font-mono tabular-nums text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 whitespace-nowrap">
+                                {game.mode === 'bet' ? `${formatPrice(game.betAmount, gCur)} Bet` : 'Friendly'}
+                              </span>
+                            </div>
+
+                            {/* Full Mode Arena Canvas */}
+                            <div className="flex-1 overflow-y-auto px-4 py-6 flex flex-col justify-center">
+                              {renderXoCardBody(true)}
+                            </div>
+                          </div>,
+                          document.body
+                        )}
+                    </>
                   );
                 })()}
 

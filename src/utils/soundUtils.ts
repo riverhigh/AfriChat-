@@ -194,3 +194,29 @@ export function getNotificationSound(): NotificationSound {
 export function setNotificationSound(sound: NotificationSound | string) {
   localStorage.setItem('AGC_notification_sound', sound);
 }
+
+export function playCreditWinChime() {
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    const notes = [523.25, 659.25, 783.99, 1046.5, 1318.51];
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = idx === notes.length - 1 ? 'triangle' : 'sine';
+      const start = now + idx * 0.065;
+      const dur = idx === notes.length - 1 ? 0.38 : 0.16;
+      osc.frequency.setValueAtTime(freq, start);
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.linearRampToValueAtTime(0.18, start + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+      osc.start(start);
+      osc.stop(start + dur + 0.02);
+    });
+  } catch (_) {}
+}
+

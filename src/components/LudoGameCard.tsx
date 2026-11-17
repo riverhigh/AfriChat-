@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Check,
   X,
@@ -9,6 +10,9 @@ import {
   Loader2,
   Bot,
   BadgeCheck,
+  Maximize2,
+  ArrowLeft,
+  Flag,
 } from 'lucide-react';
 import { LudoGameState } from '../types';
 import { useApp, phonesMatch } from '../context/AppContext';
@@ -139,6 +143,7 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
     declineLudoChallenge,
     rollLudoDice,
     moveLudoToken,
+    forfeitLudoGame,
     setIsWalletModalOpen,
     upgradeVerificationBadge,
   } = useApp();
@@ -148,12 +153,28 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
   const [insufficientFunds, setInsufficientFunds] = useState(false);
   const [requiresVerifiedBadge, setRequiresVerifiedBadge] = useState(false);
   const [dieChoice, setDieChoice] = useState<'die0' | 'die1' | 'combined'>('die0');
+  const [isFullMode, setIsFullMode] = useState(false);
+  const [confirmForfeit, setConfirmForfeit] = useState(false);
 
   const myPhone = currentUser.phoneNumber || currentUser.id;
   const isChallenger = phonesMatch(myPhone, game.challengerPhone);
   const isOpponent =
     !isChallenger &&
     (!game.opponentPhone || phonesMatch(myPhone, game.opponentPhone));
+  const isParticipant = isChallenger || isOpponent;
+
+  useEffect(() => {
+    if (game.status !== 'active') setConfirmForfeit(false);
+  }, [game.status]);
+
+  useEffect(() => {
+    if (!isFullMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsFullMode(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isFullMode]);
 
   const isMyTurn =
     game.status === 'active' && phonesMatch(myPhone, game.currentTurnPhone);
@@ -251,6 +272,19 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
     }
   };
 
+  const handleForfeit = async () => {
+    if (busy || game.status !== 'active') return;
+    setBusy(true);
+    setFeedback(null);
+    setConfirmForfeit(false);
+    try {
+      const res = await forfeitLudoGame(game);
+      if (!res.success && res.message) setFeedback(res.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleRoll = async () => {
     if (!canRoll) return;
     setBusy(true);
@@ -321,43 +355,57 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
     return list;
   }, [challengerList, opponentList]);
 
-  return (
-    <div className="w-full min-w-[268px] max-w-[330px] rounded-2xl overflow-hidden border border-purple-300/60 dark:border-purple-700/50 bg-white dark:bg-neutral-900 shadow-lg text-slate-900 dark:text-white">
-      {/* Header */}
-      <div className="px-3.5 py-2.5 bg-gradient-to-r from-indigo-700 via-violet-700 to-amber-500 text-white flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="w-7 h-7 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
-            <Dices className="w-4 h-4" />
+  const oppName = isChallenger
+    ? game.opponentName || 'Opponent'
+    : game.challengerName || 'Challenger';
+
+  const renderForfeitBar = () => {
+    if (game.status !== 'active' || !isParticipant) return null;
+    if (confirmForfeit) {
+      return (
+        <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 space-y-2">
+          <div className="text-[11px] font-bold text-rose-700 dark:text-rose-200 text-center">
+            Forfeit match? {oppName} wins{game.mode === 'bet' ? ` (${sym}${game.winnerPayout.toLocaleString()})` : ''}.
           </div>
-          <div className="min-w-0">
-            <div className="text-xs font-extrabold leading-tight truncate flex items-center gap-1.5">
-              <span>Ludo ({totalSeeds} Seeds · 2 Dice)</span>
-              {game.isAiOpponent && (
-                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-white/20 text-[9px] font-bold">
-                  <Bot className="w-2.5 h-2.5" />
-                  Hard AI
-                </span>
-              )}
-            </div>
-            <div className="text-[10px] text-purple-100 truncate">
-              {game.mode === 'bet'
-                ? `${sym}${game.betAmount.toLocaleString()} Stake · Pot ${sym}${game.winnerPayout.toLocaleString()}`
-                : game.isAiOpponent
-                ? 'Friendly 2-Castle vs AgcBot (Hard)'
-                : 'Friendly 2-Castle Match (Free)'}
-            </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setConfirmForfeit(false)}
+              className="py-1.5 px-2.5 rounded-lg bg-white dark:bg-neutral-800 border border-slate-200 dark:border-neutral-700 text-[11px] font-bold text-slate-700 dark:text-neutral-200"
+            >
+              Keep Playing
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={handleForfeit}
+              className="py-1.5 px-2.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold flex items-center justify-center gap-1"
+            >
+              <Flag className="w-3 h-3" />
+              <span>Confirm Forfeit</span>
+            </button>
           </div>
         </div>
-        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/20 shrink-0">
-          {game.status === 'pending'
-            ? 'Pending'
-            : game.status === 'active'
-            ? 'Live'
-            : game.status.toUpperCase()}
-        </span>
+      );
+    }
+    return (
+      <div className="flex justify-end pt-0.5">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => setConfirmForfeit(true)}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-800/60 text-rose-600 dark:text-rose-300 text-[10px] font-bold transition-colors"
+        >
+          <Flag className="w-3 h-3" />
+          <span>Forfeit</span>
+        </button>
       </div>
+    );
+  };
 
-      <div className="p-3 space-y-2.5">
+  const renderArenaBody = (full: boolean) => (
+      <div className={full ? 'p-4 sm:p-6 space-y-3.5 max-w-lg w-full mx-auto' : 'p-3 space-y-2.5'}>
         {/* Player Legend */}
         <div className="grid grid-cols-2 gap-1.5 text-[10px]">
           <div className="px-2 py-1.5 rounded-lg bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/50 flex items-center justify-between gap-1">
@@ -605,6 +653,8 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
           </div>
         )}
 
+        {renderForfeitBar()}
+
         {game.status === 'won' && (
           <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300/70 dark:border-amber-700/50 text-center space-y-1">
             <div className="flex items-center justify-center gap-1.5 text-amber-700 dark:text-amber-300 text-xs font-extrabold">
@@ -615,6 +665,11 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
                   : `${game.winnerName || 'Opponent'} Won!`}
               </span>
             </div>
+            {game.lastActionNote && (
+              <div className="text-[11px] text-slate-600 dark:text-neutral-300">
+                {game.lastActionNote}
+              </div>
+            )}
             {game.mode === 'bet' && (
               <div className="text-[11px] font-mono text-emerald-700 dark:text-emerald-300">
                 Payout {sym}
@@ -716,6 +771,98 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
           </div>
         )}
       </div>
-    </div>
+  );
+
+  return (
+    <>
+      <div className="w-full min-w-[268px] max-w-[330px] rounded-2xl overflow-hidden border border-purple-300/60 dark:border-purple-700/50 bg-white dark:bg-neutral-900 shadow-lg text-slate-900 dark:text-white">
+        {/* Header */}
+        <div className="px-3.5 py-2.5 bg-gradient-to-r from-indigo-700 via-violet-700 to-amber-500 text-white flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-7 h-7 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+              <Dices className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-extrabold leading-tight truncate flex items-center gap-1.5">
+                <span>Ludo ({totalSeeds} Seeds · 2 Dice)</span>
+                {game.isAiOpponent && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-white/20 text-[9px] font-bold">
+                    <Bot className="w-2.5 h-2.5" />
+                    Hard AI
+                  </span>
+                )}
+              </div>
+              <div className="text-[10px] text-purple-100 truncate">
+                {game.mode === 'bet'
+                  ? `${sym}${game.betAmount.toLocaleString()} Stake · Pot ${sym}${game.winnerPayout.toLocaleString()}`
+                  : game.isAiOpponent
+                  ? 'Friendly 2-Castle vs AgcBot (Hard)'
+                  : 'Friendly 2-Castle Match (Free)'}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/20">
+              {game.status === 'pending'
+                ? 'Pending'
+                : game.status === 'active'
+                ? 'Live'
+                : game.status.toUpperCase()}
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsFullMode(true)}
+              aria-label="Open Ludo Full Mode"
+              title="Open Full Mode"
+              className="w-7 h-7 rounded-lg bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors"
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {renderArenaBody(false)}
+      </div>
+
+      {isFullMode &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[75] bg-slate-950 text-white flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Full Mode Header with Back Button */}
+            <div
+              className="px-4 py-3 bg-gradient-to-r from-indigo-800 via-violet-800 to-amber-600 border-b border-white/10 flex items-center justify-between gap-3 shrink-0"
+              style={{ paddingTop: 'max(calc(env(safe-area-inset-top, 0px) + 8px), 12px)' }}
+            >
+              <button
+                type="button"
+                onClick={() => setIsFullMode(false)}
+                className="min-h-[44px] px-3.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Back</span>
+              </button>
+              <div className="min-w-0 text-center">
+                <div className="text-sm font-black truncate">Ludo Arena</div>
+                <div className="text-[11px] text-purple-100 truncate">
+                  {game.mode === 'bet'
+                    ? `${sym}${game.betAmount.toLocaleString()} Bet · Win ${sym}${game.winnerPayout.toLocaleString()}`
+                    : 'Friendly 8-Seed Match'}
+                </div>
+              </div>
+              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-white/20 shrink-0">
+                {game.status === 'active' ? 'Live' : game.status.toUpperCase()}
+              </span>
+            </div>
+
+            <div className="flex-1 overflow-y-auto bg-white dark:bg-neutral-950 text-slate-900 dark:text-white flex items-start justify-center">
+              {renderArenaBody(true)}
+            </div>
+          </div>,
+          document.body
+        )}
+    </>
   );
 };

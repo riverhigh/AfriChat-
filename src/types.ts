@@ -115,6 +115,29 @@ export interface UserWallet {
   balance?: number;
 }
 
+export type CreditAlertCategory =
+  | 'escrow'
+  | 'game_win'
+  | 'admin_topup'
+  | 'deposit'
+  | 'refund'
+  | 'bill_received'
+  | 'referral'
+  | 'payout';
+
+export interface CreditAlertEvent {
+  id: string;
+  amount: number;
+  currency: CurrencyCode;
+  newBalance: number;
+  category: CreditAlertCategory;
+  categoryLabel: string;
+  title: string;
+  subtitle?: string;
+  xpEarned: number;
+  createdAt: string;
+}
+
 export interface MemeSticker {
   id: string;
   title: string;
@@ -330,6 +353,7 @@ export interface TicTacToeGameState {
   platformFeeRate: number;
   platformFee: number;
   winnerPayout: number;
+  lastActionNote?: string;
   settledAt?: string;
   createdAt: string;
   updatedAt: string;
