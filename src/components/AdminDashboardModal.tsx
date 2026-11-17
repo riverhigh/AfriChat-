@@ -68,6 +68,7 @@ import {
   upsertSupabaseAdminStoreOverride,
   upsertSupabaseAdminArtisanOverride,
 } from '../services/supabaseAdminSync';
+import { isSyntheticTestUser } from '../utils/testAccountFilter';
 
 type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'professionals' | 'comms' | 'ads' | 'ai_datacenter' | 'security';
 type FinanceSubTab = 'escrows' | 'ledger' | 'disputes' | 'dispatch' | 'webhooks' | 'payouts';
@@ -715,7 +716,7 @@ export const AdminDashboardModal: React.FC = () => {
     };
 
     const addUser = (raw: any, authoritative = true) => {
-      if (!raw) return;
+      if (!raw || isSyntheticTestUser(raw)) return;
       const phone = (raw.phoneNumber || raw.phone || raw.full_phone || '').trim();
       const digits = (phone || raw.phone_digits || raw.id || '').replace(/\D/g, '');
       const id = raw.id || (digits ? `usr_${digits}` : `usr_${Date.now()}`);

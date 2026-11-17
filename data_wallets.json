@@ -8,33 +8,6 @@
       "currency": "NGN",
       "transactions": [],
       "updatedAt": "2026-11-16T23:19:45.441Z"
-    },
-    "transactions": {
-      "phoneKey": "transactions",
-      "phoneNumber": "transactions",
-      "availableBalance": 0,
-      "escrowLockedBalance": 0,
-      "currency": "NGN",
-      "transactions": [],
-      "updatedAt": "2026-11-16T23:19:45.448Z"
-    },
-    "000000001": {
-      "phoneKey": "000000001",
-      "phoneNumber": "+2348000000001",
-      "availableBalance": 0,
-      "escrowLockedBalance": 0,
-      "currency": "NGN",
-      "transactions": [],
-      "updatedAt": "2026-11-17T01:09:58.872Z"
-    },
-    "099988877": {
-      "phoneKey": "099988877",
-      "phoneNumber": "+2348099988877",
-      "availableBalance": 0,
-      "escrowLockedBalance": 0,
-      "currency": "NGN",
-      "transactions": [],
-      "updatedAt": "2026-11-17T01:13:30.270Z"
     }
   },
   "usedReferences": [],

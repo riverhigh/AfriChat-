@@ -2,31 +2,22 @@
   "auditTrail": [],
   "securityEvents": [
     {
-      "id": "sec_1794877779305_0791",
-      "timestamp": "2026-11-17T01:09:39.305Z",
+      "id": "sec_1794921641597_yat8",
+      "timestamp": "2026-11-17T13:20:41.597Z",
       "type": "bot_block",
       "severity": "medium",
       "ip": "127.0.0.1",
       "path": "/api/users",
-      "reason": "Blocked automated UA: curl/7.88.1"
+      "reason": "Blocked automated UA: python-urllib/3.10"
     },
     {
-      "id": "sec_1794742091456_g2pi",
-      "timestamp": "2026-11-15T11:28:11.456Z",
+      "id": "sec_1794921641594_fpdg",
+      "timestamp": "2026-11-17T13:20:41.594Z",
       "type": "bot_block",
       "severity": "medium",
       "ip": "127.0.0.1",
       "path": "/api/users",
-      "reason": "Blocked automated UA: curl/7.88.1"
-    },
-    {
-      "id": "sec_1794738319197_x8xi",
-      "timestamp": "2026-11-15T10:25:19.197Z",
-      "type": "bot_block",
-      "severity": "medium",
-      "ip": "127.0.0.1",
-      "path": "/api/users",
-      "reason": "Blocked automated UA: curl/7.88.1"
+      "reason": "Blocked automated UA: curl/8.0.1"
     }
   ],
   "webhookLogs": [],

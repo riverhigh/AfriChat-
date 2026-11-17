@@ -420,7 +420,7 @@ export const AuthModal: React.FC = () => {
                       type="text"
                       value={emailFullName}
                       onChange={(e) => setEmailFullName(e.target.value)}
-                      placeholder="e.g. Chioma Adebayo"
+                      placeholder="Enter your full name"
                       required
                       className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-purple-500"
                     />

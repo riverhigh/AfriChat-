@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { useApp, phonesMatch } from '../context/AppContext';
 import { AgcBillCategory, FeatureFlags } from '../types';
+import { isSyntheticTestUser } from '../utils/testAccountFilter';
 
 interface AgcFeatureBillConfig {
   category: AgcBillCategory;
@@ -431,6 +432,7 @@ export const SendBillModal: React.FC = () => {
       const clean = (phone || '').replace(/\D/g, '');
       if (!clean || clean.length < 7) return;
       if (phonesMatch(phone, currentUser.phoneNumber)) return;
+      if (isSyntheticTestUser({ name, phone })) return;
       const key = clean.slice(-9);
       if (!map.has(key)) {
         map.set(key, {

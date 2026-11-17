@@ -54,6 +54,7 @@ import { MarketplaceView } from './MarketplaceView';
 import { LegalComplianceModal } from './LegalComplianceModal';
 import { AccountCenterModal } from './AccountCenterModal';
 import { PwaInstallCard } from './PwaInstallCard';
+import { HubToolsDrawer } from './HubToolsDrawer';
 import { compressAvatarImage, compressWallpaperImage } from '../utils/imageUtils';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 
@@ -121,6 +122,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     serviceProviders,
     artisanStation,
     storeSubscription,
+    hasActiveStore,
+    creators,
+    errandRunners,
     referralProgram,
     CURRENCY_SYMBOLS,
     CURRENCY_RATES,
@@ -129,6 +133,79 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     isFeatureEnabled,
     getBadgeForPhone,
   } = useApp();
+
+  const eligibleHubToolRoles = React.useMemo(() => {
+    const roles: string[] = [];
+    const activeBadge = currentUser.verificationBadge || getBadgeForPhone(currentUser.phoneNumber);
+    const normalizedHandle = (currentUser.username || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^@+/, '');
+
+    const isCreatorMatched =
+      activeBadge === 'creator_plus' ||
+      currentUser.role === 'creator' ||
+      Boolean(currentUser.isCreator) ||
+      currentUser.creatorPlan === 'gold' ||
+      currentUser.creatorPlan === 'creator_plus' ||
+      creators.some(
+        (c) =>
+          c.id === currentUser.id ||
+          (normalizedHandle.length > 0 &&
+            c.handle.trim().toLowerCase().replace(/^@+/, '') === normalizedHandle)
+      );
+
+    const isStoreMatched =
+      activeBadge === 'gold' ||
+      currentUser.role === 'merchant' ||
+      Boolean(hasActiveStore) ||
+      Boolean(
+        storeSubscription?.isRegistered &&
+          storeSubscription?.tier &&
+          storeSubscription.tier !== 'none' &&
+          storeSubscription.approvalStatus !== 'suspended' &&
+          storeSubscription.approvalStatus !== 'rejected'
+      );
+
+    const isArtisanMatched =
+      Boolean(
+        artisanStation &&
+          artisanStation.approvalStatus !== 'suspended' &&
+          artisanStation.approvalStatus !== 'rejected' &&
+          (!artisanStation.ownerPhone ||
+            phonesMatch(artisanStation.ownerPhone, currentUser.phoneNumber) ||
+            artisanStation.ownerId === currentUser.id)
+      ) ||
+      serviceProviders.some(
+        (p) =>
+          p.id === currentUser.id ||
+          (Boolean(p.phone) && phonesMatch(p.phone, currentUser.phoneNumber))
+      );
+
+    const isErrandsStallMatched = errandRunners.some(
+      (r) =>
+        (r.userId === currentUser.id ||
+          (Boolean(r.phone) && phonesMatch(r.phone, currentUser.phoneNumber)) ||
+          (Boolean(r.userPhone) && phonesMatch(r.userPhone, currentUser.phoneNumber))) &&
+        r.approvalStatus !== 'rejected' &&
+        r.verificationStatus !== 'rejected'
+    );
+
+    if (isCreatorMatched) roles.push('Creator');
+    if (isStoreMatched) roles.push('Store');
+    if (isArtisanMatched) roles.push('Artisan');
+    if (isErrandsStallMatched) roles.push('Errands Stall');
+    return roles;
+  }, [
+    currentUser,
+    getBadgeForPhone,
+    creators,
+    hasActiveStore,
+    storeSubscription,
+    artisanStation,
+    serviceProviders,
+    errandRunners,
+  ]);
 
   const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan' | 'chat_bg'>('services');
   const [selectedNotificationSound, setSelectedNotificationSound] = useState<NotificationSound>(() => {
@@ -1405,6 +1482,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         isOpen={isAccountCenterOpen}
         onClose={() => setIsAccountCenterOpen(false)}
       />
+      <HubToolsDrawer eligibleRoles={eligibleHubToolRoles} />
     </div>
   );
 };

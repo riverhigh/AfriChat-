@@ -413,7 +413,7 @@ export const LegalModal: React.FC = () => {
                         required
                         value={regName}
                         onChange={(e) => setRegName(e.target.value)}
-                        placeholder="Barr. Chidi Okafor"
+                        placeholder="Enter lawyer full name"
                         className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 text-slate-900 dark:text-white"
                       />
                     </div>

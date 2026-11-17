@@ -323,8 +323,92 @@ const authRateLimiter = (req: Request, res: Response, next: () => void) => {
 // ── ANTI-BOT & RECON SCRAPING MITIGATION ────────────────────────────────────
 const BOT_USER_AGENTS = [
   'sqlmap', 'nikto', 'nmap', 'masscan', 'gobuster', 'dirbuster', 'wpscan',
-  'python-requests', 'aiohttp', 'curl/', 'wget/', 'postmanruntime',
+  'python-requests', 'python-urllib', 'aiohttp', 'curl/', 'wget/', 'postmanruntime',
+  'headlesschrome', 'playwright', 'puppeteer', 'selenium', 'node-fetch', 'axios/', 'undici',
 ];
+
+const SYNTHETIC_TEST_LAST9 = new Set([
+  '800000000',
+  '800000001',
+  '000000001',
+  '099988877',
+  '055511122',
+  '099911101',
+  '099911102',
+  '999000111',
+  '990001111',
+  '990002222',
+  '812345678',
+  '123456789',
+]);
+
+const SYNTHETIC_TEST_NAMES = new Set([
+  'bet tester one',
+  'bet tester two',
+  'test user',
+  'test payer',
+  'test requester',
+  'chidi okafor',
+  'amaka nwosu',
+  'chioma adebayo',
+  'tunde balogun',
+]);
+
+function isSyntheticTestAccount(input?: {
+  id?: string;
+  fullName?: string;
+  name?: string;
+  username?: string;
+  phoneNumber?: string;
+  phone?: string;
+  cleanPhone?: string;
+  full_phone?: string;
+  phone_digits?: string;
+  userPhone?: string;
+  userName?: string;
+} | null): boolean {
+  if (!input) return false;
+  const idStr = String(input.id || '').trim().toLowerCase();
+  if (
+    idStr === 'usr_test' ||
+    idStr === 'usr_chioma_adebayo' ||
+    idStr.startsWith('usr_test_') ||
+    idStr.startsWith('usr_fresh_test') ||
+    idStr === 'usr_2348099911101' ||
+    idStr === 'usr_2348099911102' ||
+    idStr === 'usr_2348000000001' ||
+    idStr === 'usr_2348099988877' ||
+    idStr === 'usr_2348055511122'
+  ) {
+    return true;
+  }
+  const rawPhone =
+    input.phoneNumber ||
+    input.phone ||
+    input.userPhone ||
+    input.cleanPhone ||
+    input.full_phone ||
+    input.phone_digits ||
+    '';
+  const digits = String(rawPhone).replace(/\D/g, '');
+  if (digits) {
+    const last9 = digits.length >= 9 ? digits.slice(-9) : digits;
+    if (SYNTHETIC_TEST_LAST9.has(last9)) return true;
+    if (/^(234)?80999111\d+$/.test(digits)) return true;
+    if (/^(234)?999000\d+$/.test(digits)) return true;
+    if (/^(234)?800000000\d+$/.test(digits)) return true;
+  }
+  const names = [input.fullName, input.name, input.username, input.userName]
+    .filter(Boolean)
+    .map((n) => String(n).trim().toLowerCase());
+  for (const name of names) {
+    if (SYNTHETIC_TEST_NAMES.has(name)) return true;
+    if (/\b(bet\s*tester|test\s*user|test\s*payer|test\s*requester|bot\s*tester|spam\s*bot)\b/i.test(name)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 const botMitigation = (req: Request, res: Response, next: () => void) => {
   const ua = (req.headers['user-agent'] || '').toLowerCase();
@@ -348,11 +432,13 @@ const botMitigation = (req: Request, res: Response, next: () => void) => {
   next();
 };
 
-// Apply rate limiter and bot protection to user registration and auth lookup routes
+// Apply rate limiter and bot protection to user registration, auth lookup, and wallet/ledger routes
 app.use('/api/users/register', authRateLimiter, botMitigation);
 app.use('/api/users/check-phone', authRateLimiter);
 app.use('/api/users/check-username', authRateLimiter);
 app.use('/api/users', botMitigation);
+app.use('/api/wallet/ledger', botMitigation);
+app.use('/api/wallet/pay-bill', botMitigation);
 
 // Basic health check route
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -769,7 +855,7 @@ async function syncAdminStateFromSupabase() {
     if (usersSlice && usersSlice.overrides && typeof usersSlice.overrides === 'object') {
       let usersChanged = false;
       for (const [k, ov] of Object.entries<any>(usersSlice.overrides)) {
-        if (!ov) continue;
+        if (!ov || isSyntheticTestAccount({ ...ov, phoneNumber: ov.phoneNumber || k })) continue;
         const match = findUserEntry(ov.phoneNumber || k) || findUserEntry(k);
         if (match) {
           const { key, user } = match;
@@ -893,7 +979,7 @@ async function syncUsersFromSupabase(force = false): Promise<void> {
       for (const row of rows) {
         const rawPhone = (row.full_phone || '').trim() || (row.phone_digits ? `+234${String(row.phone_digits).replace(/^0+/, '')}` : '');
         const clean = rawPhone.replace(/\D/g, '') || String(row.phone_digits || '').replace(/\D/g, '');
-        if (!clean) continue;
+        if (!clean || isSyntheticTestAccount({ username: row.username, full_phone: rawPhone, phone_digits: clean })) continue;
 
         const match = findUserEntry(rawPhone) || (row.phone_digits ? findUserEntry(String(row.phone_digits)) : null);
         if (match) {
@@ -1284,7 +1370,7 @@ try {
     if (Array.isArray(raw)) {
       for (const u of raw) {
         const derivedClean = (u.cleanPhone || u.phoneNumber || '').replace(/\D/g, '');
-        if (!derivedClean) continue;
+        if (!derivedClean || isSyntheticTestAccount(u)) continue;
         const normalized: RegisteredUser = {
           ...u,
           cleanPhone: derivedClean,
@@ -1648,6 +1734,12 @@ app.post('/api/users/register', (req: Request, res: Response) => {
   const { id, fullName, username, phoneNumber, avatarUrl, about, role, email, sessionToken, socketId, skipSessionKick, updatedAt } = req.body || {};
   if (!phoneNumber) {
     return res.status(400).json({ error: 'Phone number required' });
+  }
+  if (isSyntheticTestAccount({ id, fullName, username, phoneNumber })) {
+    return res.status(403).json({
+      error: 'Synthetic or automated test accounts are prohibited on this platform.',
+      code: 'AGC_SYNTHETIC_TEST_BLOCKED',
+    });
   }
   const cleanPhone = String(phoneNumber).replace(/\D/g, '');
   const existingEntry = findUserEntry(String(phoneNumber));
@@ -2060,7 +2152,12 @@ try {
       }
       if (raw.wallets && typeof raw.wallets === 'object') {
         for (const [k, w] of Object.entries<any>(raw.wallets)) {
-          if (w && typeof w === 'object') {
+          if (
+            w &&
+            typeof w === 'object' &&
+            k !== 'transactions' &&
+            !isSyntheticTestAccount({ phoneNumber: w.phoneNumber || k, phone_digits: k })
+          ) {
             serverWallets.set(k, {
               phoneKey: k,
               phoneNumber: w.phoneNumber || `+${k}`,
@@ -2083,7 +2180,9 @@ try {
   if (fs.existsSync(WALLET_LEDGER_FILE)) {
     const rawLedger = JSON.parse(fs.readFileSync(WALLET_LEDGER_FILE, 'utf8'));
     if (Array.isArray(rawLedger)) {
-      unifiedLedger = rawLedger.slice(0, 5000);
+      unifiedLedger = rawLedger
+        .filter((tx: any) => !isSyntheticTestAccount(tx) && !String(tx?.referenceId || '').startsWith('TEST_'))
+        .slice(0, 5000);
     }
   }
 } catch (e) {
@@ -2553,6 +2652,9 @@ app.post('/api/wallet/ledger', (req: Request, res: Response) => {
     const body = req.body || {};
     if (!body.type || body.amount === undefined) {
       return res.status(400).json({ error: 'Transaction type and amount required' });
+    }
+    if (isSyntheticTestAccount(body) || String(body.referenceId || body.reference || '').startsWith('TEST_')) {
+      return res.status(403).json({ error: 'Synthetic test ledger entries are prohibited.' });
     }
     const phoneStr = String(body.userPhone || '');
     const match = phoneStr ? findUserEntry(phoneStr) : undefined;
@@ -4350,6 +4452,13 @@ app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
       message: 'Valid payer, requester, and bill amount (min 50) required.',
     });
   }
+  if (
+    isSyntheticTestAccount({ name: payerName, phone: payerPhone }) ||
+    isSyntheticTestAccount({ name: requesterName, phone: requesterPhone }) ||
+    String(paystackRef || '').startsWith('TEST_')
+  ) {
+    return res.status(403).json({ success: false, message: 'Synthetic test accounts cannot settle bills.' });
+  }
 
   const payerWallet = getOrCreateServerWallet(String(payerPhone));
   const requesterWallet = getOrCreateServerWallet(String(requesterPhone));
@@ -4887,7 +4996,7 @@ app.get('/api/users/lookup', (req: Request, res: Response) => {
       }
     }
   }
-  if (foundUser) {
+  if (foundUser && !isSyntheticTestAccount(foundUser)) {
     res.json({ found: true, user: foundUser });
   } else {
     res.json({ found: false });
@@ -4898,9 +5007,11 @@ app.get('/api/users/lookup', (req: Request, res: Response) => {
 app.get('/api/users', async (_req: Request, res: Response) => {
   try {
     await syncUsersFromSupabase();
-    res.json({ users: Array.from(usersByPhone.values()) });
+    const cleanUsers = Array.from(usersByPhone.values()).filter((u) => !isSyntheticTestAccount(u));
+    res.json({ users: cleanUsers });
   } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Failed to load users', users: Array.from(usersByPhone.values()) });
+    const cleanUsers = Array.from(usersByPhone.values()).filter((u) => !isSyntheticTestAccount(u));
+    res.status(500).json({ error: err?.message || 'Failed to load users', users: cleanUsers });
   }
 });
 

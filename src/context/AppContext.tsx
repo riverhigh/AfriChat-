@@ -24,6 +24,7 @@ import {
 } from '../services/socket';
 import { encryptChatMessage, decryptChatMessage, getConversationSecret, getConversationSecretFallbacks } from '../utils/cryptoUtils';
 import { safeLocalStorage, safeSessionStorage } from '../utils/safeStorage';
+import { isSyntheticTestUser } from '../utils/testAccountFilter';
 import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
 import {
   compressAvatarImage,
@@ -4423,7 +4424,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const userKey = getUserStorageKey('AGC_device_contacts');
       const saved = localStorage.getItem(userKey);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((c) => !isSyntheticTestUser(c));
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse device contacts:', e);
     }
@@ -4811,12 +4817,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [groupInvites, currentUser.phoneNumber]);
 
-  // Re-read user's contacts when phone changes
+  // Re-read user's contacts when phone changes (filtering any cached synthetic test entries)
   useEffect(() => {
     const userKey = getUserStorageKey('AGC_device_contacts', currentUser.phoneNumber);
     try {
       const saved = localStorage.getItem(userKey);
-      setDeviceContacts(saved ? JSON.parse(saved) : []);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setDeviceContacts(Array.isArray(parsed) ? parsed.filter((c) => !isSyntheticTestUser(c)) : []);
+      } else {
+        setDeviceContacts([]);
+      }
     } catch (_) {}
   }, [currentUser.phoneNumber]);
 
@@ -4844,8 +4855,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (data && Array.isArray(data) && data.length > 0) {
             setDeviceContacts((prev) => {
               const map = new Map<string, DeviceContact>();
-              prev.forEach((c) => map.set(c.normalizedPhoneNumber, c));
+              prev.filter((c) => !isSyntheticTestUser(c)).forEach((c) => map.set(c.normalizedPhoneNumber, c));
               data.forEach((row: any) => {
+                if (isSyntheticTestUser({ name: row.name, phone: row.phone })) return;
                 map.set(row.phone, {
                   id: row.id || `cnt_${row.phone}`,
                   name: row.name,
@@ -14835,7 +14847,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const importDeviceContacts = async (rawContacts: { name: string; phone: string }[]): Promise<number> => {
     if (!rawContacts || rawContacts.length === 0) return 0;
 
-    const normalizedList: DeviceContact[] = rawContacts.map((c, i) => {
+    const normalizedList: DeviceContact[] = rawContacts
+      .filter((c) => !isSyntheticTestUser({ name: c.name, phone: c.phone }))
+      .map((c, i) => {
       const raw = c.phone.trim();
       const cleaned = raw.replace(/[\s-]/g, '');
       const normalized = cleaned.startsWith('0') ? `+234${cleaned.slice(1)}` : cleaned.startsWith('+') ? cleaned : `+234${cleaned}`;
@@ -15189,7 +15203,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       platformFee,
       totalFee,
       status: 'rider_assigned',
-      riderName: orderData.provider === 'gokada' ? 'Tunde Balogun (Gokada Express)' : 'Chijioke PickkR Hub #8',
+      riderName: orderData.provider === 'gokada' ? 'Gokada Express Dispatch' : 'PickkR Hub Rider',
       riderPhone: '+2348039988112',
       riderPlate: orderData.provider === 'gokada' ? 'GKD-481-APP' : 'PCK-102-LAG',
       createdAt: 'Just now',
@@ -17896,10 +17910,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetchSupabaseAdminSlice<{ overrides?: Record<string, any> }>(ADMIN_SYS_USERS_KEY),
       ]);
 
-      let nextList = adminUsersRef.current;
+      let nextList = adminUsersRef.current.filter((u) => !isSyntheticTestUser(u));
 
       if (sbRes && !sbRes.error && Array.isArray(sbRes.data)) {
-        const sbMapped: AdminUserRecord[] = sbRes.data.map((row: any) => ({
+        const sbMapped: AdminUserRecord[] = sbRes.data
+          .filter((row: any) => !isSyntheticTestUser(row))
+          .map((row: any) => ({
           id: `usr_${row.phone_digits || (row.full_phone || '').replace(/\D/g, '')}`,
           fullName: row.username || 'Registered User',
           phoneNumber: row.full_phone || (row.phone_digits ? `+234${String(row.phone_digits).replace(/^0+/, '')}` : ''),
@@ -17918,22 +17934,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       if (apiRes?.users && Array.isArray(apiRes.users)) {
-        const mappedUsers = apiRes.users.map(mapRawToAdminUser);
+        const mappedUsers = apiRes.users
+          .filter((u: any) => !isSyntheticTestUser(u))
+          .map(mapRawToAdminUser);
         nextList = mergeAdminUsersList(nextList, mappedUsers, true);
       }
 
       if (sbOverrides?.overrides && typeof sbOverrides.overrides === 'object') {
-        const overrideRecords: AdminUserRecord[] = Object.entries(sbOverrides.overrides).map(([key, ov]: [string, any]) => {
-          const phoneStr = ov.phoneNumber || (key.length >= 9 ? `+234${key}` : key);
-          return mapRawToAdminUser({
-            ...ov,
-            id: ov.id || `usr_${key}`,
-            phoneNumber: phoneStr,
-          });
-        });
+        const overrideRecords: AdminUserRecord[] = Object.entries(sbOverrides.overrides)
+          .map(([key, ov]: [string, any]) => {
+            const phoneStr = ov.phoneNumber || (key.length >= 9 ? `+234${key}` : key);
+            return mapRawToAdminUser({
+              ...ov,
+              id: ov.id || `usr_${key}`,
+              phoneNumber: phoneStr,
+            });
+          })
+          .filter((u) => !isSyntheticTestUser(u));
         nextList = mergeAdminUsersList(nextList, overrideRecords, true);
       }
 
+      nextList = nextList.filter((u) => !isSyntheticTestUser(u));
       adminUsersRef.current = nextList;
       setAdminUsers(nextList);
 

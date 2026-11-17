@@ -754,7 +754,7 @@ export const ChatList: React.FC = () => {
       </div>
 
       {/* Floating AI Chatbot & New Chat Rounded FAB Stack (positioned clearly above BottomNav) */}
-      <div className="fixed bottom-24 right-4 z-30 flex flex-col items-center gap-3">
+      <div className="fixed bottom-28 right-4 z-30 flex flex-col items-center gap-5">
         <button
           type="button"
           onClick={startAiChat}

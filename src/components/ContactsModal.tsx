@@ -22,6 +22,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { DeviceContact } from '../types';
+import { isSyntheticTestUser } from '../utils/testAccountFilter';
 
 const ICON_AVATAR = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>";
 
@@ -87,6 +88,7 @@ export const ContactsModal: React.FC = () => {
           const list = Array.isArray(payload) ? payload : payload?.users;
           if (Array.isArray(list)) {
             for (const u of list) {
+              if (isSyntheticTestUser(u)) continue;
               const digits = String(u.phoneNumber || u.phone || '').replace(/\D/g, '');
               const last9 = digits.length >= 9 ? digits.slice(-9) : digits;
               if (last9.length >= 7) {
@@ -109,6 +111,7 @@ export const ContactsModal: React.FC = () => {
             .limit(250);
           if (Array.isArray(data)) {
             for (const row of data) {
+              if (isSyntheticTestUser(row)) continue;
               const digits = String(row.phone_digits || row.full_phone || '').replace(/\D/g, '');
               const last9 = digits.length >= 9 ? digits.slice(-9) : digits;
               if (last9.length >= 7 && !serverDirectory.has(last9)) {
@@ -226,10 +229,11 @@ export const ContactsModal: React.FC = () => {
 
   if (!isContactsModalOpen) return null;
 
-  const registeredList = deviceContacts.filter((c) => c.isRegisteredOnAGC);
-  const nonRegisteredList = deviceContacts.filter((c) => !c.isRegisteredOnAGC);
+  const registeredList = deviceContacts.filter((c) => c.isRegisteredOnAGC && !isSyntheticTestUser(c));
+  const nonRegisteredList = deviceContacts.filter((c) => !c.isRegisteredOnAGC && !isSyntheticTestUser(c));
 
   const filteredContacts = deviceContacts.filter((contact) => {
+    if (isSyntheticTestUser(contact)) return false;
     const matchesSearch =
       contact.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       contact.rawPhoneNumber.includes(searchQuery) ||
