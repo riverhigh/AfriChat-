@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Phone,
   PhoneOff,
@@ -6,16 +6,23 @@ import {
   User,
   ShieldCheck,
   Radio,
+  EyeOff,
+  Eye,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const IncomingCallModal: React.FC = () => {
   const { incomingCall, acceptIncomingCall, declineIncomingCall } = useApp();
+  const [joinAnonymously, setJoinAnonymously] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const ringtoneIntervalRef = useRef<number | null>(null);
 
   // ── Dual-tone incoming ringtone synthesizer ───────────────────────────────
   const incomingRoomId = incomingCall?.roomId;
+  useEffect(() => {
+    setJoinAnonymously(false);
+  }, [incomingRoomId]);
+
   useEffect(() => {
     if (!incomingRoomId) return;
 
@@ -103,8 +110,8 @@ export const IncomingCallModal: React.FC = () => {
         </h2>
         <p className="text-sm font-mono text-white/50">
           {incomingCall.isGroupCall
-            ? `From ${incomingCall.callerName} · ${incomingCall.callerPhone}`
-            : incomingCall.callerPhone}
+            ? `From ${incomingCall.callerName}${incomingCall.callerPhone ? ` · ${incomingCall.callerPhone}` : ''}`
+            : (incomingCall.callerPhone || 'Private Caller')}
         </p>
       </div>
 
@@ -135,8 +142,43 @@ export const IncomingCallModal: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Bottom Actions: Decline / Accept ────────────────────────────────── */}
-      <div className="relative z-10 pb-10">
+      {/* ── Bottom Actions: Identity Privacy Choice + Decline / Accept ──────── */}
+      <div className="relative z-10 pb-8 space-y-5">
+        {/* Privacy Selector: Show Number vs Join Anonymously */}
+        <div className="max-w-xs mx-auto">
+          <div className="p-1 rounded-2xl bg-white/8 border border-white/12 grid grid-cols-2 gap-1 backdrop-blur-md">
+            <button
+              type="button"
+              onClick={() => setJoinAnonymously(false)}
+              className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                !joinAnonymously
+                  ? 'bg-emerald-600 text-white shadow-md'
+                  : 'text-white/65 hover:text-white'
+              }`}
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>Show Number</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setJoinAnonymously(true)}
+              className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                joinAnonymously
+                  ? 'bg-purple-600 text-white shadow-md'
+                  : 'text-white/65 hover:text-white'
+              }`}
+            >
+              <EyeOff className="w-3.5 h-3.5" />
+              <span>Anonymous</span>
+            </button>
+          </div>
+          <p className="text-[11px] text-center text-white/55 mt-1.5">
+            {joinAnonymously
+              ? 'Your phone number and profile will stay hidden on this call.'
+              : 'Callers will see your name and phone number.'}
+          </p>
+        </div>
+
         <div className="flex items-center justify-around max-w-xs mx-auto">
           {/* Decline Button */}
           <div className="flex flex-col items-center gap-2">
@@ -155,13 +197,25 @@ export const IncomingCallModal: React.FC = () => {
           <div className="flex flex-col items-center gap-2">
             <button
               type="button"
-              onClick={acceptIncomingCall}
-              className="w-16 h-16 rounded-full bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white flex items-center justify-center shadow-xl shadow-emerald-950/80 transition-all border border-emerald-400/40 animate-bounce duration-1000"
-              aria-label="Accept Call"
+              onClick={() => acceptIncomingCall({ anonymous: joinAnonymously })}
+              className={`w-16 h-16 rounded-full active:scale-95 text-white flex items-center justify-center shadow-xl transition-all border animate-bounce duration-1000 ${
+                joinAnonymously
+                  ? 'bg-purple-600 hover:bg-purple-500 shadow-purple-950/80 border-purple-400/40'
+                  : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-950/80 border-emerald-400/40'
+              }`}
+              aria-label={joinAnonymously ? 'Join Anonymously' : 'Accept Call'}
             >
-              {isVideo ? <Video className="w-7 h-7" /> : <Phone className="w-7 h-7 fill-current" />}
+              {joinAnonymously ? (
+                <EyeOff className="w-7 h-7" />
+              ) : isVideo ? (
+                <Video className="w-7 h-7" />
+              ) : (
+                <Phone className="w-7 h-7 fill-current" />
+              )}
             </button>
-            <span className="text-xs font-semibold text-emerald-300">Accept</span>
+            <span className={`text-xs font-semibold ${joinAnonymously ? 'text-purple-300' : 'text-emerald-300'}`}>
+              {joinAnonymously ? 'Join Anon' : 'Accept'}
+            </span>
           </div>
         </div>
       </div>

@@ -722,6 +722,8 @@ const ADMIN_SYS_STORES_KEY = '__agc_sys_stores__';
 const ADMIN_SYS_AI_KEY = '__agc_sys_ai_datacenter__';
 const ADMIN_SYS_PROFS_KEY = '__agc_sys_professionals__';
 const ADMIN_SYS_ESCROWS_KEY = '__agc_sys_escrows__';
+const ADMIN_SYS_WALLETS_KEY = '__agc_sys_wallets__';
+const ADMIN_SYS_GAME_ESCROWS_KEY = '__agc_sys_game_escrows__';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function canonicalAdminPhoneKey(phoneOrId?: string): string {
@@ -839,10 +841,18 @@ function pushAdminStoresToSupabase() {
 let syncAiFromSupabaseHook: ((slice: any) => void) | null = null;
 let syncProfessionalsFromSupabaseHook: ((slice: any) => void) | null = null;
 let syncEscrowsFromSupabaseHook: ((slice: any) => void) | null = null;
+let syncWalletsFromSupabaseHook: ((slice: any) => void) | null = null;
+let syncGameEscrowsFromSupabaseHook: ((slice: any) => void) | null = null;
+
+let initialSupabaseSyncDone = false;
+let initialSupabaseSyncPromise: Promise<void> | null = null;
 
 async function syncAdminStateFromSupabase() {
   try {
-    const [cfgSlice, cmsSlice, usersSlice, storesSlice, aiSlice, profsSlice, escrowsSlice] = await Promise.all([
+    // Ensure registry users are populated before applying user overrides
+    await syncUsersFromSupabase().catch(() => {});
+
+    const [cfgSlice, cmsSlice, usersSlice, storesSlice, aiSlice, profsSlice, escrowsSlice, walletsSlice, gameEscrowsSlice] = await Promise.all([
       fetchSupabaseAdminSlice(ADMIN_SYS_CONFIG_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_CMS_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_USERS_KEY),
@@ -850,6 +860,8 @@ async function syncAdminStateFromSupabase() {
       fetchSupabaseAdminSlice(ADMIN_SYS_AI_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_PROFS_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_ESCROWS_KEY),
+      fetchSupabaseAdminSlice(ADMIN_SYS_WALLETS_KEY),
+      fetchSupabaseAdminSlice(ADMIN_SYS_GAME_ESCROWS_KEY),
     ]);
 
     if (cfgSlice) {
@@ -904,6 +916,35 @@ async function syncAdminStateFromSupabase() {
             } as any);
             usersChanged = true;
           }
+        } else {
+          // Hydrate missing user from Supabase overrides so cold starts never lose admin-funded/verified accounts
+          const rawPhone = String(ov.phoneNumber || (k.length >= 9 ? `+234${k.replace(/^0+/, '')}` : k));
+          const clean = rawPhone.replace(/\D/g, '') || k.replace(/\D/g, '');
+          if (clean.length >= 7) {
+            usersByPhone.set(clean, {
+              id: ov.id || `usr_${clean}`,
+              fullName: ov.fullName || 'Registered User',
+              phoneNumber: rawPhone.startsWith('+') ? rawPhone : `+${clean}`,
+              cleanPhone: clean,
+              avatarUrl:
+                ov.avatarUrl ||
+                `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(ov.fullName || clean)}`,
+              about: 'Available · Using AGC',
+              registeredAt: ov.updatedAt || new Date().toISOString(),
+              role: ov.role || 'user',
+              status: ov.status || 'active',
+              verificationBadge: ov.verificationBadge ?? null,
+              kycStatus: ov.kycStatus,
+              kycType: ov.kycType,
+              walletBalanceNgn: typeof ov.walletBalanceNgn === 'number' ? ov.walletBalanceNgn : 0,
+              adminWalletAdjustedAt: ov.adminWalletAdjustedAt,
+              bannedAt: ov.bannedAt,
+              banReason: ov.banReason,
+              isOnline: false,
+              updatedAt: ov.updatedAt,
+            });
+            usersChanged = true;
+          }
         }
       }
       if (usersChanged) saveUsersFile();
@@ -945,7 +986,27 @@ async function syncAdminStateFromSupabase() {
     if (escrowsSlice && syncEscrowsFromSupabaseHook) {
       syncEscrowsFromSupabaseHook(escrowsSlice);
     }
+    if (walletsSlice && syncWalletsFromSupabaseHook) {
+      syncWalletsFromSupabaseHook(walletsSlice);
+    }
+    if (gameEscrowsSlice && syncGameEscrowsFromSupabaseHook) {
+      syncGameEscrowsFromSupabaseHook(gameEscrowsSlice);
+    }
+    initialSupabaseSyncDone = true;
   } catch (_) {}
+}
+
+async function ensureInitialSupabaseSync(): Promise<void> {
+  if (initialSupabaseSyncDone) return;
+  if (!initialSupabaseSyncPromise) {
+    initialSupabaseSyncPromise = Promise.race([
+      Promise.all([syncUsersFromSupabase(true), syncAdminStateFromSupabase()]).then(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+    ]).finally(() => {
+      initialSupabaseSyncDone = true;
+    });
+  }
+  return initialSupabaseSyncPromise;
 }
 
 function findUserEntry(phoneOrId: string): { key: string; user: RegisteredUser } | null {
@@ -2320,7 +2381,7 @@ try {
   console.warn('Notice loading server game escrows:', e);
 }
 
-function saveGameEscrowsFile() {
+function saveGameEscrowsFile(pushRemote: boolean = true) {
   try {
     fs.writeFileSync(
       GAME_ESCROWS_FILE,
@@ -2329,7 +2390,44 @@ function saveGameEscrowsFile() {
   } catch (e) {
     console.warn('Notice saving server game escrows:', e);
   }
+  if (pushRemote) {
+    pushGameEscrowsToSupabase();
+  }
 }
+
+let gameEscrowsPushTimer: ReturnType<typeof setTimeout> | null = null;
+function pushGameEscrowsToSupabase() {
+  if (gameEscrowsPushTimer) clearTimeout(gameEscrowsPushTimer);
+  gameEscrowsPushTimer = setTimeout(() => {
+    const entries = Array.from(serverGameEscrows.entries())
+      .sort((a, b) => new Date(b[1].updatedAt || 0).getTime() - new Date(a[1].updatedAt || 0).getTime())
+      .slice(0, 400);
+    upsertSupabaseAdminSlice(ADMIN_SYS_GAME_ESCROWS_KEY, 'AGC_GAME_ESCROWS', {
+      escrows: Object.fromEntries(entries),
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }, 250);
+}
+
+syncGameEscrowsFromSupabaseHook = (slice: any) => {
+  if (!slice || !slice.escrows || typeof slice.escrows !== 'object') return;
+  let changed = false;
+  for (const [gid, rec] of Object.entries<any>(slice.escrows)) {
+    if (!rec || !rec.gameId) continue;
+    const cur = serverGameEscrows.get(gid);
+    const remoteTs = new Date(rec.updatedAt || 0).getTime();
+    const localTs = new Date(cur?.updatedAt || 0).getTime();
+    if (
+      !cur ||
+      (rec.settled && !cur.settled) ||
+      remoteTs > localTs
+    ) {
+      serverGameEscrows.set(gid, rec as ServerGameEscrow);
+      changed = true;
+    }
+  }
+  if (changed) saveGameEscrowsFile(false);
+};
 
 interface ServerWalletTx {
   id: string;
@@ -2519,7 +2617,59 @@ function appendUnifiedLedgerTx(entry: ServerWalletTx) {
   return normalized;
 }
 
-function saveWalletsFile() {
+let walletsPushTimer: ReturnType<typeof setTimeout> | null = null;
+function pushWalletsToSupabase() {
+  if (walletsPushTimer) clearTimeout(walletsPushTimer);
+  walletsPushTimer = setTimeout(() => {
+    const walletsObj: Record<string, ServerWalletRecord> = {};
+    for (const [k, w] of serverWallets.entries()) {
+      walletsObj[k] = {
+        ...w,
+        transactions: Array.isArray(w.transactions) ? w.transactions.slice(0, 35) : [],
+      };
+    }
+    upsertSupabaseAdminSlice(ADMIN_SYS_WALLETS_KEY, 'AGC_SERVER_WALLETS', {
+      wallets: walletsObj,
+      usedReferences: Array.from(processedPaymentRefs).slice(-1000),
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }, 250);
+}
+
+syncWalletsFromSupabaseHook = (slice: any) => {
+  if (!slice || typeof slice !== 'object') return;
+  let changed = false;
+  if (Array.isArray(slice.usedReferences)) {
+    slice.usedReferences.forEach((r: string) => r && processedPaymentRefs.add(String(r)));
+  }
+  if (slice.wallets && typeof slice.wallets === 'object') {
+    for (const [rawKey, w] of Object.entries<any>(slice.wallets)) {
+      if (!w || typeof w !== 'object' || isSyntheticTestAccount({ phoneNumber: w.phoneNumber || rawKey, phone_digits: rawKey })) {
+        continue;
+      }
+      const key = canonicalAdminPhoneKey(w.phoneNumber || w.phoneKey || rawKey) || rawKey;
+      const cur = serverWallets.get(key);
+      const remoteTs = new Date(w.updatedAt || 0).getTime();
+      const localTs = new Date(cur?.updatedAt || 0).getTime();
+      const curIsColdPlaceholder = Boolean(cur && cur.availableBalance === 0 && cur.escrowLockedBalance === 0 && cur.transactions.length === 0);
+      if (!cur || (curIsColdPlaceholder && Number(w.availableBalance || 0) > 0) || remoteTs > localTs) {
+        serverWallets.set(key, {
+          phoneKey: key,
+          phoneNumber: w.phoneNumber || cur?.phoneNumber || `+${key}`,
+          availableBalance: Math.max(0, Number(w.availableBalance) || 0),
+          escrowLockedBalance: Math.max(0, Number(w.escrowLockedBalance) || 0),
+          currency: w.currency || cur?.currency || 'NGN',
+          transactions: Array.isArray(w.transactions) && w.transactions.length > 0 ? w.transactions.slice(0, 100) : (cur?.transactions || []),
+          updatedAt: w.updatedAt || new Date().toISOString(),
+        });
+        changed = true;
+      }
+    }
+  }
+  if (changed) saveWalletsFile(false);
+};
+
+function saveWalletsFile(pushRemote: boolean = true) {
   try {
     const walletsObj: Record<string, ServerWalletRecord> = {};
     for (const [k, w] of serverWallets.entries()) {
@@ -2540,6 +2690,9 @@ function saveWalletsFile() {
   } catch (e) {
     console.warn('Notice saving server wallet ledger:', e);
   }
+  if (pushRemote) {
+    pushWalletsToSupabase();
+  }
 }
 
 function getOrCreateServerWallet(phoneOrId: string): ServerWalletRecord {
@@ -2547,11 +2700,16 @@ function getOrCreateServerWallet(phoneOrId: string): ServerWalletRecord {
   const cleanKey = canonicalAdminPhoneKey(match?.user.phoneNumber || phoneOrId) || phoneOrId.replace(/\D/g, '') || phoneOrId;
   const existing = serverWallets.get(cleanKey);
   if (existing) {
-    // Keep in sync with any higher/admin-adjusted balance on user record
+    // Keep in sync with any higher/admin-adjusted balance on user record (or recover from cold-start 0 placeholder)
     if (match?.user.adminWalletAdjustedAt && typeof match.user.walletBalanceNgn === 'number') {
       const adjTs = new Date(match.user.adminWalletAdjustedAt).getTime();
       const walTs = new Date(existing.updatedAt || 0).getTime();
-      if (adjTs > walTs) {
+      const isColdZeroPlaceholder =
+        existing.availableBalance === 0 &&
+        existing.escrowLockedBalance === 0 &&
+        existing.transactions.length === 0 &&
+        match.user.walletBalanceNgn > 0;
+      if (adjTs > walTs || isColdZeroPlaceholder) {
         existing.availableBalance = Math.max(0, match.user.walletBalanceNgn);
         existing.updatedAt = match.user.adminWalletAdjustedAt;
         saveWalletsFile();
@@ -2560,7 +2718,21 @@ function getOrCreateServerWallet(phoneOrId: string): ServerWalletRecord {
     return existing;
   }
 
-  const initialBal = Math.max(0, Number(match?.user.walletBalanceNgn) || 0);
+  let initialBal = Math.max(0, Number(match?.user.walletBalanceNgn) || 0);
+  // Fallback: recover latest authoritative balance_after from unifiedLedger if user record was missing it
+  if (initialBal === 0 && cleanKey) {
+    const lastTx = unifiedLedger.find(
+      (tx) =>
+        tx.balanceAfter !== undefined &&
+        tx.balanceAfter !== null &&
+        tx.userPhone &&
+        canonicalAdminPhoneKey(tx.userPhone) === cleanKey
+    );
+    if (lastTx && Number.isFinite(Number(lastTx.balanceAfter)) && Number(lastTx.balanceAfter) > 0) {
+      initialBal = Math.max(0, Number(lastTx.balanceAfter));
+    }
+  }
+
   const record: ServerWalletRecord = {
     phoneKey: cleanKey,
     phoneNumber: match?.user.phoneNumber || phoneOrId,
@@ -2568,10 +2740,10 @@ function getOrCreateServerWallet(phoneOrId: string): ServerWalletRecord {
     escrowLockedBalance: 0,
     currency: 'NGN',
     transactions: [],
-    updatedAt: new Date().toISOString(),
+    updatedAt: initialBal > 0 ? (match?.user.adminWalletAdjustedAt || new Date().toISOString()) : new Date(0).toISOString(),
   };
   serverWallets.set(cleanKey, record);
-  saveWalletsFile();
+  saveWalletsFile(initialBal > 0);
   return record;
 }
 
@@ -2705,9 +2877,10 @@ function creditAuthoritativeWallet(params: {
 }
 
 // REST: Read authoritative server wallet state (never trusts browser balance)
-app.get('/api/wallet/:phone', (req: Request, res: Response) => {
+app.get('/api/wallet/:phone', async (req: Request, res: Response) => {
   const rawPhone = decodeURIComponent(req.params.phone || '');
   if (!rawPhone) return res.status(400).json({ error: 'Phone number required' });
+  await ensureInitialSupabaseSync();
   const wallet = getOrCreateServerWallet(rawPhone);
   return res.json({
     success: true,
@@ -3076,8 +3249,9 @@ app.post('/api/wallet/upgrade-badge', (req: Request, res: Response) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // STRICT SERVER-AUTHORITATIVE GAME BET ESCROW ENGINE (X/O, WHOT!, LUDO)
 // ═══════════════════════════════════════════════════════════════════════════════
-app.post('/api/games/bet/lock', (req: Request, res: Response) => {
+app.post('/api/games/bet/lock', async (req: Request, res: Response) => {
   try {
+    await ensureInitialSupabaseSync();
     const {
       gameId,
       gameType,
@@ -3105,7 +3279,7 @@ app.post('/api/games/bet/lock', (req: Request, res: Response) => {
       });
     }
 
-    const match = findUserEntry(cleanPlayer);
+    let match = findUserEntry(cleanPlayer);
     const isVerified = hasActiveVerifiedBadgeServer(match?.user);
     const maxBetLimit = isVerified ? VERIFIED_GAME_BET_LIMIT : STANDARD_GAME_BET_LIMIT;
     if (stake > maxBetLimit) {
@@ -3119,7 +3293,14 @@ app.post('/api/games/bet/lock', (req: Request, res: Response) => {
       });
     }
 
-    const existingEscrow = serverGameEscrows.get(cleanGameId);
+    let existingEscrow = serverGameEscrows.get(cleanGameId);
+    if (!existingEscrow && playerRole === 'opponent') {
+      const remoteGameSlice = await fetchSupabaseAdminSlice(ADMIN_SYS_GAME_ESCROWS_KEY).catch(() => null);
+      if (remoteGameSlice && syncGameEscrowsFromSupabaseHook) {
+        syncGameEscrowsFromSupabaseHook(remoteGameSlice);
+        existingEscrow = serverGameEscrows.get(cleanGameId);
+      }
+    }
     if (existingEscrow?.settled) {
       return res.status(409).json({
         success: false,
@@ -3128,7 +3309,13 @@ app.post('/api/games/bet/lock', (req: Request, res: Response) => {
       });
     }
 
-    const wallet = getOrCreateServerWallet(cleanPlayer);
+    let wallet = getOrCreateServerWallet(cleanPlayer);
+    if (wallet.availableBalance < stake) {
+      // Check latest remote wallets/users override in Supabase before rejecting for insufficient balance
+      await syncAdminStateFromSupabase().catch(() => {});
+      match = findUserEntry(cleanPlayer) || match;
+      wallet = getOrCreateServerWallet(cleanPlayer);
+    }
 
     // Idempotent check: if this player role already locked stake for this exact match
     if (existingEscrow) {
@@ -3264,8 +3451,9 @@ app.post('/api/games/bet/lock', (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/games/bet/settle', (req: Request, res: Response) => {
+app.post('/api/games/bet/settle', async (req: Request, res: Response) => {
   try {
+    await ensureInitialSupabaseSync();
     const {
       gameId,
       gameType,
@@ -3291,7 +3479,14 @@ app.post('/api/games/bet/settle', (req: Request, res: Response) => {
       });
     }
 
-    const existingEscrow = serverGameEscrows.get(cleanGameId);
+    let existingEscrow = serverGameEscrows.get(cleanGameId);
+    if (!existingEscrow) {
+      const remoteGameSlice = await fetchSupabaseAdminSlice(ADMIN_SYS_GAME_ESCROWS_KEY).catch(() => null);
+      if (remoteGameSlice && syncGameEscrowsFromSupabaseHook) {
+        syncGameEscrowsFromSupabaseHook(remoteGameSlice);
+        existingEscrow = serverGameEscrows.get(cleanGameId);
+      }
+    }
     const reqPhoneStr = String(requesterPhone || winnerPhone || challengerPhone || opponentPhone || '').trim();
 
     // Idempotent guard: already settled on server -> NEVER double-settle, return requester's authoritative wallet
@@ -3329,8 +3524,16 @@ app.post('/api/games/bet/settle', (req: Request, res: Response) => {
 
     const chalKey = canonicalAdminPhoneKey(chalPhone);
     const oppKey = oppPhone ? canonicalAdminPhoneKey(oppPhone) : '';
-    const chalLocked = existingEscrow ? existingEscrow.challengerLocked : false;
-    const oppLocked = existingEscrow ? existingEscrow.opponentLocked : false;
+    const chalLockTxId = `tx_${gType}_lock_${cleanGameId}`;
+    const oppAccTxId = `tx_${gType}_acc_${cleanGameId}`;
+    const chalLocked = existingEscrow
+      ? existingEscrow.challengerLocked
+      : unifiedLedger.some((tx) => tx.id === chalLockTxId) ||
+        Boolean(serverWallets.get(chalKey)?.transactions?.some((tx) => tx.id === chalLockTxId));
+    const oppLocked = existingEscrow
+      ? existingEscrow.opponentLocked
+      : unifiedLedger.some((tx) => tx.id === oppAccTxId) ||
+        Boolean(oppKey && serverWallets.get(oppKey)?.transactions?.some((tx) => tx.id === oppAccTxId));
 
     const nowIso = new Date().toISOString();
     const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -9598,7 +9801,7 @@ async function startServer() {
       console.log(`📡 WebSocket & User Registry ready (${usersByPhone.size} users loaded)`);
       // Sync Supabase registry & global admin state asynchronously so port binding is never delayed
       purgeExpiredServerStatuses(false);
-      Promise.all([syncUsersFromSupabase(true), syncAdminStateFromSupabase()]).catch(() => {});
+      ensureInitialSupabaseSync().catch(() => {});
       syncIntervalRef = setInterval(() => {
         purgeExpiredServerStatuses(true);
         Promise.all([syncUsersFromSupabase(), syncAdminStateFromSupabase()]).catch(() => {});

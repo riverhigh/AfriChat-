@@ -1,5 +1,55 @@
 [
   {
+    "id": "tx_xo_ref_c_xo_verify_1794953181997",
+    "userId": "usr_032044777",
+    "userPhone": "+2347032044777",
+    "userName": "Mitch",
+    "type": "refund",
+    "title": "X/O Challenge Closed (Stake Refunded)",
+    "description": "X/O stake returned from escrow",
+    "amount": 1000,
+    "fee": 0,
+    "balanceAfter": 61000,
+    "currency": "NGN",
+    "timestamp": "10:06 PM",
+    "createdAt": "2026-11-17T22:06:22.079Z",
+    "status": "completed",
+    "reference": "XO_xo_verify_1794953181997",
+    "referenceId": "XO_xo_verify_1794953181997",
+    "channel": "wallet",
+    "metadata": {
+      "gameBetEscrow": true,
+      "gameId": "xo_verify_1794953181997",
+      "gameType": "xo",
+      "outcome": "cancelled"
+    }
+  },
+  {
+    "id": "tx_xo_lock_xo_verify_1794953181997",
+    "userId": "usr_032044777",
+    "userPhone": "+2347032044777",
+    "userName": "Mitch",
+    "type": "game_wager",
+    "title": "Verify X/O Lock",
+    "description": "X/O bet stake locked in server escrow",
+    "amount": 1000,
+    "fee": 0,
+    "balanceAfter": 60000,
+    "currency": "NGN",
+    "timestamp": "10:06 PM",
+    "createdAt": "2026-11-17T22:06:22.011Z",
+    "status": "completed",
+    "reference": "XO_xo_verify_1794953181997",
+    "referenceId": "XO_xo_verify_1794953181997",
+    "channel": "wallet",
+    "metadata": {
+      "gameBetEscrow": true,
+      "gameId": "xo_verify_1794953181997",
+      "gameType": "xo",
+      "role": "challenger"
+    }
+  },
+  {
     "id": "tx_xo_ref_c_test_123",
     "userId": "usr_032044777",
     "userPhone": "+2347032044777",

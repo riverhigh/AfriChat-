@@ -39,7 +39,9 @@ export interface UseWebRTCOptions {
   userName?: string;
   userAvatar?: string;
   isGroupCall?: boolean;
+  isAnonymous?: boolean;
   onCallEnded?: () => void;
+  onUpgradedToGroup?: () => void;
   enabled?: boolean;
 }
 
@@ -48,6 +50,8 @@ export interface RemotePeerMedia {
   name: string;
   phone?: string;
   avatar?: string;
+  isAnonymous?: boolean;
+  isScreenSharing?: boolean;
   stream: MediaStream | null;
   connectionState: string;
 }
@@ -66,6 +70,8 @@ interface PeerEntry {
   name: string;
   phone?: string;
   avatar?: string;
+  isAnonymous?: boolean;
+  isScreenSharing?: boolean;
   pc: RTCPeerConnection;
   stream: MediaStream;
   iceQueue: RTCIceCandidateInit[];
@@ -179,7 +185,9 @@ export function useWebRTC({
   userName,
   userAvatar,
   isGroupCall = false,
+  isAnonymous = false,
   onCallEnded,
+  onUpgradedToGroup,
   enabled = true,
 }: UseWebRTCOptions) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -188,6 +196,7 @@ export function useWebRTC({
   const [connectionState, setConnectionState] = useState<CallConnectionState>('idle');
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(callType === 'voice');
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isSpeaker, setIsSpeaker] = useState(false);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -196,6 +205,8 @@ export function useWebRTC({
   // Stable refs so callback/prop identity changes NEVER tear down the call
   const onCallEndedRef = useRef(onCallEnded);
   onCallEndedRef.current = onCallEnded;
+  const onUpgradedToGroupRef = useRef(onUpgradedToGroup);
+  onUpgradedToGroupRef.current = onUpgradedToGroup;
   const userPhoneRef = useRef(userPhone || '');
   userPhoneRef.current = userPhone || '';
   const userNameRef = useRef(userName || 'AGC User');
@@ -204,17 +215,26 @@ export function useWebRTC({
   userAvatarRef.current = userAvatar || '';
   const isGroupCallRef = useRef(isGroupCall);
   isGroupCallRef.current = isGroupCall;
+  const isAnonymousRef = useRef(Boolean(isAnonymous));
+  isAnonymousRef.current = Boolean(isAnonymous);
   const isInitiatorRef = useRef(isInitiator);
   isInitiatorRef.current = isInitiator;
   const roomIdRef = useRef(roomId);
   roomIdRef.current = roomId;
   const callTypeRef = useRef(callType);
   callTypeRef.current = callType;
+  const isScreenSharingRef = useRef(false);
+  const isVideoOffRef = useRef(callType === 'voice');
+  isVideoOffRef.current = isVideoOff;
+  const facingModeRef = useRef<'user' | 'environment'>('user');
+  facingModeRef.current = facingMode;
+  const wasVideoOffBeforeShareRef = useRef<boolean>(callType === 'voice');
+  const screenStreamRef = useRef<MediaStream | null>(null);
 
   // Session-unique peer ID for glare-free mesh signaling
   const myPeerIdRef = useRef<string>('');
   if (!myPeerIdRef.current) {
-    const clean = (userPhone || '').replace(/\D/g, '') || 'peer';
+    const clean = isAnonymous ? 'anon' : ((userPhone || '').replace(/\D/g, '') || 'peer');
     myPeerIdRef.current = `${clean}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
@@ -310,9 +330,11 @@ export function useWebRTC({
       }
       list.push({
         peerId: entry.peerId,
-        name: entry.name,
-        phone: entry.phone,
-        avatar: entry.avatar,
+        name: entry.isAnonymous ? 'Anonymous' : entry.name,
+        phone: entry.isAnonymous ? undefined : entry.phone,
+        avatar: entry.isAnonymous ? undefined : entry.avatar,
+        isAnonymous: Boolean(entry.isAnonymous),
+        isScreenSharing: Boolean(entry.isScreenSharing),
         stream: activeStream,
         connectionState: entry.pc.connectionState || entry.pc.iceConnectionState || 'connecting',
       });
@@ -347,13 +369,16 @@ export function useWebRTC({
 
     signalSeqRef.current += 1;
     const sigId = `${myPeerIdRef.current}_${event}_${signalSeqRef.current}_${Date.now()}`;
+    const anon = isAnonymousRef.current;
     const payload = {
       ...rawPayload,
       _sigId: sigId,
       _fromPeerId: myPeerIdRef.current,
-      _fromName: userNameRef.current,
-      _fromPhone: userPhoneRef.current,
-      _fromAvatar: userAvatarRef.current,
+      _fromName: anon ? 'Anonymous' : userNameRef.current,
+      _fromPhone: anon ? '' : userPhoneRef.current,
+      _fromAvatar: anon ? '' : userAvatarRef.current,
+      _isAnonymous: anon,
+      _isScreenSharing: isScreenSharingRef.current,
     };
 
     // Mark our own signal ID processed so we never echo-handle it
@@ -429,6 +454,19 @@ export function useWebRTC({
     });
     peersRef.current.clear();
 
+    // Stop screen share stream if active
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((track) => {
+        try {
+          track.onended = null;
+          track.stop();
+        } catch (_) {}
+      });
+      screenStreamRef.current = null;
+    }
+    isScreenSharingRef.current = false;
+    setIsScreenSharing(false);
+
     // Stop local tracks
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => {
@@ -492,12 +530,34 @@ export function useWebRTC({
 
   // ── Get or Create PeerConnection for a Specific Remote Peer ────────────────
   const getOrCreatePeer = useCallback(
-    (remotePeerId: string, meta?: { _fromName?: string; _fromPhone?: string; _fromAvatar?: string }): PeerEntry | null => {
+    (
+      remotePeerId: string,
+      meta?: {
+        _fromName?: string;
+        _fromPhone?: string;
+        _fromAvatar?: string;
+        _isAnonymous?: boolean;
+        _isScreenSharing?: boolean;
+      }
+    ): PeerEntry | null => {
       const existing = peersRef.current.get(remotePeerId);
       if (existing) {
-        if (meta?._fromName && existing.name === 'Participant') existing.name = meta._fromName;
-        if (meta?._fromPhone && !existing.phone) existing.phone = meta._fromPhone;
-        if (meta?._fromAvatar && !existing.avatar) existing.avatar = meta._fromAvatar;
+        if (meta?._isAnonymous !== undefined) {
+          existing.isAnonymous = Boolean(meta._isAnonymous);
+          if (existing.isAnonymous) {
+            existing.name = 'Anonymous';
+            existing.phone = undefined;
+            existing.avatar = undefined;
+          }
+        }
+        if (!existing.isAnonymous) {
+          if (meta?._fromName && existing.name === 'Participant') existing.name = meta._fromName;
+          if (meta?._fromPhone && !existing.phone) existing.phone = meta._fromPhone;
+          if (meta?._fromAvatar && !existing.avatar) existing.avatar = meta._fromAvatar;
+        }
+        if (meta?._isScreenSharing !== undefined) {
+          existing.isScreenSharing = Boolean(meta._isScreenSharing);
+        }
         return existing;
       }
 
@@ -514,11 +574,14 @@ export function useWebRTC({
         return null;
       }
 
+      const isPeerAnon = Boolean(meta?._isAnonymous);
       const entry: PeerEntry = {
         peerId: remotePeerId,
-        name: meta?._fromName || 'Participant',
-        phone: meta?._fromPhone,
-        avatar: meta?._fromAvatar,
+        name: isPeerAnon ? 'Anonymous' : (meta?._fromName || 'Participant'),
+        phone: isPeerAnon ? undefined : meta?._fromPhone,
+        avatar: isPeerAnon ? undefined : meta?._fromAvatar,
+        isAnonymous: isPeerAnon,
+        isScreenSharing: Boolean(meta?._isScreenSharing),
         pc,
         stream: new MediaStream(),
         iceQueue: [],
@@ -526,6 +589,12 @@ export function useWebRTC({
         disconnectTimer: null,
       };
       peersRef.current.set(remotePeerId, entry);
+
+      // Automatically upgrade to multi-peer mode if >1 remote peer joins
+      if (peersRef.current.size > 1 && !isGroupCallRef.current) {
+        isGroupCallRef.current = true;
+        onUpgradedToGroupRef.current?.();
+      }
 
       // Attach local tracks
       stream.getTracks().forEach((track) => {
@@ -675,7 +744,7 @@ export function useWebRTC({
         setConnectionState((prev) => (prev === 'connected' ? 'connected' : 'connecting'));
         const offer = await pc.createOffer({
           offerToReceiveAudio: true,
-          offerToReceiveVideo: callTypeRef.current === 'video',
+          offerToReceiveVideo: true,
         });
         if (endedFlagRef.current || isPcClosed(pc)) return;
         await pc.setLocalDescription(offer);
@@ -828,6 +897,27 @@ export function useWebRTC({
         } catch (err) {
           console.error('Error handling WebRTC answer:', err);
         }
+      } else if (event === 'call_upgraded_group') {
+        if (!isGroupCallRef.current) {
+          isGroupCallRef.current = true;
+          onUpgradedToGroupRef.current?.();
+        }
+      } else if (event === 'peer_media_state') {
+        const entry = peersRef.current.get(senderPeerId);
+        if (entry) {
+          if (payload.isScreenSharing !== undefined) {
+            entry.isScreenSharing = Boolean(payload.isScreenSharing);
+          }
+          if (payload._isAnonymous !== undefined) {
+            entry.isAnonymous = Boolean(payload._isAnonymous);
+            if (entry.isAnonymous) {
+              entry.name = 'Anonymous';
+              entry.phone = undefined;
+              entry.avatar = undefined;
+            }
+          }
+          syncRemotePeersState();
+        }
       } else if (event === 'webrtc_ice') {
         if (!payload.candidate) return;
         const entry = getOrCreatePeer(senderPeerId, payload);
@@ -965,7 +1055,7 @@ export function useWebRTC({
       });
       supabaseChannelRef.current = channel;
 
-      ['peer_join', 'peer_ack', 'receiver_ready', 'webrtc_offer', 'webrtc_answer', 'webrtc_ice', 'webrtc_end'].forEach((evt) => {
+      ['peer_join', 'peer_ack', 'receiver_ready', 'peer_media_state', 'call_upgraded_group', 'webrtc_offer', 'webrtc_answer', 'webrtc_ice', 'webrtc_end'].forEach((evt) => {
         channel.on('broadcast', { event: evt }, ({ payload }) => {
           handleInboundSignal(evt, payload);
         });
@@ -1055,21 +1145,199 @@ export function useWebRTC({
     setIsMuted(nextMuted);
   }, [isMuted]);
 
+  const stopScreenShare = useCallback(async () => {
+    if (!isScreenSharingRef.current && !screenStreamRef.current) return;
+
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((t) => {
+        try {
+          t.onended = null;
+          t.stop();
+        } catch (_) {}
+      });
+      screenStreamRef.current = null;
+    }
+
+    isScreenSharingRef.current = false;
+    setIsScreenSharing(false);
+
+    const stream = localStreamRef.current;
+    if (stream) {
+      stream.getVideoTracks().forEach((t) => {
+        try {
+          t.onended = null;
+          t.stop();
+        } catch (_) {}
+        stream.removeTrack(t);
+      });
+
+      if (callTypeRef.current === 'video' && !wasVideoOffBeforeShareRef.current && navigator.mediaDevices?.getUserMedia) {
+        try {
+          const camStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: facingModeRef.current, width: { ideal: 640 }, height: { ideal: 480 } },
+          });
+          const camTrack = camStream.getVideoTracks()[0];
+          if (camTrack && localStreamRef.current) {
+            localStreamRef.current.addTrack(camTrack);
+            setIsVideoOff(false);
+            peersRef.current.forEach((entry) => {
+              const sender = entry.pc.getSenders().find((s) => s.track?.kind === 'video') ||
+                entry.pc.getTransceivers().find((tr) => tr.receiver.track?.kind === 'video')?.sender;
+              if (sender) {
+                sender.replaceTrack(camTrack).catch(() => {});
+              }
+            });
+            setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+            sendSignal('peer_media_state', { isScreenSharing: false, isVideoOff: false });
+            return;
+          }
+        } catch (err) {
+          console.warn('Could not restore camera after screen share:', err);
+        }
+      }
+
+      setIsVideoOff(true);
+      peersRef.current.forEach((entry) => {
+        const sender = entry.pc.getSenders().find((s) => s.track?.kind === 'video');
+        if (sender) {
+          sender.replaceTrack(null).catch(() => {});
+        }
+      });
+      if (localStreamRef.current) {
+        setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+      }
+    }
+
+    sendSignal('peer_media_state', { isScreenSharing: false, isVideoOff: true });
+  }, [sendSignal]);
+
+  const startScreenShare = useCallback(async (): Promise<{
+    success: boolean;
+    isScreenSharing?: boolean;
+    message?: string;
+  }> => {
+    if (
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices ||
+      typeof navigator.mediaDevices.getDisplayMedia !== 'function'
+    ) {
+      return {
+        success: false,
+        message: 'Screen sharing is not supported in this browser.',
+      };
+    }
+
+    if (isScreenSharingRef.current) {
+      return { success: true, isScreenSharing: true };
+    }
+
+    try {
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 24, max: 30 } },
+        audio: false,
+      });
+      const screenTrack = displayStream.getVideoTracks()[0];
+      if (!screenTrack) {
+        displayStream.getTracks().forEach((t) => { try { t.stop(); } catch (_) {} });
+        return { success: false, message: 'No screen video track was selected.' };
+      }
+
+      wasVideoOffBeforeShareRef.current = isVideoOffRef.current;
+      screenStreamRef.current = displayStream;
+      isScreenSharingRef.current = true;
+      setIsScreenSharing(true);
+      setIsVideoOff(false);
+
+      screenTrack.onended = () => {
+        void stopScreenShare();
+      };
+
+      const stream = localStreamRef.current;
+      if (stream) {
+        stream.getVideoTracks().forEach((oldTrack) => {
+          try {
+            oldTrack.onended = null;
+            oldTrack.stop();
+          } catch (_) {}
+          stream.removeTrack(oldTrack);
+        });
+        stream.addTrack(screenTrack);
+        setLocalStream(new MediaStream(stream.getTracks()));
+
+        for (const entry of peersRef.current.values()) {
+          if (entry.pc.signalingState === 'closed') continue;
+          const videoSender =
+            entry.pc.getSenders().find((s) => s.track?.kind === 'video') ||
+            entry.pc.getTransceivers().find((tr) => tr.receiver.track?.kind === 'video')?.sender;
+
+          if (videoSender) {
+            await videoSender.replaceTrack(screenTrack).catch(() => {});
+          } else {
+            // Voice call upgrading to send video/screen track: add track and renegotiate SDP
+            try {
+              entry.pc.addTrack(screenTrack, stream);
+              if (entry.pc.signalingState === 'stable') {
+                const offer = await entry.pc.createOffer({
+                  offerToReceiveAudio: true,
+                  offerToReceiveVideo: true,
+                });
+                if (!endedFlagRef.current && String(entry.pc.signalingState) !== 'closed') {
+                  await entry.pc.setLocalDescription(offer);
+                  const sdp = entry.pc.localDescription || offer;
+                  sendSignal('webrtc_offer', {
+                    _targetPeerId: entry.peerId,
+                    sdp: { type: sdp.type, sdp: sdp.sdp },
+                  });
+                }
+              }
+            } catch (err) {
+              console.warn('Screen share renegotiation error:', err);
+            }
+          }
+        }
+      }
+
+      sendSignal('peer_media_state', { isScreenSharing: true, isVideoOff: false });
+      return { success: true, isScreenSharing: true };
+    } catch (err: any) {
+      if (err?.name === 'NotAllowedError' || err?.name === 'AbortError') {
+        return { success: false, message: 'Screen sharing cancelled.' };
+      }
+      return { success: false, message: err?.message || 'Unable to start screen sharing.' };
+    }
+  }, [sendSignal, stopScreenShare]);
+
+  const toggleScreenShare = useCallback(async (): Promise<{
+    success: boolean;
+    isScreenSharing?: boolean;
+    message?: string;
+  }> => {
+    if (isScreenSharingRef.current) {
+      await stopScreenShare();
+      return { success: true, isScreenSharing: false };
+    }
+    return startScreenShare();
+  }, [startScreenShare, stopScreenShare]);
+
   const toggleVideo = useCallback(() => {
     if (!localStreamRef.current) return;
+    if (isScreenSharingRef.current) {
+      void stopScreenShare();
+      return;
+    }
     const nextOff = !isVideoOff;
     localStreamRef.current.getVideoTracks().forEach((track) => {
       track.enabled = !nextOff;
     });
     setIsVideoOff(nextOff);
-  }, [isVideoOff]);
+  }, [isVideoOff, stopScreenShare]);
 
   const toggleSpeaker = useCallback(() => {
     setIsSpeaker((prev) => !prev);
   }, []);
 
   const flipCamera = useCallback(async () => {
-    if (callTypeRef.current !== 'video') return;
+    if (callTypeRef.current !== 'video' || isScreenSharingRef.current) return;
     const nextFacing = facingMode === 'user' ? 'environment' : 'user';
     setFacingMode(nextFacing);
 
@@ -1122,12 +1390,16 @@ export function useWebRTC({
     connectionState,
     isMuted,
     isVideoOff,
+    isScreenSharing,
     isSpeaker,
     facingMode,
     durationSeconds,
     errorMessage,
     toggleMute,
     toggleVideo,
+    startScreenShare,
+    stopScreenShare,
+    toggleScreenShare,
     toggleSpeaker,
     flipCamera,
     endCall,

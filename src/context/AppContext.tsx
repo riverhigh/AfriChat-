@@ -895,6 +895,8 @@ export interface ActiveCallState {
   isGroupCall?: boolean;
   participantPhones?: string[];
   chatId?: string;
+  isMinimized?: boolean;
+  isAnonymous?: boolean;
 }
 
 interface AppContextType {
@@ -1032,11 +1034,18 @@ interface AppContextType {
       isGroupCall?: boolean;
       participantPhones?: string[];
       chatId?: string;
+      isAnonymous?: boolean;
     }
   ) => void;
   endCall: () => void;
   toggleCallMute: () => void;
   toggleCallSpeaker: () => void;
+  toggleCallMinimize: () => void;
+  setCallMinimized: (val: boolean) => void;
+  upgradeCallToGroup: () => void;
+  inviteToActiveCall: (
+    targets: Array<{ phone: string; name?: string; avatar?: string }>
+  ) => { invitedCount: number; alreadyInCall: number };
   incomingCall: {
     roomId: string;
     callerName: string;
@@ -1047,7 +1056,7 @@ interface AppContextType {
     groupName?: string;
     participantPhones?: string[];
   } | null;
-  acceptIncomingCall: () => void;
+  acceptIncomingCall: (options?: { anonymous?: boolean }) => void;
   declineIncomingCall: () => void;
   // 1. Meme & Sticker Studio
   isMemeStudioOpen: boolean;
@@ -7778,6 +7787,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isGroupCall?: boolean;
         participantPhones?: string[];
         chatId?: string;
+        isAnonymous?: boolean;
       }
     ) => {
       const generatedRoomId = roomId || `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -7865,6 +7875,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isGroupCall: isGroupCall || uniqueTargets.length > 1,
         participantPhones: uniqueTargets,
         chatId: options?.chatId,
+        isMinimized: false,
+        isAnonymous: Boolean(options?.isAnonymous),
       };
 
       activeCallRef.current = nextActiveCall;
@@ -7904,25 +7916,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [sendCallControlSignal]
   );
 
-  const acceptIncomingCall = useCallback(() => {
-    const inc = incomingCallRef.current;
-    if (!inc) return;
-    const { callerName, callerPhone, callerAvatar, type, roomId, isGroupCall, groupName, participantPhones } = inc;
-    incomingCallRef.current = null;
-    setIncomingCall(null);
-    startCall(
-      isGroupCall && groupName ? groupName : callerName,
-      callerPhone,
-      callerAvatar,
-      type,
-      roomId,
-      false,
-      {
-        isGroupCall,
-        participantPhones: participantPhones || (callerPhone ? [callerPhone] : []),
-      }
-    );
-  }, [startCall]);
+  const acceptIncomingCall = useCallback(
+    (options?: { anonymous?: boolean }) => {
+      const inc = incomingCallRef.current;
+      if (!inc) return;
+      const { callerName, callerPhone, callerAvatar, type, roomId, isGroupCall, groupName, participantPhones } = inc;
+      incomingCallRef.current = null;
+      setIncomingCall(null);
+      startCall(
+        isGroupCall && groupName ? groupName : callerName,
+        callerPhone,
+        callerAvatar,
+        type,
+        roomId,
+        false,
+        {
+          isGroupCall,
+          participantPhones: participantPhones || (callerPhone ? [callerPhone] : []),
+          isAnonymous: Boolean(options?.anonymous),
+        }
+      );
+    },
+    [startCall]
+  );
 
   const declineIncomingCall = useCallback(() => {
     const inc = incomingCallRef.current;
@@ -7991,6 +8007,119 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleCallSpeaker = () => {
     setActiveCall((prev) => (prev ? { ...prev, isSpeaker: !prev.isSpeaker } : null));
   };
+
+  const setCallMinimized = useCallback((val: boolean) => {
+    setActiveCall((prev) => {
+      if (!prev) return null;
+      const next = { ...prev, isMinimized: val };
+      activeCallRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const toggleCallMinimize = useCallback(() => {
+    setActiveCall((prev) => {
+      if (!prev) return null;
+      const next = { ...prev, isMinimized: !prev.isMinimized };
+      activeCallRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const upgradeCallToGroup = useCallback(() => {
+    setActiveCall((prev) => {
+      if (!prev || prev.isGroupCall) return prev;
+      const next: ActiveCallState = {
+        ...prev,
+        isGroupCall: true,
+      };
+      activeCallRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const inviteToActiveCall = useCallback(
+    (targets: Array<{ phone: string; name?: string; avatar?: string }>): { invitedCount: number; alreadyInCall: number } => {
+      const current = activeCallRef.current;
+      if (!current || !current.roomId) return { invitedCount: 0, alreadyInCall: 0 };
+
+      const me = currentUserRef.current;
+      const myPhone = me?.phoneNumber || '';
+      const existingPhones = [...(current.participantPhones || [])];
+      if (current.phone && current.phone.replace(/\D/g, '').length >= 7) {
+        existingPhones.push(current.phone);
+      }
+
+      const newPhones: string[] = [];
+      let alreadyInCall = 0;
+
+      targets.forEach((t) => {
+        const raw = (t?.phone || '').trim();
+        const digits = raw.replace(/\D/g, '');
+        if (digits.length < 7) return;
+        if (myPhone && phonesMatch(raw, myPhone)) return;
+        if (existingPhones.some((ep) => phonesMatch(ep, raw)) || newPhones.some((np) => phonesMatch(np, raw))) {
+          alreadyInCall += 1;
+          return;
+        }
+        newPhones.push(raw);
+      });
+
+      if (newPhones.length === 0) {
+        return { invitedCount: 0, alreadyInCall };
+      }
+
+      const mergedParticipants = Array.from(new Set([...existingPhones, ...newPhones]));
+      const groupTitle = current.isGroupCall
+        ? current.name
+        : `${current.name || 'Call'} + ${newPhones.length}`;
+
+      const updatedActive: ActiveCallState = {
+        ...current,
+        isGroupCall: true,
+        name: groupTitle,
+        phone: `${mergedParticipants.length + 1} participants`,
+        participantPhones: mergedParticipants,
+      };
+      activeCallRef.current = updatedActive;
+      setActiveCall(updatedActive);
+
+      // Ring the newly added participants into the SAME live room
+      const callPayload = {
+        roomId: current.roomId,
+        callerName: current.isAnonymous ? 'Anonymous' : (me?.fullName || 'AGC User'),
+        callerPhone: current.isAnonymous ? '' : myPhone,
+        callerAvatar: current.isAnonymous ? '' : me?.avatarUrl,
+        type: current.type,
+        isGroupCall: true,
+        groupName: groupTitle,
+        participantPhones: [myPhone, ...mergedParticipants].filter(Boolean),
+        timestamp: Date.now(),
+      };
+      sendCallControlSignal(newPhones, 'incoming_call', callPayload);
+
+      // Notify existing peers in the room that this call is now a multi-party group call
+      const upgradeSig = {
+        roomId: current.roomId,
+        _sigId: `ctx_grp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: Date.now(),
+      };
+      try {
+        emitCallSignal(current.roomId, 'call_upgraded_group', upgradeSig);
+      } catch (_) {}
+      try {
+        const bc = new BroadcastChannel(`AGC_call_${current.roomId}`);
+        bc.postMessage({ event: 'call_upgraded_group', payload: upgradeSig, id: upgradeSig._sigId, roomId: current.roomId });
+        setTimeout(() => { try { bc.close(); } catch (_) {} }, 1500);
+      } catch (_) {}
+      if (isSupabaseConfigured) {
+        sendSupabaseBroadcastOnce(`call_room_${current.roomId}`, 'call_upgraded_group', upgradeSig);
+      }
+
+      return { invitedCount: newPhones.length, alreadyInCall };
+    },
+    [sendCallControlSignal, sendSupabaseBroadcastOnce]
+  );
   // Blocked users list
   const [blockedUserIds, setBlockedUserIds] = useState<string[]>(() => {
     try {
@@ -12934,12 +13063,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           message: `Stakes above ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} require a Verified Badge (₦4,000/mo, up to ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}).`,
         };
       }
-      if (wallet.availableBalance < game.betAmount) {
-        return {
-          success: false,
-          insufficientFunds: true,
-          message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.`,
-        };
+      if (walletRef.current.availableBalance < game.betAmount) {
+        await refreshWalletFromServer();
+        if (walletRef.current.availableBalance < game.betAmount) {
+          return {
+            success: false,
+            insufficientFunds: true,
+            message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.`,
+          };
+        }
       }
     }
 
@@ -13886,8 +14018,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           message: `Stakes above ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} require a Verified Badge (₦4,000/mo, up to ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}).`,
         };
       }
-      if (wallet.availableBalance < game.betAmount) {
-        return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+      if (walletRef.current.availableBalance < game.betAmount) {
+        await refreshWalletFromServer();
+        if (walletRef.current.availableBalance < game.betAmount) {
+          return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+        }
       }
     }
     if (game.status !== 'pending') {
@@ -14708,8 +14843,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           message: `Stakes above ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} require a Verified Badge (₦4,000/mo, up to ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}).`,
         };
       }
-      if (wallet.availableBalance < game.betAmount) {
-        return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+      if (walletRef.current.availableBalance < game.betAmount) {
+        await refreshWalletFromServer();
+        if (walletRef.current.availableBalance < game.betAmount) {
+          return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+        }
       }
     }
     if (game.status !== 'pending') {
@@ -15280,8 +15418,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           message: `Stakes above ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} require a Verified Badge (₦4,000/mo, up to ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}).`,
         };
       }
-      if (wallet.availableBalance < game.betAmount) {
-        return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+      if (walletRef.current.availableBalance < game.betAmount) {
+        await refreshWalletFromServer();
+        if (walletRef.current.availableBalance < game.betAmount) {
+          return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+        }
       }
     }
     if (game.status !== 'pending') {
@@ -20097,7 +20238,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         lastSeenTs = Number(localStorage.getItem(walletTsKey) || 0);
       } catch (_) {}
       if (adjTs > lastSeenTs) {
-        setWallet((w) => ({ ...w, availableBalance: me.walletBalanceNgn }));
+        setWallet((w) => {
+          const updated = { ...w, availableBalance: me.walletBalanceNgn };
+          walletRef.current = updated;
+          if (cur.phoneNumber) persistPartitionedWallet(updated, cur.phoneNumber);
+          return updated;
+        });
         try { localStorage.setItem(walletTsKey, String(adjTs)); } catch (_) {}
       }
     }
@@ -21925,6 +22071,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         endCall,
         toggleCallMute,
         toggleCallSpeaker,
+        toggleCallMinimize,
+        setCallMinimized,
+        upgradeCallToGroup,
+        inviteToActiveCall,
         incomingCall,
         acceptIncomingCall,
         declineIncomingCall,
