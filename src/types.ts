@@ -410,6 +410,18 @@ export interface WhotGameState {
 
 export type LudoColor = 'purple' | 'amber';
 
+export interface LudoRulesConfig {
+  dice_count: 2;
+  safe_tiles: number[];
+  spawn_requires: 6;
+  spawn_captures_occupant: boolean;
+  instant_finish_on_capture: boolean;
+  stack_protects_from_single: boolean;
+  stack_blocks_passing: boolean;
+  mandatory_capture_to_finish: boolean;
+  two_house_mode: boolean;
+}
+
 export interface LudoGameState {
   id: string;
   chatId: string;
@@ -426,16 +438,27 @@ export interface LudoGameState {
   mode: 'friendly' | 'bet';
   betAmount: number;
   currency: CurrencyCode;
-  /** 8 seeds per player: indices 0..3 = Castle A, indices 4..7 = Castle B */
+  /** 8 seeds (Two-House Mode: indices 0..3 = Castle A, 4..7 = Castle B) or 4 seeds (Single-House) */
   challengerTokens: number[];
   opponentTokens: number[];
+  /** Authentic Nigerian Double-Dice Ludo ruleset flags */
+  rulesConfig?: LudoRulesConfig;
+  /** Total captures ("eats") recorded by each player */
+  challengerCaptures?: number;
+  opponentCaptures?: number;
+  /** Outer-track index awaiting 2nd token to complete a Stack-vs-Stack capture */
+  pendingStackTargetTrackIdx?: number | null;
+  pendingStackAttackerIndex?: number | null;
   /** Current remaining unused dice in this roll (up to 2 dice) */
   diceValues?: number[];
   /** Original 2 dice rolled this turn */
   rolledDice?: [number, number] | null;
+  /** Most recent dice pair rolled/played for bold graphic display on board center */
+  lastPlayedDice?: [number, number] | null;
   /** Backwards-compatible primary die value */
   diceValue: number | null;
   hasRolled: boolean;
+  /** Consecutive [6, 6] double-6 rolls on current turn (3 cancels turn) */
   consecutiveSixes?: number;
   currentTurnPhone: string;
   currentTurnName: string;

@@ -52,8 +52,8 @@ const GAME_OPTIONS: {
   {
     id: 'ludo',
     label: 'Ludo',
-    tagline: '8 Seeds · 2 Dice',
-    desc: '8 seeds across 2 Castles per player with 2 dice! Split moves across seeds or combine dice, capture foes & race to Home!',
+    tagline: 'Double-Dice Nigerian',
+    desc: 'Zero safe tiles! Double-6 bonus only, Eat & Go Home instant finish, 2+ stacking blocks & 3× [6,6] foul.',
     icon: Dices,
     accent: 'text-emerald-500',
   },
@@ -91,6 +91,8 @@ export const GameXoChallengeModal: React.FC = () => {
   const [selectedGame, setSelectedGame] = useState<SelectedGameType>('xo');
   const [mode, setMode] = useState<'friendly' | 'bet'>('friendly');
   const [betInput, setBetInput] = useState<string>('1000');
+  const [ludoTwoHouseMode, setLudoTwoHouseMode] = useState<boolean>(true);
+  const [ludoMandatoryCapture, setLudoMandatoryCapture] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<{
     text: string;
     insufficient?: boolean;
@@ -187,7 +189,10 @@ export const GameXoChallengeModal: React.FC = () => {
         selectedGame === 'whot'
           ? await sendWhotChallenge(resolvedChatId, effectiveMode, parsedBet)
           : selectedGame === 'ludo'
-          ? await sendLudoChallenge(resolvedChatId, effectiveMode, parsedBet)
+          ? await sendLudoChallenge(resolvedChatId, effectiveMode, parsedBet, {
+              twoHouseMode: ludoTwoHouseMode,
+              mandatoryCaptureToFinish: ludoMandatoryCapture,
+            })
           : selectedGame === 'poker'
           ? await sendPokerChallenge(resolvedChatId, effectiveMode, parsedBet)
           : await sendXoChallenge(resolvedChatId, effectiveMode, parsedBet);
@@ -326,6 +331,50 @@ export const GameXoChallengeModal: React.FC = () => {
               })}
             </div>
           </div>
+
+          {/* Nigerian Ludo House Rule Toggles */}
+          {selectedGame === 'ludo' && (
+            <div className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/25 border border-emerald-200 dark:border-emerald-800/60 space-y-2">
+              <div className="text-[11px] font-bold text-emerald-900 dark:text-emerald-200 flex items-center justify-between">
+                <span>Nigerian Ludo House Rules</span>
+                <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                  Zero Safe Tiles
+                </span>
+              </div>
+              <label className="flex items-center justify-between gap-2 cursor-pointer">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold text-slate-800 dark:text-slate-200">
+                    Two-House Mode (8 Seeds)
+                  </div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                    Control 2 opposite yards (8 tokens) vs 1 yard (4 tokens)
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={ludoTwoHouseMode}
+                  onChange={(e) => setLudoTwoHouseMode(e.target.checked)}
+                  className="w-4 h-4 accent-emerald-600 rounded shrink-0"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-2 cursor-pointer pt-1 border-t border-emerald-200/70 dark:border-emerald-800/40">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold text-slate-800 dark:text-slate-200">
+                    Mandatory Capture Gate
+                  </div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                    Must eat 1 opponent token before entering Home Column
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={ludoMandatoryCapture}
+                  onChange={(e) => setLudoMandatoryCapture(e.target.checked)}
+                  className="w-4 h-4 accent-emerald-600 rounded shrink-0"
+                />
+              </label>
+            </div>
+          )}
 
           {/* Mode Segmented Selector */}
           <div>

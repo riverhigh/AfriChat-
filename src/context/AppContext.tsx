@@ -51,14 +51,17 @@ import {
   pickHardWhotMove,
   isWhotCardPlayable,
   pickHardLudoPlan,
-  getLudoSeedOffset,
-  canMoveLudoSingleDie,
-  canMoveLudoCombinedDice,
-  hasAnyLegalLudoMove,
   evaluateBest5PokerHand,
   comparePokerEvaluations,
   pickHardPokerAction,
 } from '../utils/gameAiEngine';
+import {
+  DEFAULT_LUDO_RULES_CONFIG,
+  getLudoRulesConfig,
+  getLegalLudoPlayState,
+  simulateLudoSingleDieStep,
+  isStepFinished,
+} from '../utils/ludoRules';
 import { playAnimalSound, getNotificationSound } from '../utils/soundUtils';
 import {
   supabase,
@@ -135,6 +138,7 @@ import {
   WhotShape,
   WhotCard,
   WhotGameState,
+  LudoRulesConfig,
   LudoGameState,
   PokerSuit,
   PokerCard,
@@ -1084,7 +1088,8 @@ interface AppContextType {
   sendLudoChallenge: (
     chatId: string,
     mode: 'friendly' | 'bet',
-    betAmount: number
+    betAmount: number,
+    options?: { twoHouseMode?: boolean; mandatoryCaptureToFinish?: boolean }
   ) => Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string; game?: LudoGameState }>;
   acceptLudoChallenge: (
     game: LudoGameState
@@ -13072,7 +13077,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true, message: 'Match forfeited.' };
   };
 
-  // Pure Ludo 2-Dice / 8-Seed / 2-Castle Helpers
+  // Nigerian Double-Dice Ludo Helpers (Zero Safe Tiles, Eat & Go Home, Stacking Blocks, Double-6 Bonus Only)
   const resolveLudoRoll = (
     game: LudoGameState,
     rollerPhone: string,
@@ -13081,54 +13086,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     oppName: string
   ): LudoGameState => {
     const isChallenger = phonesMatch(rollerPhone, game.challengerPhone);
-    const myTokens = isChallenger ? game.challengerTokens : game.opponentTokens;
     const d1 = Math.floor(Math.random() * 6) + 1;
     const d2 = Math.floor(Math.random() * 6) + 1;
     const dicePair: [number, number] = [d1, d2];
-    const rolledSix = d1 === 6 || d2 === 6;
-    const nextSixStreak = rolledSix ? (game.consecutiveSixes || 0) + 1 : 0;
+    const isDoubleSix = d1 === 6 && d2 === 6;
+    const nextDoubleSixStreak = isDoubleSix ? (game.consecutiveSixes || 0) + 1 : 0;
 
-    if (rolledSix && nextSixStreak >= 3) {
+    if (isDoubleSix && nextDoubleSixStreak >= 3) {
       return {
         ...game,
         diceValues: [],
         rolledDice: dicePair,
+        lastPlayedDice: dicePair,
         diceValue: d1,
         hasRolled: false,
         consecutiveSixes: 0,
+        pendingStackTargetTrackIdx: null,
+        pendingStackAttackerIndex: null,
         currentTurnPhone: oppPhone,
         currentTurnName: oppName,
-        lastActionNote: `${rollerName} rolled [${d1}, ${d2}] — 3 consecutive 6s forfeit turn!`,
+        lastActionNote: `${rollerName} rolled [6, 6] 3× in a row — FOUL! Turn cancelled.`,
         moveCount: (game.moveCount || 0) + 1,
         updatedAt: new Date().toISOString(),
       };
     }
 
-    const hasLegal = hasAnyLegalLudoMove(myTokens, dicePair);
-    if (!hasLegal) {
+    const probeState: LudoGameState = {
+      ...game,
+      pendingStackTargetTrackIdx: null,
+      pendingStackAttackerIndex: null,
+    };
+    const legal = getLegalLudoPlayState(probeState, isChallenger, dicePair);
+
+    if (!legal.hasAnyLegalMove) {
       return {
         ...game,
         diceValues: [],
         rolledDice: dicePair,
+        lastPlayedDice: dicePair,
         diceValue: d1,
         hasRolled: false,
         consecutiveSixes: 0,
+        pendingStackTargetTrackIdx: null,
+        pendingStackAttackerIndex: null,
         currentTurnPhone: oppPhone,
         currentTurnName: oppName,
-        lastActionNote: `${rollerName} rolled [${d1}, ${d2}] (no valid move — turn passed)`,
+        lastActionNote: `${rollerName} rolled [${d1}, ${d2}] (no legal move — turn passed)`,
         moveCount: (game.moveCount || 0) + 1,
         updatedAt: new Date().toISOString(),
       };
     }
+
+    const mandatoryHint =
+      legal.forcedHigherDie !== null
+        ? ` · Must play higher die (${legal.forcedHigherDie})`
+        : '';
 
     return {
       ...game,
       diceValues: [...dicePair],
       rolledDice: dicePair,
+      lastPlayedDice: dicePair,
       diceValue: d1,
       hasRolled: true,
-      consecutiveSixes: nextSixStreak,
-      lastActionNote: `${rollerName} rolled [${d1} & ${d2}]`,
+      consecutiveSixes: nextDoubleSixStreak,
+      pendingStackTargetTrackIdx: null,
+      pendingStackAttackerIndex: null,
+      lastActionNote: isDoubleSix
+        ? `${rollerName} rolled DOUBLE 6 [6 & 6] — bonus roll after moves!`
+        : `${rollerName} rolled [${d1} & ${d2}]${mandatoryHint}`,
       moveCount: (game.moveCount || 0) + 1,
       updatedAt: new Date().toISOString(),
     };
@@ -13141,10 +13167,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     dieChoice: 'die0' | 'die1' | 'combined' = 'die0'
   ): { error?: string; nextGame?: LudoGameState; finishedNow?: boolean } => {
     const isChallenger = phonesMatch(moverPhone, game.challengerPhone);
-    const myTokens = [...((isChallenger ? game.challengerTokens : game.opponentTokens) || [])];
-    const oppTokens = [...((isChallenger ? game.opponentTokens : game.challengerTokens) || [])];
+    let myTokens = [...((isChallenger ? game.challengerTokens : game.opponentTokens) || [])];
+    let oppTokens = [...((isChallenger ? game.opponentTokens : game.challengerTokens) || [])];
+    let myCaptures = (isChallenger ? game.challengerCaptures : game.opponentCaptures) || 0;
+    const oppCaptures = (isChallenger ? game.opponentCaptures : game.challengerCaptures) || 0;
+    const rules = getLudoRulesConfig(game);
+
     const curStep = myTokens[tokenIndex];
-    if (curStep === undefined || curStep >= 56) {
+    if (curStep === undefined || isStepFinished(curStep)) {
       return { error: 'Seed already finished.' };
     }
 
@@ -13156,73 +13186,119 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : [];
     if (remaining.length === 0) return { error: 'Roll the dice first.' };
 
+    const legal = getLegalLudoPlayState(game, isChallenger, remaining);
+    const blockedReason = legal.reasonForBlockedToken(tokenIndex, dieChoice);
+    if (blockedReason) {
+      return { error: blockedReason };
+    }
+
     const myName = isChallenger ? game.challengerName : game.opponentName || 'Amber Player';
     const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
     const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
 
-    const executeSingleStep = (stepAmount: number): { valid: boolean; capturedNow: boolean; errorMsg?: string } => {
-      const s = myTokens[tokenIndex];
-      if (!canMoveLudoSingleDie(s, stepAmount)) {
-        return {
-          valid: false,
-          capturedNow: false,
-          errorMsg: s < 0 ? 'Need a 6 to exit Castle.' : 'Exact roll needed to reach home.',
-        };
-      }
-      const nextStep = s < 0 ? 0 : s + stepAmount;
-      myTokens[tokenIndex] = nextStep;
-      let capturedNow = false;
-      if (nextStep >= 0 && nextStep <= 50) {
-        const myOffset = getLudoSeedOffset(tokenIndex, isChallenger, myTokens.length);
-        const myTrackIdx = (nextStep + myOffset) % 52;
-        if (!LUDO_SAFE_TRACK_SET_CTX.has(myTrackIdx)) {
-          for (let i = 0; i < oppTokens.length; i++) {
-            const os = oppTokens[i];
-            if (os >= 0 && os <= 50) {
-              const oppOffset = getLudoSeedOffset(i, !isChallenger, oppTokens.length);
-              if ((os + oppOffset) % 52 === myTrackIdx) {
-                oppTokens[i] = -1;
-                capturedNow = true;
-              }
-            }
-          }
-        }
-      }
-      return { valid: true, capturedNow };
-    };
-
-    let captured = false;
+    let capturedCount = 0;
+    let instantFinishedCount = 0;
+    let completedStackAssault = false;
+    let nextPendingTarget: number | null = null;
+    let nextPendingAttacker: number | null = null;
     let nextRemaining = [...remaining];
     let moveLabel = '';
 
     if (dieChoice === 'combined') {
-      if (remaining.length < 2) return { error: 'Need 2 unused dice to combine.' };
+      if (remaining.length < 2) return { error: 'Need 2 unused dice to play both.' };
       const [d0, d1] = remaining;
-      if (!canMoveLudoCombinedDice(curStep, d0, d1)) {
-        return { error: 'Cannot combine both dice on this seed.' };
+
+      const trySeq = (first: number, second: number) => {
+        const s1 = simulateLudoSingleDieStep({
+          myTokens,
+          oppTokens,
+          tokenIndex,
+          dieVal: first,
+          otherDieVal: second,
+          isChallenger,
+          rules,
+          myCaptures,
+          pendingStackTargetTrackIdx: null,
+          pendingStackAttackerIndex: null,
+        });
+        if (!s1.valid || s1.nextPendingStackTarget !== null || isStepFinished(s1.nextStep)) {
+          return null;
+        }
+        const s2 = simulateLudoSingleDieStep({
+          myTokens: s1.nextMyTokens,
+          oppTokens: s1.nextOppTokens,
+          tokenIndex,
+          dieVal: second,
+          otherDieVal: null,
+          isChallenger,
+          rules,
+          myCaptures: myCaptures + s1.capturesGained,
+          pendingStackTargetTrackIdx: null,
+          pendingStackAttackerIndex: null,
+        });
+        if (!s2.valid) return null;
+        return { s1, s2, order: [first, second] as [number, number] };
+      };
+
+      const seq =
+        curStep < 0 && d1 === rules.spawn_requires && d0 !== rules.spawn_requires
+          ? trySeq(d1, d0)
+          : trySeq(d0, d1) || trySeq(d1, d0);
+
+      if (!seq) {
+        return { error: 'Cannot play both dice sequentially on that seed.' };
       }
-      const order: [number, number] = curStep < 0 && d1 === 6 && d0 !== 6 ? [d1, d0] : [d0, d1];
-      const r1 = executeSingleStep(order[0]);
-      if (!r1.valid) return { error: r1.errorMsg || 'Invalid combined move.' };
-      const r2 = executeSingleStep(order[1]);
-      if (!r2.valid) return { error: r2.errorMsg || 'Invalid combined move.' };
-      captured = r1.capturedNow || r2.capturedNow;
+
+      myTokens = seq.s2.nextMyTokens;
+      oppTokens = seq.s2.nextOppTokens;
+      capturedCount = seq.s1.capturesGained + seq.s2.capturesGained;
+      myCaptures += capturedCount;
+      instantFinishedCount = seq.s1.instantFinishedCount + seq.s2.instantFinishedCount;
+      completedStackAssault = seq.s2.completedStackAssault;
+      nextPendingTarget = seq.s2.nextPendingStackTarget;
+      nextPendingAttacker = seq.s2.nextPendingAttacker;
       nextRemaining = [];
-      moveLabel = `${myName} combined [${order[0]}+${order[1]}] on seed #${tokenIndex + 1}`;
+      moveLabel = `${myName} played [${seq.order[0]}+${seq.order[1]}] on seed #${tokenIndex + 1}`;
     } else {
       const dieIdx = dieChoice === 'die1' && remaining.length > 1 ? 1 : 0;
       const dieVal = remaining[dieIdx];
-      const r1 = executeSingleStep(dieVal);
-      if (!r1.valid) return { error: r1.errorMsg || 'Invalid move.' };
-      captured = r1.capturedNow;
+      const otherDieVal = remaining.length === 2 ? remaining[dieIdx === 0 ? 1 : 0] : null;
+
+      const s1 = simulateLudoSingleDieStep({
+        myTokens,
+        oppTokens,
+        tokenIndex,
+        dieVal,
+        otherDieVal,
+        isChallenger,
+        rules,
+        myCaptures,
+        pendingStackTargetTrackIdx: game.pendingStackTargetTrackIdx ?? null,
+        pendingStackAttackerIndex: game.pendingStackAttackerIndex ?? null,
+      });
+      if (!s1.valid) {
+        return { error: s1.reason || 'Invalid move.' };
+      }
+
+      myTokens = s1.nextMyTokens;
+      oppTokens = s1.nextOppTokens;
+      capturedCount = s1.capturesGained;
+      myCaptures += capturedCount;
+      instantFinishedCount = s1.instantFinishedCount;
+      completedStackAssault = s1.completedStackAssault;
+      nextPendingTarget = s1.nextPendingStackTarget;
+      nextPendingAttacker = s1.nextPendingAttacker;
       nextRemaining.splice(dieIdx, 1);
+
       moveLabel =
-        curStep < 0
-          ? `${myName} deployed seed #${tokenIndex + 1} (${tokenIndex < 4 ? 'Castle A' : 'Castle B'})`
+        nextPendingTarget !== null
+          ? `${myName} moved seed #${tokenIndex + 1} to raid stack (play 2nd seed onto block!)`
+          : curStep < 0
+          ? `${myName} spawned seed #${tokenIndex + 1}`
           : `${myName} moved seed #${tokenIndex + 1} by ${dieVal}`;
     }
 
-    const finishedNow = myTokens.every((s) => s >= 56);
+    const finishedNow = myTokens.every(isStepFinished);
     if (finishedNow) {
       return {
         finishedNow: true,
@@ -13230,6 +13306,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ...game,
           challengerTokens: isChallenger ? myTokens : oppTokens,
           opponentTokens: isChallenger ? oppTokens : myTokens,
+          challengerCaptures: isChallenger ? myCaptures : oppCaptures,
+          opponentCaptures: isChallenger ? oppCaptures : myCaptures,
+          pendingStackTargetTrackIdx: null,
+          pendingStackAttackerIndex: null,
           diceValues: [],
           diceValue: null,
           hasRolled: false,
@@ -13237,7 +13317,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           status: 'won',
           winnerPhone: moverPhone,
           winnerName: myName,
-          lastActionNote: `${myName} finished all ${myTokens.length} seeds!`,
+          lastActionNote:
+            capturedCount > 0
+              ? `${myName} captured & finished all ${myTokens.length} seeds!`
+              : `${myName} finished all ${myTokens.length} seeds!`,
           moveCount: (game.moveCount || 0) + 1,
           settledAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -13245,57 +13328,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    // If a 2nd die still has a legal move in this roll, keep hasRolled = true on same player!
-    if (nextRemaining.length > 0 && hasAnyLegalLudoMove(myTokens, nextRemaining)) {
+    const eatNote =
+      completedStackAssault
+        ? ' · STACK CAPTURE (2 eaten & finished home!)'
+        : capturedCount > 0
+        ? ' · EAT & GO HOME (seed scored!)'
+        : instantFinishedCount > 0
+        ? ' · Seed reached Home!'
+        : '';
+
+    const intermediateState: LudoGameState = {
+      ...game,
+      challengerTokens: isChallenger ? myTokens : oppTokens,
+      opponentTokens: isChallenger ? oppTokens : myTokens,
+      challengerCaptures: isChallenger ? myCaptures : oppCaptures,
+      opponentCaptures: isChallenger ? oppCaptures : myCaptures,
+      pendingStackTargetTrackIdx: nextPendingTarget,
+      pendingStackAttackerIndex: nextPendingAttacker,
+    };
+
+    if (
+      nextRemaining.length > 0 &&
+      getLegalLudoPlayState(intermediateState, isChallenger, nextRemaining).hasAnyLegalMove
+    ) {
       return {
         finishedNow: false,
         nextGame: {
-          ...game,
-          challengerTokens: isChallenger ? myTokens : oppTokens,
-          opponentTokens: isChallenger ? oppTokens : myTokens,
+          ...intermediateState,
           diceValues: nextRemaining,
           diceValue: nextRemaining[0],
           hasRolled: true,
-          lastActionNote: captured
-            ? `${moveLabel} & CAPTURED! Play remaining die [${nextRemaining[0]}]`
-            : `${moveLabel} · Play remaining die [${nextRemaining[0]}]`,
+          lastActionNote: `${moveLabel}${eatNote} · Play [${nextRemaining[0]}]`,
           moveCount: (game.moveCount || 0) + 1,
           updatedAt: new Date().toISOString(),
         },
       };
     }
 
-    const hadSixBonus = Boolean(game.rolledDice?.includes(6));
-    const keepTurn = hadSixBonus || captured;
+    // Roll complete! Double-6 ([6, 6]) ONLY grants a bonus roll!
+    const hadDoubleSixBonus = Boolean(
+      game.rolledDice && game.rolledDice[0] === 6 && game.rolledDice[1] === 6
+    );
+    const keepTurn = hadDoubleSixBonus;
+
     return {
       finishedNow: false,
       nextGame: {
-        ...game,
-        challengerTokens: isChallenger ? myTokens : oppTokens,
-        opponentTokens: isChallenger ? oppTokens : myTokens,
+        ...intermediateState,
         diceValues: [],
         diceValue: null,
         hasRolled: false,
-        consecutiveSixes: keepTurn ? game.consecutiveSixes || 0 : 0,
+        consecutiveSixes: keepTurn ? game.consecutiveSixes || 1 : 0,
+        pendingStackTargetTrackIdx: null,
+        pendingStackAttackerIndex: null,
         currentTurnPhone: keepTurn ? moverPhone : oppPhone,
         currentTurnName: keepTurn ? myName : oppName,
-        lastActionNote: captured
-          ? `${moveLabel} & CAPTURED opponent seed! Bonus roll!`
-          : hadSixBonus
-          ? `${moveLabel} · Rolled 6 bonus roll!`
-          : moveLabel,
+        lastActionNote: hadDoubleSixBonus
+          ? `${moveLabel}${eatNote} · Double-6 Bonus Roll!`
+          : `${moveLabel}${eatNote}`,
         moveCount: (game.moveCount || 0) + 1,
         updatedAt: new Date().toISOString(),
       },
     };
   };
 
-  const LUDO_SAFE_TRACK_SET_CTX = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
-
   const sendLudoChallenge = async (
     chatId: string,
     mode: 'friendly' | 'bet',
-    betAmount: number
+    betAmount: number,
+    options?: { twoHouseMode?: boolean; mandatoryCaptureToFinish?: boolean }
   ): Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string; game?: LudoGameState }> => {
     const targetChat = chats.find((c) => c.id === chatId);
     const isAiChat = chatId === AFRIBOT_ID || Boolean(targetChat?.isBot);
@@ -13348,6 +13449,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const platformFee = mode === 'bet' ? Math.round(totalPot * 0.01) : 0;
     const winnerPayout = totalPot - platformFee;
 
+    const twoHouseMode = options?.twoHouseMode ?? true;
+    const mandatoryCaptureToFinish = options?.mandatoryCaptureToFinish ?? true;
+    const seedCount = twoHouseMode ? 8 : 4;
+    const rulesConfig: LudoRulesConfig = {
+      ...DEFAULT_LUDO_RULES_CONFIG,
+      two_house_mode: twoHouseMode,
+      mandatory_capture_to_finish: mandatoryCaptureToFinish,
+    };
+
     const newGame: LudoGameState = {
       id: gameId,
       chatId,
@@ -13364,16 +13474,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       mode,
       betAmount: cleanBet,
       currency: currency || 'NGN',
-      challengerTokens: Array(8).fill(-1),
-      opponentTokens: Array(8).fill(-1),
+      challengerTokens: Array(seedCount).fill(-1),
+      opponentTokens: Array(seedCount).fill(-1),
+      rulesConfig,
+      challengerCaptures: 0,
+      opponentCaptures: 0,
+      pendingStackTargetTrackIdx: null,
+      pendingStackAttackerIndex: null,
       diceValues: [],
       rolledDice: null,
+      lastPlayedDice: null,
       diceValue: null,
       hasRolled: false,
       consecutiveSixes: 0,
       currentTurnPhone: myPhone,
       currentTurnName: currentUser.fullName || 'Purple Player',
-      lastActionNote: isAiChat ? '8 Seeds · 2 Castles · 2 Dice! Roll to start vs AgcBot.' : undefined,
+      lastActionNote: isAiChat
+        ? `${seedCount} Seeds · Double-6 Bonus Only · Zero Safe Tiles! Roll vs AgcBot.`
+        : undefined,
       moveCount: 0,
       status: isAiChat ? 'active' : 'pending',
       totalPot,

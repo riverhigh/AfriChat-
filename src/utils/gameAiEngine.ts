@@ -7,6 +7,16 @@ import {
   WhotGameState,
   WhotShape,
 } from '../types';
+import {
+  getLudoRulesConfig,
+  getLudoSeedOffset,
+  getLudoTrackIndex,
+  getTokensAtTrackIndex,
+  getLegalLudoPlayState,
+  simulateLudoSingleDieStep,
+  isStepOnOuterTrack,
+  isStepFinished,
+} from './ludoRules';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 1. X / O (TIC-TAC-TOE) HARD MINIMAX AI
@@ -293,45 +303,43 @@ export function pickHardWhotMove(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 3. LUDO (8 SEEDS, 2 CASTLES [4+4], 2 DICE, SPLIT VS COMBINED) RULES & AI TREE
+// 3. LUDO (DOUBLE-DICE NIGERIAN RULESET) & HARD AI TREE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export const LUDO_SAFE_TRACK_SET = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
+export const LUDO_SAFE_TRACK_SET = new Set<number>();
 
-/**
- * Castle layout on the 52-cell outer loop:
- * - Challenger (Purple): Castle A (seeds 0..3) starts at 0; Castle B (seeds 4..7) starts at 26
- * - Opponent (Amber): Castle A (seeds 0..3) starts at 13; Castle B (seeds 4..7) starts at 39
- */
-export function getLudoSeedOffset(seedIndex: number, isChallenger: boolean, totalSeeds: number = 8): number {
-  if (totalSeeds <= 4) {
-    return isChallenger ? 0 : 26;
-  }
-  const isCastleB = seedIndex >= 4;
-  if (isChallenger) {
-    return isCastleB ? 26 : 0;
-  }
-  return isCastleB ? 39 : 13;
-}
+export { getLudoSeedOffset };
 
 export function canMoveLudoSingleDie(step: number, die: number): boolean {
-  if (step >= 56) return false;
+  if (isStepFinished(step)) return false;
   if (step < 0) return die === 6;
+  if (step === 151) return true;
   return step + die <= 56;
 }
 
 export function canMoveLudoCombinedDice(step: number, d1: number, d2: number): boolean {
-  if (step >= 56) return false;
+  if (isStepFinished(step)) return false;
   if (step < 0) {
     if (d1 === 6) return 0 + d2 <= 56;
     if (d2 === 6) return 0 + d1 <= 56;
     return false;
   }
+  if (step === 151) return true;
   return step + d1 + d2 <= 56;
 }
 
-export function hasAnyLegalLudoMove(tokens: number[], remainingDice: number[]): boolean {
-  if (!Array.isArray(tokens) || !Array.isArray(remainingDice)) return false;
+export function hasAnyLegalLudoMove(
+  tokens: number[],
+  remainingDice: number[],
+  game?: LudoGameState,
+  isChallenger: boolean = true
+): boolean {
+  if (!Array.isArray(tokens) || !Array.isArray(remainingDice) || remainingDice.length === 0) {
+    return false;
+  }
+  if (game) {
+    return getLegalLudoPlayState(game, isChallenger, remainingDice).hasAnyLegalMove;
+  }
   for (const die of remainingDice) {
     if (tokens.some((s) => canMoveLudoSingleDie(s, die))) return true;
   }
@@ -355,77 +363,69 @@ interface LudoSimOutcome {
   castleAExited: number;
   castleBExited: number;
   finishedNow: number;
+  completedStackAssault: boolean;
   usedSplit: boolean;
   usedCombined: boolean;
-}
-
-function applySingleDieSim(
-  aiTokens: number[],
-  humanTokens: number[],
-  seedIdx: number,
-  die: number,
-  isAiChallenger: boolean
-): { valid: boolean; nextAi: number[]; nextHuman: number[]; capturedSteps: number[] } {
-  const cur = aiTokens[seedIdx];
-  if (!canMoveLudoSingleDie(cur, die)) {
-    return { valid: false, nextAi: aiTokens, nextHuman: humanTokens, capturedSteps: [] };
-  }
-  const nextStep = cur < 0 ? 0 : cur + die;
-  const nextAi = [...aiTokens];
-  nextAi[seedIdx] = nextStep;
-  const nextHuman = [...humanTokens];
-  const capturedSteps: number[] = [];
-
-  if (nextStep >= 0 && nextStep <= 50) {
-    const aiOffset = getLudoSeedOffset(seedIdx, isAiChallenger, nextAi.length);
-    const aiTrackIdx = (nextStep + aiOffset) % 52;
-    if (!LUDO_SAFE_TRACK_SET.has(aiTrackIdx)) {
-      for (let j = 0; j < nextHuman.length; j++) {
-        const hs = nextHuman[j];
-        if (hs >= 0 && hs <= 50) {
-          const hOffset = getLudoSeedOffset(j, !isAiChallenger, nextHuman.length);
-          if ((hs + hOffset) % 52 === aiTrackIdx) {
-            capturedSteps.push(hs);
-            nextHuman[j] = -1;
-          }
-        }
-      }
-    }
-  }
-
-  return { valid: true, nextAi, nextHuman, capturedSteps };
 }
 
 function scoreLudoBoardState(
   sim: LudoSimOutcome,
   origAiTokens: number[],
-  isAiChallenger: boolean
+  isAiChallenger: boolean,
+  aiCapturesBefore: number
 ): number {
   let score = 0;
 
-  // 1. Capture Moves (Top Priority, weighted by how far opponent seed was)
-  score += sim.captures * 1400 + sim.capturedValue * 12;
+  // 1. Captures + Eat & Go Home (each capture removes an enemy AND finishes our seed!)
+  score += sim.captures * 1650 + sim.capturedValue * 14;
+  if (aiCapturesBefore === 0 && sim.captures > 0) {
+    score += 750; // Unlocking Mandatory Capture Gate!
+  }
+  if (sim.completedStackAssault) {
+    score += 450;
+  }
 
-  // 2. Finishing seeds at exact 56
+  // 2. Finishing seeds directly into Home (56)
   score += sim.finishedNow * 1350;
 
-  // Helper: threat check on unsafe track squares
+  // Count stacks (2+ friendly seeds on same outer track tile = protected block!)
+  const aiStackTracks = new Set<number>();
+  const trackCounts = new Map<number, number>();
+  for (let i = 0; i < sim.aiTokens.length; i++) {
+    const t = getLudoTrackIndex(sim.aiTokens[i], i, isAiChallenger, sim.aiTokens.length);
+    if (t !== null) {
+      const next = (trackCounts.get(t) || 0) + 1;
+      trackCounts.set(t, next);
+      if (next >= 2) {
+        aiStackTracks.add(t);
+        score += 290; // Strong defensive stack bonus (no safe tiles exist on outer track!)
+      }
+    }
+  }
+
+  // Threat check for single exposed seeds
   const countThreatened = (aiToks: number[], humToks: number[]): number => {
     let threatPenalty = 0;
+    const localCounts = new Map<number, number>();
+    for (let i = 0; i < aiToks.length; i++) {
+      const t = getLudoTrackIndex(aiToks[i], i, isAiChallenger, aiToks.length);
+      if (t !== null) localCounts.set(t, (localCounts.get(t) || 0) + 1);
+    }
+
     for (let i = 0; i < aiToks.length; i++) {
       const s = aiToks[i];
-      if (s < 0 || s > 50) continue;
-      const aiOffset = getLudoSeedOffset(i, isAiChallenger, aiToks.length);
-      const aiTrack = (s + aiOffset) % 52;
-      if (LUDO_SAFE_TRACK_SET.has(aiTrack)) continue;
+      const aiTrack = getLudoTrackIndex(s, i, isAiChallenger, aiToks.length);
+      if (aiTrack === null) continue;
+      // Stacked (2+) pieces cannot be captured by a single opponent token!
+      if ((localCounts.get(aiTrack) || 0) >= 2) continue;
+
       for (let j = 0; j < humToks.length; j++) {
         const hs = humToks[j];
-        if (hs < 0 || hs > 50) continue;
-        const hOffset = getLudoSeedOffset(j, !isAiChallenger, humToks.length);
-        const hTrack = (hs + hOffset) % 52;
+        const hTrack = getLudoTrackIndex(hs, j, !isAiChallenger, humToks.length);
+        if (hTrack === null) continue;
         const dist = (aiTrack - hTrack + 52) % 52;
-        if (dist >= 1 && dist <= 6 && hs + dist <= 50) {
-          threatPenalty += 220 + s * 3.2;
+        if (dist >= 1 && dist <= 12) {
+          threatPenalty += dist <= 6 ? 260 + (s === 151 ? 51 : s) * 3 : 95;
           break;
         }
       }
@@ -433,50 +433,44 @@ function scoreLudoBoardState(
     return threatPenalty;
   };
 
-  // Threat delta & safety
   const beforeThreat = countThreatened(origAiTokens, sim.humanTokens);
   const afterThreat = countThreatened(sim.aiTokens, sim.humanTokens);
-  score += (beforeThreat - afterThreat);
+  score += beforeThreat - afterThreat;
 
-  // 3. Castle Deployment Strategy (stagger between Castle A [0..3] and Castle B [4..7])
-  const castleAActive = sim.aiTokens.slice(0, 4).filter((s) => s >= 0 && s < 56).length;
-  const castleBActive = sim.aiTokens.slice(4, 8).filter((s) => s >= 0 && s < 56).length;
-  const totalActiveBefore = origAiTokens.filter((s) => s >= 0 && s < 56).length;
+  // 3. Deployment across Castles
+  const castleAActive = sim.aiTokens.slice(0, 4).filter((s) => s >= 0 && !isStepFinished(s)).length;
+  const castleBActive = sim.aiTokens.slice(4, 8).filter((s) => s >= 0 && !isStepFinished(s)).length;
+  const totalActiveBefore = origAiTokens.filter((s) => s >= 0 && !isStepFinished(s)).length;
 
   if (sim.castleAExited > 0 || sim.castleBExited > 0) {
     score += totalActiveBefore === 0 ? 920 : 540;
-    // Stagger bonus if balancing Castle A & Castle B presence!
-    if (Math.abs(castleAActive - castleBActive) <= 1) {
-      score += 180;
+    if (sim.aiTokens.length > 4 && Math.abs(castleAActive - castleBActive) <= 1) {
+      score += 170;
     }
   }
 
-  // 4. Progress, safe squares, home column & avoiding exact-finish stalls
+  // 4. Forward progress & home column safety
   for (let i = 0; i < sim.aiTokens.length; i++) {
     const s = sim.aiTokens[i];
-    if (s >= 56) {
-      score += 400;
-    } else if (s >= 51) {
-      score += 480 + (s - 50) * 35;
-      if (s === 55) score -= 45; // Avoid stalling on 55 needing exact 1 if another good move exists
-    } else if (s >= 0) {
-      score += s * 4.2;
-      const offset = getLudoSeedOffset(i, isAiChallenger, sim.aiTokens.length);
-      if (LUDO_SAFE_TRACK_SET.has((s + offset) % 52)) {
-        score += 240;
-      }
+    if (isStepFinished(s)) {
+      score += 420;
+    } else if (s >= 51 && s < 56) {
+      score += 520 + (s - 50) * 38;
+      if (s === 55) score -= 40;
+    } else if (isStepOnOuterTrack(s)) {
+      const progress = s === 151 ? 51 : s;
+      score += progress * 4.0;
     }
   }
 
-  // Slight bonus for smart split or smart combined execution
-  if (sim.usedCombined && sim.captures > 0) score += 60;
   if (sim.usedSplit && castleAActive > 0 && castleBActive > 0) score += 35;
 
   return score;
 }
 
 /**
- * Evaluates full 2-dice split & combined permutation tree across all 8 AI seeds (Castle A + Castle B).
+ * Evaluates full Double-Dice Nigerian Ludo move tree strictly respecting Mandatory Play,
+ * Zero Safe Tiles, Eat & Go Home, Stacking Blocks, Stack-vs-Stack Assaults, and Mandatory Capture Gate.
  */
 export function pickHardLudoPlan(
   game: LudoGameState,
@@ -486,32 +480,58 @@ export function pickHardLudoPlan(
   if (!game) return null;
   const aiTokens = isAiChallenger ? game.challengerTokens : game.opponentTokens;
   const humanTokens = isAiChallenger ? game.opponentTokens : game.challengerTokens;
+  const aiCaptures = (isAiChallenger ? game.challengerCaptures : game.opponentCaptures) || 0;
+  const rules = getLudoRulesConfig(game);
 
-  if (!Array.isArray(aiTokens) || !Array.isArray(humanTokens) || !Array.isArray(remainingDice) || remainingDice.length === 0) {
+  if (
+    !Array.isArray(aiTokens) ||
+    !Array.isArray(humanTokens) ||
+    !Array.isArray(remainingDice) ||
+    remainingDice.length === 0
+  ) {
     return null;
   }
 
-  // If only 1 die left in turn, pick best single-die move
+  const legal = getLegalLudoPlayState(game, isAiChallenger, remainingDice);
+  if (!legal.hasAnyLegalMove) return null;
+
+  const pendingTarget = game.pendingStackTargetTrackIdx ?? null;
+  const pendingAttacker = game.pendingStackAttackerIndex ?? null;
+
+  // 1 die left
   if (remainingDice.length === 1) {
     const d = remainingDice[0];
     let bestPlan: LudoAiMovePlan | null = null;
     let bestScore = -Infinity;
 
-    for (let i = 0; i < aiTokens.length; i++) {
-      const stepRes = applySingleDieSim(aiTokens, humanTokens, i, d, isAiChallenger);
+    for (const i of legal.playableDie0Tokens) {
+      const stepRes = simulateLudoSingleDieStep({
+        myTokens: aiTokens,
+        oppTokens: humanTokens,
+        tokenIndex: i,
+        dieVal: d,
+        otherDieVal: null,
+        isChallenger: isAiChallenger,
+        rules,
+        myCaptures: aiCaptures,
+        pendingStackTargetTrackIdx: pendingTarget,
+        pendingStackAttackerIndex: pendingAttacker,
+      });
       if (!stepRes.valid) continue;
+
       const sim: LudoSimOutcome = {
-        aiTokens: stepRes.nextAi,
-        humanTokens: stepRes.nextHuman,
-        captures: stepRes.capturedSteps.length,
-        capturedValue: stepRes.capturedSteps.reduce((a, b) => a + b, 0),
-        castleAExited: aiTokens[i] < 0 && stepRes.nextAi[i] >= 0 && i < 4 ? 1 : 0,
-        castleBExited: aiTokens[i] < 0 && stepRes.nextAi[i] >= 0 && i >= 4 ? 1 : 0,
-        finishedNow: aiTokens[i] < 56 && stepRes.nextAi[i] >= 56 ? 1 : 0,
+        aiTokens: stepRes.nextMyTokens,
+        humanTokens: stepRes.nextOppTokens,
+        captures: stepRes.capturesGained,
+        capturedValue: stepRes.capturesGained * 25,
+        castleAExited: aiTokens[i] < 0 && stepRes.nextMyTokens[i] >= 0 && i < 4 ? 1 : 0,
+        castleBExited: aiTokens[i] < 0 && stepRes.nextMyTokens[i] >= 0 && i >= 4 ? 1 : 0,
+        finishedNow: stepRes.instantFinishedCount,
+        completedStackAssault: stepRes.completedStackAssault,
         usedSplit: false,
         usedCombined: false,
       };
-      const sc = scoreLudoBoardState(sim, aiTokens, isAiChallenger);
+      const sc = scoreLudoBoardState(sim, aiTokens, isAiChallenger, aiCaptures);
       if (sc > bestScore) {
         bestScore = sc;
         bestPlan = { tokenIndex: i, dieChoice: 'die0' };
@@ -520,109 +540,102 @@ export function pickHardLudoPlan(
     return bestPlan;
   }
 
-  // 2 dice available: evaluate BOTH split moves (dieIdx0 -> seedA, dieIdx1 -> seedB) AND combined moves (same seed sequential)
-  const [d0, d1] = remainingDice;
+  // 2 dice available: pick the legal first move whose optimal 2nd-step continuation yields highest score
   let bestPlan: LudoAiMovePlan | null = null;
   let bestScore = -Infinity;
 
-  // A. Evaluate all 2-step sequences starting with dieIdx (0 or 1)
-  for (let firstDieIdx = 0; firstDieIdx < 2; firstDieIdx++) {
+  const evaluateFirstDie = (firstDieIdx: 0 | 1) => {
     const firstDie = remainingDice[firstDieIdx];
     const secondDie = remainingDice[firstDieIdx === 0 ? 1 : 0];
     const dieChoice: 'die0' | 'die1' = firstDieIdx === 0 ? 'die0' : 'die1';
+    const allowedFirst = firstDieIdx === 0 ? legal.playableDie0Tokens : legal.playableDie1Tokens;
 
-    for (let i = 0; i < aiTokens.length; i++) {
-      const s1 = applySingleDieSim(aiTokens, humanTokens, i, firstDie, isAiChallenger);
+    for (const i of allowedFirst) {
+      const s1 = simulateLudoSingleDieStep({
+        myTokens: aiTokens,
+        oppTokens: humanTokens,
+        tokenIndex: i,
+        dieVal: firstDie,
+        otherDieVal: secondDie,
+        isChallenger: isAiChallenger,
+        rules,
+        myCaptures: aiCaptures,
+        pendingStackTargetTrackIdx: pendingTarget,
+        pendingStackAttackerIndex: pendingAttacker,
+      });
       if (!s1.valid) continue;
 
-      let foundSecondStep = false;
-      for (let j = 0; j < s1.nextAi.length; j++) {
-        const s2 = applySingleDieSim(s1.nextAi, s1.nextHuman, j, secondDie, isAiChallenger);
+      let foundSecond = false;
+      for (let j = 0; j < s1.nextMyTokens.length; j++) {
+        const s2 = simulateLudoSingleDieStep({
+          myTokens: s1.nextMyTokens,
+          oppTokens: s1.nextOppTokens,
+          tokenIndex: j,
+          dieVal: secondDie,
+          otherDieVal: null,
+          isChallenger: isAiChallenger,
+          rules,
+          myCaptures: aiCaptures + s1.capturesGained,
+          pendingStackTargetTrackIdx: s1.nextPendingStackTarget,
+          pendingStackAttackerIndex: s1.nextPendingAttacker,
+        });
         if (!s2.valid) continue;
-        foundSecondStep = true;
+        foundSecond = true;
 
         const sim: LudoSimOutcome = {
-          aiTokens: s2.nextAi,
-          humanTokens: s2.nextHuman,
-          captures: s1.capturedSteps.length + s2.capturedSteps.length,
-          capturedValue:
-            s1.capturedSteps.reduce((a, b) => a + b, 0) +
-            s2.capturedSteps.reduce((a, b) => a + b, 0),
+          aiTokens: s2.nextMyTokens,
+          humanTokens: s2.nextOppTokens,
+          captures: s1.capturesGained + s2.capturesGained,
+          capturedValue: (s1.capturesGained + s2.capturesGained) * 25,
           castleAExited:
-            (aiTokens[i] < 0 && s1.nextAi[i] >= 0 && i < 4 ? 1 : 0) +
-            (s1.nextAi[j] < 0 && s2.nextAi[j] >= 0 && j < 4 ? 1 : 0),
+            (aiTokens[i] < 0 && s1.nextMyTokens[i] >= 0 && i < 4 ? 1 : 0) +
+            (s1.nextMyTokens[j] < 0 && s2.nextMyTokens[j] >= 0 && j < 4 ? 1 : 0),
           castleBExited:
-            (aiTokens[i] < 0 && s1.nextAi[i] >= 0 && i >= 4 ? 1 : 0) +
-            (s1.nextAi[j] < 0 && s2.nextAi[j] >= 0 && j >= 4 ? 1 : 0),
-          finishedNow:
-            (aiTokens[i] < 56 && s1.nextAi[i] >= 56 ? 1 : 0) +
-            (s1.nextAi[j] < 56 && s2.nextAi[j] >= 56 ? 1 : 0),
+            (aiTokens[i] < 0 && s1.nextMyTokens[i] >= 0 && i >= 4 ? 1 : 0) +
+            (s1.nextMyTokens[j] < 0 && s2.nextMyTokens[j] >= 0 && j >= 4 ? 1 : 0),
+          finishedNow: s1.instantFinishedCount + s2.instantFinishedCount,
+          completedStackAssault: s2.completedStackAssault,
           usedSplit: i !== j,
           usedCombined: i === j,
         };
-        const sc = scoreLudoBoardState(sim, aiTokens, isAiChallenger);
+        const sc = scoreLudoBoardState(sim, aiTokens, isAiChallenger, aiCaptures);
         if (sc > bestScore) {
           bestScore = sc;
-          bestPlan =
-            i === j && aiTokens[i] >= 0 && s1.capturedSteps.length === 0
-              ? { tokenIndex: i, dieChoice: 'combined' }
-              : { tokenIndex: i, dieChoice };
+          bestPlan = { tokenIndex: i, dieChoice };
         }
       }
 
-      // Single-step fallback if second die cannot be used afterward
-      if (!foundSecondStep) {
+      if (!foundSecond) {
         const sim: LudoSimOutcome = {
-          aiTokens: s1.nextAi,
-          humanTokens: s1.nextHuman,
-          captures: s1.capturedSteps.length,
-          capturedValue: s1.capturedSteps.reduce((a, b) => a + b, 0),
-          castleAExited: aiTokens[i] < 0 && s1.nextAi[i] >= 0 && i < 4 ? 1 : 0,
-          castleBExited: aiTokens[i] < 0 && s1.nextAi[i] >= 0 && i >= 4 ? 1 : 0,
-          finishedNow: aiTokens[i] < 56 && s1.nextAi[i] >= 56 ? 1 : 0,
+          aiTokens: s1.nextMyTokens,
+          humanTokens: s1.nextOppTokens,
+          captures: s1.capturesGained,
+          capturedValue: s1.capturesGained * 25,
+          castleAExited: aiTokens[i] < 0 && s1.nextMyTokens[i] >= 0 && i < 4 ? 1 : 0,
+          castleBExited: aiTokens[i] < 0 && s1.nextMyTokens[i] >= 0 && i >= 4 ? 1 : 0,
+          finishedNow: s1.instantFinishedCount,
+          completedStackAssault: s1.completedStackAssault,
           usedSplit: false,
           usedCombined: false,
         };
-        const sc = scoreLudoBoardState(sim, aiTokens, isAiChallenger) - 35;
+        const sc = scoreLudoBoardState(sim, aiTokens, isAiChallenger, aiCaptures) - 30;
         if (sc > bestScore) {
           bestScore = sc;
           bestPlan = { tokenIndex: i, dieChoice };
         }
       }
     }
-  }
+  };
 
-  // Also explicitly check direct combined jump if d0 + d1 moves a token
-  for (let i = 0; i < aiTokens.length; i++) {
-    if (aiTokens[i] >= 0 && canMoveLudoCombinedDice(aiTokens[i], d0, d1)) {
-      const s1 = applySingleDieSim(aiTokens, humanTokens, i, d0, isAiChallenger);
-      if (s1.valid) {
-        const s2 = applySingleDieSim(s1.nextAi, s1.nextHuman, i, d1, isAiChallenger);
-        if (s2.valid) {
-          const sim: LudoSimOutcome = {
-            aiTokens: s2.nextAi,
-            humanTokens: s2.nextHuman,
-            captures: s1.capturedSteps.length + s2.capturedSteps.length,
-            capturedValue:
-              s1.capturedSteps.reduce((a, b) => a + b, 0) +
-              s2.capturedSteps.reduce((a, b) => a + b, 0),
-            castleAExited: 0,
-            castleBExited: 0,
-            finishedNow: s2.nextAi[i] >= 56 ? 1 : 0,
-            usedSplit: false,
-            usedCombined: true,
-          };
-          const sc = scoreLudoBoardState(sim, aiTokens, isAiChallenger);
-          if (sc > bestScore) {
-            bestScore = sc;
-            bestPlan = { tokenIndex: i, dieChoice: 'combined' };
-          }
-        }
-      }
-    }
-  }
+  evaluateFirstDie(0);
+  evaluateFirstDie(1);
 
   return bestPlan;
+}
+
+// Unused helper export kept for lint cleanliness if referenced externally
+export function getTokensAtTrackIdxForDebug(tokens: number[], trackIdx: number, isChallenger: boolean) {
+  return getTokensAtTrackIndex(tokens, trackIdx, isChallenger);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
