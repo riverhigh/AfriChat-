@@ -7,6 +7,8 @@ import {
   emitLiveMessage,
   emitLiveGameUpdate,
   emitMessageReaction,
+  emitChatMetaUpdate,
+  emitQuickPollUpdate,
   emitGroupInvite,
   emitGroupInviteResponse,
   emitPhoneCallSignal,
@@ -26,6 +28,7 @@ import { showLocalNotification, requestNotificationPermission } from '../service
 import {
   compressAvatarImage,
   compressChatMediaImage,
+  compressLowDataMediaImage,
   downsampleDataUrl,
   isPlaceholderAvatar,
 } from '../utils/imageUtils';
@@ -119,6 +122,10 @@ import {
   ScamEntity,
   InvoiceData,
   FinancialPoll,
+  QuickPoll,
+  PinnedChatAnnouncement,
+  GhostTimerSetting,
+  ChatThemeId,
   AjoGroup,
   TicTacToeGameState,
   WhotShape,
@@ -310,6 +317,58 @@ function sanitizeLoadedChats(parsed: unknown): ChatThread[] {
   );
 }
 
+const GHOST_DURATION_MS: Record<string, number> = {
+  '10s': 10 * 1000,
+  '30s': 30 * 1000,
+  '1m': 60 * 1000,
+  '5m': 5 * 60 * 1000,
+  '1h': 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+};
+
+export function parseGhostDurationMs(timer?: string): number {
+  if (!timer || timer === 'off') return 0;
+  return GHOST_DURATION_MS[timer] || 0;
+}
+
+export function extractMentionsFromText(text?: string): string[] {
+  if (!text) return [];
+  const matches = text.match(/@([a-zA-Z0-9_.-]{2,32})/g);
+  if (!matches) return [];
+  return Array.from(new Set(matches.map((m) => m.slice(1).toLowerCase())));
+}
+
+export function doesMessageMentionUser(msg: ChatMessage, user: UserProfile): boolean {
+  const tokens = new Set<string>(
+    [...(msg.mentions || []), ...extractMentionsFromText(msg.text)].map((s) => s.toLowerCase())
+  );
+  if (tokens.size === 0) return false;
+  if (tokens.has('everyone') || tokens.has('all') || tokens.has('here')) return true;
+  const username = (user.username || '').replace(/^@/, '').trim().toLowerCase();
+  const fullName = (user.fullName || '').trim().toLowerCase();
+  const firstName = fullName.split(/\s+/)[0] || '';
+  const compactFull = fullName.replace(/\s+/g, '_');
+  const compactNoSpace = fullName.replace(/\s+/g, '');
+  return (
+    (Boolean(username) && tokens.has(username)) ||
+    (Boolean(firstName) && firstName.length >= 2 && tokens.has(firstName)) ||
+    (Boolean(compactFull) && tokens.has(compactFull)) ||
+    (Boolean(compactNoSpace) && tokens.has(compactNoSpace))
+  );
+}
+
+function enqueueOfflineOutboxItem(chatId: string, msg: ChatMessage) {
+  try {
+    const raw = localStorage.getItem('AGC_offline_outbox');
+    const list: Array<{ chatId: string; msg: ChatMessage }> = raw ? JSON.parse(raw) : [];
+    if (!list.some((item) => item?.msg?.id === msg.id)) {
+      list.push({ chatId, msg });
+      localStorage.setItem('AGC_offline_outbox', JSON.stringify(list.slice(-80)));
+      window.dispatchEvent(new CustomEvent('agc-outbox-changed'));
+    }
+  } catch (_) {}
+}
+
 function sanitizeLoadedMessages(parsed: unknown): Record<string, ChatMessage[]> {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
   const now = Date.now();
@@ -317,7 +376,7 @@ function sanitizeLoadedMessages(parsed: unknown): Record<string, ChatMessage[]> 
   for (const [cid, msgs] of Object.entries(parsed as Record<string, ChatMessage[]>)) {
     if (!Array.isArray(msgs)) continue;
     cleaned[cid] = msgs
-      .filter((m): m is ChatMessage => Boolean(m && typeof m === 'object' && m.id))
+      .filter((m): m is ChatMessage => Boolean(m && typeof m === 'object' && m.id && !(m.expiresAt && m.expiresAt <= now)))
       .map((m) => {
         if (m.type === 'voice' && m.voiceNote?.expiresAt) {
         const exp = new Date(m.voiceNote.expiresAt).getTime();
@@ -686,6 +745,13 @@ interface AppContextType {
   setFontSize: (size: AppFontSize) => void;
   chatWallpaper: string | null;
   setChatWallpaper: (wallpaper: string | null) => void;
+  globalChatTheme: ChatThemeId | string;
+  setGlobalChatTheme: (themeId: ChatThemeId | string) => void;
+  setChatTheme: (chatId: string, themeId: ChatThemeId | string) => void;
+  setDisappearingTimer: (chatId: string, timer: GhostTimerSetting | string) => void;
+  markGhostMessagesViewed: (chatId: string) => void;
+  pinChatMessage: (chatId: string, msg: ChatMessage | null) => void;
+  clearChatMentions: (chatId: string) => void;
   // QR Scan Modal
   isScanQrModalOpen: boolean;
   setIsScanQrModalOpen: (val: boolean) => void;
@@ -864,6 +930,16 @@ interface AppContextType {
     pollId: string,
     optionId: string
   ) => { success: boolean; insufficientFunds?: boolean; message?: string };
+  // 6a. Free Chat Quick Polls
+  isQuickPollModalOpen: boolean;
+  setIsQuickPollModalOpen: (val: boolean) => void;
+  createQuickPoll: (
+    chatId: string,
+    question: string,
+    optionTexts: string[],
+    allowMultiple?: boolean
+  ) => { success: boolean; message?: string };
+  voteOnQuickPoll: (chatId: string, messageId: string, optionId: string) => void;
   // 6b. Live Socket.IO Multiplayer X/O (Tic-Tac-Toe)
   isGameXoModalOpen: boolean;
   setIsGameXoModalOpen: (val: boolean) => void;
@@ -1862,7 +1938,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       currency: c,
     }));
   };
-  const [lowDataMode, setLowDataMode] = useState<boolean>(false);
+  const [lowDataMode, setLowDataModeState] = useState<boolean>(() => {
+    return safeLocalStorage.getItem('AGC_low_data_mode') === 'true';
+  });
+  const setLowDataMode = (val: boolean) => {
+    setLowDataModeState(val);
+    safeLocalStorage.setItem('AGC_low_data_mode', String(val));
+  };
+  useEffect(() => {
+    document.documentElement.classList.toggle('low-data-mode', lowDataMode);
+    safeLocalStorage.setItem('AGC_low_data_mode', String(lowDataMode));
+  }, [lowDataMode]);
+
   const [activeTab, setActiveTab] = useState<'status' | 'calls' | 'town' | 'chats' | 'settings' | 'market'>('status');
 
   // Display & Appearance
@@ -1893,6 +1980,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else {
       safeLocalStorage.removeItem('AGC_wallpaper');
     }
+  };
+
+  const [globalChatTheme, setGlobalChatThemeState] = useState<string>(() => {
+    return safeLocalStorage.getItem('AGC_global_chat_theme') || 'default';
+  });
+  const setGlobalChatTheme = (themeId: ChatThemeId | string) => {
+    setGlobalChatThemeState(themeId);
+    safeLocalStorage.setItem('AGC_global_chat_theme', themeId);
   };
 
   // QR Code Scanner Modal
@@ -3383,8 +3478,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isInvoiceGeneratorOpen, setIsInvoiceGeneratorOpen] = useState(false);
   const [viewingInvoice, setViewingInvoice] = useState<InvoiceData | null>(null);
 
-  // 6. Group Polls with Financial Stakes State
+  // 6. Group Polls with Financial Stakes & Free Chat Quick Polls State
   const [isFinancialPollModalOpen, setIsFinancialPollModalOpen] = useState(false);
+  const [isQuickPollModalOpen, setIsQuickPollModalOpen] = useState(false);
 
   // 7. Ajo / Esusu Group Savings State & 1-Time View Toggle
   const [isOneTimeViewEnabled, setIsOneTimeViewEnabled] = useState(false);
@@ -5087,7 +5183,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const toggleLowDataMode = () => {
-    setLowDataMode((prev) => !prev);
+    setLowDataMode(!lowDataMode);
   };
 
   const t = (key: string): string => {
@@ -6357,6 +6453,154 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const relayChatMetaUpdate = useCallback(
+    (chatId: string, meta: { disappearingTimer?: string; pinnedMessage?: PinnedChatAnnouncement | null; chatTheme?: string }) => {
+      const chat = chatsRef.current.find((c) => c.id === chatId);
+      const targetPhone = chat?.phone || (chat as any)?.phoneNumber || '';
+      const memberPhones = chat?.memberPhones || [];
+      const payload = { chatId, ...meta, targetPhone, memberPhones, senderId: currentUser.id };
+      try {
+        const bc = new BroadcastChannel('AGC_chats_sync');
+        bc.postMessage({ type: 'chat_meta_update', ...payload });
+        bc.close();
+      } catch (_) {}
+      emitChatMetaUpdate(payload);
+      if (isSupabaseConfigured) {
+        sendSupabaseBroadcastSafe(`chat_${chatId}`, 'chat_meta_update', payload);
+        if (targetPhone) {
+          const clean = targetPhone.replace(/\D/g, '');
+          if (clean) sendSupabaseBroadcastSafe(`inbox_${clean}`, 'chat_meta_update', payload);
+        }
+        memberPhones.forEach((p) => {
+          const cp = p.replace(/\D/g, '');
+          if (cp && !phonesMatch(cp, currentUser.phoneNumber)) {
+            sendSupabaseBroadcastSafe(`inbox_${cp}`, 'chat_meta_update', payload);
+          }
+        });
+      }
+    },
+    [currentUser.id, currentUser.phoneNumber]
+  );
+
+  const setDisappearingTimer = (chatId: string, timer: GhostTimerSetting | string) => {
+    updateChat(chatId, { disappearingTimer: timer });
+    relayChatMetaUpdate(chatId, { disappearingTimer: timer });
+    const sysText =
+      timer === 'off'
+        ? '👻 Ghost disappearing messages turned off.'
+        : `👻 Ghost mode active: messages self-destruct ${timer} after viewing.`;
+    const sysMsg: ChatMessage = {
+      id: `msg_sys_ghost_${Date.now()}`,
+      chatId,
+      sender: 'system',
+      text: sysText,
+      type: 'text',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'delivered',
+    };
+    setMessages((prev) => {
+      const updated = { ...prev, [chatId]: [...(prev[chatId] || []), sysMsg] };
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
+      return updated;
+    });
+  };
+
+  const markGhostMessagesViewed = useCallback(
+    (chatId: string) => {
+      if (!chatId) return;
+      const targetChat = chatsRef.current.find((c) => c.id === chatId);
+      const chatTimerMs = parseGhostDurationMs(targetChat?.disappearingTimer);
+      setMessages((prev) => {
+        const list = prev[chatId];
+        if (!list || list.length === 0) return prev;
+        const now = Date.now();
+        let changed = false;
+        const nextList = list.map((m) => {
+          const durMs = m.disappearingDurationMs || (m.isGhost ? chatTimerMs || 30000 : 0);
+          if ((m.isGhost || m.disappearingDurationMs) && !m.expiresAt && durMs > 0) {
+            changed = true;
+            return { ...m, viewedAt: now, expiresAt: now + durMs, status: 'read' as const };
+          }
+          return m;
+        });
+        if (!changed) return prev;
+        const updated = { ...prev, [chatId]: nextList };
+        persistPartitionedMessages(updated, currentUser.phoneNumber);
+        return updated;
+      });
+    },
+    [currentUser.phoneNumber]
+  );
+
+  // Auto-purge expired Ghost messages every 2s
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      const now = Date.now();
+      setMessages((prev) => {
+        let anyExpired = false;
+        const next: Record<string, ChatMessage[]> = {};
+        for (const [cid, list] of Object.entries(prev)) {
+          const filtered = list.filter((m) => !(m.expiresAt && m.expiresAt <= now));
+          if (filtered.length !== list.length) anyExpired = true;
+          next[cid] = filtered;
+        }
+        if (!anyExpired) return prev;
+        persistPartitionedMessages(next, currentUser.phoneNumber);
+        return next;
+      });
+    }, 2000);
+    return () => window.clearInterval(interval);
+  }, [currentUser.phoneNumber]);
+
+  const pinChatMessage = (chatId: string, msg: ChatMessage | null) => {
+    const pinned: PinnedChatAnnouncement | null = msg
+      ? {
+          messageId: msg.id,
+          text:
+            msg.text?.trim() ||
+            (msg.type === 'image'
+              ? '📷 Pinned Photo'
+              : msg.type === 'voice'
+              ? '🎙️ Pinned Voice Note'
+              : msg.type === 'quick_poll' && msg.quickPoll
+              ? `📊 Poll: ${msg.quickPoll.question}`
+              : '📌 Pinned Announcement'),
+          senderName: msg.sender === 'user' ? currentUser.fullName || 'You' : msg.senderName || 'Member',
+          pinnedByName: currentUser.fullName || 'Admin',
+          pinnedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        }
+      : null;
+    updateChat(chatId, { pinnedMessage: pinned });
+    relayChatMetaUpdate(chatId, { pinnedMessage: pinned });
+  };
+
+  const setChatTheme = (chatId: string, themeId: ChatThemeId | string) => {
+    updateChat(chatId, { chatTheme: themeId });
+    relayChatMetaUpdate(chatId, { chatTheme: themeId });
+  };
+
+  const clearChatMentions = useCallback(
+    (chatId: string) => {
+      if (!chatId) return;
+      setChats((prev) => {
+        const target = prev.find((c) => c.id === chatId);
+        if (!target || (!target.unreadMentions && !target.lastMentionMessageId)) return prev;
+        const updated = prev.map((c) =>
+          c.id === chatId ? { ...c, unreadMentions: 0, lastMentionMessageId: undefined } : c
+        );
+        persistPartitionedChats(updated, currentUser.phoneNumber);
+        return updated;
+      });
+    },
+    [currentUser.phoneNumber]
+  );
+
+  useEffect(() => {
+    if (activeChatId) {
+      markGhostMessagesViewed(activeChatId);
+    }
+  }, [activeChatId, markGhostMessagesViewed]);
+
   const sendGroupInvitesToTargets = useCallback(
     (targetChat: ChatThread, targets: { name: string; phone: string }[]) => {
       if (!targetChat || !targets.length) return;
@@ -6972,7 +7216,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (!isDeviceOnline) {
-      // Offline: Keep as 1 check (sent). Will automatically flush and double check once data is on.
+      // Offline: Persist into local outbox queue so reconnect auto-flushes queued messages
+      enqueueOfflineOutboxItem(chatId, msg);
       return;
     }
 
@@ -7062,13 +7307,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const sendImageMessage = async (chatId: string, imageUrl: string, caption?: string, oneTimeView?: boolean) => {
     // Strongly compress any data URL image so Supabase storage & Realtime stay tiny
     let finalImageUrl = imageUrl;
-    if (imageUrl.startsWith('data:image') && imageUrl.length > 72000) {
-      try {
-        finalImageUrl = await compressChatMediaImage(imageUrl);
-      } catch (_) {}
+    if (imageUrl.startsWith('data:image')) {
+      if (lowDataMode) {
+        try {
+          finalImageUrl = await compressLowDataMediaImage(imageUrl);
+        } catch (_) {}
+      } else if (imageUrl.length > 72000) {
+        try {
+          finalImageUrl = await compressChatMediaImage(imageUrl);
+        } catch (_) {}
+      }
     }
 
     const useOneTime = Boolean(oneTimeView);
+    const targetChat = chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
+    const ghostMs = parseGhostDurationMs(targetChat?.disappearingTimer);
     const newMsg: ChatMessage = {
       id: 'msg_img_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
       chatId,
@@ -7080,6 +7333,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       imageUrl: finalImageUrl,
       text: caption || '',
       oneTimeView: useOneTime,
+      ...(ghostMs > 0 ? { isGhost: true, disappearingDurationMs: ghostMs, expiresAt: Date.now() + ghostMs } : {}),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'sent',
     };
@@ -7208,7 +7462,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     const initialStatus: 'sent' | 'delivered' = isOnline ? 'delivered' : 'sent';
     const useOneTime = Boolean(oneTimeView);
-    const previewLabel = useOneTime ? '🔒 1-Time Message' : text;
+    const ghostMs = parseGhostDurationMs(_targetChatSend?.disappearingTimer);
+    const mentions = extractMentionsFromText(text);
+    const previewLabel = useOneTime ? '🔒 1-Time Message' : ghostMs > 0 ? `👻 ${text}` : text;
 
     const newMsg: ChatMessage = {
       id: `msg_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -7219,6 +7475,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderAvatar: currentUser.avatarUrl,
       text,
       oneTimeView: useOneTime,
+      ...(ghostMs > 0 ? { isGhost: true, disappearingDurationMs: ghostMs, expiresAt: Date.now() + ghostMs } : {}),
+      ...(mentions.length > 0 ? { mentions } : {}),
       replyTo,
       translatedText: {
         en: text,
@@ -7550,6 +7808,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ) => {
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24h TTL
     const useOneTime = Boolean(oneTimeView);
+    const targetChat = chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
+    const ghostMs = parseGhostDurationMs(targetChat?.disappearingTimer);
     const previewLabel = useOneTime
       ? `🔒 1-Time Voice Note (${durationSeconds}s)`
       : `🎙️ Voice message (${durationSeconds}s)`;
@@ -7563,6 +7823,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderAvatar: currentUser.avatarUrl,
       type: 'voice',
       oneTimeView: useOneTime,
+      ...(ghostMs > 0 ? { isGhost: true, disappearingDurationMs: ghostMs, expiresAt: Date.now() + ghostMs } : {}),
       voiceNote: {
         durationSeconds,
         waveform: Array.from({ length: 18 }, () => Math.floor(Math.random() * 70) + 20),
@@ -9236,6 +9497,137 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ? 'Vote updated (stake already locked in escrow).'
         : 'Vote cast & escrow stake locked!',
     };
+  };
+
+  // 6a. Free Chat Quick Polls (Groups, DMs, Channels)
+  const createQuickPoll = (
+    chatId: string,
+    question: string,
+    optionTexts: string[],
+    allowMultiple = false
+  ): { success: boolean; message?: string } => {
+    const cleanQuestion = question.trim();
+    const cleanOptions = optionTexts.map((t) => t.trim()).filter(Boolean);
+    if (!cleanQuestion) return { success: false, message: 'Enter a poll question.' };
+    if (cleanOptions.length < 2) return { success: false, message: 'Provide at least 2 options.' };
+
+    const nowTs = Date.now();
+    const poll: QuickPoll = {
+      id: `qpoll_${nowTs}_${Math.random().toString(36).slice(2, 6)}`,
+      question: cleanQuestion,
+      creatorId: currentUser.id,
+      creatorName: currentUser.fullName || 'AGC User',
+      options: cleanOptions.map((txt, idx) => ({
+        id: `qopt_${nowTs}_${idx}`,
+        text: txt,
+        voterIds: [],
+        voterNames: [],
+      })),
+      allowMultiple,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    };
+
+    const targetChat = chatsRef.current.find((c) => c.id === chatId);
+    const ghostMs = parseGhostDurationMs(targetChat?.disappearingTimer);
+
+    const newMsg: ChatMessage = {
+      id: `msg_qpoll_${nowTs}`,
+      chatId,
+      sender: 'user',
+      senderName: currentUser.fullName || 'AGC User',
+      senderPhone: currentUser.phoneNumber,
+      senderAvatar: currentUser.avatarUrl,
+      type: 'quick_poll',
+      quickPoll: poll,
+      text: `📊 Poll: ${cleanQuestion}`,
+      ...(ghostMs > 0 ? { isGhost: true, disappearingDurationMs: ghostMs, expiresAt: Date.now() + ghostMs } : {}),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'sent',
+    };
+
+    setMessages((prev) => {
+      const updated = { ...prev, [chatId]: [...(prev[chatId] || []), newMsg] };
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
+      return updated;
+    });
+    setChats((prev) => {
+      const updated = prev.map((c) =>
+        c.id === chatId ? { ...c, lastMessage: `📊 Poll: ${cleanQuestion}`, lastMessageTime: newMsg.timestamp } : c
+      );
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
+
+    broadcastLiveMessage(chatId, newMsg);
+    return { success: true, message: 'Quick Poll posted!' };
+  };
+
+  const voteOnQuickPoll = (chatId: string, messageId: string, optionId: string) => {
+    const myVoterId = currentUser.id || normalizePhoneDigits(currentUser.phoneNumber) || 'local_user';
+    const myVoterName = currentUser.fullName || currentUser.phoneNumber || 'Member';
+    let updatedPollForSync: QuickPoll | null = null;
+
+    setMessages((prev) => {
+      const list = prev[chatId] || [];
+      const nextList = list.map((m) => {
+        if (m.id !== messageId || !m.quickPoll || m.quickPoll.status === 'closed') return m;
+        const allowMultiple = Boolean(m.quickPoll.allowMultiple);
+        const nextPoll: QuickPoll = {
+          ...m.quickPoll,
+          options: m.quickPoll.options.map((opt) => {
+            const voterIds = [...opt.voterIds];
+            const voterNames = [...opt.voterNames];
+            const idx = voterIds.indexOf(myVoterId);
+            if (opt.id === optionId) {
+              if (idx >= 0) {
+                voterIds.splice(idx, 1);
+                voterNames.splice(idx, 1);
+              } else {
+                voterIds.push(myVoterId);
+                voterNames.push(myVoterName);
+              }
+            } else if (!allowMultiple && idx >= 0) {
+              voterIds.splice(idx, 1);
+              voterNames.splice(idx, 1);
+            }
+            return { ...opt, voterIds, voterNames };
+          }),
+        };
+        updatedPollForSync = nextPoll;
+        return { ...m, quickPoll: nextPoll };
+      });
+      if (!updatedPollForSync) return prev;
+      const nextAll = { ...prev, [chatId]: nextList };
+      persistPartitionedMessages(nextAll, currentUser.phoneNumber);
+      return nextAll;
+    });
+
+    if (updatedPollForSync) {
+      const targetChat = chatsRef.current.find((c) => c.id === chatId);
+      const targetPhone = targetChat?.phone || (targetChat as any)?.phoneNumber || '';
+      const memberPhones = targetChat?.memberPhones || [];
+      const payload = { chatId, messageId, quickPoll: updatedPollForSync, targetPhone, memberPhones, senderId: currentUser.id };
+      try {
+        const bc = new BroadcastChannel('AGC_chats_sync');
+        bc.postMessage({ type: 'quick_poll_update', ...payload });
+        bc.close();
+      } catch (_) {}
+      emitQuickPollUpdate(payload);
+      if (isSupabaseConfigured) {
+        sendSupabaseBroadcastSafe(`chat_${chatId}`, 'quick_poll_update', payload);
+        if (targetPhone) {
+          const clean = targetPhone.replace(/\D/g, '');
+          if (clean) sendSupabaseBroadcastSafe(`inbox_${clean}`, 'quick_poll_update', payload);
+        }
+        memberPhones.forEach((p) => {
+          const cp = p.replace(/\D/g, '');
+          if (cp && !phonesMatch(cp, currentUser.phoneNumber)) {
+            sendSupabaseBroadcastSafe(`inbox_${cp}`, 'quick_poll_update', payload);
+          }
+        });
+      }
+    }
   };
 
   // 6b. Real-Time Supabase Multiplayer X/O (Tic-Tac-Toe) & Location Pin Modal State
@@ -15488,13 +15880,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return prev;
         }
 
-        const receivedMsg: ChatMessage = {
+            const receivedMsg: ChatMessage = {
           ...message,
           text: plainText,
           isEncrypted: wasEncrypted,
           chatId: resolvedChatId,
           sender: isSelfChat ? 'user' : (isFromMe ? 'user' : 'other'),
           status: 'delivered',
+          ...((currentActiveChatId === resolvedChatId || currentActiveChatId === chatId) && (message.isGhost || message.disappearingDurationMs) && !message.expiresAt
+            ? {
+                viewedAt: Date.now(),
+                expiresAt: Date.now() + (message.disappearingDurationMs || 30000),
+              }
+            : {}),
         };
         const updated = {
           ...prev,
@@ -15508,6 +15906,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (isDuplicateMessage) return;
+
+      const mentionedMe =
+        !isFromMe &&
+        doesMessageMentionUser({ ...message, text: plainText }, userNow);
 
       // 4. Update or insert thread
       setChats((prev) => {
@@ -15529,22 +15931,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   ? '🎙️ Voice message'
                   : message.type === 'meme_sticker'
                   ? '🎭 Sticker'
+                  : message.type === 'quick_poll' && message.quickPoll
+                  ? `📊 Poll: ${message.quickPoll.question}`
                   : '📎 Attachment'));
 
         if (index >= 0) {
           const updated = [...prev];
           const matched = { ...updated[index] };
           const activeNow = activeChatIdRef.current;
+          const isOpenNow = activeNow === resolvedChatId || activeNow === matched.id || activeNow === chatId;
           if (matched.id !== resolvedChatId && activeNow === matched.id) {
             setActiveChatId(resolvedChatId);
           }
           matched.id = resolvedChatId;
           matched.lastMessage = msgText;
           matched.lastMessageTime = message.timestamp;
-          matched.unreadCount =
-            activeNow === resolvedChatId || activeNow === matched.id || activeNow === chatId
-              ? 0
-              : (matched.unreadCount || 0) + 1;
+          matched.unreadCount = isOpenNow ? 0 : (matched.unreadCount || 0) + 1;
+          if (mentionedMe) {
+            matched.unreadMentions = (matched.unreadMentions || 0) + 1;
+            matched.lastMentionMessageId = message.id;
+            if (!isOpenNow) {
+              showLocalNotification(
+                `@${userNow.username || userNow.fullName || 'You'} mentioned in ${matched.name}`,
+                plainText || 'Mentioned you in chat',
+                matched.avatar || '/icon-192.png'
+              );
+            }
+          }
           updated.splice(index, 1);
           const finalUpdated = [matched, ...updated];
           try {
@@ -15686,8 +16099,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (payload?.payload) applyBillRequestUpdate(payload.payload);
     };
 
+    const handleChatMetaUpdateSocket = (payload: any) => {
+      if (!payload?.chatId) return;
+      const updates: Partial<ChatThread> = {};
+      if (payload.disappearingTimer !== undefined) updates.disappearingTimer = payload.disappearingTimer;
+      if (payload.pinnedMessage !== undefined) updates.pinnedMessage = payload.pinnedMessage;
+      if (payload.chatTheme !== undefined) updates.chatTheme = payload.chatTheme;
+      if (Object.keys(updates).length > 0) {
+        updateChat(payload.chatId, updates);
+      }
+    };
+    const handleQuickPollUpdateSocket = (payload: any) => {
+      if (!payload?.chatId || !payload?.messageId || !payload?.quickPoll) return;
+      setMessages((prev) => {
+        const list = prev[payload.chatId];
+        if (!list) return prev;
+        const nextList = list.map((m) =>
+          m.id === payload.messageId ? { ...m, quickPoll: payload.quickPoll } : m
+        );
+        const updated = { ...prev, [payload.chatId]: nextList };
+        persistPartitionedMessages(updated, currentUserRef.current.phoneNumber);
+        return updated;
+      });
+    };
+
+    const handleOnlineFlushOutbox = () => {
+      try {
+        const raw = localStorage.getItem('AGC_offline_outbox');
+        if (!raw) return;
+        const queued: Array<{ chatId: string; msg: ChatMessage }> = JSON.parse(raw);
+        if (!Array.isArray(queued) || queued.length === 0) return;
+        localStorage.removeItem('AGC_offline_outbox');
+        window.dispatchEvent(new CustomEvent('agc-outbox-changed'));
+        queued.forEach((item) => {
+          if (item?.chatId && item?.msg) {
+            broadcastLiveMessage(item.chatId, item.msg);
+          }
+        });
+      } catch (_) {}
+    };
+    window.addEventListener('online', handleOnlineFlushOutbox);
+
     socket.on('new_message', handleIncomingMessage);
     socket.on('message_reaction', applyRemoteMessageReaction);
+    socket.on('chat_meta_update', handleChatMetaUpdateSocket);
+    socket.on('quick_poll_update', handleQuickPollUpdateSocket);
     socket.on('xo_game_update', handleXoGameSocket);
     socket.on('whot_game_update', handleWhotGameSocket);
     socket.on('ludo_game_update', handleLudoGameSocket);
@@ -15912,6 +16368,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           applyRemoteMessageReaction(e.data);
           return;
         }
+        if (e.data && e.data.type === 'chat_meta_update' && e.data.chatId) {
+          handleChatMetaUpdateSocket(e.data);
+          return;
+        }
+        if (e.data && e.data.type === 'quick_poll_update' && e.data.chatId) {
+          handleQuickPollUpdateSocket(e.data);
+          return;
+        }
         if (e.data && e.data.type === 'xo_game_update' && e.data.game) {
           applyXoGameUpdate(e.data.game);
           return;
@@ -15995,6 +16459,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (payload?.chatId && payload?.messageId) {
             applyRemoteMessageReaction(payload);
           }
+        })
+        .on('broadcast', { event: 'chat_meta_update' }, ({ payload }: any) => {
+          if (payload?.chatId) handleChatMetaUpdateSocket(payload);
+        })
+        .on('broadcast', { event: 'quick_poll_update' }, ({ payload }: any) => {
+          if (payload?.chatId && payload?.quickPoll) handleQuickPollUpdateSocket(payload);
         })
         .on('broadcast', { event: 'xo_game_update' }, ({ payload }: any) => {
           if (payload?.game) {
@@ -16153,10 +16623,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return () => {
+      window.removeEventListener('online', handleOnlineFlushOutbox);
       socket.off('connect', registerRoomsOnConnect);
       socket.off('account_banned', handleAccountBanned);
       socket.off('new_message', handleIncomingMessage);
       socket.off('message_reaction', applyRemoteMessageReaction);
+      socket.off('chat_meta_update', handleChatMetaUpdateSocket);
+      socket.off('quick_poll_update', handleQuickPollUpdateSocket);
       socket.off('xo_game_update', handleXoGameSocket);
       socket.off('whot_game_update', handleWhotGameSocket);
       socket.off('ludo_game_update', handleLudoGameSocket);
@@ -17944,11 +18417,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         viewingInvoice,
         setViewingInvoice,
         sendInvoiceReceipt,
-        // 6. Group Polls with Financial Stakes
+        // 6. Group Polls with Financial Stakes & Free Chat Quick Polls
         isFinancialPollModalOpen,
         setIsFinancialPollModalOpen,
         createFinancialPoll,
         voteOnFinancialPoll,
+        isQuickPollModalOpen,
+        setIsQuickPollModalOpen,
+        createQuickPoll,
+        voteOnQuickPoll,
         // 6b. Live Socket.IO Multiplayer X/O (Tic-Tac-Toe)
         isGameXoModalOpen,
         setIsGameXoModalOpen,
@@ -18083,6 +18560,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setFontSize,
         chatWallpaper,
         setChatWallpaper,
+        globalChatTheme,
+        setGlobalChatTheme,
+        setChatTheme,
+        setDisappearingTimer,
+        markGhostMessagesViewed,
+        pinChatMessage,
+        clearChatMentions,
         // QR Scanner
         isScanQrModalOpen,
         setIsScanQrModalOpen,

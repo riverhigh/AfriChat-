@@ -25,10 +25,12 @@ import {
   BadgeCheck,
   Volume2,
   AlertCircle,
+  BarChart3,
 } from 'lucide-react';
 import { useApp, phonesMatch } from '../context/AppContext';
 import { AudioSpaceSpeaker } from '../types';
 import { useSpaceAudio } from '../hooks/useSpaceAudio';
+import { QuickPollModal } from './QuickPollModal';
 
 const SPACE_REACTION_EMOJIS = ['😂', '😮', '😢', '💜', '💯', '👏', '✊', '👍', '🔥'];
 
@@ -89,6 +91,7 @@ export const AudioSpaceModal: React.FC = () => {
   const [confirmEndPrompt, setConfirmEndPrompt] = useState(false);
   const [selectedSpeakerForAction, setSelectedSpeakerForAction] = useState<AudioSpaceSpeaker | null>(null);
   const [shareCopiedToast, setShareCopiedToast] = useState(false);
+  const [showPollCreator, setShowPollCreator] = useState(false);
 
   const [pinDraft, setPinDraft] = useState<string>('');
   const [isEditingPin, setIsEditingPin] = useState(false);
@@ -106,6 +109,7 @@ export const AudioSpaceModal: React.FC = () => {
       setShowChatSheet(false);
       setConfirmEndPrompt(false);
       setSelectedSpeakerForAction(null);
+      setShowPollCreator(false);
       return;
     }
 
@@ -131,6 +135,7 @@ export const AudioSpaceModal: React.FC = () => {
     raisedHands: raisedHandsQueue,
     chatMessages,
     pinnedNote,
+    activePoll,
     listenersCount,
     peakListeners,
     floatingReactions,
@@ -154,6 +159,9 @@ export const AudioSpaceModal: React.FC = () => {
     removeFromStage,
     updatePinnedNote,
     sendChatMessage,
+    createSpacePoll,
+    voteSpacePoll,
+    closeSpacePoll,
   } = useSpaceAudio({
     space: activeAudioSpace,
     currentUser: {
@@ -611,6 +619,83 @@ export const AudioSpaceModal: React.FC = () => {
             </div>
           )}
 
+          {/* Live Interactive Space Poll Card */}
+          {activePoll && (() => {
+            const totalVotes = activePoll.options.reduce((acc, o) => acc + o.voterIds.length, 0);
+            const myVoterId = currentUser?.id || '';
+            const isPollClosed = activePoll.status === 'closed';
+            return (
+              <div className="p-3.5 rounded-2xl bg-gradient-to-br from-[#17112b] to-zinc-900 border border-[#7856ff]/40 space-y-2.5 shadow-lg">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-[#9c82ff]">
+                    <BarChart3 className="w-3.5 h-3.5" />
+                    <span>{isPollClosed ? 'Space Poll · Closed' : 'Live Space Poll'}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono text-zinc-400">
+                      {totalVotes} vote{totalVotes === 1 ? '' : 's'}
+                    </span>
+                    {canManage && !isPollClosed && (
+                      <button
+                        type="button"
+                        onClick={() => closeSpacePoll(activePoll.id)}
+                        className="px-2 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-[10px] font-bold text-zinc-300"
+                      >
+                        Close
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <h4 className="text-sm font-extrabold text-white leading-snug">
+                  {activePoll.question}
+                </h4>
+
+                <div className="space-y-1.5">
+                  {activePoll.options.map((opt) => {
+                    const votes = opt.voterIds.length;
+                    const pct = totalVotes > 0 ? Math.round((votes / totalVotes) * 100) : 0;
+                    const voted = Boolean(myVoterId && opt.voterIds.includes(myVoterId));
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        disabled={isPollClosed}
+                        onClick={() => voteSpacePoll(activePoll.id, opt.id)}
+                        className={`w-full text-left px-3 py-2 rounded-xl border relative overflow-hidden transition-all ${
+                          voted
+                            ? 'border-[#7856ff] bg-[#7856ff]/15 text-white'
+                            : 'border-zinc-800 bg-black/50 hover:border-zinc-700 text-zinc-200'
+                        } disabled:cursor-default`}
+                      >
+                        <div
+                          style={{ width: `${pct}%` }}
+                          className={`absolute inset-y-0 left-0 transition-all duration-300 ${
+                            voted ? 'bg-[#7856ff]/30' : 'bg-zinc-700/35'
+                          }`}
+                        />
+                        <div className="relative z-10 flex items-center justify-between gap-2 text-xs">
+                          <span className="font-semibold flex items-center gap-1.5 truncate">
+                            {voted && <Check className="w-3.5 h-3.5 text-[#9c82ff] shrink-0" />}
+                            <span className="truncate">{opt.text}</span>
+                          </span>
+                          <span className="font-mono font-bold text-[11px] shrink-0">
+                            {pct}% ({votes})
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="text-[10px] text-zinc-500 flex items-center justify-between">
+                  <span>Started by {activePoll.creatorName}</span>
+                  <span>{activePoll.allowMultiple ? 'Multiple choice' : 'Single choice'}</span>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Clean 4-Column Stage Grid (No Heavy Boxes) */}
           <div className="grid grid-cols-4 gap-x-3 gap-y-5 pt-1">
             {(Array.isArray(speakersList) ? speakersList : []).filter(Boolean).map((speaker) => {
@@ -743,7 +828,15 @@ export const AudioSpaceModal: React.FC = () => {
                   <Crown className="w-4 h-4 text-amber-400" />
                   <span>Host Controls</span>
                 </span>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowPollCreator(true)}
+                    className="px-2.5 py-1 rounded-full bg-[#7856ff]/20 hover:bg-[#7856ff]/30 text-[#b7a5ff] text-[11px] font-semibold flex items-center gap-1"
+                  >
+                    <BarChart3 className="w-3 h-3" />
+                    <span>Poll</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -907,6 +1000,17 @@ export const AudioSpaceModal: React.FC = () => {
             >
               <Users className="w-4 h-4" />
             </button>
+
+            {(canManage || isOnStage) && (
+              <button
+                type="button"
+                onClick={() => setShowPollCreator(true)}
+                className="w-10 h-10 rounded-full bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 flex items-center justify-center text-[#9c82ff] transition-colors"
+                title="Launch Space Poll"
+              >
+                <BarChart3 className="w-4 h-4" />
+              </button>
+            )}
 
             {canManage && (
               <button
@@ -1359,6 +1463,13 @@ export const AudioSpaceModal: React.FC = () => {
             </div>
           </div>
         )}
+
+        <QuickPollModal
+          isOpen={showPollCreator}
+          onClose={() => setShowPollCreator(false)}
+          contextLabel="Launch Space Poll"
+          onSubmitPoll={(q, opts, multi) => createSpacePoll(q, opts, multi)}
+        />
       </div>
     </div>
   );

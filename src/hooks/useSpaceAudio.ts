@@ -4,6 +4,7 @@ import {
   AudioSpaceChatMessage,
   AudioSpaceListener,
   AudioSpaceSpeaker,
+  QuickPoll,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import {
@@ -15,6 +16,9 @@ import {
   emitSpaceRaiseHand,
   emitSpaceStageAction,
   emitSpaceChatMessage,
+  emitSpacePollCreate,
+  emitSpacePollVote,
+  emitSpacePollClose,
   emitSpaceWebRTCSignal,
 } from '../services/socket';
 
@@ -95,6 +99,7 @@ export function useSpaceAudio({
   >(() => space?.raisedHands || []);
   const [chatMessages, setChatMessages] = useState<AudioSpaceChatMessage[]>([]);
   const [pinnedNote, setPinnedNote] = useState<string>(space?.pinnedAnnouncement || '');
+  const [activePoll, setActivePoll] = useState<QuickPoll | null>(space?.activePoll || null);
   const [listenersCount, setListenersCount] = useState<number>(space?.listenersCount || 1);
   const [peakListeners, setPeakListeners] = useState<number>(space?.peakListeners || space?.listenersCount || 1);
 
@@ -125,6 +130,7 @@ export function useSpaceAudio({
       setRaisedHands([]);
       setChatMessages([]);
       setPinnedNote('');
+      setActivePoll(null);
       setFloatingReactions([]);
       setAvatarReactions({});
       setSpeakingPeers({});
@@ -166,6 +172,7 @@ export function useSpaceAudio({
         .map((rh) => ({ ...rh, id: rh.id || `rh_${Math.random()}`, name: rh.name || 'Listener', avatar: rh.avatar || '' }))
     );
     setPinnedNote(space.pinnedAnnouncement || '');
+    setActivePoll(space.activePoll || null);
     setListenersCount(Math.max(1, space.listenersCount || baseSpeakers.length));
     setPeakListeners((prev) => Math.max(prev, space.peakListeners || space.listenersCount || 1));
   }, [spaceId]);
@@ -662,6 +669,7 @@ export function useSpaceAudio({
         );
       }
       if (typeof snap.pinnedNote === 'string') setPinnedNote(snap.pinnedNote);
+      if ('activePoll' in snap) setActivePoll(snap.activePoll || null);
       if (typeof snap.listenersCount === 'number') setListenersCount(snap.listenersCount);
       if (typeof snap.peakListeners === 'number') {
         setPeakListeners((prev) => Math.max(prev, snap.peakListeners));
@@ -733,6 +741,10 @@ export function useSpaceAudio({
       if (payload?.spaceId !== spaceId) return;
       handleWebRTCSignal(payload.event, payload.data);
     };
+    const onPollUpdated = (payload: any) => {
+      if (payload?.spaceId !== spaceId) return;
+      if (payload.poll) setActivePoll(payload.poll);
+    };
     const onEnded = (payload: any) => {
       if (payload?.spaceId === spaceId) {
         onSpaceEndedRef.current?.(payload);
@@ -745,6 +757,7 @@ export function useSpaceAudio({
     socket?.on('space_speaker_active', onSpeakerActive);
     socket?.on('space_reaction', onReaction);
     socket?.on('space_chat_message', onChatMsg);
+    socket?.on('space_poll_updated', onPollUpdated);
     socket?.on('space_webrtc_signal', onWebRTCSig);
     socket?.on('space_ended', onEnded);
 
@@ -757,6 +770,7 @@ export function useSpaceAudio({
         const { event, payload } = evt.data || {};
         if (event === 'space_reaction') onReaction(payload);
         else if (event === 'space_chat_message') onChatMsg(payload);
+        else if (event === 'space_poll_updated') onPollUpdated(payload);
         else if (event === 'space_speaking') onSpeakerActive(payload);
         else if (event === 'space_state_sync') applyRoomSnapshot(payload);
         else if (event === 'space_webrtc_signal') onWebRTCSig(payload);
@@ -773,6 +787,7 @@ export function useSpaceAudio({
       supaCh
         .on('broadcast', { event: 'space_reaction' }, ({ payload }) => onReaction(payload))
         .on('broadcast', { event: 'space_chat_message' }, ({ payload }) => onChatMsg(payload))
+        .on('broadcast', { event: 'space_poll_updated' }, ({ payload }) => onPollUpdated(payload))
         .on('broadcast', { event: 'space_speaking' }, ({ payload }) => onSpeakerActive(payload))
         .on('broadcast', { event: 'space_state_sync' }, ({ payload }) => applyRoomSnapshot(payload))
         .on('broadcast', { event: 'space_webrtc_signal' }, ({ payload }) => onWebRTCSig(payload))
@@ -798,6 +813,7 @@ export function useSpaceAudio({
       socket?.off('space_speaker_active', onSpeakerActive);
       socket?.off('space_reaction', onReaction);
       socket?.off('space_chat_message', onChatMsg);
+      socket?.off('space_poll_updated', onPollUpdated);
       socket?.off('space_webrtc_signal', onWebRTCSig);
       socket?.off('space_ended', onEnded);
 
@@ -969,12 +985,89 @@ export function useSpaceAudio({
     [spaceId, myId, myName, myAvatar, broadcastExtra]
   );
 
+  const createSpacePoll = useCallback(
+    (question: string, optionsText: string[], allowMultiple = false) => {
+      const cleanedQ = question.trim();
+      const validOpts = optionsText.map((t) => t.trim()).filter(Boolean);
+      if (!spaceId || !cleanedQ || validOpts.length < 2) return;
+      const poll: QuickPoll = {
+        id: `spoll_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        question: cleanedQ,
+        creatorId: myId,
+        creatorName: myName,
+        options: validOpts.map((text, idx) => ({
+          id: `opt_${idx}_${Date.now()}`,
+          text,
+          voterIds: [],
+          voterNames: [],
+        })),
+        allowMultiple,
+        status: 'active',
+        createdAt: new Date().toISOString(),
+      };
+      setActivePoll(poll);
+      emitSpacePollCreate(spaceId, poll);
+      broadcastExtra('space_poll_updated', { spaceId, poll });
+    },
+    [spaceId, myId, myName, broadcastExtra]
+  );
+
+  const voteSpacePoll = useCallback(
+    (pollId: string, optionId: string) => {
+      if (!spaceId || !pollId || !optionId) return;
+      setActivePoll((prev) => {
+        if (!prev || prev.id !== pollId || prev.status === 'closed') return prev;
+        const allowMultiple = Boolean(prev.allowMultiple);
+        const updated: QuickPoll = {
+          ...prev,
+          options: prev.options.map((opt) => {
+            const voterIds = [...opt.voterIds];
+            const voterNames = [...opt.voterNames];
+            const idx = voterIds.indexOf(myId);
+            if (opt.id === optionId) {
+              if (idx >= 0) {
+                voterIds.splice(idx, 1);
+                voterNames.splice(idx, 1);
+              } else {
+                voterIds.push(myId);
+                voterNames.push(myName);
+              }
+            } else if (!allowMultiple && idx >= 0) {
+              voterIds.splice(idx, 1);
+              voterNames.splice(idx, 1);
+            }
+            return { ...opt, voterIds, voterNames };
+          }),
+        };
+        broadcastExtra('space_poll_updated', { spaceId, poll: updated });
+        return updated;
+      });
+      emitSpacePollVote(spaceId, pollId, optionId, myId, myName);
+    },
+    [spaceId, myId, myName, broadcastExtra]
+  );
+
+  const closeSpacePoll = useCallback(
+    (pollId: string) => {
+      if (!spaceId || !pollId) return;
+      setActivePoll((prev) => {
+        if (!prev || prev.id !== pollId) return prev;
+        const closed = { ...prev, status: 'closed' as const };
+        broadcastExtra('space_poll_updated', { spaceId, poll: closed });
+        return closed;
+      });
+      emitSpacePollClose(spaceId, pollId);
+    },
+    [spaceId, broadcastExtra]
+  );
+
   return {
     speakers,
     listeners,
     raisedHands,
     chatMessages,
     pinnedNote,
+    activePoll,
     listenersCount,
     peakListeners,
     floatingReactions,
@@ -998,5 +1091,8 @@ export function useSpaceAudio({
     removeFromStage,
     updatePinnedNote,
     sendChatMessage,
+    createSpacePoll,
+    voteSpacePoll,
+    closeSpacePoll,
   };
 }

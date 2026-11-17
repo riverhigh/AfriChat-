@@ -61,13 +61,21 @@ import {
   Grid3X3,
   Layers,
   Dices,
+  Pin,
+  Ghost,
+  Palette,
+  BarChart3,
+  WifiOff,
+  AtSign,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { ChatMessage, Product, LanguageCode } from '../types';
+import { ChatMessage, GhostTimerSetting, Product, LanguageCode } from '../types';
 import { EmojiMemeDrawer } from './EmojiMemeDrawer';
 import { DisplayWallpaperModal } from './DisplayWallpaperModal';
 import { ContactProfileModal } from './ContactProfileModal';
-import { compressChatMediaImage } from '../utils/imageUtils';
+import { compressChatMediaImage, compressLowDataMediaImage } from '../utils/imageUtils';
+import { getChatThemePreset } from '../utils/chatThemes';
+import { exportChatTranscript } from '../utils/chatExport';
 import { GroupInfoModal } from './GroupInfoModal';
 import { LocationMessageBubble } from './LocationMessageBubble';
 import { NineDotsIcon } from './NineDotsIcon';
@@ -158,6 +166,14 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     forwardMessage,
     adminUsers,
     deviceContacts,
+    lowDataMode,
+    globalChatTheme,
+    setDisappearingTimer,
+    markGhostMessagesViewed,
+    pinChatMessage,
+    clearChatMentions,
+    setIsQuickPollModalOpen,
+    voteOnQuickPoll,
   } = useApp();
 
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
@@ -166,9 +182,15 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [toastNotice, setToastNotice] = useState<string | null>(null);
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
   const [showHeaderActionsMenu, setShowHeaderActionsMenu] = useState(false);
+  const [showGhostTimerMenu, setShowGhostTimerMenu] = useState(false);
   const [confirmChatAction, setConfirmChatAction] = useState<'clear' | 'delete' | null>(null);
   const [showChatSearch, setShowChatSearch] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
+  const [voiceSpeed, setVoiceSpeed] = useState<1 | 1.5 | 2>(1);
+  const [revealedLowDataImages, setRevealedLowDataImages] = useState<Record<string, boolean>>({});
+  const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
+  const [ghostClockNow, setGhostClockNow] = useState(() => Date.now());
+  const inputRef = useRef<HTMLInputElement>(null);
   const [pollCardErrors, setPollCardErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
   const [xoBusyId, setXoBusyId] = useState<string | null>(null);
   const [xoErrors, setXoErrors] = useState<Record<string, { msg: string; insufficient?: boolean; requiresVerifiedBadge?: boolean }>>({});
@@ -368,7 +390,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     if (!file || !activeChatId) return;
     setShowAttachMenu(false);
     try {
-      const compressedDataUrl = await compressChatMediaImage(file);
+      const compressedDataUrl = lowDataMode
+        ? await compressLowDataMediaImage(file)
+        : await compressChatMediaImage(file);
       sendImageMessage(activeChatId, compressedDataUrl, undefined, isOneTimeViewEnabled);
     } catch (err) {
       console.warn('Image compression failed:', err);
@@ -501,10 +525,51 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
   const myPhoneRaw = currentUser.phoneNumber || currentUser.id || '';
   const myVoterKey = normPhone(myPhoneRaw) || currentUser.id || 'local_user';
+  const myQuickPollVoterId = currentUser.id || normPhone(myPhoneRaw) || 'local_user';
   const currentMessages =
     (activeChatId && messages[activeChatId]) ||
     (currentChat?.id && messages[currentChat.id]) ||
     [];
+  const activeChatTheme = getChatThemePreset(currentChat?.chatTheme || globalChatTheme);
+  const canPinMessages = Boolean(
+    currentChat && ((!currentChat.isGroup && !currentChat.isChannel) || isGroupAdmin || isChannelAdmin)
+  );
+  const hasActiveGhostCountdown = currentMessages.some((m) => Boolean(m.expiresAt));
+
+  useEffect(() => {
+    if (!hasActiveGhostCountdown) return;
+    setGhostClockNow(Date.now());
+    const timer = setInterval(() => setGhostClockNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [hasActiveGhostCountdown]);
+
+  useEffect(() => {
+    if (currentChat?.id) {
+      markGhostMessagesViewed(currentChat.id);
+    }
+  }, [currentChat?.id, currentMessages.length, markGhostMessagesViewed]);
+
+  useEffect(() => {
+    if (playingVoiceId && audioRefs.current[playingVoiceId]) {
+      try {
+        audioRefs.current[playingVoiceId].playbackRate = voiceSpeed;
+      } catch (_) {}
+    }
+  }, [voiceSpeed, playingVoiceId]);
+
+  const scrollToMessageById = (targetMsgId: string) => {
+    const el = document.getElementById(`msg-${targetMsgId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedMsgId(targetMsgId);
+      setTimeout(() => {
+        setHighlightedMsgId((cur) => (cur === targetMsgId ? null : cur));
+      }, 1800);
+    } else {
+      setToastNotice('Message is no longer in this chat');
+      setTimeout(() => setToastNotice(null), 2000);
+    }
+  };
 
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -519,6 +584,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     setShowCatalogDrawer(false);
     setShowChatSearch(false);
     setChatSearchQuery('');
+    setShowHeaderActionsMenu(false);
+    setShowGhostTimerMenu(false);
     return () => {
       Object.values(audioRefs.current).forEach((a) => {
         try { a.pause(); a.currentTime = 0; } catch (_) {}
@@ -637,6 +704,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       try {
         window.speechSynthesis.cancel();
         const utter = new SpeechSynthesisUtterance(cleanText);
+        utter.rate = voiceSpeed;
         let settled = false;
         utter.onstart = () => {
           setPlayingVoiceId(msgId);
@@ -722,6 +790,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
     if (existing) {
       try {
+        existing.playbackRate = voiceSpeed;
         if (existing.ended || (Number.isFinite(existing.duration) && existing.currentTime >= existing.duration)) {
           existing.currentTime = 0;
         }
@@ -743,6 +812,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         const playableSrc = dataUrlToPlayableUrl(msgId, audioDataUrl);
         const audio = new Audio(playableSrc);
         audio.preload = 'auto';
+        audio.playbackRate = voiceSpeed;
         audioRefs.current[msgId] = audio;
 
         const finishAudio = () => {
@@ -783,6 +853,101 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
     playVoiceFallback(msgId, transcriptText, isOneTime, durationSeconds);
   };
+
+  const cycleVoiceSpeed = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setVoiceSpeed((prev) => (prev === 1 ? 1.5 : prev === 1.5 ? 2 : 1));
+  };
+
+  const formatGhostCountdown = (msg: ChatMessage): string => {
+    if (msg.expiresAt) {
+      const remSec = Math.max(0, Math.ceil((msg.expiresAt - ghostClockNow) / 1000));
+      if (remSec < 60) return `${remSec}s`;
+      if (remSec < 3600) return `${Math.ceil(remSec / 60)}m`;
+      return `${Math.ceil(remSec / 3600)}h`;
+    }
+    return currentChat.disappearingTimer && currentChat.disappearingTimer !== 'off'
+      ? currentChat.disappearingTimer
+      : 'Ghost';
+  };
+
+  const mentionMatch = inputText.match(/(?:^|\s)@([a-zA-Z0-9_.-]{0,24})$/);
+  const mentionQuery = mentionMatch ? mentionMatch[1].toLowerCase() : null;
+  const mentionCandidates = (() => {
+    const list: Array<{ handle: string; label: string; badge?: string }> = [];
+    const seen = new Set<string>();
+    const pushCandidate = (rawName: string, badge?: string) => {
+      const clean = rawName.trim();
+      if (!clean) return;
+      const handle = clean.replace(/^@/, '').replace(/\s+/g, '_');
+      const key = handle.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      list.push({ handle, label: clean, badge });
+    };
+    if (currentChat.isGroup || currentChat.isChannel) {
+      pushCandidate('everyone', 'Notify all');
+    }
+    (currentChat.members || []).forEach((m) => pushCandidate(m, 'Member'));
+    currentMessages.forEach((m) => {
+      if (m.sender === 'other' && m.senderName) pushCandidate(m.senderName);
+    });
+    if (!currentChat.isGroup && !currentChat.isChannel) {
+      pushCandidate(currentChat.name);
+    }
+    return list;
+  })();
+
+  const filteredMentionCandidates =
+    mentionQuery !== null
+      ? mentionCandidates
+          .filter(
+            (c) =>
+              c.handle.toLowerCase().includes(mentionQuery) ||
+              c.label.toLowerCase().includes(mentionQuery)
+          )
+          .slice(0, 5)
+      : [];
+
+  const insertMentionHandle = (handle: string) => {
+    setInputText((prev) => prev.replace(/@([a-zA-Z0-9_.-]{0,24})$/, `@${handle} `));
+    inputRef.current?.focus();
+  };
+
+  const renderTextWithMentions = (text: string, isUserBubble: boolean) => {
+    const parts = text.split(/(@[a-zA-Z0-9_.-]{2,32})/g);
+    return parts.map((part, idx) => {
+      if (/^@[a-zA-Z0-9_.-]{2,32}$/.test(part)) {
+        return (
+          <span
+            key={idx}
+            className={
+              isUserBubble
+                ? 'font-extrabold text-amber-300 underline decoration-amber-300/60 underline-offset-2'
+                : 'font-extrabold text-purple-600 dark:text-purple-300 bg-purple-500/15 px-1 rounded'
+            }
+          >
+            {part}
+          </span>
+        );
+      }
+      return <React.Fragment key={idx}>{part}</React.Fragment>;
+    });
+  };
+
+  const feedThemeStyle: React.CSSProperties | undefined =
+    activeChatTheme.id !== 'default' && activeChatTheme.backgroundStyle
+      ? {
+          backgroundImage:
+            !lowDataMode && activeChatTheme.patternDataUrl
+              ? `${activeChatTheme.patternDataUrl}, ${activeChatTheme.backgroundStyle}`
+              : activeChatTheme.backgroundStyle,
+          backgroundRepeat:
+            !lowDataMode && activeChatTheme.patternDataUrl ? 'repeat, no-repeat' : 'no-repeat',
+          backgroundSize:
+            !lowDataMode && activeChatTheme.patternDataUrl ? '44px 44px, cover' : 'cover',
+        }
+      : undefined;
 
   const toggleTranslation = (msgId: string) => {
     setTranslatedMessages((prev) => ({
@@ -982,12 +1147,23 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     )}
                     {currentChat.isGroup && (
                       <button
-                        onClick={() => setIsGroupInfoOpen(true)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsGroupInfoOpen(true);
+                        }}
                         className="text-[10px] font-mono bg-white/15 hover:bg-white/25 px-1.5 py-0.2 rounded font-normal transition-colors"
                         title="Group info"
                       >
                         {currentChat.membersCount} members
                       </button>
+                    )}
+                    {currentChat.disappearingTimer && currentChat.disappearingTimer !== 'off' && (
+                      <span
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-purple-500/30 border border-purple-300/40 text-purple-100 text-[9px] font-mono font-bold shrink-0"
+                        title={`Ghost messages auto-destruct after ${currentChat.disappearingTimer}`}
+                      >
+                        👻 {currentChat.disappearingTimer}
+                      </span>
                     )}
                   </div>
                   <div className="text-[11px] text-indigo-200/80 leading-tight truncate">
@@ -1135,16 +1311,107 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
               <>
                 <div
                   className="fixed inset-0 z-40"
-                  onClick={() => setShowHeaderActionsMenu(false)}
+                  onClick={() => {
+                    setShowHeaderActionsMenu(false);
+                    setShowGhostTimerMenu(false);
+                  }}
                 />
-                <div className="absolute right-0 mt-2 w-52 bg-white dark:bg-[#1a1635] text-slate-800 dark:text-slate-100 rounded-2xl shadow-2xl border border-slate-200 dark:border-purple-900/40 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                <div className="absolute right-0 mt-2 w-60 max-h-[75vh] overflow-y-auto bg-white dark:bg-[#1a1635] text-slate-800 dark:text-slate-100 rounded-2xl shadow-2xl border border-slate-200 dark:border-purple-900/40 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowHeaderActionsMenu(false);
+                      setIsDisplayModalOpen(true);
+                    }}
+                    className="w-full px-3.5 py-2.5 text-left text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/10 flex items-center gap-2.5 transition-colors"
+                  >
+                    <Palette className="w-4 h-4 text-purple-500 shrink-0" />
+                    <span className="flex-1">Chat Theme &amp; Gradient</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowGhostTimerMenu((prev) => !prev)}
+                    className="w-full px-3.5 py-2.5 text-left text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/10 flex items-center justify-between gap-2 transition-colors"
+                  >
+                    <span className="flex items-center gap-2.5">
+                      <Ghost className="w-4 h-4 text-fuchsia-500 shrink-0" />
+                      <span>Ghost Messages</span>
+                    </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-600 dark:text-purple-300 font-bold">
+                      {currentChat.disappearingTimer && currentChat.disappearingTimer !== 'off'
+                        ? currentChat.disappearingTimer
+                        : 'Off'}
+                    </span>
+                  </button>
+
+                  {showGhostTimerMenu && (
+                    <div className="px-3 pb-2.5 pt-1 flex flex-wrap gap-1 border-b border-slate-100 dark:border-purple-900/30">
+                      {(['off', '10s', '30s', '1m', '5m', '1h', '24h'] as GhostTimerSetting[]).map((timerOpt) => {
+                        const isCurrentTimer = (currentChat.disappearingTimer || 'off') === timerOpt;
+                        return (
+                          <button
+                            key={timerOpt}
+                            type="button"
+                            onClick={() => {
+                              setDisappearingTimer(currentChat.id, timerOpt);
+                              setShowGhostTimerMenu(false);
+                              setShowHeaderActionsMenu(false);
+                              setToastNotice(
+                                timerOpt === 'off'
+                                  ? 'Ghost messages turned off'
+                                  : `Ghost timer set to ${timerOpt}`
+                              );
+                              setTimeout(() => setToastNotice(null), 2200);
+                            }}
+                            className={`px-2 py-1 rounded-lg text-[10px] font-mono font-bold transition-colors ${
+                              isCurrentTimer
+                                ? 'bg-purple-600 text-white'
+                                : 'bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-slate-200 hover:bg-purple-500/20'
+                            }`}
+                          >
+                            {timerOpt === 'off' ? 'Off' : timerOpt}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {!(isChannelMember || (currentChat.announceMode && !isGroupAdmin)) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderActionsMenu(false);
+                        setIsQuickPollModalOpen(true);
+                      }}
+                      className="w-full px-3.5 py-2.5 text-left text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/10 flex items-center gap-2.5 transition-colors"
+                    >
+                      <BarChart3 className="w-4 h-4 text-indigo-500 shrink-0" />
+                      <span>Quick Vote Poll</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      exportChatTranscript(currentChat, currentMessages, currentUser);
+                      setShowHeaderActionsMenu(false);
+                      setToastNotice('Chat transcript exported (.txt)');
+                      setTimeout(() => setToastNotice(null), 2200);
+                    }}
+                    className="w-full px-3.5 py-2.5 text-left text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/10 flex items-center gap-2.5 transition-colors"
+                  >
+                    <Download className="w-4 h-4 text-emerald-500 shrink-0" />
+                    <span>Export Transcript (.txt)</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => {
                       setShowHeaderActionsMenu(false);
                       setConfirmChatAction('clear');
                     }}
-                    className="w-full px-3.5 py-2.5 text-left text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/10 flex items-center gap-2.5 transition-colors"
+                    className="w-full px-3.5 py-2.5 text-left text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/10 flex items-center gap-2.5 transition-colors border-t border-slate-100 dark:border-purple-900/30"
                   >
                     <Eraser className="w-4 h-4 text-slate-500 dark:text-slate-300 shrink-0" />
                     <span>Clear Chat History</span>
@@ -1525,12 +1792,72 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         );
       })()}
 
+      {/* Sticky Pinned Announcement Banner */}
+      {currentChat.pinnedMessage && (
+        <div
+          onClick={() => scrollToMessageById(currentChat.pinnedMessage!.messageId)}
+          className="px-3.5 py-2 bg-purple-950/95 dark:bg-[#161029] text-white border-b border-purple-500/35 flex items-center justify-between gap-2.5 cursor-pointer hover:bg-purple-900/95 transition-colors shrink-0 z-10"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Pin className="w-3.5 h-3.5 text-amber-400 shrink-0 rotate-45" />
+            <div className="min-w-0">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300 truncate">
+                Pinned · {currentChat.pinnedMessage.senderName}
+              </div>
+              <div className="text-xs text-purple-100 truncate">
+                {currentChat.pinnedMessage.text}
+              </div>
+            </div>
+          </div>
+          {canPinMessages ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                pinChatMessage(currentChat.id, null);
+              }}
+              className="p-1 rounded-full hover:bg-white/15 text-purple-200 hover:text-white shrink-0"
+              title="Unpin announcement"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          ) : (
+            <span className="text-[10px] font-mono text-purple-300 shrink-0">View</span>
+          )}
+        </div>
+      )}
+
       {/* Message Feed */}
       <div
         ref={chatContainerRef}
         onClick={() => setActiveMenuMsgId(null)}
-        className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-2 space-y-2.5 overscroll-contain w-full min-w-0"
+        style={feedThemeStyle}
+        className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-2 space-y-2.5 overscroll-contain w-full min-w-0 relative"
       >
+        {/* Floating Jump-to-Mention Pill */}
+        {(currentChat.lastMentionMessageId || (currentChat.unreadMentions || 0) > 0) && (
+          <div className="sticky top-2 z-20 flex justify-end pointer-events-none">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (currentChat.lastMentionMessageId) {
+                  scrollToMessageById(currentChat.lastMentionMessageId);
+                }
+                clearChatMentions(currentChat.id);
+              }}
+              className="pointer-events-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-400 hover:bg-amber-300 text-black font-extrabold text-xs shadow-xl border border-amber-200 active:scale-95 transition-transform"
+            >
+              <AtSign className="w-3.5 h-3.5" />
+              <span>
+                {(currentChat.unreadMentions || 0) > 0
+                  ? `${currentChat.unreadMentions} Mention${currentChat.unreadMentions! > 1 ? 's' : ''}`
+                  : 'Jump to @mention'}
+              </span>
+            </button>
+          </div>
+        )}
+
         {/* Date Divider */}
         <div className="flex justify-center my-2">
           <span className="text-[11px] bg-white/80 dark:bg-[#1a172e]/80 backdrop-blur-xs text-slate-600 dark:text-slate-400 px-3 py-1 rounded-md shadow-2xs font-medium">
@@ -1588,8 +1915,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
           return (
             <div
+              id={`msg-${msg.id}`}
               key={msg.id}
-              className={`flex items-start gap-2.5 my-2.5 w-full ${isUser ? 'justify-end' : 'justify-start'}`}
+              className={`flex items-start gap-2.5 my-2.5 w-full ${isUser ? 'justify-end' : 'justify-start'} ${
+                highlightedMsgId === msg.id ? 'agc-jump-flash rounded-2xl' : ''
+              }`}
             >
               {/* Contact Avatar (WeChat style Left) */}
               {!isUser && (
@@ -1705,8 +2035,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       </button>
                     </div>
 
-                    {/* Row 2: Reminder, Read, Translate, Search */}
-                    <div className="grid grid-cols-4 gap-1 text-center pt-1.5">
+                    {/* Row 2: Reminder, Read, Translate, Pin, Search */}
+                    <div className={`grid ${canPinMessages ? 'grid-cols-5' : 'grid-cols-4'} gap-1 text-center pt-1.5`}>
                       <button
                         type="button"
                         onClick={() => {
@@ -1745,6 +2075,24 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         <Languages className="w-3.5 h-3.5 text-purple-400" />
                         <span className="text-[10px] text-purple-300">Translate</span>
                       </button>
+                      {canPinMessages && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const isAlreadyPinned = currentChat.pinnedMessage?.messageId === msg.id;
+                            pinChatMessage(currentChat.id, isAlreadyPinned ? null : msg);
+                            setToastNotice(isAlreadyPinned ? 'Unpinned message' : 'Pinned announcement');
+                            setTimeout(() => setToastNotice(null), 1800);
+                            setActiveMenuMsgId(null);
+                          }}
+                          className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-amber-500/20 transition-colors text-amber-300 font-bold"
+                        >
+                          <Pin className="w-3.5 h-3.5 text-amber-300" />
+                          <span className="text-[10px] text-amber-300">
+                            {currentChat.pinnedMessage?.messageId === msg.id ? 'Unpin' : 'Pin'}
+                          </span>
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
@@ -1796,7 +2144,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   }}
                   className={`rounded-2xl px-3.5 py-2.5 shadow-xs transition-all relative break-words break-all [overflow-wrap:anywhere] min-w-0 cursor-pointer ${
                     isUser
-                      ? 'bg-purple-600 dark:bg-purple-600 text-white rounded-tr-xs'
+                      ? activeChatTheme.id !== 'default'
+                        ? `${activeChatTheme.sentBubbleClass} rounded-tr-xs`
+                        : 'bg-purple-600 dark:bg-purple-600 text-white rounded-tr-xs'
                       : 'bg-white dark:bg-[#2c2c2e] text-slate-900 dark:text-slate-100 rounded-tl-xs border border-slate-200/80 dark:border-white/10'
                   }`}
                 >
@@ -1884,7 +2234,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     ) : (
                       <div>
                         <p className="text-sm leading-relaxed whitespace-pre-wrap break-words break-all [overflow-wrap:anywhere] min-w-0 select-text">
-                          {msg.text}
+                          {renderTextWithMentions(msg.text || '', isUser)}
                         </p>
 
                         {/* WeChat-style Translated Sub-Card (Only appears when user highlights/taps Translate) */}
@@ -1954,6 +2304,35 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         </div>
                       </div>
                     )
+                  ) : lowDataMode && !isUser && !revealedLowDataImages[msg.id] ? (
+                    /* Data Saver Mode: Defer Full Photo Load until Tapped */
+                    <div className="space-y-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRevealedLowDataImages((prev) => ({ ...prev, [msg.id]: true }));
+                        }}
+                        className="w-full min-w-[200px] flex items-center gap-3 p-3 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-dashed border-amber-500/50 text-left transition-colors"
+                      >
+                        <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-300 flex items-center justify-center shrink-0">
+                          <WifiOff className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-amber-700 dark:text-amber-300">
+                            Data Saver Mode
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                            Tap to download &amp; view photo
+                          </div>
+                        </div>
+                      </button>
+                      {msg.text && (
+                        <p className="text-sm leading-relaxed pt-1">
+                          {renderTextWithMentions(msg.text, isUser)}
+                        </p>
+                      )}
+                    </div>
                   ) : (
                     /* Regular Click-to-Enlarge Image */
                     <div className="space-y-1">
@@ -1975,7 +2354,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         </div>
                       </div>
                       {msg.text && (
-                        <p className="text-sm leading-relaxed pt-1">{msg.text}</p>
+                        <p className="text-sm leading-relaxed pt-1">
+                          {renderTextWithMentions(msg.text, isUser)}
+                        </p>
                       )}
                     </div>
                   )
@@ -2058,13 +2439,28 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                               className="bg-indigo-600 dark:bg-indigo-400 h-full transition-all duration-200"
                             />
                           </div>
-                          <div className="flex justify-between items-center text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
+                          <div className="flex justify-between items-center text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono gap-2">
                             <span>0:{vn.durationSeconds < 10 ? `0${vn.durationSeconds}` : vn.durationSeconds}</span>
-                            {expiryLabel && (
-                              <span className={`text-[9px] font-semibold ${isExpired ? 'text-rose-400' : 'text-slate-400'}`}>
-                                ⏱️ {expiryLabel}
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1.5">
+                              {expiryLabel && (
+                                <span className={`text-[9px] font-semibold ${isExpired ? 'text-rose-400' : 'text-slate-400'}`}>
+                                  ⏱️ {expiryLabel}
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={cycleVoiceSpeed}
+                                className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold font-mono border transition-colors ${
+                                  isUser
+                                    ? 'bg-white/15 hover:bg-white/25 border-white/25 text-white'
+                                    : 'bg-indigo-500/15 hover:bg-indigo-500/25 border-indigo-500/30 text-indigo-600 dark:text-indigo-300'
+                                }`}
+                                title="Playback speed (1x / 1.5x / 2x)"
+                              >
+                                {voiceSpeed}x
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -2215,6 +2611,85 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     </button>
                   </div>
                 )}
+
+                {/* Free Chat Quick Poll Message */}
+                {msg.type === 'quick_poll' && msg.quickPoll && (() => {
+                  const qPoll = msg.quickPoll!;
+                  const totalVotes = qPoll.options.reduce((sum, o) => sum + o.voterIds.length, 0);
+                  return (
+                    <div
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseUp={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                      className="space-y-2.5 min-w-[250px] p-1 select-none"
+                    >
+                      <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10 pb-1.5 gap-2">
+                        <div className={`flex items-center gap-1.5 font-bold text-xs ${isUser ? 'text-purple-100' : 'text-purple-600 dark:text-purple-300'}`}>
+                          <BarChart3 className="w-4 h-4 shrink-0" />
+                          <span>Quick Vote Poll</span>
+                        </div>
+                        <span className={`text-[10px] font-mono font-bold ${isUser ? 'text-purple-200' : 'text-slate-500 dark:text-slate-400'}`}>
+                          {totalVotes} vote{totalVotes === 1 ? '' : 's'}
+                        </span>
+                      </div>
+
+                      <h4 className={`font-bold text-xs leading-snug ${isUser ? 'text-white' : 'text-slate-900 dark:text-slate-100'}`}>
+                        {qPoll.question}
+                      </h4>
+
+                      <div className="space-y-1.5">
+                        {qPoll.options.map((opt) => {
+                          const votes = opt.voterIds.length;
+                          const pct = totalVotes > 0 ? Math.round((votes / totalVotes) * 100) : 0;
+                          const voted = opt.voterIds.includes(myQuickPollVoterId);
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                voteOnQuickPoll(currentChat.id, msg.id, opt.id);
+                              }}
+                              className={`w-full text-left px-3 py-2 rounded-xl border relative overflow-hidden transition-all ${
+                                voted
+                                  ? isUser
+                                    ? 'border-white bg-white/15 text-white'
+                                    : 'border-purple-600 bg-purple-50 dark:bg-purple-950/60 text-slate-900 dark:text-white'
+                                  : isUser
+                                  ? 'border-white/25 hover:bg-white/10 text-white'
+                                  : 'border-slate-200 dark:border-slate-700 hover:bg-black/5 dark:hover:bg-white/5 text-slate-800 dark:text-slate-100'
+                              }`}
+                            >
+                              <div
+                                style={{ width: `${pct}%` }}
+                                className={`absolute inset-y-0 left-0 transition-all duration-200 ${
+                                  isUser
+                                    ? 'bg-white/20'
+                                    : voted
+                                    ? 'bg-purple-500/20'
+                                    : 'bg-slate-400/15'
+                                }`}
+                              />
+                              <div className="relative z-10 flex items-center justify-between text-xs gap-2">
+                                <span className="font-semibold truncate">
+                                  {voted ? '✓ ' : ''}{opt.text}
+                                </span>
+                                <span className="font-mono font-bold text-[11px] shrink-0">
+                                  {pct}% ({votes})
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className={`text-[10px] flex items-center justify-between font-mono ${isUser ? 'text-purple-200' : 'text-slate-400'}`}>
+                        <span>By {qPoll.creatorName}</span>
+                        <span>{qPoll.allowMultiple ? 'Multiple choice' : 'Single choice'}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Financial Stake Poll Message */}
                 {msg.type === 'financial_poll' && msg.financialPoll && (() => {
@@ -2995,10 +3470,22 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   </div>
                 )}
 
-                {/* Timestamp, Quick React Trigger & Delivery Ticks */}
+                {/* Timestamp, Ghost Countdown, Quick React Trigger & Delivery Ticks */}
                 <div className={`flex items-center justify-end gap-1.5 mt-1 text-[10px] font-mono ${
                   isUser ? 'text-purple-200' : 'text-slate-400 dark:text-slate-500'
                 }`}>
+                  {(msg.isGhost || msg.expiresAt) && (
+                    <span
+                      className={`inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full text-[9px] font-bold ${
+                        isUser
+                          ? 'bg-white/15 text-amber-200'
+                          : 'bg-purple-500/15 text-purple-600 dark:text-purple-300'
+                      }`}
+                      title="Disappearing Ghost Message"
+                    >
+                      👻 {formatGhostCountdown(msg)}
+                    </span>
+                  )}
                   <button
                     type="button"
                     onClick={(e) => {
@@ -3087,6 +3574,23 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 <FileText className="w-4 h-4" />
               </div>
               <span className="text-[10px] leading-tight">Invoice PDF</span>
+            </button>
+          )}
+
+          {/* Free Quick Vote Poll (Any Chat / Group / Channel) */}
+          {!(isChannelMember || (currentChat?.announceMode && !isGroupAdmin)) && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu(false);
+                setIsQuickPollModalOpen(true);
+              }}
+              className="flex flex-col items-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+            >
+              <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300 flex items-center justify-center mb-1">
+                <BarChart3 className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] leading-tight font-semibold">Quick Poll</span>
             </button>
           )}
 
@@ -3278,6 +3782,36 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         </div>
       )}
 
+      {/* @Mention Autocomplete Popover */}
+      {filteredMentionCandidates.length > 0 && !(isChannelMember || (currentChat?.announceMode && !isGroupAdmin)) && (
+        <div className="mx-3 mb-1.5 bg-white dark:bg-[#18132a] border border-purple-500/30 rounded-2xl shadow-xl overflow-hidden z-30 animate-in slide-in-from-bottom-2 shrink-0">
+          {filteredMentionCandidates.map((cand) => (
+            <button
+              key={cand.handle}
+              type="button"
+              onClick={() => insertMentionHandle(cand.handle)}
+              className="w-full px-3.5 py-2 flex items-center justify-between text-left hover:bg-purple-500/10 text-xs transition-colors border-b last:border-b-0 border-slate-100 dark:border-white/5"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="font-mono font-bold text-purple-600 dark:text-purple-300">
+                  @{cand.handle}
+                </span>
+                {cand.label !== cand.handle && (
+                  <span className="text-slate-500 dark:text-slate-400 truncate text-[11px]">
+                    {cand.label}
+                  </span>
+                )}
+              </div>
+              {cand.badge && (
+                <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-600 dark:text-purple-300 shrink-0">
+                  {cand.badge}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Input Bar / Channel Read-only Banner */}
       {(isChannelMember || (currentChat?.announceMode && !isGroupAdmin)) ? (
         <div className="px-4 py-3 bg-slate-100 dark:bg-neutral-900 shrink-0 flex items-center justify-center border-t border-slate-200 dark:border-neutral-800">
@@ -3304,11 +3838,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           </button>
 
           <input
+            ref={inputRef}
             type="text"
             value={inputText}
             onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder={isOneTimeViewEnabled ? '1-Time message · disappears' : 'Message'}
+            placeholder={isOneTimeViewEnabled ? '1-Time message · disappears' : 'Message (@ to mention)'}
             className="flex-1 min-w-0 px-2 py-1 bg-transparent text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none"
           />
 
@@ -3367,6 +3902,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       <DisplayWallpaperModal
         isOpen={isDisplayModalOpen}
         onClose={() => setIsDisplayModalOpen(false)}
+        targetChatId={currentChat.id}
       />
 
       {/* Group Info Modal (WhatsApp-style) */}

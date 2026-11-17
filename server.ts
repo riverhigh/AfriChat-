@@ -5119,6 +5119,7 @@ interface SpaceRoomState {
   raisedHands: { id: string; name: string; avatar: string; time: string }[];
   chatMessages: { id: string; userId: string; userName: string; userAvatar?: string; text: string; timestamp: string }[];
   peakListeners: number;
+  activePoll?: any | null;
 }
 const spaceRooms = new Map<string, SpaceRoomState>();
 
@@ -5142,6 +5143,7 @@ function serializeSpaceRoom(room: SpaceRoomState) {
     chatMessages: room.chatMessages.slice(-60),
     listenersCount,
     peakListeners: room.peakListeners,
+    activePoll: room.activePoll ?? null,
   };
 }
 
@@ -5623,6 +5625,39 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
+  // 2a-ter. Chat Metadata Sync (Ghost Timer, Pinned Announcements, Custom Themes) & Quick Poll Relay
+  const emitChatScopedEvent = (eventName: string, chatId: string, outPayload: any, memberPhones?: string[], targetPhone?: string) => {
+    const deliveredSockets = new Set<string>([socket.id]);
+    const emitRoomOnce = (roomName: string) => {
+      const room = io.sockets.adapter.rooms.get(roomName);
+      if (!room) return;
+      for (const sid of room) {
+        if (deliveredSockets.has(sid)) continue;
+        deliveredSockets.add(sid);
+        io.to(sid).emit(eventName, outPayload);
+      }
+    };
+    emitRoomOnce(`chat:${chatId}`);
+    if (targetPhone) {
+      getPhoneVariants(targetPhone).forEach((v) => emitRoomOnce(`phone:${v}`));
+    }
+    if (Array.isArray(memberPhones)) {
+      memberPhones.forEach((p) => {
+        getPhoneVariants(p).forEach((v) => emitRoomOnce(`phone:${v}`));
+      });
+    }
+  };
+
+  socket.on('chat_meta_update', (payload: { chatId?: string; disappearingTimer?: string; pinnedMessage?: any; chatTheme?: string; memberPhones?: string[]; targetPhone?: string }) => {
+    if (!payload?.chatId) return;
+    emitChatScopedEvent('chat_meta_update', payload.chatId, payload, payload.memberPhones, payload.targetPhone);
+  });
+
+  socket.on('quick_poll_update', (payload: { chatId?: string; messageId?: string; quickPoll?: any; memberPhones?: string[]; targetPhone?: string }) => {
+    if (!payload?.chatId || !payload?.quickPoll) return;
+    emitChatScopedEvent('quick_poll_update', payload.chatId, payload, payload.memberPhones, payload.targetPhone);
+  });
+
   // 2b. Live 24h Status (Stories) Handlers
   socket.on('post_status', (payload: any) => {
     const status = payload?.status || payload;
@@ -5872,6 +5907,60 @@ io.on('connection', (socket: Socket) => {
     io.to(`space:${spaceId}`).emit('space_chat_message', { spaceId, message });
   });
 
+  socket.on('space_poll_create', (payload: { spaceId?: string; poll?: any }) => {
+    const { spaceId, poll } = payload || {};
+    if (!spaceId || !poll?.id) return;
+    const room = spaceRooms.get(spaceId);
+    if (room) {
+      room.activePoll = poll;
+      io.to(`space:${spaceId}`).emit('space_state_sync', serializeSpaceRoom(room));
+    }
+    io.to(`space:${spaceId}`).emit('space_poll_updated', { spaceId, poll });
+  });
+
+  socket.on('space_poll_vote', (payload: { spaceId?: string; pollId?: string; optionId?: string; voterId?: string; voterName?: string }) => {
+    const { spaceId, pollId, optionId, voterId, voterName } = payload || {};
+    if (!spaceId || !pollId || !optionId || !voterId) return;
+    const room = spaceRooms.get(spaceId);
+    if (!room || !room.activePoll || room.activePoll.id !== pollId || room.activePoll.status === 'closed') return;
+
+    const allowMultiple = Boolean(room.activePoll.allowMultiple);
+    room.activePoll = {
+      ...room.activePoll,
+      options: (room.activePoll.options || []).map((opt: any) => {
+        const voterIds: string[] = Array.isArray(opt.voterIds) ? [...opt.voterIds] : [];
+        const voterNames: string[] = Array.isArray(opt.voterNames) ? [...opt.voterNames] : [];
+        const idx = voterIds.indexOf(voterId);
+        if (opt.id === optionId) {
+          if (idx >= 0) {
+            voterIds.splice(idx, 1);
+            voterNames.splice(idx, 1);
+          } else {
+            voterIds.push(voterId);
+            voterNames.push(voterName || 'Listener');
+          }
+        } else if (!allowMultiple && idx >= 0) {
+          voterIds.splice(idx, 1);
+          voterNames.splice(idx, 1);
+        }
+        return { ...opt, voterIds, voterNames };
+      }),
+    };
+    io.to(`space:${spaceId}`).emit('space_state_sync', serializeSpaceRoom(room));
+    io.to(`space:${spaceId}`).emit('space_poll_updated', { spaceId, poll: room.activePoll });
+  });
+
+  socket.on('space_poll_close', (payload: { spaceId?: string; pollId?: string }) => {
+    const { spaceId, pollId } = payload || {};
+    if (!spaceId || !pollId) return;
+    const room = spaceRooms.get(spaceId);
+    if (room && room.activePoll && room.activePoll.id === pollId) {
+      room.activePoll = { ...room.activePoll, status: 'closed' };
+      io.to(`space:${spaceId}`).emit('space_state_sync', serializeSpaceRoom(room));
+      io.to(`space:${spaceId}`).emit('space_poll_updated', { spaceId, poll: room.activePoll });
+    }
+  });
+
   socket.on('space_webrtc_signal', (payload: { spaceId: string; event: string; data: any }) => {
     const { spaceId, event, data } = payload || {};
     if (!spaceId || !event) return;
@@ -6043,43 +6132,57 @@ process.on('uncaughtException', (err: any) => {
   }
 });
 
-// Start listening with Vite middleware in dev or static dist in production
+// Start listening immediately and wire Vite middleware in dev or static dist in production
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     if (process.env.DISABLE_HMR === undefined) {
       process.env.DISABLE_HMR = 'true';
     }
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      plugins: [
-        {
-          name: 'agc-disable-hmr-client-ws',
-          transform(code, id) {
-            const normalizedId = id.replace(/\\/g, '/').split('?')[0];
-            if (normalizedId.endsWith('/vite/dist/client/client.mjs')) {
-              return {
-                code: code.replace(
-                  'transport.connect(createHMRHandler(handleMessage));',
-                  '/* HMR WebSocket disabled (ws: false, hmr: false) */'
-                ),
-                map: null,
-              };
-            }
+
+    let viteMiddleware: any = null;
+    let viteInitError: Error | null = null;
+
+    const viteReadyPromise = (async () => {
+      try {
+        const { createServer: createViteServer } = await import('vite');
+        const vite = await createViteServer({
+          plugins: [
+            {
+              name: 'agc-disable-hmr-client-ws',
+              transform(code, id) {
+                const normalizedId = id.replace(/\\/g, '/').split('?')[0];
+                if (normalizedId.endsWith('/vite/dist/client/client.mjs')) {
+                  return {
+                    code: code.replace(
+                      'transport.connect(createHMRHandler(handleMessage));',
+                      '/* HMR WebSocket disabled (ws: false, hmr: false) */'
+                    ),
+                    map: null,
+                  };
+                }
+              },
+            },
+          ],
+          server: {
+            middlewareMode: true,
+            host: HOST,
+            port: PORT,
+            allowedHosts: true as const,
+            ws: false,
+            hmr: false,
+            watch: null,
           },
-        },
-      ],
-      server: {
-        middlewareMode: true,
-        host: HOST,
-        port: PORT,
-        allowedHosts: true as const,
-        ws: false,
-        hmr: false,
-        watch: null,
-      },
-      appType: 'spa',
-    });
-    viteServerRef = vite;
+          appType: 'spa',
+        });
+        viteServerRef = vite;
+        viteMiddleware = vite.middlewares;
+        console.log('⚡ Vite middleware ready');
+      } catch (err: any) {
+        viteInitError = err instanceof Error ? err : new Error(String(err));
+        console.error('Vite middleware initialization failed:', viteInitError);
+      }
+    })();
+
     app.use((req: Request, res: Response, next: any) => {
       if (
         req.method === 'GET' &&
@@ -6091,7 +6194,19 @@ async function startServer() {
       }
       next();
     });
-    app.use(vite.middlewares);
+
+    app.use(async (req: Request, res: Response, next: any) => {
+      if (!viteMiddleware && !viteInitError) {
+        await viteReadyPromise;
+      }
+      if (viteInitError) {
+        return next(viteInitError);
+      }
+      if (viteMiddleware) {
+        return viteMiddleware(req, res, next);
+      }
+      return next();
+    });
   } else {
     const distPath = path.join(__dirname, 'dist');
     app.use(
@@ -6143,19 +6258,32 @@ async function startServer() {
   });
 }
 
+let isShuttingDown = false;
 const shutdown = async (signal: string) => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
   console.log(`Shutting down AGC Live Gateway (${signal})...`);
   if (syncIntervalRef) clearInterval(syncIntervalRef);
+  setTimeout(() => process.exit(0), 500).unref();
   try {
-    await viteServerRef?.close?.();
+    httpServer.closeAllConnections?.();
   } catch (_) {}
   try {
     io.close();
   } catch (_) {}
-  httpServer.close(() => {
+  try {
+    httpServer.close(() => {
+      process.exit(0);
+    });
+  } catch (_) {
     process.exit(0);
-  });
-  setTimeout(() => process.exit(0), 2000).unref();
+  }
+  try {
+    await Promise.race([
+      viteServerRef?.close?.() || Promise.resolve(),
+      new Promise((r) => setTimeout(r, 300)),
+    ]);
+  } catch (_) {}
 };
 
 process.on('SIGINT', () => shutdown('SIGINT'));

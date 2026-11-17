@@ -11,8 +11,10 @@ import {
   Users,
   Settings,
   MessageSquareOff,
+  Ghost,
+  Pin,
 } from 'lucide-react';
-import { ChatThread } from '../types';
+import { ChatThread, GhostTimerSetting } from '../types';
 import { useApp } from '../context/AppContext';
 
 interface GroupInfoModalProps {
@@ -86,7 +88,16 @@ function buildMemberList(chat: ChatThread, currentUser: any, deviceContacts: any
 }
 
 export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose, chat }) => {
-  const { currentUser, deviceContacts, updateChat, removeMemberFromGroup, deleteChat, inviteBotToGroup } = useApp();
+  const {
+    currentUser,
+    deviceContacts,
+    updateChat,
+    setDisappearingTimer,
+    pinChatMessage,
+    removeMemberFromGroup,
+    deleteChat,
+    inviteBotToGroup,
+  } = useApp();
   const [copied, setCopied] = useState(false);
   const [announceMode, setAnnounceMode] = useState(false);
   const [members, setMembers] = useState<GroupMember[]>(() =>
@@ -172,6 +183,54 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
               </div>
             </div>
           )}
+
+          {/* Ghost Disappearing Timer & Pinned Announcement */}
+          <div className="px-5 py-4 border-b border-slate-100 dark:border-neutral-800 space-y-3">
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5 mb-2">
+                <Ghost className="w-3.5 h-3.5 text-fuchsia-500" /> Ghost Messages Timer
+              </p>
+              <div className="grid grid-cols-7 gap-1">
+                {(['off', '10s', '30s', '1m', '5m', '1h', '24h'] as GhostTimerSetting[]).map((preset) => {
+                  const active = (chat.disappearingTimer || 'off') === preset;
+                  return (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setDisappearingTimer(chat.id, preset)}
+                      className={`py-1.5 rounded-lg text-[10px] font-bold transition-colors ${
+                        active
+                          ? 'bg-fuchsia-600 text-white shadow-xs'
+                          : 'bg-slate-100 dark:bg-neutral-900 text-slate-600 dark:text-neutral-300 hover:bg-slate-200 dark:hover:bg-neutral-800'
+                      }`}
+                    >
+                      {preset === 'off' ? 'Off' : preset}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {chat.pinnedMessage && (
+              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-bold text-amber-600 dark:text-amber-300 flex items-center gap-1">
+                    <Pin className="w-3 h-3" /> Pinned Announcement
+                  </p>
+                  <p className="text-xs text-slate-800 dark:text-neutral-200 truncate mt-0.5">
+                    {chat.pinnedMessage.text}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => pinChatMessage(chat.id, null)}
+                  className="text-[10px] font-bold text-rose-500 hover:underline shrink-0"
+                >
+                  Unpin
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Invite Link */}
           <div className="px-5 py-4 border-b border-slate-100 dark:border-neutral-800">

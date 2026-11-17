@@ -18,9 +18,31 @@ export const PwaInstallCard: React.FC = () => {
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [hasNewUpdate, setHasNewUpdate] = useState(true);
+  const [offlineReady, setOfflineReady] = useState(false);
+  const [cachedEntries, setCachedEntries] = useState<number>(0);
 
   const APP_VERSION = 'v2.4.0';
   const LATEST_VERSION = 'v2.5.0';
+
+  const refreshCacheStatus = async () => {
+    try {
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        let total = 0;
+        for (const k of keys) {
+          const cache = await caches.open(k);
+          const entries = await cache.keys();
+          total += entries.length;
+        }
+        setCachedEntries(total);
+        if (total > 0) setOfflineReady(true);
+      }
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg?.active) setOfflineReady(true);
+      }
+    } catch {}
+  };
 
   useEffect(() => {
     // Check if running as installed standalone app
@@ -40,6 +62,13 @@ export const PwaInstallCard: React.FC = () => {
     if ((window as any).deferredPwaPrompt) {
       setDeferredPrompt((window as any).deferredPwaPrompt);
     }
+
+    refreshCacheStatus();
+
+    const handleOfflineReady = () => {
+      setOfflineReady(true);
+      refreshCacheStatus();
+    };
 
     // Listen for PWA install prompt event
     const handleBeforeInstallPrompt = (e: Event) => {
@@ -65,11 +94,13 @@ export const PwaInstallCard: React.FC = () => {
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     window.addEventListener('pwa-prompt-ready', handlePromptReady);
     window.addEventListener('appinstalled', handleAppInstalled);
+    window.addEventListener('pwa-offline-ready', handleOfflineReady);
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('pwa-prompt-ready', handlePromptReady);
       window.removeEventListener('appinstalled', handleAppInstalled);
+      window.removeEventListener('pwa-offline-ready', handleOfflineReady);
     };
   }, []);
 
@@ -167,8 +198,13 @@ export const PwaInstallCard: React.FC = () => {
                 Newest: {LATEST_VERSION}
               </span>
             </div>
-            <p className="text-[11px] text-slate-500 dark:text-neutral-400">
-              {isStandalone ? 'Installed on home screen' : 'Install native web app for offline speed'}
+            <p className="text-[11px] text-slate-500 dark:text-neutral-400 flex items-center gap-1.5 flex-wrap">
+              <span>{isStandalone ? 'Installed on home screen' : 'Install native web app for offline speed'}</span>
+              {offlineReady && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-semibold border border-emerald-500/20">
+                  ● Offline Ready{cachedEntries > 0 ? ` (${cachedEntries})` : ''}
+                </span>
+              )}
             </p>
           </div>
         </div>

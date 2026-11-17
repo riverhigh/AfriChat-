@@ -225,3 +225,31 @@ html.text-size-huge {
   animation-play-state: paused;
 }
 
+/* Instant Data Saver Mode: suppress heavy animations, transitions & backdrop blur */
+html.low-data-mode *,
+html.low-data-mode *::before,
+html.low-data-mode *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+html.low-data-mode .animate-agc-marquee {
+  animation: none !important;
+  transform: none !important;
+}
+
+@keyframes agc-jump-highlight {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(168, 85, 247, 0);
+  }
+  25%, 65% {
+    box-shadow: 0 0 0 4px rgba(168, 85, 247, 0.55);
+  }
+}
+
+.agc-jump-flash {
+  animation: agc-jump-highlight 1.8s ease-out;
+  border-radius: 1rem;
+}

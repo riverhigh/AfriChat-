@@ -654,6 +654,24 @@ export const ChatList: React.FC = () => {
                     </p>
 
                     <div className="flex items-center gap-1.5 shrink-0">
+                      {chat.disappearingTimer && chat.disappearingTimer !== 'off' && (
+                        <span
+                          className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-300 border border-fuchsia-500/30"
+                          title={`Ghost messages active (${chat.disappearingTimer})`}
+                        >
+                          👻 {chat.disappearingTimer}
+                        </span>
+                      )}
+
+                      {(chat.unreadMentions || 0) > 0 && (
+                        <span
+                          className="bg-amber-500 text-black font-black text-[10px] rounded-full px-1.5 py-0.5 min-w-[20px] text-center shadow-xs"
+                          title={`${chat.unreadMentions} unread @mention${chat.unreadMentions === 1 ? '' : 's'}`}
+                        >
+                          @{chat.unreadMentions}
+                        </span>
+                      )}
+
                       {chat.unreadCount > 0 && (
                         <span className="bg-purple-600 text-white font-bold text-[10px] rounded-full px-1.5 py-0.5 min-w-[18px] text-center">
                           {chat.unreadCount}

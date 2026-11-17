@@ -204,6 +204,20 @@ export async function compressChatMediaImage(source: File | string): Promise<str
 }
 
 /**
+ * Ultra-lean Data Saver image compression (~18KB max, 360px) for Instant Data Saver Mode.
+ */
+export async function compressLowDataMediaImage(source: File | string): Promise<string> {
+  return compressImageToBudget(source, {
+    maxDimension: 360,
+    minDimension: 180,
+    maxBytes: 18 * 1024,
+    initialQuality: 0.44,
+    minQuality: 0.2,
+    cropSquare: false,
+  });
+}
+
+/**
  * Compressed chat background wallpaper (~25KB - 65KB max, 720px).
  */
 export async function compressWallpaperImage(source: File | string): Promise<string> {

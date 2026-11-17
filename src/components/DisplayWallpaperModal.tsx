@@ -10,14 +10,17 @@ import {
   Sliders,
   Sun,
   Moon,
+  Palette,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { AppFontSize } from '../types';
 import { compressWallpaperImage } from '../utils/imageUtils';
+import { CHAT_THEME_PRESETS, getChatThemePreset } from '../utils/chatThemes';
 
 interface DisplayWallpaperModalProps {
   isOpen: boolean;
   onClose: () => void;
+  targetChatId?: string | null;
 }
 
 const PRESET_WALLPAPERS = [
@@ -46,16 +49,26 @@ const PRESET_WALLPAPERS = [
 export const DisplayWallpaperModal: React.FC<DisplayWallpaperModalProps> = ({
   isOpen,
   onClose,
+  targetChatId,
 }) => {
   const {
     fontSize,
     setFontSize,
     chatWallpaper,
     setChatWallpaper,
+    globalChatTheme,
+    setGlobalChatTheme,
+    setChatTheme,
+    activeChatId,
+    chats,
     isDarkMode,
     toggleDarkMode,
   } = useApp();
 
+  const resolvedChatId = targetChatId ?? activeChatId;
+  const activeThread = resolvedChatId ? chats.find((c) => c.id === resolvedChatId) : null;
+  const currentThemeId = activeThread?.chatTheme || globalChatTheme || 'default';
+  const activePreset = getChatThemePreset(currentThemeId);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   if (!isOpen) return null;
@@ -158,6 +171,77 @@ export const DisplayWallpaperModal: React.FC<DisplayWallpaperModalProps> = ({
             </div>
           </div>
 
+          {/* 1b. CUSTOM CHAT THEMES & BRUTALIST DARK GRADIENTS */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Palette className="w-4 h-4 text-fuchsia-500" />
+                <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+                  Chat Theme & Gradients
+                </h4>
+              </div>
+              <span className="text-[10px] font-semibold text-purple-600 dark:text-purple-400">
+                {activeThread ? `For "${activeThread.name}"` : 'Default for All Chats'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              {CHAT_THEME_PRESETS.map((preset) => {
+                const isSelected = currentThemeId === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => {
+                      if (resolvedChatId && activeThread) {
+                        setChatTheme(resolvedChatId, preset.id);
+                      } else {
+                        setGlobalChatTheme(preset.id);
+                      }
+                    }}
+                    className={`relative rounded-2xl p-2.5 text-left border-2 transition-all overflow-hidden ${
+                      isSelected
+                        ? 'border-purple-500 ring-2 ring-purple-500/30 scale-[1.01]'
+                        : 'border-slate-200 dark:border-neutral-800 hover:border-purple-400/50'
+                    }`}
+                    style={{
+                      background: preset.previewGradient,
+                      backgroundImage: preset.patternDataUrl
+                        ? `${preset.patternDataUrl}, ${preset.previewGradient}`
+                        : preset.previewGradient,
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <span
+                        className="w-3 h-3 rounded-full border border-white/40 shrink-0"
+                        style={{ backgroundColor: preset.accentHex }}
+                      />
+                      {isSelected && (
+                        <span className="w-4 h-4 rounded-full bg-purple-600 text-white flex items-center justify-center">
+                          <Check className="w-3 h-3" />
+                        </span>
+                      )}
+                    </div>
+                    <p
+                      className={`text-xs font-bold leading-tight ${
+                        preset.isDarkTheme ? 'text-white' : 'text-slate-900'
+                      }`}
+                    >
+                      {preset.name}
+                    </p>
+                    <p
+                      className={`text-[9px] mt-0.5 leading-tight ${
+                        preset.isDarkTheme ? 'text-slate-300' : 'text-slate-600'
+                      }`}
+                    >
+                      {preset.tagline}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* 2. CHAT BACKGROUND & DEVICE UPLOAD */}
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -252,8 +336,20 @@ export const DisplayWallpaperModal: React.FC<DisplayWallpaperModalProps> = ({
               </div>
             </div>
 
-            {/* Chat preview with selected wallpaper */}
-            <div className="mt-4 p-3 rounded-2xl border border-slate-200 dark:border-neutral-800 relative overflow-hidden bg-slate-900 min-h-[110px] flex flex-col justify-end">
+            {/* Chat preview with selected theme + wallpaper */}
+            <div
+              className="mt-4 p-3 rounded-2xl border border-slate-200 dark:border-neutral-800 relative overflow-hidden bg-slate-900 min-h-[110px] flex flex-col justify-end"
+              style={
+                activePreset.backgroundStyle
+                  ? {
+                      background: activePreset.backgroundStyle,
+                      backgroundImage: activePreset.patternDataUrl
+                        ? `${activePreset.patternDataUrl}, ${activePreset.backgroundStyle}`
+                        : activePreset.backgroundStyle,
+                    }
+                  : undefined
+              }
+            >
               {chatWallpaper ? (
                 <>
                   <img
@@ -263,15 +359,15 @@ export const DisplayWallpaperModal: React.FC<DisplayWallpaperModalProps> = ({
                   />
                   <div className="absolute inset-0 bg-black/40 backdrop-blur-[0.5px]" />
                 </>
-              ) : (
+              ) : !activePreset.backgroundStyle ? (
                 <div className="absolute inset-0 bg-gradient-to-b from-neutral-900 to-black opacity-90" />
-              )}
+              ) : null}
 
               <div className="relative z-10 space-y-1.5">
                 <div className="self-start max-w-[80%] bg-white/95 dark:bg-neutral-800/95 text-slate-900 dark:text-white p-2 rounded-2xl rounded-bl-xs text-xs shadow-md">
                   Hello! How much for the sneakers?
                 </div>
-                <div className="self-end ml-auto max-w-[80%] bg-purple-600 text-white p-2 rounded-2xl rounded-br-xs text-xs shadow-md">
+                <div className={`self-end ml-auto max-w-[80%] p-2 rounded-2xl rounded-br-xs text-xs shadow-md ${activePreset.sentBubbleClass}`}>
                   ₦35,000 via Paystack Escrow. Order confirmed!
                 </div>
               </div>

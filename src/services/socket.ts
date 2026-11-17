@@ -123,6 +123,31 @@ export const emitLiveGameUpdate = (
   s.emit('game_update', { event, chatId, data, targetPhones: targetPhones.filter(Boolean) });
 };
 
+export const emitChatMetaUpdate = (payload: {
+  chatId: string;
+  disappearingTimer?: string;
+  pinnedMessage?: any;
+  chatTheme?: string;
+  memberPhones?: string[];
+  targetPhone?: string;
+}) => {
+  const s = getSocket();
+  if (!s || !payload?.chatId) return;
+  s.emit('chat_meta_update', payload);
+};
+
+export const emitQuickPollUpdate = (payload: {
+  chatId: string;
+  messageId: string;
+  quickPoll: any;
+  memberPhones?: string[];
+  targetPhone?: string;
+}) => {
+  const s = getSocket();
+  if (!s || !payload?.chatId || !payload?.quickPoll) return;
+  s.emit('quick_poll_update', payload);
+};
+
 export const emitCreateGroup = (chat: any, memberPhones: string[]) => {
   const s = getSocket();
   s?.emit('create_group', { chat, memberPhones });
@@ -195,6 +220,27 @@ export const emitSpaceChatMessage = (
 ) => {
   const s = getSocket();
   s?.emit('space_chat_message', { spaceId, message });
+};
+
+export const emitSpacePollCreate = (spaceId: string, poll: any) => {
+  const s = getSocket();
+  s?.emit('space_poll_create', { spaceId, poll });
+};
+
+export const emitSpacePollVote = (
+  spaceId: string,
+  pollId: string,
+  optionId: string,
+  voterId: string,
+  voterName: string
+) => {
+  const s = getSocket();
+  s?.emit('space_poll_vote', { spaceId, pollId, optionId, voterId, voterName });
+};
+
+export const emitSpacePollClose = (spaceId: string, pollId: string) => {
+  const s = getSocket();
+  s?.emit('space_poll_close', { spaceId, pollId });
 };
 
 export const emitSpaceWebRTCSignal = (spaceId: string, event: string, data: any) => {

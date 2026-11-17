@@ -1073,9 +1073,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="flex items-center gap-4">
                 <Database className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                 <div>
-                  <div className="text-sm font-medium">Low Data Usage</div>
+                  <div className="text-sm font-medium flex items-center gap-2">
+                    <span>Instant Data Saver Mode</span>
+                    {lowDataMode && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
                   <div className="text-xs text-slate-500">
-                    Compress media and disable auto-download
+                    Ultra-compresses photos, tap-to-load media &amp; suppresses animations
                   </div>
                 </div>
               </div>

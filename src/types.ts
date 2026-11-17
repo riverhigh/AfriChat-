@@ -167,6 +167,7 @@ export interface AudioSpace {
     avatar: string;
     time: string;
   }[];
+  activePoll?: QuickPoll | null;
 }
 
 export interface ScamEntity {
@@ -233,6 +234,42 @@ export interface FinancialPoll {
   votesByUser?: Record<string, { optionId: string; voterName: string; voterKey: string }>;
   status: 'active' | 'closed';
   payoutRule: string;
+}
+
+export type ChatThemeId =
+  | 'default'
+  | 'brutalist_obsidian'
+  | 'neon_lagos'
+  | 'sahara_gold'
+  | 'emerald_circuit'
+  | 'adire_indigo';
+
+export type GhostTimerSetting = 'off' | '10s' | '30s' | '1m' | '5m' | '1h' | '24h';
+
+export interface QuickPollOption {
+  id: string;
+  text: string;
+  voterIds: string[];
+  voterNames: string[];
+}
+
+export interface QuickPoll {
+  id: string;
+  question: string;
+  creatorId: string;
+  creatorName: string;
+  options: QuickPollOption[];
+  allowMultiple?: boolean;
+  status: 'active' | 'closed';
+  createdAt: string;
+}
+
+export interface PinnedChatAnnouncement {
+  messageId: string;
+  text: string;
+  senderName: string;
+  pinnedByName: string;
+  pinnedAt: string;
 }
 
 export const STANDARD_GAME_BET_LIMIT = 10000;
@@ -556,12 +593,20 @@ export interface ChatMessage {
     | 'game_ludo'
     | 'game_poker'
     | 'bill_request'
-    | 'location';
+    | 'location'
+    | 'quick_poll';
   imageUrl?: string;
   imageLoaded?: boolean;
   mediaSizeKB?: number;
   /** One-time view: image disappears after first tap */
   oneTimeView?: boolean;
+  /** Ghost disappearing message metadata */
+  isGhost?: boolean;
+  disappearingDurationMs?: number;
+  expiresAt?: number;
+  viewedAt?: number;
+  /** @mention tokens/usernames extracted from message */
+  mentions?: string[];
   voiceNote?: VoiceNoteMeta;
   product?: Product;
   order?: EscrowOrder;
@@ -569,6 +614,7 @@ export interface ChatMessage {
   invoiceData?: InvoiceData;
   invoice?: InvoiceData;
   financialPoll?: FinancialPoll;
+  quickPoll?: QuickPoll;
   ajoGroup?: AjoGroup;
   scamEntity?: ScamEntity;
   xoGame?: TicTacToeGameState;
@@ -635,6 +681,10 @@ export interface ChatThread {
   isBot?: boolean;
   botModel?: string;
   announceMode?: boolean;
+  chatTheme?: ChatThemeId | string;
+  pinnedMessage?: PinnedChatAnnouncement | null;
+  unreadMentions?: number;
+  lastMentionMessageId?: string;
 }
 
 export interface ContactRequest {

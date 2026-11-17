@@ -58,6 +58,8 @@ import { ErrandsModal } from './components/ErrandsModal';
 import { CallErrorBoundary } from './components/CallErrorBoundary';
 import { ChatErrorBoundary } from './components/ChatErrorBoundary';
 import { RootErrorBoundary } from './components/RootErrorBoundary';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { QuickPollModal } from './components/QuickPollModal';
 import { safeLocalStorage, safeSessionStorage } from './utils/safeStorage';
 
 const AppContent: React.FC = () => {
@@ -191,6 +193,7 @@ const AppContent: React.FC = () => {
   if (!isAuthenticated) {
     return (
       <>
+        <OfflineIndicator />
         <PhoneSignUpBanner />
         <WhatsAppPhoneAuth />
         {isAdminModalOpen && <AdminDashboardModal />}
@@ -200,6 +203,7 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="fixed inset-0 w-full h-full bg-slate-900/10 dark:bg-black flex justify-center overflow-hidden text-slate-900 dark:text-white font-sans transition-colors select-none">
+      <OfflineIndicator />
       <div className="w-full max-w-md md:max-w-5xl lg:max-w-6xl xl:max-w-7xl h-full md:h-[95vh] md:my-auto md:rounded-3xl bg-white dark:bg-black shadow-2xl flex flex-col relative overflow-hidden border-x md:border border-slate-200/50 dark:border-neutral-800">
         {/* Floating Street Radio bar when active in background */}
         <AudioSpaceBar />
@@ -303,6 +307,7 @@ const AppContent: React.FC = () => {
         {isFeatureEnabled('wallet') && <InvoiceGeneratorModal />}
         {isFeatureEnabled('wallet') && <InvoiceViewerModal />}
         {isFeatureEnabled('wallet') && <FinancialPollModal />}
+        <QuickPollModal />
         <GameXoChallengeModal />
         <ShareLocationModal />
         {isFeatureEnabled('ajo') && <AjoLedgerModal />}
