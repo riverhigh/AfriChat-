@@ -38,7 +38,13 @@ import {
   Crown,
 } from 'lucide-react';
 import { ChatThread } from '../types';
-import { useApp } from '../context/AppContext';
+import {
+  useApp,
+  phonesMatch,
+  isUserChatAdmin,
+  computeClientMembersCount,
+  dedupePhoneList,
+} from '../context/AppContext';
 import { getUnresolvedEscrowBetGames } from '../utils/gameEscrowUtils';
 
 interface ContactProfileModalProps {
@@ -65,6 +71,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
     addMembersToGroup,
     toggleMemberAdmin,
     removeMemberFromGroup,
+    leaveGroup,
     blockedUserIds,
     toggleBlockUser,
     flagEntityAsScam,
@@ -87,6 +94,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
   const [showEncryptionModal, setShowEncryptionModal] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [showDisappearingSelector, setShowDisappearingSelector] = useState(false);
 
   // Invite & Member selection state
@@ -104,6 +112,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
   const isGroup = Boolean(chat.isGroup);
   const isChannel = Boolean(chat.isChannel);
   const isGroupOrChannel = isGroup || isChannel;
+  const isSelfAdmin = !isGroupOrChannel || isUserChatAdmin(chat, currentUser);
   const entityType = isChannel ? 'Channel' : isGroup ? 'Group' : 'Contact';
   const contactPhone = chat.phone || (isGroupOrChannel ? undefined : '+234 901 087 2172');
   const isBlocked = blockedUserIds.includes(chat.id) || (Boolean(chat.phone) && blockedUserIds.includes(chat.phone!));
@@ -111,6 +120,97 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
   const isLocked = Boolean(chat.isLocked);
   const isFavourite = Boolean(chat.isFavourite);
   const disappearingTimer = chat.disappearingTimer || 'off';
+
+  const isMeToken = (val?: string): boolean => {
+    const clean = String(val || '').trim();
+    if (!clean) return false;
+    const lower = clean.toLowerCase();
+    if (lower === 'you') return true;
+    if (currentUser.fullName && lower === currentUser.fullName.toLowerCase()) return true;
+    if (currentUser.username && lower === `@${currentUser.username}`.toLowerCase()) return true;
+    if (currentUser.phoneNumber && phonesMatch(clean, currentUser.phoneNumber)) return true;
+    return false;
+  };
+
+  const resolvedParticipants = (() => {
+    if (!isGroupOrChannel) return [];
+    const out: Array<{
+      id: string;
+      name: string;
+      normalizedPhoneNumber: string;
+      avatar: string;
+      isBot?: boolean;
+    }> = [];
+    const seenNames = new Set<string>();
+    const seenPhones: string[] = currentUser.phoneNumber ? [currentUser.phoneNumber] : [];
+
+    const matchDeviceContact = (token: string) =>
+      deviceContacts.find(
+        (dc) =>
+          (dc.name && dc.name.toLowerCase() === token.toLowerCase()) ||
+          (dc.normalizedPhoneNumber && phonesMatch(dc.normalizedPhoneNumber, token)) ||
+          (dc.rawPhoneNumber && phonesMatch(dc.rawPhoneNumber, token))
+      );
+
+    const rawMembers: string[] = Array.isArray(chat.members) ? chat.members : [];
+    rawMembers.forEach((raw, idx) => {
+      const token = String(raw || '').trim();
+      if (!token || isMeToken(token)) return;
+      const isBot = token.toLowerCase() === 'agcbot' || token.toLowerCase() === 'afribot ai';
+      const dc = isBot ? undefined : matchDeviceContact(token);
+      const name = isBot ? 'AgcBot' : dc?.name || token;
+      const phone = isBot
+        ? ''
+        : dc?.normalizedPhoneNumber || (/^\+?\d{7,}$/.test(token.replace(/[\s\-()]/g, '')) ? token : '');
+      if (seenNames.has(name.toLowerCase())) return;
+      if (phone && seenPhones.some((p) => phonesMatch(p, phone))) return;
+      seenNames.add(name.toLowerCase());
+      if (phone) seenPhones.push(phone);
+      out.push({
+        id: isBot ? 'member_agcbot' : dc?.id || `member_${idx}`,
+        name,
+        normalizedPhoneNumber: isBot ? 'AI Assistant' : phone,
+        avatar: isBot
+          ? 'https://api.dicebear.com/7.x/bottts/svg?seed=AgcBot'
+          : dc?.avatar ||
+            `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(name)}&backgroundColor=581c87&textColor=ffffff`,
+        isBot,
+      });
+    });
+
+    dedupePhoneList(chat.memberPhones).forEach((ph, idx) => {
+      if (!ph || isMeToken(ph)) return;
+      if (seenPhones.some((p) => phonesMatch(p, ph))) return;
+      const dc = matchDeviceContact(ph);
+      if (dc?.name && seenNames.has(dc.name.toLowerCase())) {
+        const existing = out.find((m) => m.name.toLowerCase() === dc.name.toLowerCase());
+        if (existing && !existing.normalizedPhoneNumber) existing.normalizedPhoneNumber = ph;
+        seenPhones.push(ph);
+        return;
+      }
+      const name = dc?.name || ph;
+      seenPhones.push(ph);
+      seenNames.add(name.toLowerCase());
+      out.push({
+        id: dc?.id || `phone_member_${idx}`,
+        name,
+        normalizedPhoneNumber: ph,
+        avatar:
+          dc?.avatar ||
+          `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(name)}&backgroundColor=581c87&textColor=ffffff`,
+      });
+    });
+
+    return out;
+  })();
+
+  const totalParticipants = isGroupOrChannel
+    ? Math.max(
+        chat.membersCount || 1,
+        computeClientMembersCount(chat.members, chat.memberPhones),
+        1 + resolvedParticipants.length
+      )
+    : 2;
 
   const chatMessages = messages[chat.id] || [];
   const mediaMessages = chatMessages.filter(
@@ -335,7 +435,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
               Save
             </button>
           </div>
-        ) : (
+        ) : isSelfAdmin ? (
           <button
             type="button"
             onClick={handleStartEdit}
@@ -343,6 +443,8 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
           >
             Edit
           </button>
+        ) : (
+          <span className="w-10" />
         )}
       </div>
 
@@ -474,7 +576,14 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                 {isChannel ? 'Official Channel' : 'Group Chat'}
               </span>
               <span className="text-xs text-neutral-400 font-mono">
-                {chat.membersCount || (isChannel ? 342 : 6)} {isChannel ? 'Subscribers' : 'Members'}
+                {totalParticipants}{' '}
+                {isChannel
+                  ? totalParticipants === 1
+                    ? 'Subscriber'
+                    : 'Subscribers'
+                  : totalParticipants === 1
+                  ? 'Member'
+                  : 'Members'}
               </span>
             </div>
           ) : (
@@ -506,16 +615,18 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
           {/* Action Row */}
           {isGroupOrChannel ? (
             /* GROUP & CHANNEL ACTION CARDS */
-            <div className="grid grid-cols-3 gap-2 w-full max-w-sm mt-5">
-              {/* Add Members */}
-              <button
-                type="button"
-                onClick={() => setShowAddMembersDrawer(true)}
-                className="flex flex-col items-center justify-center py-3 px-2 bg-[#1c1c1e] hover:bg-[#252528] active:scale-95 transition-all rounded-2xl border border-neutral-800/80 group"
-              >
-                <UserPlus className="w-5 h-5 text-purple-400 mb-1 group-hover:scale-110 transition-transform" />
-                <span className="text-xs font-semibold text-white">Add Members</span>
-              </button>
+            <div className={`grid ${isSelfAdmin ? 'grid-cols-3' : 'grid-cols-2'} gap-2 w-full max-w-sm mt-5`}>
+              {/* Add Members (Admins only) */}
+              {isSelfAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setShowAddMembersDrawer(true)}
+                  className="flex flex-col items-center justify-center py-3 px-2 bg-[#1c1c1e] hover:bg-[#252528] active:scale-95 transition-all rounded-2xl border border-neutral-800/80 group"
+                >
+                  <UserPlus className="w-5 h-5 text-purple-400 mb-1 group-hover:scale-110 transition-transform" />
+                  <span className="text-xs font-semibold text-white">Add Members</span>
+                </button>
+              )}
 
               {/* Share Invite Link */}
               <button
@@ -594,20 +705,26 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-white">Invite to {entityType}</h3>
-                    <p className="text-[11px] text-neutral-400">Add friends directly or share an invite link</p>
+                    <p className="text-[11px] text-neutral-400">
+                      {isSelfAdmin
+                        ? 'Add friends directly or share an invite link'
+                        : 'Share the invite link so others can join'}
+                    </p>
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowAddMembersDrawer(true)}
-                  className="p-3 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-md active:scale-95"
-                >
-                  <UserPlus className="w-4 h-4" />
-                  <span>Add Friends</span>
-                </button>
+              <div className={`grid ${isSelfAdmin ? 'grid-cols-2' : 'grid-cols-1'} gap-2 pt-1`}>
+                {isSelfAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAddMembersDrawer(true)}
+                    className="p-3 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-md active:scale-95"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>Add Friends</span>
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -786,31 +903,16 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
 
           {/* CARD GROUP 4: Participants List for Group / Channel */}
           {isGroupOrChannel && (() => {
-            const rawMembers: string[] = Array.isArray((chat as any).members) ? (chat as any).members : [];
-            // Filter out currentUser if present in members array so "You" isn't duplicated
-            const filteredMemberNames = rawMembers.filter((m: string) => {
-              if (!m) return false;
-              const isMe =
-                m === currentUser.fullName ||
-                m === currentUser.phoneNumber ||
-                m.toLowerCase() === 'you' ||
-                (currentUser.username && m === `@${currentUser.username}`);
-              return !isMe;
-            });
-
-            const memberList = filteredMemberNames.map((nameOrPhone: string, idx: number) => {
-              const matchedContact = deviceContacts.find(
-                (dc) => dc.name === nameOrPhone || dc.normalizedPhoneNumber === nameOrPhone
-              );
-              return {
-                id: matchedContact?.id || `member_${idx}`,
-                name: matchedContact?.name || nameOrPhone,
-                normalizedPhoneNumber: matchedContact?.normalizedPhoneNumber || nameOrPhone,
-                avatar: matchedContact?.avatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(nameOrPhone)}&backgroundColor=581c87&textColor=ffffff`,
-              };
-            });
-
-            const totalParticipants = 1 + memberList.length;
+            const memberList = resolvedParticipants;
+            const filteredPending = (chat.pendingMembers || []).filter(
+              (pm) =>
+                !isMeToken(pm) &&
+                !memberList.some(
+                  (m) =>
+                    m.name.toLowerCase() === pm.toLowerCase() ||
+                    (m.normalizedPhoneNumber && phonesMatch(m.normalizedPhoneNumber, pm))
+                )
+            );
 
             return (
               <div className="bg-[#1c1c1e] rounded-2xl overflow-hidden border border-neutral-800/80 divide-y divide-neutral-800/80">
@@ -818,17 +920,19 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                   <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider">
                     {totalParticipants} {totalParticipants === 1 ? 'Participant' : 'Participants'}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddMembersDrawer(true)}
-                    className="text-xs font-bold text-purple-400 hover:text-purple-300 flex items-center gap-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add</span>
-                  </button>
+                  {isSelfAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAddMembersDrawer(true)}
+                      className="text-xs font-bold text-purple-400 hover:text-purple-300 flex items-center gap-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add</span>
+                    </button>
+                  )}
                 </div>
 
-                {/* Current user as Admin */}
+                {/* Current user row */}
                 <div className="p-3 flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
                     <img
@@ -839,9 +943,15 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                     <div>
                       <div className="text-xs font-bold text-white flex items-center gap-1.5">
                         <span>You</span>
-                        <span className="text-[10px] font-mono text-purple-400 bg-purple-950/80 px-1.5 py-0.2 rounded-full border border-purple-800">
-                          Admin
-                        </span>
+                        {isSelfAdmin ? (
+                          <span className="text-[10px] font-mono text-purple-400 bg-purple-950/80 px-1.5 py-0.2 rounded-full border border-purple-800">
+                            Admin
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-mono text-neutral-400 bg-neutral-800 px-1.5 py-0.2 rounded-full">
+                            Member
+                          </span>
+                        )}
                       </div>
                       <div className="text-[10px] text-neutral-400 font-mono">
                         {currentUser.phoneNumber}
@@ -850,87 +960,121 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                   </div>
                 </div>
 
-                {/* Group / Channel Participants with Admin Permissions & Removal (No mock fallbacks) */}
-                {memberList.length === 0 && (!chat.pendingMembers || chat.pendingMembers.length === 0) ? (
+                {/* Group / Channel Participants with Admin Permissions & Removal */}
+                {memberList.length === 0 && filteredPending.length === 0 ? (
                   <div className="p-4 text-center">
                     <p className="text-xs text-neutral-400">No other members in this {entityType.toLowerCase()} yet.</p>
-                    <button
-                      type="button"
-                      onClick={() => setShowAddMembersDrawer(true)}
-                      className="mt-2 text-xs font-bold text-purple-400 hover:text-purple-300 inline-flex items-center gap-1"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Invite or Add Contacts</span>
-                    </button>
+                    {isSelfAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAddMembersDrawer(true)}
+                        className="mt-2 text-xs font-bold text-purple-400 hover:text-purple-300 inline-flex items-center gap-1"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Invite or Add Contacts</span>
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <>
-                  {memberList.map((c: any) => {
-                    const isMemberAdmin = Boolean(
-                      chat.admins?.includes(c.name) ||
-                      chat.admins?.includes(c.normalizedPhoneNumber)
-                    );
-                    return (
-                      <div key={c.id} className="p-3 flex items-center justify-between gap-2 hover:bg-neutral-800/30 transition-colors">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <img
-                            src={c.avatar}
-                            alt={c.name}
-                            className="w-9 h-9 rounded-full object-cover border border-neutral-700 shrink-0"
-                          />
-                          <div className="min-w-0">
-                            <div className="text-xs font-semibold text-white truncate flex items-center gap-1.5">
-                              <span>{c.name}</span>
-                              {isMemberAdmin ? (
-                                <span className="text-[9px] font-mono text-purple-400 bg-purple-950/80 px-1.5 py-0.2 rounded-full border border-purple-800 shrink-0">
-                                  Admin
-                                </span>
-                              ) : (
-                                <span className="text-[9px] text-neutral-400 bg-neutral-800 px-1.5 py-0.2 rounded-full shrink-0 font-mono">
-                                  Member
-                                </span>
+                    {memberList.map((c) => {
+                      const isCreatorMember = Boolean(
+                        c.normalizedPhoneNumber &&
+                          chat.creatorPhone &&
+                          phonesMatch(chat.creatorPhone, c.normalizedPhoneNumber)
+                      );
+                      const isMemberAdmin = Boolean(
+                        c.isBot ||
+                          isCreatorMember ||
+                          chat.admins?.some(
+                            (a) =>
+                              a.toLowerCase() === c.name.toLowerCase() ||
+                              (c.normalizedPhoneNumber && phonesMatch(a, c.normalizedPhoneNumber))
+                          )
+                      );
+                      return (
+                        <div key={c.id} className="p-3 flex items-center justify-between gap-2 hover:bg-neutral-800/30 transition-colors">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <img
+                              src={c.avatar}
+                              alt={c.name}
+                              className="w-9 h-9 rounded-full object-cover border border-neutral-700 shrink-0"
+                            />
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-white truncate flex items-center gap-1.5">
+                                <span>{c.name}</span>
+                                {c.isBot ? (
+                                  <span className="text-[9px] font-mono text-pink-300 bg-pink-950/80 px-1.5 py-0.2 rounded-full border border-pink-800 shrink-0">
+                                    Bot Admin
+                                  </span>
+                                ) : isMemberAdmin ? (
+                                  <span className="text-[9px] font-mono text-purple-400 bg-purple-950/80 px-1.5 py-0.2 rounded-full border border-purple-800 shrink-0">
+                                    Admin
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] text-neutral-400 bg-neutral-800 px-1.5 py-0.2 rounded-full shrink-0 font-mono">
+                                    Member
+                                  </span>
+                                )}
+                              </div>
+                              {c.normalizedPhoneNumber && (
+                                <div className="text-[10px] text-neutral-400 font-mono truncate">
+                                  {c.normalizedPhoneNumber}
+                                </div>
                               )}
                             </div>
-                            <div className="text-[10px] text-neutral-400 font-mono truncate">{c.normalizedPhoneNumber}</div>
                           </div>
-                        </div>
 
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              toggleMemberAdmin(chat.id, c.name);
-                              showToast(isMemberAdmin ? `Removed admin permissions from ${c.name}` : `Granted ${c.name} admin permissions`);
-                            }}
-                            className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition-colors ${
-                              isMemberAdmin
-                                ? 'text-amber-400 border-amber-800/60 bg-amber-950/40 hover:bg-amber-900/60'
-                                : 'text-purple-300 border-purple-800/60 bg-purple-950/40 hover:bg-purple-900/60'
-                            }`}
-                            title={isMemberAdmin ? "Dismiss as admin" : "Give admin permissions"}
-                          >
-                            {isMemberAdmin ? "Dismiss" : "Make Admin"}
-                          </button>
+                          {isSelfAdmin && !isCreatorMember && (
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {!c.isBot && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    toggleMemberAdmin(chat.id, c.name, c.normalizedPhoneNumber || undefined);
+                                    showToast(
+                                      isMemberAdmin
+                                        ? `Removed admin permissions from ${c.name}`
+                                        : `Granted ${c.name} admin permissions`
+                                    );
+                                  }}
+                                  className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition-colors ${
+                                    isMemberAdmin
+                                      ? 'text-amber-400 border-amber-800/60 bg-amber-950/40 hover:bg-amber-900/60'
+                                      : 'text-purple-300 border-purple-800/60 bg-purple-950/40 hover:bg-purple-900/60'
+                                  }`}
+                                  title={isMemberAdmin ? 'Dismiss as admin' : 'Give admin permissions'}
+                                >
+                                  {isMemberAdmin ? 'Dismiss' : 'Make Admin'}
+                                </button>
+                              )}
 
-                          <button
-                            type="button"
-                            onClick={() => {
-                              removeMemberFromGroup(chat.id, c.name);
-                              showToast(`Removed ${c.name} from ${entityType.toLowerCase()}`);
-                            }}
-                            className="text-[10px] font-bold text-rose-400 hover:text-rose-300 px-2 py-1 rounded-lg border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 transition-colors"
-                            title={`Remove from ${entityType.toLowerCase()}`}
-                          >
-                            Remove
-                          </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  removeMemberFromGroup(
+                                    chat.id,
+                                    c.name,
+                                    c.isBot ? undefined : c.normalizedPhoneNumber || undefined
+                                  );
+                                  showToast(`Removed ${c.name} from ${entityType.toLowerCase()}`);
+                                }}
+                                className="text-[10px] font-bold text-rose-400 hover:text-rose-300 px-2 py-1 rounded-lg border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 transition-colors"
+                                title={`Remove from ${entityType.toLowerCase()}`}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    );
-                  })}
-                  {(chat.pendingMembers || [])
-                    .filter((pm) => !filteredMemberNames.includes(pm))
-                    .map((pm) => {
-                      const matched = deviceContacts.find((dc) => dc.name === pm || dc.normalizedPhoneNumber === pm);
+                      );
+                    })}
+                    {filteredPending.map((pm) => {
+                      const matched = deviceContacts.find(
+                        (dc) =>
+                          dc.name.toLowerCase() === pm.toLowerCase() ||
+                          phonesMatch(dc.normalizedPhoneNumber, pm)
+                      );
                       const avatar =
                         matched?.avatar ||
                         `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(pm)}&backgroundColor=581c87&textColor=ffffff`;
@@ -992,8 +1136,22 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
             </button>
           </div>
 
-          {/* CARD GROUP 6: Block & Report */}
+          {/* CARD GROUP 6: Block, Leave & Report */}
           <div className="bg-[#1c1c1e] rounded-2xl overflow-hidden divide-y divide-neutral-800/80 border border-neutral-800/80 text-sm font-semibold">
+            {isGroupOrChannel && (
+              <button
+                type="button"
+                onClick={() => setShowLeaveConfirm(true)}
+                className="w-full flex items-center justify-between p-3.5 text-rose-500 hover:bg-neutral-800/50 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <UserMinus className="w-5 h-5 text-rose-500" />
+                  <span>{isChannel ? 'Unsubscribe & Leave Channel' : 'Leave Group'}</span>
+                </div>
+                <ChevronRight className="w-4 h-4 text-neutral-500" />
+              </button>
+            )}
+
             {!isGroupOrChannel && (
               <button
                 type="button"
@@ -1152,18 +1310,27 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
               {deviceContacts
                 .filter(
                   (c) =>
-                    !memberSearchQuery.trim() ||
-                    c.name.toLowerCase().includes(memberSearchQuery.toLowerCase()) ||
-                    c.normalizedPhoneNumber.includes(memberSearchQuery)
+                    (!currentUser.phoneNumber || !phonesMatch(c.normalizedPhoneNumber, currentUser.phoneNumber)) &&
+                    (!memberSearchQuery.trim() ||
+                      c.name.toLowerCase().includes(memberSearchQuery.toLowerCase()) ||
+                      c.normalizedPhoneNumber.includes(memberSearchQuery))
                 )
                 .map((contact) => {
                   const isAlreadyMember = Boolean(
-                    chat.members?.includes(contact.name) ||
-                    chat.members?.includes(contact.normalizedPhoneNumber)
+                    chat.members?.some(
+                      (m) =>
+                        m.toLowerCase() === contact.name.toLowerCase() ||
+                        phonesMatch(m, contact.normalizedPhoneNumber)
+                    ) ||
+                      chat.memberPhones?.some((p) => phonesMatch(p, contact.normalizedPhoneNumber))
                   );
                   const isAlreadyInvited = Boolean(
-                    chat.pendingMembers?.includes(contact.name) ||
-                    chat.pendingMembers?.includes(contact.normalizedPhoneNumber)
+                    chat.pendingMembers?.some(
+                      (m) =>
+                        m.toLowerCase() === contact.name.toLowerCase() ||
+                        phonesMatch(m, contact.normalizedPhoneNumber)
+                    ) ||
+                      chat.pendingPhones?.some((p) => phonesMatch(p, contact.normalizedPhoneNumber))
                   );
                   const isDisabled = isAlreadyMember;
                   const isSelected = selectedContactNames.includes(contact.name);
@@ -1387,6 +1554,47 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
           </div>
         );
       })()}
+
+      {/* ---------------------------------------------------------------------- */}
+      {/* MODAL 5B: LEAVE GROUP / CHANNEL CONFIRMATION */}
+      {/* ---------------------------------------------------------------------- */}
+      {showLeaveConfirm && (
+        <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-sm bg-[#18181c] rounded-3xl border border-neutral-800 p-5 space-y-4 shadow-2xl text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/40">
+              <UserMinus className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white">
+                {isChannel ? `Leave ${chat.name}?` : `Leave ${chat.name}?`}
+              </h3>
+              <p className="text-xs text-neutral-400 mt-1">
+                You will be removed from this {entityType.toLowerCase()} and will no longer receive new messages from it.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowLeaveConfirm(false)}
+                className="py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-xl text-xs font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  leaveGroup(chat.id);
+                  setShowLeaveConfirm(false);
+                  onClose();
+                }}
+                className="py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold"
+              >
+                {isChannel ? 'Unsubscribe' : 'Leave Group'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ---------------------------------------------------------------------- */}
       {/* MODAL 6: REPORT ENTITY */}

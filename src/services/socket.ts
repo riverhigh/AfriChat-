@@ -94,6 +94,11 @@ export const leaveChatRoom = (chatId: string) => {
   s?.emit('leave_chat', chatId);
 };
 
+export const emitLogoutUserRooms = () => {
+  const s = getSocket();
+  s?.emit('logout_user_rooms');
+};
+
 // 2. Chat Message Signaling
 export const emitLiveMessage = (chatId: string, message: ChatMessage, targetPhone?: string, memberPhones?: string[], chat?: any) => {
   const s = getSocket();

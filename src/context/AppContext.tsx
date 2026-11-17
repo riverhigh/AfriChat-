@@ -5,6 +5,7 @@ import {
   getSocketUrl,
   joinChatRoom,
   leaveChatRoom,
+  emitLogoutUserRooms,
   emitLiveMessage,
   emitLiveGameUpdate,
   emitMessageReaction,
@@ -281,6 +282,79 @@ export const isSpaceCreator = (
     return space.speakers.some((s) => s.role === 'host' && Boolean(user.id) && s.id === user.id);
   }
   return false;
+};
+
+export const dedupePhoneList = (phones?: string[]): string[] => {
+  if (!Array.isArray(phones)) return [];
+  const out: string[] = [];
+  for (const raw of phones) {
+    const clean = String(raw || '').trim();
+    if (!clean || clean === '+234 BOT AI') continue;
+    if (!out.some((p) => phonesMatch(p, clean))) {
+      out.push(clean);
+    }
+  }
+  return out;
+};
+
+export const dedupeNameList = (names?: string[]): string[] => {
+  if (!Array.isArray(names)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of names) {
+    const clean = String(raw || '').trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(clean);
+    }
+  }
+  return out;
+};
+
+export const computeClientMembersCount = (members?: string[], memberPhones?: string[]): number => {
+  const uniquePhones = dedupePhoneList(memberPhones);
+  const uniqueNames = dedupeNameList(members);
+  const hasBot = uniqueNames.some((m) => m.toLowerCase() === 'agcbot' || m.toLowerCase() === 'afribot ai');
+  if (uniquePhones.length > 0) {
+    return Math.max(uniquePhones.length + (hasBot ? 1 : 0), 1);
+  }
+  return Math.max(uniqueNames.length, 1);
+};
+
+export const isUserChatAdmin = (
+  chat?: Partial<ChatThread> | null,
+  user?: Pick<UserProfile, 'id' | 'fullName' | 'phoneNumber' | 'username'> | null
+): boolean => {
+  if (!chat || !user) return false;
+  if (user.id && chat.creatorId && chat.creatorId === user.id) return true;
+  if (user.phoneNumber && (chat as any).creatorPhone && phonesMatch((chat as any).creatorPhone, user.phoneNumber)) {
+    return true;
+  }
+  if (user.id && Array.isArray(chat.adminIds) && chat.adminIds.includes(user.id)) return true;
+  const admins = Array.isArray(chat.admins) ? chat.admins : [];
+  const myNameLower = (user.fullName || '').trim().toLowerCase();
+  const myHandle = (user.username || '').trim().replace(/^@/, '').toLowerCase();
+  return admins.some((a) => {
+    const clean = String(a || '').trim();
+    if (!clean) return false;
+    const lower = clean.toLowerCase();
+    if (lower === 'you') return true;
+    if (myNameLower && lower === myNameLower) return true;
+    if (myHandle && (lower === myHandle || lower === `@${myHandle}`)) return true;
+    if (user.phoneNumber && phonesMatch(clean, user.phoneNumber)) return true;
+    return false;
+  });
+};
+
+export const isUserAdminBlockedFromSending = (
+  chat?: Partial<ChatThread> | null,
+  user?: Pick<UserProfile, 'id' | 'fullName' | 'phoneNumber' | 'username'> | null
+): boolean => {
+  if (!chat) return false;
+  if (!chat.isChannel && !chat.announceMode) return false;
+  return !isUserChatAdmin(chat, user);
 };
 
 export const getDirectChatId = (phoneA?: string, phoneB?: string): string => {
@@ -861,8 +935,9 @@ interface AppContextType {
   addMembersToGroup: (chatId: string, memberNames: string[], memberPhones?: string[]) => void;
   createGroup: (name: string, memberNamesOrPhones: string[], avatar?: string, description?: string, memberPhones?: string[]) => string;
   createChannel: (name: string, description?: string, avatar?: string, memberNamesOrPhones?: string[], memberPhones?: string[]) => string;
-  toggleMemberAdmin: (chatId: string, memberName: string) => void;
-  removeMemberFromGroup: (chatId: string, memberName: string) => void;
+  toggleMemberAdmin: (chatId: string, memberName: string, memberPhone?: string) => void;
+  removeMemberFromGroup: (chatId: string, memberName: string, memberPhone?: string) => void;
+  leaveGroup: (chatId: string) => void;
   deleteMessage: (chatId: string, messageId: string) => void;
   reactToMessage: (chatId: string, messageId: string, emoji: string) => void;
   sendImageMessage: (chatId: string, imageUrl: string, caption?: string, oneTimeView?: boolean) => void;
@@ -2222,8 +2297,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const isUserAuthorizedForTownCommunity = useCallback(
     (c: Partial<TownCommunity> | null | undefined, myPhone?: string, myId?: string): boolean => {
       if (!c || !c.id) return false;
+      if (myPhone && Array.isArray(c.kickedPhones) && c.kickedPhones.some((p) => phonesMatch(p, myPhone))) {
+        return false;
+      }
       const isPrivate = c.isPrivate === true || (c.type || 'group') === 'group';
       if (!isPrivate) return true;
+      if (!myPhone && !myId) return false;
       if (myId && c.creatorId && c.creatorId === myId) return true;
       if (myPhone && c.creatorPhone && phonesMatch(c.creatorPhone, myPhone)) return true;
       if (myPhone && Array.isArray(c.memberPhones) && c.memberPhones.some((p) => phonesMatch(p, myPhone))) return true;
@@ -2233,21 +2312,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (ch) =>
             ch.id === `town_comm_${c.id}` &&
             ch.invitationStatus !== 'pending' &&
-            ch.invitationStatus !== 'declined'
+            ch.invitationStatus !== 'declined' &&
+            !(myPhone && Array.isArray(ch.kickedPhones) && ch.kickedPhones.some((p) => phonesMatch(p, myPhone)))
         )
       ) {
         return true;
       }
-      if (townCommunitiesRef.current.some((tc) => tc.id === c.id && tc.isJoined)) return true;
       return false;
     },
     []
   );
 
-  // Town Communities & Anonymous Privacy
-  const [townCommunities, setTownCommunities] = useState<TownCommunity[]>(() => {
+  const loadPartitionedTownCommunities = useCallback((phone?: string): TownCommunity[] => {
+    const norm = normalizePhoneDigits(phone);
+    if (!norm) return [];
+    const userKey = getUserStorageKey('AGC_town_communities_v2', phone);
     try {
-      const saved = safeLocalStorage.getItem('AGC_town_communities_v2');
+      const saved = safeLocalStorage.getItem(userKey);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
@@ -2255,9 +2336,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const clean: TownCommunity[] = [];
           parsed.forEach((c: TownCommunity) => {
             if (isInvalidCommunityClientItem(c)) return;
-            // Never hydrate unjoined private groups from stale localStorage
             if ((c.type === 'group' || c.isPrivate) && !c.isJoined) return;
-            const dedupeKey = `${String(c.name || '').trim().toLowerCase()}::${c.type || 'group'}`;
+            if (Array.isArray(c.kickedPhones) && c.kickedPhones.some((p) => phonesMatch(p, phone))) return;
+            const dedupeKey =
+              c.type === 'group' || c.isPrivate
+                ? `id::${c.id}`
+                : `${String(c.name || '').trim().toLowerCase()}::${c.type || 'group'}`;
             if (seenKeys.has(c.id) || seenKeys.has(dedupeKey)) return;
             seenKeys.add(c.id);
             seenKeys.add(dedupeKey);
@@ -2270,6 +2354,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn(e);
     }
     return [];
+  }, []);
+
+  const persistPartitionedTownCommunities = useCallback((list: TownCommunity[], phone?: string) => {
+    const cleanPhone = normalizePhoneDigits(phone || getSavedUserCleanPhone());
+    if (!cleanPhone) return;
+    try {
+      safeLocalStorage.setItem(`AGC_town_communities_v2_${cleanPhone}`, JSON.stringify(list));
+    } catch (_) {}
+  }, []);
+
+  // Town Communities & Anonymous Privacy (strictly partitioned per user)
+  const [townCommunities, setTownCommunities] = useState<TownCommunity[]>(() => {
+    const savedPhone = getSavedUserCleanPhone();
+    if (!savedPhone) return [];
+    return loadPartitionedTownCommunities(savedPhone);
   });
   const [hidePhoneNumberInTown, setHidePhoneNumberInTown] = useState<boolean>(() => {
     return safeLocalStorage.getItem('AGC_hide_phone_town') === 'true';
@@ -2287,10 +2386,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const recentCommunityCreateRef = useRef<Map<string, number>>(new Map());
   useEffect(() => {
     townCommunitiesRef.current = townCommunities;
-    try {
-      localStorage.setItem('AGC_town_communities_v2', JSON.stringify(townCommunities));
-    } catch (e) {}
-  }, [townCommunities]);
+    const phone = currentUserRef.current?.phoneNumber;
+    const norm = normalizePhoneDigits(phone);
+    if (isAuthenticatedRef.current && norm && loadedPhoneForChatsRef.current === norm) {
+      persistPartitionedTownCommunities(townCommunities, phone);
+    }
+  }, [townCommunities, persistPartitionedTownCommunities]);
 
   const syncLiveCommunitiesRef = useRef<(() => void) | null>(null);
 
@@ -2304,25 +2405,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const normName = (fallbackName || '').trim().toLowerCase();
       if (normName) deletedCommunityNamesRef.current.add(normName);
 
+      const myPhone = currentUserRef.current?.phoneNumber;
       setTownCommunities((prev) => {
         const updated = prev.filter(
           (c) =>
             c.id !== communityId &&
             (!normName || c.name.trim().toLowerCase() !== normName)
         );
-        try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+        if (myPhone && loadedPhoneForChatsRef.current === normalizePhoneDigits(myPhone)) {
+          persistPartitionedTownCommunities(updated, myPhone);
+        }
         return updated;
       });
 
       const communityChatId = `town_comm_${communityId}`;
-      const myPhone = currentUserRef.current?.phoneNumber;
       setChats((prev) => {
         const updated = prev.filter(
           (c) =>
             c.id !== communityChatId &&
             !(normName && c.id.startsWith('town_comm_') && c.name.trim().toLowerCase() === normName)
         );
-        if (updated.length !== prev.length) {
+        if (updated.length !== prev.length && myPhone) {
           persistPartitionedChats(updated, myPhone);
         }
         return updated;
@@ -2332,7 +2435,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!prev[communityChatId]) return prev;
         const updated = { ...prev };
         delete updated[communityChatId];
-        persistPartitionedMessages(updated, myPhone);
+        if (myPhone) persistPartitionedMessages(updated, myPhone);
         return updated;
       });
 
@@ -2340,14 +2443,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const syncLiveCommunities = async () => {
+      if (!isAuthenticatedRef.current) return;
+      const myPhone = currentUserRef.current?.phoneNumber || '';
+      const myId = currentUserRef.current?.id || '';
+      const normMyPhone = normalizePhoneDigits(myPhone);
+      if (!normMyPhone || loadedPhoneForChatsRef.current !== normMyPhone) return;
+
       const authoritativeRows: TownCommunity[] = [];
       const seenIds = new Set<string>();
       const seenNames = new Set<string>();
-      const threadSyncUpdates = new Map<string, { name: string; commType: 'group' | 'channel'; actualCount: number; parsedMembers: string[] }>();
+      const kickedOutCommChatIds = new Set<string>();
+      const threadSyncUpdates = new Map<string, { name: string; commType: 'group' | 'channel'; actualCount: number; parsedMembers: string[]; kickedPhones: string[] }>();
       let gotSupabaseAuth = false;
       let gotServerAuth = false;
-      const myPhone = currentUserRef.current?.phoneNumber || '';
-      const myId = currentUserRef.current?.id || '';
 
       if (isSupabaseConfigured) {
         try {
@@ -2375,11 +2483,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const membersTag = tags.find((t: string) => t.startsWith('members:'));
               let parsedMembers: string[] = [];
               if (membersTag) {
-                try { parsedMembers = JSON.parse(membersTag.replace('members:', '')); } catch (_) {}
+                try { parsedMembers = dedupePhoneList(JSON.parse(membersTag.replace('members:', ''))); } catch (_) {}
               }
-              const actualCount = row.members_count || (parsedMembers.length > 0 ? parsedMembers.length + 1 : 1);
-              const existingLocal = townCommunitiesRef.current.find((c) => c.id === row.id);
+              const kickedTag = tags.find((t: string) => t.startsWith('kicked:'));
+              let parsedKicked: string[] = [];
+              if (kickedTag) {
+                try { parsedKicked = dedupePhoneList(JSON.parse(kickedTag.replace('kicked:', ''))); } catch (_) {}
+              }
+              const cleanMembers = parsedMembers.filter((p) => !parsedKicked.some((kp) => phonesMatch(kp, p)));
               const chatId = `town_comm_${row.id}`;
+              if (parsedKicked.some((kp) => phonesMatch(kp, myPhone))) {
+                kickedOutCommChatIds.add(chatId);
+                return;
+              }
+              const actualCount = Math.max(Number(row.members_count || 0), cleanMembers.length, 1);
+              const existingLocal = townCommunitiesRef.current.find((c) => c.id === row.id);
               const alreadyInChats = chatsRef.current.some((c) => c.id === chatId);
 
               const candidateComm: TownCommunity = {
@@ -2391,14 +2509,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 membersCount: actualCount,
                 avatar: row.avatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(row.name)}&backgroundColor=581c87&textColor=ffffff`,
                 isVerified: Boolean(row.is_live),
-                isJoined: Boolean(existingLocal?.isJoined || alreadyInChats),
-                recentActivity: parsedMembers.length > 0 ? `${parsedMembers.length} members connected` : 'Active community',
+                isJoined: Boolean(existingLocal?.isJoined || alreadyInChats || cleanMembers.some((p) => phonesMatch(p, myPhone))),
+                recentActivity: cleanMembers.length > 0 ? `${actualCount} members connected` : 'Active community',
                 adminName: existingLocal?.adminName || 'AGC Admin',
                 creatorId: rowCreatorId || existingLocal?.creatorId,
                 creatorPhone: rowCreatorPhone || existingLocal?.creatorPhone,
                 isPrivate,
                 inviteCode: inviteCode || existingLocal?.inviteCode,
-                memberPhones: parsedMembers.length > 0 ? parsedMembers : existingLocal?.memberPhones,
+                memberPhones: cleanMembers.length > 0 ? cleanMembers : existingLocal?.memberPhones,
+                kickedPhones: parsedKicked,
               };
 
               // Strict privacy gate: private groups are hidden unless user is creator, invited, or joined member
@@ -2417,7 +2536,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 name: row.name,
                 commType,
                 actualCount,
-                parsedMembers,
+                parsedMembers: cleanMembers,
+                kickedPhones: parsedKicked,
               });
             });
           }
@@ -2435,28 +2555,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             json.communities.forEach((c: TownCommunity) => {
               if (isInvalidCommunityClientItem(c)) return;
               if (deletedCommunityIdsRef.current.has(c.id)) return;
+              if (Array.isArray(c.kickedPhones) && c.kickedPhones.some((kp) => phonesMatch(kp, myPhone))) {
+                kickedOutCommChatIds.add(`town_comm_${c.id}`);
+                return;
+              }
               if (!isUserAuthorizedForTownCommunity(c, myPhone, myId)) return;
               const lowerName = String(c.name || '').trim().toLowerCase();
               if (deletedCommunityNamesRef.current.has(lowerName)) return;
               const commType = c.type === 'channel' ? 'channel' : 'group';
               const isPrivate = commType === 'group' || Boolean(c.isPrivate);
               const dedupeKey = isPrivate ? `id::${c.id}` : `${lowerName}::${commType}`;
+              const cleanServerPhones = dedupePhoneList(c.memberPhones);
+              const actualCount = Math.max(Number(c.membersCount || 0), cleanServerPhones.length, 1);
+              const chatId = `town_comm_${c.id}`;
+              threadSyncUpdates.set(chatId, {
+                name: c.name,
+                commType,
+                actualCount,
+                parsedMembers: cleanServerPhones,
+                kickedPhones: dedupePhoneList(c.kickedPhones),
+              });
               if (seenIds.has(c.id) || seenNames.has(dedupeKey)) return;
               seenIds.add(c.id);
               seenNames.add(dedupeKey);
               const existingLocal = townCommunitiesRef.current.find((lc) => lc.id === c.id);
-              const alreadyInChats = chatsRef.current.some((ch) => ch.id === `town_comm_${c.id}`);
+              const alreadyInChats = chatsRef.current.some((ch) => ch.id === chatId);
               authoritativeRows.push({
                 ...c,
                 isPrivate,
-                isJoined: Boolean(c.isJoined || existingLocal?.isJoined || alreadyInChats),
+                memberPhones: cleanServerPhones.length > 0 ? cleanServerPhones : existingLocal?.memberPhones,
+                membersCount: actualCount,
+                isJoined: Boolean(c.isJoined || existingLocal?.isJoined || alreadyInChats || cleanServerPhones.some((p) => phonesMatch(p, myPhone))),
               });
             });
           }
         }
       } catch (_) {}
 
-      if (!isMounted) return;
+      if (!isMounted || loadedPhoneForChatsRef.current !== normMyPhone) return;
 
       if (gotSupabaseAuth || gotServerAuth) {
         const now = Date.now();
@@ -2465,33 +2601,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const pendingRecent = prev.filter((c) => {
             if (isInvalidCommunityClientItem(c)) return false;
             if (deletedCommunityIdsRef.current.has(c.id)) return false;
+            if (kickedOutCommChatIds.has(`town_comm_${c.id}`)) return false;
             if (seenIds.has(c.id)) return false;
             if (!isUserAuthorizedForTownCommunity(c, myPhone, myId)) return false;
             const createdTs = recentCommunityCreateRef.current.get(`${c.name.trim().toLowerCase()}::${c.type}`);
             return Boolean(createdTs && now - createdTs < 10000);
           });
           const merged = [...pendingRecent, ...authoritativeRows];
-          try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(merged)); } catch (_) {}
+          persistPartitionedTownCommunities(merged, myPhone);
           return merged;
         });
 
-        if (threadSyncUpdates.size > 0) {
+        if (threadSyncUpdates.size > 0 || kickedOutCommChatIds.size > 0) {
           setChats((cPrev) => {
             let changed = false;
-            const updated = cPrev.map((cExisting) => {
+            const filteredPrev = cPrev.filter((cExisting) => {
+              if (kickedOutCommChatIds.has(cExisting.id)) {
+                changed = true;
+                return false;
+              }
+              return true;
+            });
+            const updated = filteredPrev.map((cExisting) => {
               const sync = threadSyncUpdates.get(cExisting.id);
               if (!sync) return cExisting;
               changed = true;
+              const mergedPhones = sync.parsedMembers.length > 0 ? sync.parsedMembers : dedupePhoneList(cExisting.memberPhones);
               return {
                 ...cExisting,
+                name: sync.name || cExisting.name,
                 isGroup: sync.commType !== 'channel',
                 isChannel: sync.commType === 'channel',
-                membersCount: sync.actualCount,
+                membersCount: Math.max(sync.actualCount, mergedPhones.length, 1),
+                memberPhones: mergedPhones,
                 members: sync.parsedMembers.length > 0 ? sync.parsedMembers : cExisting.members,
+                kickedPhones: sync.kickedPhones,
               };
             });
             if (changed) {
-              persistPartitionedChats(updated, currentUserRef.current?.phoneNumber);
+              persistPartitionedChats(updated, myPhone);
               return updated;
             }
             return cPrev;
@@ -2523,7 +2671,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return prev;
         }
         const updated = [comm, ...prev];
-        try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+        persistPartitionedTownCommunities(updated, myPhone);
         return updated;
       });
     };
@@ -2550,23 +2698,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           removeCommunityLocally(payload.id || '', payload.name);
         })
         .on('broadcast', { event: 'members_updated' }, ({ payload }: any) => {
-          if (!payload?.chatName) return;
-          setTownCommunities((prev) =>
-            prev.map((c) =>
-              c.name === payload.chatName ? { ...c, membersCount: payload.membersCount } : c
-            )
-          );
-          setChats((prev) =>
-            prev.map((c) =>
-              c.name === payload.chatName
-                ? {
-                    ...c,
-                    membersCount: payload.membersCount,
-                    members: payload.members || c.members,
-                  }
-                : c
-            )
-          );
+          if (!payload?.chatName && !payload?.communityId && !payload?.chatId) return;
+          const matchComm = (c: TownCommunity) =>
+            (payload.communityId && c.id === payload.communityId) ||
+            (payload.chatId && `town_comm_${c.id}` === payload.chatId) ||
+            (payload.chatName && c.name === payload.chatName);
+          const myPhone = currentUserRef.current?.phoneNumber || '';
+          const wasKicked = Boolean(myPhone && Array.isArray(payload.kickedPhones) && payload.kickedPhones.some((kp: string) => phonesMatch(kp, myPhone)));
+          setTownCommunities((prev) => {
+            const updated = wasKicked
+              ? prev.filter((c) => !matchComm(c))
+              : prev.map((c) =>
+                  matchComm(c)
+                    ? {
+                        ...c,
+                        membersCount: payload.membersCount ?? c.membersCount,
+                        memberPhones: Array.isArray(payload.memberPhones) ? payload.memberPhones : c.memberPhones,
+                      }
+                    : c
+                );
+            persistPartitionedTownCommunities(updated, myPhone);
+            return updated;
+          });
+          setChats((prev) => {
+            const updated = wasKicked
+              ? prev.filter((c) => !(payload.chatId ? c.id === payload.chatId : c.name === payload.chatName))
+              : prev.map((c) =>
+                  (payload.chatId ? c.id === payload.chatId : c.name === payload.chatName)
+                    ? {
+                        ...c,
+                        membersCount: payload.membersCount ?? c.membersCount,
+                        members: payload.members || c.members,
+                        memberPhones: payload.memberPhones || c.memberPhones,
+                      }
+                    : c
+                );
+            persistPartitionedChats(updated, myPhone);
+            return updated;
+          });
         })
         .subscribe();
     }
@@ -2578,14 +2747,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket?.off('community_deleted', handleCommunityDeleted);
       if (commCh) commCh.unsubscribe();
     };
-  }, [isUserAuthorizedForTownCommunity]);
+  }, [isUserAuthorizedForTownCommunity, persistPartitionedTownCommunities]);
 
   const toggleJoinTownCommunity = (id: string) => {
-    setTownCommunities((prev) =>
-      prev.map((c) =>
-        c.id === id ? { ...c, isJoined: !c.isJoined, membersCount: c.isJoined ? Math.max(0, c.membersCount - 1) : c.membersCount + 1 } : c
-      )
-    );
+    const me = currentUserRef.current;
+    const myPhone = me?.phoneNumber || '';
+    const myName = me?.fullName || 'AGC Member';
+    const target = townCommunitiesRef.current.find((c) => c.id === id);
+    if (!target) return;
+
+    const joining = !target.isJoined;
+    const currentPhones = dedupePhoneList(target.memberPhones);
+    const nextPhones = joining
+      ? dedupePhoneList([...currentPhones, myPhone])
+      : currentPhones.filter((p) => !phonesMatch(p, myPhone));
+    const nextCount = joining
+      ? Math.max((target.membersCount || 1) + (currentPhones.some((p) => phonesMatch(p, myPhone)) ? 0 : 1), nextPhones.length, 1)
+      : Math.max(Math.min((target.membersCount || 1) - 1, nextPhones.length > 0 ? nextPhones.length : (target.membersCount || 1) - 1), 1);
+
+    setTownCommunities((prev) => {
+      const updated = prev.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              isJoined: joining,
+              memberPhones: nextPhones,
+              membersCount: nextCount,
+            }
+          : c
+      );
+      persistPartitionedTownCommunities(updated, myPhone);
+      return updated;
+    });
+
+    if (joining) {
+      fetch('/api/groups/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          codeOrLink: target.inviteCode || target.id,
+          phone: myPhone,
+          name: myName,
+          avatar: me?.avatarUrl,
+          userId: me?.id,
+        }),
+      }).catch(() => {});
+    } else {
+      fetch('/api/groups/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          groupId: `town_comm_${id}`,
+          action: 'leave',
+          actorPhone: myPhone,
+          actorId: me?.id,
+          targetName: myName,
+          targetPhone: myPhone,
+        }),
+      }).catch(() => {});
+    }
+
+    if (isSupabaseConfigured) {
+      updateTownCommunityInDb(id, {
+        members_count: nextCount,
+        members: nextPhones,
+      }).catch(() => {});
+    }
   };
 
   const addTownCommunity = (name: string, type: 'group' | 'channel', category: TownCommunity['category'], description: string) => {
@@ -2637,7 +2864,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setTownCommunities((prev) => {
       const updated = [newCommunity, ...prev.filter((c) => c.id !== communityId)];
-      try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (e) {}
+      persistPartitionedTownCommunities(updated, myPhone);
       return updated;
     });
 
@@ -2673,11 +2900,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isGroup: type !== 'channel',
       isChannel: type === 'channel',
       creatorId: currentUser.id,
+      creatorPhone: myPhone,
       admins: [creatorDisplay, 'You'],
       adminIds: currentUser.id ? [currentUser.id] : [],
-      members: myPhone ? [myPhone] : [creatorDisplay],
+      members: [creatorDisplay],
       memberPhones: myPhone ? [myPhone] : [],
       membersCount: 1,
+      description: newCommunity.description,
       inviteCode,
       invitationStatus: 'accepted',
       verifiedStore: false,
@@ -2740,7 +2969,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updated = prev.filter(
         (c) => c.id !== communityId && (!normName || c.name.trim().toLowerCase() !== normName)
       );
-      try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+      persistPartitionedTownCommunities(updated, currentUser.phoneNumber);
       return updated;
     });
 
@@ -2791,18 +3020,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     const chatId = `town_comm_${community.id}`;
     const isOwner = Boolean(
-      community.adminName &&
-        (community.adminName === currentUser.fullName || community.adminName === 'You')
+      (community.creatorId && currentUser.id && community.creatorId === currentUser.id) ||
+        (community.creatorPhone && currentUser.phoneNumber && phonesMatch(community.creatorPhone, currentUser.phoneNumber)) ||
+        (community.adminName &&
+          (community.adminName === currentUser.fullName || community.adminName === 'You'))
     );
+    const commPhones = dedupePhoneList(community.memberPhones);
+    const commCount = Math.max(community.membersCount || 1, commPhones.length, 1);
     setChats((prev) => {
       if (prev.some((c) => c.id === chatId)) {
         const updated = prev.map((c) =>
           c.id === chatId
             ? {
                 ...c,
+                name: community.name || c.name,
+                avatar: community.avatar || c.avatar,
+                description: community.description ?? c.description,
+                inviteCode: community.inviteCode || c.inviteCode,
+                creatorId: c.creatorId || community.creatorId || (isOwner ? currentUser.id : undefined),
+                creatorPhone: c.creatorPhone || community.creatorPhone,
                 isGroup: community.type !== 'channel',
                 isChannel: community.type === 'channel',
-                creatorId: c.creatorId || (isOwner ? currentUser.id : undefined),
+                membersCount: commCount,
+                memberPhones: commPhones.length > 0 ? commPhones : c.memberPhones,
+                members: commPhones.length > 0 ? commPhones : c.members,
                 admins:
                   c.admins && c.admins.length > 0
                     ? c.admins
@@ -2825,12 +3066,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: chatId,
         name: community.name,
         avatar: community.avatar,
+        description: community.description,
+        inviteCode: community.inviteCode,
         isGroup: community.type !== 'channel',
         isChannel: community.type === 'channel',
-        creatorId: isOwner ? currentUser.id : undefined,
+        creatorId: community.creatorId || (isOwner ? currentUser.id : undefined),
+        creatorPhone: community.creatorPhone,
         admins: isOwner ? [currentUser.fullName || 'You', 'You'] : community.adminName ? [community.adminName] : [],
         adminIds: isOwner && currentUser.id ? [currentUser.id] : [],
-        membersCount: community.membersCount || 1,
+        members: commPhones.length > 0 ? commPhones : (isOwner ? [currentUser.fullName || 'You'] : []),
+        memberPhones: commPhones,
+        membersCount: commCount,
+        invitationStatus: 'accepted',
         verifiedStore: false,
         location: `${community.type === 'channel' ? 'Broadcast Channel' : 'Town Group'} · ${community.category}`,
         unreadCount: 0,
@@ -2961,10 +3208,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const data = await res.json();
           if (data?.success && data.kind === 'group' && data.group) {
             const g = data.group;
-            const mergedMembers = Array.from(new Set([...(Array.isArray(g.members) ? g.members : []), myName]));
-            const mergedPhones = Array.from(
-              new Set([...(Array.isArray(g.memberPhones) ? g.memberPhones : []), myPhone].filter(Boolean))
-            );
+            const mergedMembers = dedupeNameList([...(Array.isArray(g.members) ? g.members : []), myName]);
+            const mergedPhones = dedupePhoneList([...(Array.isArray(g.memberPhones) ? g.memberPhones : []), myPhone]);
             const joinedThread: ChatThread = {
               id: g.id,
               name: g.name,
@@ -2980,15 +3225,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               isGroup: !g.isChannel,
               isChannel: Boolean(g.isChannel),
               creatorId: g.creatorId,
+              creatorPhone: g.creatorPhone,
               admins: Array.isArray(g.admins) ? g.admins : [],
               adminIds: Array.isArray(g.adminIds) ? g.adminIds : [],
               members: mergedMembers,
               memberPhones: mergedPhones,
-              membersCount: Math.max(Number(g.membersCount || 1), mergedMembers.length, mergedPhones.length),
+              pendingMembers: Array.isArray(g.pendingMembers) ? g.pendingMembers : [],
+              pendingPhones: Array.isArray(g.pendingPhones) ? g.pendingPhones : [],
+              kickedPhones: Array.isArray(g.kickedPhones) ? g.kickedPhones : [],
+              membersCount: Math.max(Number(g.membersCount || 1), computeClientMembersCount(mergedMembers, mergedPhones)),
+              announceMode: Boolean(g.announceMode),
               inviteCode: g.inviteCode,
               description: g.description,
               invitationStatus: 'accepted',
             };
+            kickedGroupIdsRef.current.delete(g.id);
+            persistKickedGroupIds(myPhone);
             declinedGroupIdsRef.current.delete(g.id);
             try {
               const key = getUserStorageKey('AGC_declined_group_ids', myPhone);
@@ -3024,21 +3276,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           if (data?.success && data.kind === 'community' && data.community) {
             const c = data.community;
+            kickedGroupIdsRef.current.delete(`town_comm_${c.id}`);
+            persistKickedGroupIds(myPhone);
             const joinedComm: TownCommunity = {
               ...c,
               isJoined: true,
-              memberPhones: Array.from(
-                new Set([...(Array.isArray(c.memberPhones) ? c.memberPhones : []), myPhone].filter(Boolean))
-              ),
+              memberPhones: dedupePhoneList([...(Array.isArray(c.memberPhones) ? c.memberPhones : []), myPhone]),
             };
+            joinedComm.membersCount = Math.max(Number(joinedComm.membersCount || 1), joinedComm.memberPhones?.length || 1);
             setTownCommunities((prev) => {
               const filtered = prev.filter((item) => item.id !== joinedComm.id);
               const updated = [joinedComm, ...filtered];
-              try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+              persistPartitionedTownCommunities(updated, myPhone);
               return updated;
             });
             openCommunityChat(joinedComm);
             return { success: true, name: joinedComm.name };
+          }
+        } else {
+          const errJson = await res.json().catch(() => null);
+          if (errJson?.error) {
+            return { success: false, error: errJson.error };
           }
         }
       } catch (_) {}
@@ -3053,18 +3311,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const commType = typeTag ? (typeTag.replace('type:', '') as 'group' | 'channel') : 'group';
             const inviteTag = tags.find((t: string) => t.toLowerCase().startsWith('invite:'));
             const membersTag = tags.find((t: string) => t.startsWith('members:'));
+            const kickedTag = tags.find((t: string) => t.startsWith('kicked:'));
             let parsedMembers: string[] = [];
             if (membersTag) {
-              try { parsedMembers = JSON.parse(membersTag.replace('members:', '')); } catch (_) {}
+              try { parsedMembers = dedupePhoneList(JSON.parse(membersTag.replace('members:', ''))); } catch (_) {}
             }
-            const mergedMembers = Array.from(new Set([...parsedMembers, myPhone].filter(Boolean)));
+            let parsedKicked: string[] = [];
+            if (kickedTag) {
+              try { parsedKicked = dedupePhoneList(JSON.parse(kickedTag.replace('kicked:', ''))); } catch (_) {}
+            }
+            if (myPhone && parsedKicked.some((kp) => phonesMatch(kp, myPhone))) {
+              return { success: false, error: 'You were removed from this group and must be re-invited by an admin.' };
+            }
+            const alreadyInRow = parsedMembers.some((p) => phonesMatch(p, myPhone));
+            const mergedMembers = dedupePhoneList([...parsedMembers, myPhone]);
             const joinedComm: TownCommunity = {
               id: row.id,
               name: row.name,
               type: commType,
               category: row.category || 'Tech & Hustle',
               description: row.description || '',
-              membersCount: Math.max(Number(row.members_count || 1) + 1, mergedMembers.length),
+              membersCount: Math.max(Number(row.members_count || 1) + (alreadyInRow ? 0 : 1), mergedMembers.length, 1),
               avatar: row.avatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(row.name)}&backgroundColor=581c87&textColor=ffffff`,
               isVerified: Boolean(row.is_live),
               isJoined: true,
@@ -3077,7 +3344,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setTownCommunities((prev) => {
               const filtered = prev.filter((item) => item.id !== joinedComm.id);
               const updated = [joinedComm, ...filtered];
-              try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+              persistPartitionedTownCommunities(updated, myPhone);
               return updated;
             });
             updateTownCommunityInDb(row.id, {
@@ -4468,6 +4735,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 1500);
   }, [messages, currentUser?.phoneNumber, isAuthenticated]);
 
+  // Sync all group & channel socket rooms whenever membership changes while authenticated
+  const groupRoomIdsKey = chats
+    .filter((c) => c.isGroup || c.isChannel)
+    .map((c) => c.id)
+    .sort()
+    .join(',');
+
+  useEffect(() => {
+    if (!isAuthenticated || !groupRoomIdsKey) return;
+    groupRoomIdsKey.split(',').forEach((gid) => {
+      if (gid) joinChatRoom(gid);
+    });
+  }, [isAuthenticated, groupRoomIdsKey]);
+
   // Hydrate chats/messages/wallet/profile from localStorage + Supabase backup whenever user logs in or mounts
   useEffect(() => {
     if (!isAuthenticated || !currentUser?.phoneNumber) return;
@@ -4476,10 +4757,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!norm) return;
 
     isHydratingChatsRef.current = true;
+    kickedGroupIdsRef.current = loadKickedGroupIds(phone);
     const localData = loadPartitionedUserChatsAndMessages(phone);
-    setChats(localData.chats);
+    const filteredLocalChats = localData.chats.filter((c) => !kickedGroupIdsRef.current.has(c.id));
+    setChats(filteredLocalChats);
     setMessages(localData.messages);
     loadedPhoneForChatsRef.current = norm;
+    setTownCommunities(loadPartitionedTownCommunities(phone));
     isHydratingChatsRef.current = false;
 
     isHydratingWalletRef.current = true;
@@ -4488,6 +4772,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     walletRef.current = localWallet;
     loadedPhoneForWalletRef.current = norm;
     isHydratingWalletRef.current = false;
+
+    void syncGroupsFromServerRef.current?.();
+    syncLiveCommunitiesRef.current?.();
 
     let cancelled = false;
     // Always hydrate authoritative wallet balance & unified ledger directly from the backend server
@@ -4965,6 +5252,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const handledGroupInviteIdsRef = useRef<Set<string>>(new Set());
   const declinedGroupIdsRef = useRef<Set<string>>(new Set());
+  const kickedGroupIdsRef = useRef<Set<string>>(new Set());
+  const syncGroupsFromServerRef = useRef<(() => Promise<void>) | null>(null);
+
+  const loadKickedGroupIds = useCallback((phone?: string): Set<string> => {
+    try {
+      const key = getUserStorageKey('AGC_kicked_group_ids', phone);
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return new Set(parsed.map(String));
+      }
+    } catch (_) {}
+    return new Set();
+  }, []);
+
+  const persistKickedGroupIds = useCallback((phone?: string) => {
+    try {
+      const key = getUserStorageKey('AGC_kicked_group_ids', phone || currentUserRef.current?.phoneNumber);
+      const arr = Array.from(kickedGroupIdsRef.current).slice(-250);
+      localStorage.setItem(key, JSON.stringify(arr));
+    } catch (_) {}
+  }, []);
 
   const loadHandledGroupInviteIds = useCallback((phone?: string): Set<string> => {
     try {
@@ -5021,6 +5330,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
     if (handledGroupInviteIdsRef.current.has(rawInvite.id)) return;
+
+    // An admin re-inviting a previously kicked/declined user allows them to respond again
+    if (kickedGroupIdsRef.current.has(rawInvite.groupId)) {
+      kickedGroupIdsRef.current.delete(rawInvite.groupId);
+      persistKickedGroupIds(currentUser.phoneNumber);
+    }
 
     const alreadyJoined = chatsRef.current.some(
       (c) => c.id === rawInvite.groupId && c.invitationStatus !== 'pending' && c.invitationStatus !== 'declined'
@@ -7704,12 +8019,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return isBlocked;
   };
 
+  const broadcastGroupSnapshot = useCallback((updatedChat: ChatThread) => {
+    if (!updatedChat || (!updatedChat.isGroup && !updatedChat.isChannel)) return;
+    const myPhone = currentUserRef.current?.phoneNumber || '';
+    try {
+      const bc = new BroadcastChannel('AGC_chats_sync');
+      bc.postMessage({ type: 'group_updated', group: updatedChat });
+      bc.close();
+    } catch (_) {}
+    if (isSupabaseConfigured) {
+      dedupePhoneList(updatedChat.memberPhones).forEach((p) => {
+        if (myPhone && phonesMatch(p, myPhone)) return;
+        const clean = p.replace(/\D/g, '');
+        const norm = normalizePhoneDigits(clean);
+        new Set([clean, norm].filter(Boolean)).forEach((t) => {
+          sendSupabaseBroadcastSafe(`inbox_${t}`, 'group_updated', { group: updatedChat });
+        });
+      });
+    }
+  }, []);
+
   const updateChat = (chatId: string, updates: Partial<ChatThread>) => {
+    let nextThread: ChatThread | null = null;
     setChats((prev) => {
-      const updated = prev.map((c) => (c.id === chatId ? { ...c, ...updates } : c));
+      const updated = prev.map((c) => {
+        if (c.id !== chatId) return c;
+        nextThread = { ...c, ...updates };
+        return nextThread;
+      });
       persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });
+
+    const isGroupMetaSync =
+      updates.announceMode !== undefined ||
+      updates.name !== undefined ||
+      updates.description !== undefined ||
+      updates.avatar !== undefined;
+
+    const existing = nextThread || chatsRef.current.find((c) => c.id === chatId);
+    if (isGroupMetaSync && existing && (existing.isGroup || existing.isChannel)) {
+      const merged = { ...existing, ...updates };
+      fetch('/api/groups/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          groupId: chatId,
+          action: 'update_meta',
+          actorPhone: currentUser.phoneNumber,
+          actorId: currentUser.id,
+          name: updates.name,
+          description: updates.description,
+          avatar: updates.avatar,
+          announceMode: updates.announceMode,
+        }),
+      }).catch(() => {});
+      broadcastGroupSnapshot(merged);
+    }
   };
 
   const relayChatMetaUpdate = useCallback(
@@ -7982,8 +8348,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const targetChat = chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
     const entityType = targetChat?.isChannel ? 'channel' : 'group';
 
-    const resolvedTargets: { name: string; phone: string }[] = memberNames.map((nameOrPhone, idx) => {
+    const resolvedTargets: { name: string; phone: string; isBot?: boolean }[] = memberNames.map((nameOrPhone, idx) => {
       const explicitPhone = memberPhones?.[idx];
+      const isBot =
+        nameOrPhone.trim().toLowerCase() === 'agcbot' ||
+        nameOrPhone.trim().toLowerCase() === 'afribot ai' ||
+        explicitPhone === '+234 BOT AI';
+      if (isBot) {
+        return { name: AFRIBOT_NAME, phone: AFRIBOT_PHONE, isBot: true };
+      }
       const matchedContact = deviceContacts.find(
         (dc) =>
           dc.name === nameOrPhone ||
@@ -8002,18 +8375,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     });
 
-    const displayNames = resolvedTargets.map((t) => t.name);
+    const hasBotTarget = resolvedTargets.some((t) => t.isBot);
+    const inviteTargets = resolvedTargets.filter((t) => !t.isBot && (t.phone || t.name));
+
+    if (hasBotTarget) {
+      inviteBotToGroup(chatId, true);
+    }
+
+    if (inviteTargets.length === 0) return;
+
+    const displayNames = inviteTargets.map((t) => t.name);
+    const invitePhonesList = dedupePhoneList(inviteTargets.map((t) => t.phone).filter(Boolean));
 
     setChats((prev) => {
       const updated = prev.map((c) => {
         if (c.id === chatId) {
           const currentPending = c.pendingMembers || [];
           const currentMembers = c.members || [];
-          const newPending = displayNames.filter((n) => !currentMembers.includes(n));
-          const updatedPending = Array.from(new Set([...currentPending, ...newPending]));
+          const currentPhones = c.memberPhones || [];
+          const newPending = inviteTargets
+            .filter(
+              (t) =>
+                !currentMembers.some((m) => m.toLowerCase() === t.name.toLowerCase()) &&
+                !(t.phone && currentPhones.some((p) => phonesMatch(p, t.phone)))
+            )
+            .map((t) => t.name);
+          const updatedPending = dedupeNameList([...currentPending, ...newPending]);
+          const updatedPendingPhones = dedupePhoneList([...(c.pendingPhones || []), ...invitePhonesList]);
+          const updatedKicked = (c.kickedPhones || []).filter(
+            (kp) => !invitePhonesList.some((ip) => phonesMatch(kp, ip))
+          );
           return {
             ...c,
             pendingMembers: updatedPending,
+            pendingPhones: updatedPendingPhones,
+            kickedPhones: updatedKicked,
             lastMessage: `Invited ${displayNames.join(', ')} (pending)`,
             lastMessageTime: 'Just now',
           };
@@ -8025,8 +8421,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (targetChat) {
-      sendGroupInvitesToTargets(targetChat, resolvedTargets);
+      sendGroupInvitesToTargets(targetChat, inviteTargets);
     }
+
+    fetch('/api/groups/invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        groupId: chatId,
+        actorPhone: currentUser.phoneNumber,
+        actorId: currentUser.id,
+        targets: inviteTargets,
+      }),
+    }).catch(() => {});
 
     const sysMsg: ChatMessage = {
       id: `msg_sys_${Date.now()}`,
@@ -8072,8 +8479,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const myName = currentUser.fullName || 'You';
     const myPhone = currentUser.phoneNumber || '';
 
-    const resolvedTargets: { name: string; phone: string }[] = memberNamesOrPhones.map((item, idx) => {
+    const resolvedAll = memberNamesOrPhones.map((item, idx) => {
       const explicitPhone = memberPhones?.[idx];
+      const isBot =
+        item.trim().toLowerCase() === 'agcbot' ||
+        item.trim().toLowerCase() === 'afribot ai' ||
+        explicitPhone === '+234 BOT AI';
+      if (isBot) {
+        return { name: AFRIBOT_NAME, phone: AFRIBOT_PHONE, isBot: true };
+      }
       const matchedContact = deviceContacts.find(
         (dc) =>
           dc.name === item ||
@@ -8089,8 +8503,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         name: matchedContact?.name || item,
         phone: resolvedPhone,
+        isBot: false,
       };
     });
+
+    const hasBot = resolvedAll.some((t) => t.isBot);
+    const resolvedTargets = resolvedAll.filter((t) => !t.isBot);
+    const initialMembers = hasBot ? [myName, AFRIBOT_NAME] : [myName];
+    const initialAdmins = hasBot ? [myName, AFRIBOT_NAME] : [myName];
+    const initialMemberPhones = myPhone ? [myPhone] : [];
+    const initialCount = computeClientMembersCount(initialMembers, initialMemberPhones);
+    const pendingPhoneList = dedupePhoneList(resolvedTargets.map((t) => t.phone).filter(Boolean));
 
     const newThread: ChatThread = {
       id: newChatId,
@@ -8101,18 +8524,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unreadCount: 0,
       lastMessage: resolvedTargets.length > 0
         ? `Created group "${cleanName}" · ${resolvedTargets.length} invite(s) sent`
+        : hasBot
+        ? `Created group "${cleanName}" with AgcBot`
         : `You created group "${cleanName}"`,
       lastMessageTime: 'Just now',
       catalog: [],
       isOnline: true,
       isGroup: true,
-      membersCount: 1,
+      membersCount: initialCount,
       creatorId: currentUser.id,
-      admins: [myName],
+      creatorPhone: myPhone,
+      admins: initialAdmins,
       adminIds: [currentUser.id],
-      members: [myName],
-      memberPhones: myPhone ? [myPhone] : [],
+      members: initialMembers,
+      memberPhones: initialMemberPhones,
       pendingMembers: resolvedTargets.map((t) => t.name),
+      pendingPhones: pendingPhoneList,
+      kickedPhones: [],
       inviteCode: shortInvite,
       invitationStatus: 'accepted',
       description,
@@ -8123,8 +8551,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       chatId: newChatId,
       sender: 'system',
       text: resolvedTargets.length > 0
-        ? `You created group "${cleanName}" and sent invitations to ${resolvedTargets.map((t) => t.name).join(', ')}.`
-        : `You created group "${cleanName}".`,
+        ? `You created group "${cleanName}"${hasBot ? ' with AgcBot' : ''} and sent invitations to ${resolvedTargets.map((t) => t.name).join(', ')}.`
+        : `You created group "${cleanName}"${hasBot ? ' with AgcBot as Admin' : ''}.`,
       type: 'text',
       timestamp: 'Just now',
       status: 'sent',
@@ -8142,7 +8570,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    // Register private group on server so invite links and codes resolve for authorized joiners
+    joinChatRoom(newChatId);
+
+    // Register private group on server so invite links, codes, and live member syncing work across accounts
     try {
       fetch('/api/groups/register', {
         method: 'POST',
@@ -8160,7 +8590,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           adminIds: newThread.adminIds,
           members: newThread.members,
           memberPhones: newThread.memberPhones,
-          membersCount: 1,
+          pendingMembers: newThread.pendingMembers,
+          pendingPhones: newThread.pendingPhones,
+          membersCount: initialCount,
           inviteCode: shortInvite,
         }),
       }).catch(() => {});
@@ -8196,25 +8628,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const myName = currentUser.fullName || 'You';
     const myPhone = currentUser.phoneNumber || '';
 
-    const resolvedTargets: { name: string; phone: string }[] = (memberNamesOrPhones || []).map((item, idx) => {
-      const explicitPhone = memberPhones?.[idx];
-      const matchedContact = deviceContacts.find(
-        (dc) =>
-          dc.name === item ||
-          dc.normalizedPhoneNumber === item ||
-          dc.rawPhoneNumber === item ||
-          (explicitPhone && phonesMatch(dc.normalizedPhoneNumber || dc.rawPhoneNumber, explicitPhone))
-      );
-      const resolvedPhone =
-        explicitPhone ||
-        matchedContact?.normalizedPhoneNumber ||
-        matchedContact?.rawPhoneNumber ||
-        (/^\+?[0-9\s-]{7,}$/.test(item) ? item : '');
-      return {
-        name: matchedContact?.name || item,
-        phone: resolvedPhone,
-      };
-    });
+    const resolvedTargets: { name: string; phone: string }[] = (memberNamesOrPhones || [])
+      .filter((item) => item.trim().toLowerCase() !== 'agcbot' && item.trim().toLowerCase() !== 'afribot ai')
+      .map((item, idx) => {
+        const explicitPhone = memberPhones?.[idx];
+        const matchedContact = deviceContacts.find(
+          (dc) =>
+            dc.name === item ||
+            dc.normalizedPhoneNumber === item ||
+            dc.rawPhoneNumber === item ||
+            (explicitPhone && phonesMatch(dc.normalizedPhoneNumber || dc.rawPhoneNumber, explicitPhone))
+        );
+        const resolvedPhone =
+          explicitPhone ||
+          matchedContact?.normalizedPhoneNumber ||
+          matchedContact?.rawPhoneNumber ||
+          (/^\+?[0-9\s-]{7,}$/.test(item) ? item : '');
+        return {
+          name: matchedContact?.name || item,
+          phone: resolvedPhone,
+        };
+      });
+
+    const pendingPhoneList = dedupePhoneList(resolvedTargets.map((t) => t.phone).filter(Boolean));
 
     const newThread: ChatThread = {
       id: newChatId,
@@ -8229,14 +8665,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       lastMessageTime: 'Just now',
       catalog: [],
       isOnline: true,
+      isGroup: false,
       isChannel: true,
       membersCount: 1,
       creatorId: currentUser.id,
+      creatorPhone: myPhone,
       admins: [myName],
       adminIds: [currentUser.id],
       members: [myName],
       memberPhones: myPhone ? [myPhone] : [],
       pendingMembers: resolvedTargets.map((t) => t.name),
+      pendingPhones: pendingPhoneList,
+      kickedPhones: [],
       inviteCode: shortInvite,
       invitationStatus: 'accepted',
       description,
@@ -8266,6 +8706,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
+    joinChatRoom(newChatId);
+
+    // Always register channel on server so invite links, join-by-code, subscriber count & kicks work cleanly
+    try {
+      fetch('/api/groups/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: newThread.id,
+          name: newThread.name,
+          avatar: newThread.avatar,
+          description: newThread.description,
+          isGroup: false,
+          isChannel: true,
+          creatorId: currentUser.id,
+          creatorPhone: myPhone,
+          admins: newThread.admins,
+          adminIds: newThread.adminIds,
+          members: newThread.members,
+          memberPhones: newThread.memberPhones,
+          pendingMembers: newThread.pendingMembers,
+          pendingPhones: newThread.pendingPhones,
+          membersCount: 1,
+          inviteCode: shortInvite,
+        }),
+      }).catch(() => {});
+    } catch (_) {}
+
     if (resolvedTargets.length > 0) {
       sendGroupInvitesToTargets(newThread, resolvedTargets);
     }
@@ -8274,16 +8742,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newChatId;
   };
 
-  const toggleMemberAdmin = (chatId: string, memberName: string) => {
+  const toggleMemberAdmin = (chatId: string, memberName: string, memberPhone?: string) => {
+    const targetChat = chatsRef.current.find((c) => c.id === chatId);
+    if (!targetChat) return;
+    if (!isUserChatAdmin(targetChat, currentUserRef.current)) return;
+
+    const matchedContact = deviceContactsRef.current.find(
+      (dc) =>
+        dc.name === memberName ||
+        (memberPhone && phonesMatch(dc.normalizedPhoneNumber || dc.rawPhoneNumber, memberPhone))
+    );
+    const resolvedPhone =
+      memberPhone || matchedContact?.normalizedPhoneNumber || matchedContact?.rawPhoneNumber || '';
+
+    let nextAdminsSnapshot: string[] = [];
+    let updatedChatSnapshot: ChatThread | null = null;
     setChats((prev) => {
       const updated = prev.map((c) => {
         if (c.id === chatId) {
           const currentAdmins = c.admins || [currentUser.fullName || 'You'];
-          const isAlreadyAdmin = currentAdmins.includes(memberName);
+          const isAlreadyAdmin = currentAdmins.some(
+            (a) =>
+              a.toLowerCase() === memberName.toLowerCase() ||
+              (resolvedPhone && phonesMatch(a, resolvedPhone))
+          );
           const updatedAdmins = isAlreadyAdmin
-            ? currentAdmins.filter((a) => a !== memberName)
-            : [...currentAdmins, memberName];
-          return { ...c, admins: updatedAdmins };
+            ? currentAdmins.filter(
+                (a) =>
+                  a.toLowerCase() !== memberName.toLowerCase() &&
+                  (!resolvedPhone || !phonesMatch(a, resolvedPhone))
+              )
+            : dedupeNameList([...currentAdmins, memberName]);
+          nextAdminsSnapshot = updatedAdmins;
+          updatedChatSnapshot = { ...c, admins: updatedAdmins };
+          return updatedChatSnapshot;
         }
         return c;
       });
@@ -8291,11 +8783,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
+    fetch('/api/groups/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        groupId: chatId,
+        action: 'toggle_admin',
+        actorPhone: currentUser.phoneNumber,
+        actorId: currentUser.id,
+        targetName: memberName,
+        targetPhone: resolvedPhone,
+        admins: nextAdminsSnapshot,
+      }),
+    }).catch(() => {});
+
+    if (updatedChatSnapshot) {
+      broadcastGroupSnapshot(updatedChatSnapshot);
+    }
+
     const sysMsg: ChatMessage = {
       id: 'msg_sys_' + Date.now(),
       chatId,
       sender: 'system',
-      text: memberName + ' was updated as group admin.',
+      text: `${memberName} admin status was updated.`,
       type: 'text',
       timestamp: 'Just now',
       status: 'sent',
@@ -8307,35 +8817,433 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const removeMemberFromGroup = (chatId: string, memberName: string) => {
+  const removeGroupLocallyAndCleanup = useCallback(
+    (
+      groupId: string,
+      opts?: { recordKick?: boolean; preserveMessages?: boolean; notifyTitle?: string; notifyBody?: string }
+    ) => {
+      if (!groupId) return;
+      const myPhone = currentUserRef.current?.phoneNumber;
+      const hadGroup =
+        chatsRef.current.some((c) => c.id === groupId) ||
+        (groupId.startsWith('town_comm_') &&
+          townCommunitiesRef.current.some((tc) => tc.id === groupId.replace('town_comm_', '') && tc.isJoined));
+
+      if (opts?.recordKick) {
+        kickedGroupIdsRef.current.add(groupId);
+        persistKickedGroupIds(myPhone);
+      }
+
+      try {
+        leaveChatRoom(groupId);
+      } catch (_) {}
+
+      setChats((prev) => {
+        if (!prev.some((c) => c.id === groupId)) return prev;
+        const updated = prev.filter((c) => c.id !== groupId);
+        if (myPhone) persistPartitionedChats(updated, myPhone);
+        return updated;
+      });
+
+      if (!opts?.preserveMessages) {
+        setMessages((prev) => {
+          if (!prev[groupId]) return prev;
+          const updated = { ...prev };
+          delete updated[groupId];
+          if (myPhone) persistPartitionedMessages(updated, myPhone);
+          return updated;
+        });
+      }
+
+      setGroupInvites((prev) => {
+        const next = prev.filter((inv) => inv.groupId !== groupId);
+        return next.length === prev.length ? prev : next;
+      });
+      setActiveGroupInvitePopup((curr) => (curr && curr.groupId === groupId ? null : curr));
+      setActiveChatId((curr) => (curr === groupId ? null : curr));
+
+      if (groupId.startsWith('town_comm_')) {
+        const commId = groupId.replace('town_comm_', '');
+        setTownCommunities((prev) => {
+          const targetComm = prev.find((tc) => tc.id === commId);
+          if (!targetComm) return prev;
+          const nextPhones = dedupePhoneList(targetComm.memberPhones).filter(
+            (p) => !myPhone || !phonesMatch(p, myPhone)
+          );
+          const updated =
+            targetComm.type === 'channel' && !targetComm.isPrivate && !opts?.recordKick
+              ? prev.map((tc) =>
+                  tc.id === commId
+                    ? {
+                        ...tc,
+                        isJoined: false,
+                        memberPhones: nextPhones,
+                        membersCount: Math.max((tc.membersCount || 1) - 1, nextPhones.length, 1),
+                      }
+                    : tc
+                )
+              : prev.filter((tc) => tc.id !== commId);
+          if (myPhone) persistPartitionedTownCommunities(updated, myPhone);
+          return updated;
+        });
+      }
+
+      if (hadGroup && opts?.notifyTitle) {
+        showLocalNotification(opts.notifyTitle, opts.notifyBody || 'You are no longer a member.');
+      }
+    },
+    [persistKickedGroupIds, persistPartitionedTownCommunities]
+  );
+
+  const applyAuthoritativeGroupUpdate = useCallback(
+    (g: any) => {
+      if (!g || !g.id || !isAuthenticatedRef.current) return;
+      const myUser = currentUserRef.current;
+      const myPhone = myUser?.phoneNumber || '';
+      const myId = myUser?.id || '';
+      const normMyPhone = normalizePhoneDigits(myPhone);
+      if (!normMyPhone || loadedPhoneForChatsRef.current !== normMyPhone) return;
+
+      const serverKicked: string[] = dedupePhoneList(g.kickedPhones);
+      const serverMemberPhones: string[] = dedupePhoneList(g.memberPhones);
+      const isKicked = Boolean(myPhone && serverKicked.some((kp) => phonesMatch(kp, myPhone)));
+      const isCreator =
+        (Boolean(myId) && g.creatorId === myId) ||
+        (Boolean(myPhone && g.creatorPhone) && phonesMatch(g.creatorPhone, myPhone));
+      const isInPhones = Boolean(myPhone && serverMemberPhones.some((mp) => phonesMatch(mp, myPhone)));
+      const isMember = isCreator || isInPhones;
+
+      if (isKicked || (serverMemberPhones.length > 0 && !isMember)) {
+        removeGroupLocallyAndCleanup(g.id, {
+          recordKick: isKicked,
+          notifyTitle: isKicked ? `Removed from ${g.name || 'Group'}` : undefined,
+          notifyBody: isKicked ? 'An admin removed you from this conversation.' : undefined,
+        });
+        return;
+      }
+
+      if (!isMember) return;
+
+      if (kickedGroupIdsRef.current.has(g.id)) {
+        kickedGroupIdsRef.current.delete(g.id);
+        persistKickedGroupIds(myPhone);
+      }
+
+      const nextMembers = dedupeNameList(g.members);
+      const nextPending = dedupeNameList(g.pendingMembers);
+      const nextPendingPhones = dedupePhoneList(g.pendingPhones);
+      const nextCount = Math.max(Number(g.membersCount || 0), computeClientMembersCount(nextMembers, serverMemberPhones));
+      const isChan = Boolean(g.isChannel);
+
+      setChats((prev) => {
+        const idx = prev.findIndex((c) => c.id === g.id);
+        if (idx >= 0) {
+          const existing = prev[idx];
+          const updatedThread: ChatThread = {
+            ...existing,
+            name: g.name || existing.name,
+            avatar: g.avatar || existing.avatar,
+            description: g.description !== undefined ? g.description : existing.description,
+            isGroup: !isChan,
+            isChannel: isChan,
+            creatorId: g.creatorId || existing.creatorId,
+            creatorPhone: g.creatorPhone || existing.creatorPhone,
+            admins: Array.isArray(g.admins) ? g.admins : existing.admins,
+            adminIds: Array.isArray(g.adminIds) ? g.adminIds : existing.adminIds,
+            members: nextMembers.length > 0 ? nextMembers : existing.members,
+            memberPhones: serverMemberPhones.length > 0 ? serverMemberPhones : existing.memberPhones,
+            pendingMembers: Array.isArray(g.pendingMembers) ? nextPending : existing.pendingMembers,
+            pendingPhones: Array.isArray(g.pendingPhones) ? nextPendingPhones : existing.pendingPhones,
+            kickedPhones: serverKicked,
+            membersCount: nextCount,
+            announceMode: g.announceMode !== undefined ? Boolean(g.announceMode) : existing.announceMode,
+            inviteCode: g.inviteCode || existing.inviteCode,
+            invitationStatus: 'accepted',
+          };
+          const updated = prev.map((c, i) => (i === idx ? updatedThread : c));
+          persistPartitionedChats(updated, myPhone);
+          return updated;
+        }
+
+        if (declinedGroupIdsRef.current.has(g.id)) return prev;
+        const createdThread: ChatThread = {
+          id: g.id,
+          name: g.name || (isChan ? 'Broadcast Channel' : 'Group Chat'),
+          avatar:
+            g.avatar ||
+            (isChan
+              ? 'https://images.unsplash.com/photo-1582213782179-e0d53f98f2ca?w=150&auto=format&fit=crop&q=80'
+              : 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=150&auto=format&fit=crop&q=80'),
+          description: g.description,
+          verifiedStore: false,
+          location: isChan ? 'Broadcast Channel' : 'Private Group',
+          unreadCount: 0,
+          lastMessage: g.description || (isChan ? 'Subscribed channel' : 'Group chat'),
+          lastMessageTime: 'Just now',
+          lastMessageAtMs: Date.now(),
+          catalog: [],
+          isOnline: true,
+          isGroup: !isChan,
+          isChannel: isChan,
+          creatorId: g.creatorId,
+          creatorPhone: g.creatorPhone,
+          admins: Array.isArray(g.admins) ? g.admins : [],
+          adminIds: Array.isArray(g.adminIds) ? g.adminIds : [],
+          members: nextMembers,
+          memberPhones: serverMemberPhones,
+          pendingMembers: nextPending,
+          pendingPhones: nextPendingPhones,
+          kickedPhones: serverKicked,
+          membersCount: nextCount,
+          announceMode: Boolean(g.announceMode),
+          inviteCode: g.inviteCode,
+          invitationStatus: 'accepted',
+        };
+        joinChatRoom(g.id);
+        const updated = [createdThread, ...prev];
+        persistPartitionedChats(updated, myPhone);
+        return updated;
+      });
+
+      if (String(g.id).startsWith('town_comm_')) {
+        const commId = String(g.id).replace('town_comm_', '');
+        setTownCommunities((prev) => {
+          if (!prev.some((tc) => tc.id === commId)) return prev;
+          const updated = prev.map((tc) =>
+            tc.id === commId
+              ? {
+                  ...tc,
+                  name: g.name || tc.name,
+                  description: g.description !== undefined ? g.description : tc.description,
+                  memberPhones: serverMemberPhones,
+                  membersCount: nextCount,
+                  kickedPhones: serverKicked,
+                }
+              : tc
+          );
+          persistPartitionedTownCommunities(updated, myPhone);
+          return updated;
+        });
+      }
+    },
+    [persistKickedGroupIds, persistPartitionedTownCommunities, removeGroupLocallyAndCleanup]
+  );
+
+  const leaveGroup = (chatId: string) => {
+    const me = currentUserRef.current;
+    const myPhone = me?.phoneNumber || '';
+    const myName = me?.fullName || 'AGC User';
+    const targetChat = chatsRef.current.find((c) => c.id === chatId);
+    const commId = chatId.startsWith('town_comm_') ? chatId.replace('town_comm_', '') : '';
+    const targetComm = commId ? townCommunitiesRef.current.find((tc) => tc.id === commId) : undefined;
+
+    removeGroupLocallyAndCleanup(chatId, { recordKick: false });
+
+    fetch('/api/groups/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        groupId: chatId,
+        action: 'leave',
+        actorPhone: myPhone,
+        actorId: me?.id,
+        targetName: myName,
+        targetPhone: myPhone,
+      }),
+    }).catch(() => {});
+
+    if (commId && isSupabaseConfigured && targetComm) {
+      const remainingPhones = dedupePhoneList(targetComm.memberPhones).filter(
+        (p) => !myPhone || !phonesMatch(p, myPhone)
+      );
+      const nextCount = Math.max((targetComm.membersCount || 1) - 1, remainingPhones.length, 1);
+      updateTownCommunityInDb(commId, {
+        members_count: nextCount,
+        members: remainingPhones,
+      }).catch(() => {});
+    }
+
+    if (targetChat) {
+      const remainingPhones = dedupePhoneList(targetChat.memberPhones).filter(
+        (p) => !myPhone || !phonesMatch(p, myPhone)
+      );
+      const remainingMembers = (targetChat.members || []).filter(
+        (m) => m.toLowerCase() !== myName.toLowerCase() && (!myPhone || !phonesMatch(m, myPhone)) && m.toLowerCase() !== 'you'
+      );
+      const remainingAdmins = (targetChat.admins || []).filter(
+        (a) => a.toLowerCase() !== myName.toLowerCase() && (!myPhone || !phonesMatch(a, myPhone)) && a.toLowerCase() !== 'you'
+      );
+      broadcastGroupSnapshot({
+        ...targetChat,
+        members: remainingMembers,
+        memberPhones: remainingPhones,
+        admins: remainingAdmins,
+        membersCount: computeClientMembersCount(remainingMembers, remainingPhones),
+      });
+    }
+  };
+
+  const removeMemberFromGroup = (chatId: string, memberName: string, memberPhone?: string) => {
+    const me = currentUserRef.current;
+    const myPhone = me?.phoneNumber || '';
+    const myName = me?.fullName || '';
+
+    const isSelf =
+      (memberPhone && myPhone && phonesMatch(memberPhone, myPhone)) ||
+      memberName.trim().toLowerCase() === 'you' ||
+      (Boolean(myName) && memberName.trim().toLowerCase() === myName.trim().toLowerCase());
+    if (isSelf) {
+      leaveGroup(chatId);
+      return;
+    }
+
+    const targetChat = chatsRef.current.find((c) => c.id === chatId);
+    if (!targetChat) return;
+    if (!isUserChatAdmin(targetChat, me)) return;
+
+    const matchedContact = deviceContactsRef.current.find(
+      (dc) =>
+        dc.name === memberName ||
+        dc.normalizedPhoneNumber === memberName ||
+        dc.rawPhoneNumber === memberName ||
+        (memberPhone && phonesMatch(dc.normalizedPhoneNumber || dc.rawPhoneNumber, memberPhone))
+    );
+    const matchedAdminUser = adminUsersRef.current.find(
+      (u) =>
+        u.fullName === memberName ||
+        (memberPhone && u.phoneNumber && phonesMatch(u.phoneNumber, memberPhone))
+    );
+    const resolvedPhone =
+      memberPhone ||
+      matchedContact?.normalizedPhoneNumber ||
+      matchedContact?.rawPhoneNumber ||
+      matchedAdminUser?.phoneNumber ||
+      (/^\+?[0-9\s-]{7,}$/.test(memberName) ? memberName : '');
+
+    let updatedSnapshot: ChatThread | null = null;
+    let nextCountForSync = 1;
+    let nextPhonesForSync: string[] = [];
+    let nextKickedForSync: string[] = [];
+
     setChats((prev) => {
       const updated = prev.map((c) => {
-        if (c.id === chatId) {
-          const currentAdmins = (c.admins || []).filter((a) => a !== memberName);
-          return {
-            ...c,
-            membersCount: Math.max(1, (c.membersCount || 2) - 1),
-            admins: currentAdmins,
-          };
-        }
-        return c;
+        if (c.id !== chatId) return c;
+        const lowerTarget = memberName.trim().toLowerCase();
+        const matchesEntry = (entry: string) => {
+          const clean = String(entry || '').trim();
+          if (!clean) return false;
+          if (clean.toLowerCase() === lowerTarget) return true;
+          if (resolvedPhone && phonesMatch(clean, resolvedPhone)) return true;
+          return false;
+        };
+        const nextMembers = (c.members || []).filter((m) => !matchesEntry(m));
+        const nextPhones = dedupePhoneList(c.memberPhones).filter(
+          (p) => !resolvedPhone || !phonesMatch(p, resolvedPhone)
+        );
+        const nextPending = (c.pendingMembers || []).filter((m) => !matchesEntry(m));
+        const nextPendingPhones = dedupePhoneList(c.pendingPhones).filter(
+          (p) => !resolvedPhone || !phonesMatch(p, resolvedPhone)
+        );
+        const nextAdmins = (c.admins || []).filter((a) => !matchesEntry(a));
+        const nextKicked = resolvedPhone
+          ? dedupePhoneList([...(c.kickedPhones || []), resolvedPhone])
+          : dedupePhoneList(c.kickedPhones);
+        const nextCount = computeClientMembersCount(nextMembers, nextPhones);
+        nextCountForSync = nextCount;
+        nextPhonesForSync = nextPhones;
+        nextKickedForSync = nextKicked;
+        updatedSnapshot = {
+          ...c,
+          members: nextMembers,
+          memberPhones: nextPhones,
+          pendingMembers: nextPending,
+          pendingPhones: nextPendingPhones,
+          admins: nextAdmins,
+          kickedPhones: nextKicked,
+          membersCount: nextCount,
+        };
+        return updatedSnapshot;
       });
-      persistPartitionedChats(updated, currentUser.phoneNumber);
+      persistPartitionedChats(updated, myPhone);
       return updated;
     });
+
+    fetch('/api/groups/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        groupId: chatId,
+        action: 'kick',
+        actorPhone: myPhone,
+        actorId: me?.id,
+        targetName: memberName,
+        targetPhone: resolvedPhone,
+      }),
+    }).catch(() => {});
+
+    // Notify kicked user + remaining members immediately via BroadcastChannel & Supabase Realtime
+    try {
+      const bc = new BroadcastChannel('AGC_chats_sync');
+      bc.postMessage({
+        type: 'group_kicked',
+        groupId: chatId,
+        groupName: targetChat.name,
+        targetPhone: resolvedPhone,
+        targetName: memberName,
+      });
+      if (updatedSnapshot) {
+        bc.postMessage({ type: 'group_updated', group: updatedSnapshot });
+      }
+      bc.close();
+    } catch (_) {}
+
+    if (isSupabaseConfigured) {
+      if (resolvedPhone) {
+        const clean = resolvedPhone.replace(/\D/g, '');
+        const norm = normalizePhoneDigits(clean);
+        new Set([clean, norm].filter(Boolean)).forEach((t) => {
+          sendSupabaseBroadcastSafe(`inbox_${t}`, 'group_kicked', {
+            groupId: chatId,
+            groupName: targetChat.name,
+            targetPhone: resolvedPhone,
+            targetName: memberName,
+          });
+        });
+      }
+      if (chatId.startsWith('town_comm_')) {
+        const commId = chatId.replace('town_comm_', '');
+        updateTownCommunityInDb(commId, {
+          members_count: nextCountForSync,
+          members: nextPhonesForSync,
+          kicked: nextKickedForSync,
+        }).catch(() => {});
+        sendSupabaseBroadcastSafe('live_town_communities', 'members_updated', {
+          communityId: commId,
+          chatId,
+          chatName: targetChat.name,
+          membersCount: nextCountForSync,
+          memberPhones: nextPhonesForSync,
+          kickedPhones: nextKickedForSync,
+        });
+      }
+    }
+
+    if (updatedSnapshot) {
+      broadcastGroupSnapshot(updatedSnapshot);
+    }
 
     const sysMsg: ChatMessage = {
       id: 'msg_sys_' + Date.now(),
       chatId,
       sender: 'system',
-      text: memberName + ' was removed from the group.',
+      text: `${memberName} was removed from the ${targetChat.isChannel ? 'channel' : 'group'}.`,
       type: 'text',
       timestamp: 'Just now',
       status: 'sent',
     };
     setMessages((prev) => {
       const updated = { ...prev, [chatId]: [...(prev[chatId] || []), sysMsg] };
-      persistPartitionedMessages(updated, currentUser.phoneNumber);
+      persistPartitionedMessages(updated, myPhone);
       return updated;
     });
   };
@@ -8580,13 +9488,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 4. Supabase Realtime (Cross-device & background inbox channel)
     if (isSupabaseConfigured) {
       try {
-        sendSupabaseBroadcastSafe('agc_chat_global', 'new_message', {
-          chatId,
-          message: wireMessage,
-          senderId: userNow.id,
-          chat: wireChat,
-        });
-
         sendSupabaseBroadcastSafe(`chat_${chatId}`, 'new_message', {
           chatId,
           message: wireMessage,
@@ -8644,6 +9545,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const sendImageMessage = async (chatId: string, imageUrl: string, caption?: string, oneTimeView?: boolean) => {
+    const _targetChatImg = chatsRef.current.find((c) => c.id === chatId);
+    if (isUserAdminBlockedFromSending(_targetChatImg, currentUserRef.current)) return;
+
     // Strongly compress any data URL image so Supabase storage & Realtime stay tiny
     let finalImageUrl = imageUrl;
     if (imageUrl.startsWith('data:image')) {
@@ -8800,16 +9704,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!text.trim()) return;
 
     // Block non-admins from sending in channels or announce-only groups
-    const _targetChatSend = chats.find((c) => c.id === chatId);
-    if (_targetChatSend?.isChannel || _targetChatSend?.announceMode) {
-      const _myName = currentUser.fullName || '';
-      const _myPhone = (currentUser.phoneNumber || '').replace(/\D/g, '');
-      const _admins = _targetChatSend.admins || [];
-      const _isAdmin = _admins.some((a) => {
-        const aC = (a || '').replace(/\D/g, '');
-        return a === _myName || (aC.length >= 9 && aC.slice(-9) === _myPhone.slice(-9));
-      });
-      if (!_isAdmin) return;
+    const _targetChatSend = chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
+    if (isUserAdminBlockedFromSending(_targetChatSend, currentUserRef.current)) {
+      return;
     }
 
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
@@ -9161,9 +10058,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     audioDataUrl?: string,
     oneTimeView?: boolean
   ) => {
+    const targetChat = chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
+    if (isUserAdminBlockedFromSending(targetChat, currentUserRef.current)) return;
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24h TTL
     const useOneTime = Boolean(oneTimeView);
-    const targetChat = chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
     const ghostMs = parseGhostDurationMs(targetChat?.disappearingTimer);
     const previewLabel = useOneTime
       ? `🔒 1-Time Voice Note (${durationSeconds}s)`
@@ -9286,6 +10184,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const sendLocationMessage = (chatId: string, locationData: LocationPinMeta) => {
     if (!chatId || !Number.isFinite(locationData.latitude) || !Number.isFinite(locationData.longitude)) return;
+    const targetChat = chatsRef.current.find((c) => c.id === chatId);
+    if (isUserAdminBlockedFromSending(targetChat, currentUserRef.current)) return;
 
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     const label = locationData.addressName?.trim() || `${locationData.latitude.toFixed(4)}, ${locationData.longitude.toFixed(4)}`;
@@ -9763,6 +10663,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 1. Meme & Sticker Studio Handler
   const sendMemeSticker = (chatId: string, meme: MemeSticker) => {
+    const targetChat = chatsRef.current.find((c) => c.id === chatId);
+    if (isUserAdminBlockedFromSending(targetChat, currentUserRef.current)) return;
     const nowMs = Date.now();
     const newMsg: ChatMessage = {
       id: `msg_meme_${nowMs}`,
@@ -10324,35 +11226,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         emitGroupInviteResponse(payload);
       } catch (_) {}
 
+      fetch('/api/groups/invite-response', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+
       try {
         const bc = new BroadcastChannel('AGC_chats_sync');
         bc.postMessage({ type: 'group_invite_response', ...payload });
         bc.close();
       } catch (_) {}
 
-      if (isSupabaseConfigured && targetPhone) {
-        const rawClean = targetPhone.replace(/\D/g, '');
-        const normTarget = normalizePhoneDigits(rawClean);
-        const targets = Array.from(new Set([rawClean, normTarget].filter(Boolean)));
-        targets.forEach((t) => {
-          try {
-            const ch = supabase.channel(`inbox_${t}`, { config: { broadcast: { self: false } } });
-            ch.subscribe((st) => {
-              if (st === 'SUBSCRIBED') {
-                ch.send({ type: 'broadcast', event: 'group_invite_response', payload })
-                  .catch(() => {})
-                  .finally(() => {
-                    setTimeout(() => {
-                      try { supabase.removeChannel(ch); } catch (_) {}
-                    }, 1500);
-                  });
-              }
-            });
-          } catch (_) {}
+      if (isSupabaseConfigured) {
+        const recipientPhones = dedupePhoneList([
+          ...(targetPhone ? [targetPhone] : []),
+          ...(Array.isArray(invite.chatSnapshot?.memberPhones) ? invite.chatSnapshot!.memberPhones! : []),
+        ]).filter((p) => !responderPhone || !phonesMatch(p, responderPhone));
+
+        recipientPhones.forEach((rp) => {
+          const rawClean = rp.replace(/\D/g, '');
+          const normTarget = normalizePhoneDigits(rawClean);
+          new Set([rawClean, normTarget].filter(Boolean)).forEach((t) => {
+            sendSupabaseBroadcastSafe(`inbox_${t}`, 'group_invite_response', payload);
+          });
         });
       }
     },
-    [currentUser.phoneNumber, currentUser.fullName]
+    [currentUser.phoneNumber, currentUser.fullName, sendSupabaseBroadcastSafe]
   );
 
   const acceptGroupInvite = (inviteId: string) => {
@@ -10368,6 +11269,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     markGroupInvitesHandled(matchingIds, currentUser.phoneNumber);
     declinedGroupIdsRef.current.delete(invite.groupId);
     persistDeclinedGroupIds(currentUser.phoneNumber);
+    kickedGroupIdsRef.current.delete(invite.groupId);
+    persistKickedGroupIds(currentUser.phoneNumber);
 
     setGroupInvites((prev) => {
       const remaining = prev.filter((inv) => !matchingIds.includes(inv.id) && inv.groupId !== invite.groupId);
@@ -10389,14 +11292,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (existingIdx >= 0) {
         const updated = prev.map((c) => {
           if (c.id !== invite.groupId) return c;
-          const nextMembers = Array.from(new Set([...(c.members || []), myName]));
-          const nextMemberPhones = Array.from(new Set([...(c.memberPhones || []), myPhone].filter(Boolean)));
+          const nextMembers = dedupeNameList([...(c.members || []), myName]);
+          const nextMemberPhones = dedupePhoneList([...(c.memberPhones || []), myPhone]);
           return {
             ...c,
             invitationStatus: 'accepted' as const,
             members: nextMembers,
             memberPhones: nextMemberPhones,
-            membersCount: Math.max(c.membersCount || 1, nextMembers.length),
+            kickedPhones: (c.kickedPhones || []).filter((kp) => !phonesMatch(kp, myPhone)),
+            membersCount: computeClientMembersCount(nextMembers, nextMemberPhones),
             lastMessage: `You joined this ${isChannel ? 'channel' : 'group'}`,
             lastMessageTime: 'Just now',
           };
@@ -10408,8 +11312,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const snapshot = invite.chatSnapshot;
       const baseMembers = snapshot?.members || (invite.invitedByName ? [invite.invitedByName] : []);
       const baseMemberPhones = snapshot?.memberPhones || (invite.invitedByPhone ? [invite.invitedByPhone] : []);
-      const mergedMembers = Array.from(new Set([...baseMembers, myName]));
-      const mergedPhones = Array.from(new Set([...baseMemberPhones, myPhone].filter(Boolean)));
+      const mergedMembers = dedupeNameList([...baseMembers, myName]);
+      const mergedPhones = dedupePhoneList([...baseMemberPhones, myPhone]);
 
       const joinedThread: ChatThread = {
         ...(snapshot || {}),
@@ -10434,7 +11338,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         adminIds: snapshot?.adminIds || [],
         members: mergedMembers,
         memberPhones: mergedPhones,
-        membersCount: Math.max((invite.membersCount || 1) + 1, mergedMembers.length),
+        membersCount: computeClientMembersCount(mergedMembers, mergedPhones),
         description: invite.description || snapshot?.description,
         invitedBy: invite.invitedByName,
         invitationStatus: 'accepted',
@@ -10492,23 +11396,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const exists = prev.some((c) => c.id === commId);
         let updated: TownCommunity[];
         if (exists) {
-          updated = prev.map((c) =>
-            c.id === commId
-              ? {
-                  ...c,
-                  isJoined: true,
-                  memberPhones: Array.from(new Set([...(c.memberPhones || []), myPhone].filter(Boolean))),
-                  membersCount: Math.max(c.membersCount || 1, (c.memberPhones?.length || 0) + 1),
-                }
-              : c
-          );
+          updated = prev.map((c) => {
+            if (c.id !== commId) return c;
+            const nextPhones = dedupePhoneList([...(c.memberPhones || []), myPhone]);
+            return {
+              ...c,
+              isJoined: true,
+              memberPhones: nextPhones,
+              membersCount: Math.max(c.membersCount || 1, nextPhones.length),
+            };
+          });
         } else {
           const newComm: TownCommunity = {
             id: commId,
             name: invite.groupName || 'Private Group',
             type: isChannel ? 'channel' : 'group',
             category: 'Tech & Hustle',
-            membersCount: invite.membersCount || 2,
+            membersCount: Math.max(invite.membersCount || 1, 1),
             avatar: invite.groupAvatar || `https://api.dicebear.com/8.x/initials/svg?seed=${encodeURIComponent(invite.groupName || 'Group')}&backgroundColor=581c87&textColor=ffffff`,
             description: invite.description || '',
             isVerified: false,
@@ -10520,7 +11424,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
           updated = [newComm, ...prev];
         }
-        try { localStorage.setItem('AGC_town_communities_v2', JSON.stringify(updated)); } catch (_) {}
+        persistPartitionedTownCommunities(updated, myPhone);
         return updated;
       });
     }
@@ -11101,6 +12005,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     optionTexts: string[],
     allowMultiple = false
   ): { success: boolean; message?: string } => {
+    const _targetChatPoll = chatsRef.current.find((c) => c.id === chatId);
+    if (isUserAdminBlockedFromSending(_targetChatPoll, currentUserRef.current)) {
+      return { success: false, message: 'Only admins can post in this group/channel.' };
+    }
     const cleanQuestion = question.trim();
     const cleanOptions = optionTexts.map((t) => t.trim()).filter(Boolean);
     if (!cleanQuestion) return { success: false, message: 'Enter a poll question.' };
@@ -15504,10 +16412,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const localWalletState = loadPartitionedWallet(phoneNumber);
     loadedPhoneForChatsRef.current = normPhone || cleanPhone;
     loadedPhoneForWalletRef.current = normPhone || cleanPhone;
-    setChats(localChatState.chats);
+    kickedGroupIdsRef.current = loadKickedGroupIds(phoneNumber);
+    const filteredLoginChats = localChatState.chats.filter((c) => !kickedGroupIdsRef.current.has(c.id));
+    setChats(filteredLoginChats);
     setMessages(localChatState.messages);
-    chatsRef.current = localChatState.chats;
+    chatsRef.current = filteredLoginChats;
     messagesRef.current = localChatState.messages;
+    setTownCommunities(loadPartitionedTownCommunities(phoneNumber));
     setWallet(localWalletState);
     walletRef.current = localWalletState;
     setSecuritySettings(loadPartitionedSecuritySettings(phoneNumber));
@@ -15727,6 +16638,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (activePhone) {
       persistPartitionedChats(chatsRef.current, activePhone);
       persistPartitionedMessages(messagesRef.current, activePhone);
+      persistPartitionedTownCommunities(townCommunitiesRef.current, activePhone);
       persistPartitionedWallet(walletRef.current, activePhone);
       persistPartitionedUserProfile(currentUserRef.current || currentUser);
       saveUserChatsBackupToSupabase(activePhone, chatsRef.current, messagesRef.current, {
@@ -15734,15 +16646,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userProfile: currentUserRef.current || currentUser,
       }).catch(() => {});
     }
+    try {
+      emitLogoutUserRooms();
+    } catch (_) {}
     // Clear loaded-phone guards & mark unauthenticated FIRST so auto-save effects & incoming socket/broadcast listeners NEVER overwrite saved storage!
     isAuthenticatedRef.current = false;
     loadedPhoneForChatsRef.current = '';
     loadedPhoneForWalletRef.current = '';
+    kickedGroupIdsRef.current.clear();
     setIsAuthenticated(false);
     safeLocalStorage.setItem('AGC_is_authenticated', 'false');
     setActiveChatId(null);
     setChats([]);
     setMessages({});
+    setTownCommunities([]);
+    setGroupInvites([]);
+    setActiveGroupInvitePopup(null);
     setWallet({ ...EMPTY_WALLET, transactions: [] });
     setIsAuthModalOpen(true);
   };
@@ -16213,8 +17132,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const inviteBotToGroup = (groupId: string, makeAdmin: boolean = true) => {
-    setChats((prev) =>
-      prev.map((c) => {
+    let nextChatSnapshot: ChatThread | null = null;
+    setChats((prev) => {
+      const updated = prev.map((c) => {
         if (c.id !== groupId) return c;
         const currentMembers = (c.members || []).filter((m) => m !== 'AfriBot AI');
         const currentAdmins = (c.admins || []).filter((a) => a !== 'AfriBot AI');
@@ -16224,14 +17144,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const newAdmins = makeAdmin && !currentAdmins.includes(AFRIBOT_NAME)
           ? [...currentAdmins, AFRIBOT_NAME]
           : currentAdmins;
-        return {
+        nextChatSnapshot = {
           ...c,
           members: newMembers,
           admins: newAdmins,
-          membersCount: Math.max(c.membersCount || 0, newMembers.length),
+          membersCount: computeClientMembersCount(newMembers, c.memberPhones),
         };
-      })
-    );
+        return nextChatSnapshot;
+      });
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
+
+    if (nextChatSnapshot) {
+      const snap = nextChatSnapshot as ChatThread;
+      fetch('/api/groups/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          groupId,
+          action: 'update_meta',
+          actorPhone: currentUser.phoneNumber,
+          actorId: currentUser.id,
+          admins: snap.admins,
+          members: snap.members,
+          membersCount: snap.membersCount,
+        }),
+      }).catch(() => {});
+      broadcastGroupSnapshot(snap);
+    }
 
     const announceMsg: ChatMessage = {
       id: `msg_bot_joined_${Date.now()}`,
@@ -17967,8 +18908,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const isDm = chatId.startsWith('dm_');
       const isChannelChat = Boolean(chatId.startsWith('channel_') || chat?.isChannel);
-      const isGroupChat = Boolean(isGroup || chatId.startsWith('group_') || chat?.isGroup || isChannelChat);
+      const isGroupChat = Boolean(isGroup || chatId.startsWith('group_') || chatId.startsWith('town_comm_') || chat?.isGroup || isChannelChat);
       const isSelfChat = chatId.includes('self') || (myCleanPhone && phonesMatch(senderCleanPhone, myCleanPhone) && (!targetPhone || phonesMatch(targetPhone, myCleanPhone)));
+
+      // Ignore any incoming group/channel traffic if user was kicked/removed
+      if (isGroupChat) {
+        const localGroup = chatsRef.current.find((c) => c.id === chatId);
+        const isKickedHere =
+          kickedGroupIdsRef.current.has(chatId) ||
+          Boolean(myCleanPhone && localGroup?.kickedPhones?.some((kp) => phonesMatch(kp, myCleanPhone))) ||
+          Boolean(myCleanPhone && Array.isArray(chat?.kickedPhones) && chat.kickedPhones.some((kp: string) => phonesMatch(kp, myCleanPhone)));
+        if (isKickedHere) {
+          removeGroupLocallyAndCleanup(chatId, { recordKick: true });
+          return;
+        }
+      }
 
       // 1. Strict DM Protection: Only actual participants can receive or view direct messages!
       if (isDm && !isSelfChat) {
@@ -18242,7 +19196,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             isOnline: true,
             isGroup: isGroupChat && !isChannelChat,
             isChannel: isChannelChat,
-            membersCount: chat?.membersCount || 2,
+            membersCount: chat?.membersCount || computeClientMembersCount(chat?.members, chat?.memberPhones),
             members: chat?.members || [],
             memberPhones: chat?.memberPhones || [],
             phone: isSelfChat ? userNow.phoneNumber : (message.senderPhone || ''),
@@ -18276,6 +19230,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     []
   );
 
+  // Sync authoritative group & channel membership/counts/kicks from backend server
+  const syncGroupsFromServer = useCallback(async () => {
+    if (!isAuthenticatedRef.current || isHydratingChatsRef.current) return;
+    const phone = currentUserRef.current?.phoneNumber || '';
+    const userId = currentUserRef.current?.id || '';
+    const norm = normalizePhoneDigits(phone);
+    if (!norm || loadedPhoneForChatsRef.current !== norm) return;
+
+    try {
+      const res = await fetch(
+        `/api/groups?phone=${encodeURIComponent(norm)}&userId=${encodeURIComponent(userId)}`
+      );
+      if (!res.ok) return;
+      const json = await res.json();
+      if (!json?.success) return;
+
+      if (Array.isArray(json.excludedGroupIds)) {
+        json.excludedGroupIds.forEach((excludedId: string) => {
+          if (excludedId) {
+            removeGroupLocallyAndCleanup(excludedId, { recordKick: true });
+          }
+        });
+      }
+
+      if (Array.isArray(json.groups)) {
+        json.groups.forEach((g: any) => {
+          applyAuthoritativeGroupUpdate(g);
+        });
+      }
+    } catch (_) {}
+  }, [applyAuthoritativeGroupUpdate, removeGroupLocallyAndCleanup]);
+  syncGroupsFromServerRef.current = syncGroupsFromServer;
+
   // Store-and-forward missed-message recovery from server buffer
   const syncMissedMessagesFromServer = useCallback(async (specificChatId?: string) => {
     if (!isAuthenticatedRef.current || isHydratingChatsRef.current) return;
@@ -18293,9 +19280,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null),
       ];
-      if (specificChatId && specificChatId !== AFRIBOT_ID) {
+      if (specificChatId && specificChatId !== AFRIBOT_ID && !kickedGroupIdsRef.current.has(specificChatId)) {
         requests.push(
-          fetch(`/api/messages/chat/${encodeURIComponent(specificChatId)}?sinceMs=${sinceMs}`)
+          fetch(`/api/messages/chat/${encodeURIComponent(specificChatId)}?phone=${encodeURIComponent(norm)}&sinceMs=${sinceMs}`)
             .then((r) => (r.ok ? r.json() : null))
             .catch(() => null)
         );
@@ -18305,6 +19292,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const seenIds = new Set<string>();
 
       for (const res of results) {
+        if (res?.removed && specificChatId) {
+          removeGroupLocallyAndCleanup(specificChatId, { recordKick: true });
+          continue;
+        }
         if (!res?.success || !Array.isArray(res.messages)) continue;
         if (typeof res.serverTimeMs === 'number' && res.serverTimeMs > newestServerTs) {
           newestServerTs = res.serverTimeMs;
@@ -18326,7 +19317,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         safeLocalStorage.setItem(watermarkKey, String(newestServerTs));
       }
     } catch (_) {}
-  }, [handleIncomingMessage]);
+  }, [handleIncomingMessage, removeGroupLocallyAndCleanup]);
   syncMissedMessagesRef.current = (specificChatId?: string) => {
     void syncMissedMessagesFromServer(specificChatId);
   };
@@ -18359,27 +19350,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           phoneNumber: latestUser.phoneNumber,
         });
       }
+      // Join active chat & all existing group/channel rooms so live kicks & member updates arrive immediately
       if (activeChatIdRef.current) {
         joinChatRoom(activeChatIdRef.current);
       }
+      chatsRef.current.forEach((c) => {
+        if (c.isGroup || c.isChannel) joinChatRoom(c.id);
+      });
+      void syncGroupsFromServer();
       void syncMissedMessagesFromServer(activeChatIdRef.current || undefined);
     };
 
     if (socket.connected) {
       registerRoomsOnConnect();
     } else {
+      void syncGroupsFromServer();
       void syncMissedMessagesFromServer(activeChatIdRef.current || undefined);
     }
     socket.on('connect', registerRoomsOnConnect);
 
     const handleInboxFocusOrVis = () => {
       if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        void syncGroupsFromServer();
+        syncLiveCommunitiesRef.current?.();
         void syncMissedMessagesFromServer(activeChatIdRef.current || undefined);
       }
     };
     window.addEventListener('focus', handleInboxFocusOrVis);
     document.addEventListener('visibilitychange', handleInboxFocusOrVis);
     const missedSyncInterval = setInterval(() => {
+      void syncGroupsFromServer();
       void syncMissedMessagesFromServer(activeChatIdRef.current || undefined);
     }, 10_000);
 
@@ -18490,47 +19490,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const handleGroupInviteResponse = (payload: any) => {
       if (!payload?.groupId) return;
-      const { groupId, responderPhone, responderName, accepted } = payload;
+      const { groupId, responderPhone, responderName, accepted, group } = payload;
       const latestUser = currentUserRef.current;
       if (responderPhone && latestUser.phoneNumber && phonesMatch(responderPhone, latestUser.phoneNumber)) {
         return;
       }
 
+      if (group && group.id) {
+        applyAuthoritativeGroupUpdate(group);
+      }
+
       const displayName = responderName || responderPhone || 'Contact';
-      let targetExists = false;
+      let addedNewMember = false;
 
       setChats((prev) => {
-        const exists = prev.some((c) => c.id === groupId);
-        if (!exists) return prev;
-        targetExists = true;
+        const target = prev.find((c) => c.id === groupId);
+        if (!target) return prev;
+        const alreadyMember = Boolean(
+          (responderPhone && target.memberPhones?.some((p) => phonesMatch(p, responderPhone))) ||
+            target.members?.some(
+              (m) =>
+                m.toLowerCase() === displayName.toLowerCase() ||
+                (responderPhone && phonesMatch(m, responderPhone))
+            )
+        );
         const updated = prev.map((c) => {
           if (c.id !== groupId) return c;
           const nextPending = (c.pendingMembers || []).filter(
-            (m) => m !== displayName && (!responderPhone || !phonesMatch(m, responderPhone))
+            (m) => m.toLowerCase() !== displayName.toLowerCase() && (!responderPhone || !phonesMatch(m, responderPhone))
+          );
+          const nextPendingPhones = (c.pendingPhones || []).filter(
+            (p) => !responderPhone || !phonesMatch(p, responderPhone)
           );
           if (accepted) {
-            const nextMembers = Array.from(new Set([...(c.members || []), displayName]));
-            const nextPhones = Array.from(new Set([...(c.memberPhones || []), responderPhone].filter(Boolean)));
+            if (!alreadyMember) addedNewMember = true;
+            const nextMembers = dedupeNameList([...(c.members || []), displayName]);
+            const nextPhones = dedupePhoneList([...(c.memberPhones || []), ...(responderPhone ? [responderPhone] : [])]);
+            const nextCount = computeClientMembersCount(nextMembers, nextPhones);
             return {
               ...c,
               pendingMembers: nextPending,
+              pendingPhones: nextPendingPhones,
+              kickedPhones: (c.kickedPhones || []).filter((kp) => !responderPhone || !phonesMatch(kp, responderPhone)),
               members: nextMembers,
               memberPhones: nextPhones,
-              membersCount: Math.max((c.membersCount || 1) + 1, nextMembers.length),
-              lastMessage: `${displayName} joined`,
-              lastMessageTime: 'Just now',
+              membersCount: Math.max(nextCount, Number(group?.membersCount || 0)),
+              lastMessage: alreadyMember ? c.lastMessage : `${displayName} joined`,
+              lastMessageTime: alreadyMember ? c.lastMessageTime : 'Just now',
             };
           }
           return {
             ...c,
             pendingMembers: nextPending,
+            pendingPhones: nextPendingPhones,
           };
         });
         persistPartitionedChats(updated, latestUser.phoneNumber);
         return updated;
       });
 
-      if (targetExists) {
+      if (addedNewMember) {
         const sysMsg: ChatMessage = {
           id: `msg_sys_invres_${Date.now()}`,
           chatId: groupId,
@@ -18552,6 +19571,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           showLocalNotification(`✅ ${displayName} joined`, `${displayName} accepted your group/channel invite.`);
         }
       }
+    };
+
+    const handleGroupUpdatedEvent = (payload: any) => {
+      const grp = payload?.group || payload;
+      if (!grp?.id) return;
+      applyAuthoritativeGroupUpdate(grp);
+    };
+
+    const handleGroupKickedEvent = (payload: any) => {
+      const gid = payload?.groupId || payload?.id;
+      if (!gid) return;
+      const myPhone = currentUserRef.current?.phoneNumber || '';
+      if (payload?.targetPhone && myPhone && !phonesMatch(payload.targetPhone, myPhone)) return;
+      removeGroupLocallyAndCleanup(gid, {
+        recordKick: true,
+        notifyTitle: `Removed from ${payload?.groupName || 'Group'}`,
+        notifyBody: 'An admin removed you from this conversation.',
+      });
     };
 
     const handleFriendRequestSocket = ({ request }: any) => {
@@ -18658,6 +19695,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket.on('group_created', handleGroupCreated);
     socket.on('group_invite', handleGroupInviteSocket);
     socket.on('group_invite_response', handleGroupInviteResponse);
+    socket.on('group_updated', handleGroupUpdatedEvent);
+    socket.on('group_kicked', handleGroupKickedEvent);
     socket.on('friend_request', handleFriendRequestSocket);
     socket.on('friend_request_accepted', handleFriendRequestAccepted);
     socket.on('dispatch_order_created', handleDispatchOrderCreated);
@@ -18714,6 +19753,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         if (e.data && e.data.type === 'group_invite_response' && e.data.groupId) {
           handleGroupInviteResponse(e.data);
+          return;
+        }
+        if (e.data && e.data.type === 'group_updated' && e.data.group) {
+          handleGroupUpdatedEvent(e.data);
+          return;
+        }
+        if (e.data && e.data.type === 'group_kicked' && e.data.groupId) {
+          handleGroupKickedEvent(e.data);
           return;
         }
         if (e.data && e.data.type === 'friend_request' && e.data.request) {
@@ -18813,6 +19860,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             handleGroupInviteResponse(payload);
           }
         })
+        .on('broadcast', { event: 'group_updated' }, ({ payload }: any) => {
+          if (payload) handleGroupUpdatedEvent(payload);
+        })
+        .on('broadcast', { event: 'group_kicked' }, ({ payload }: any) => {
+          if (payload) handleGroupKickedEvent(payload);
+        })
         .on('broadcast', { event: 'friend_request' }, ({ payload }: any) => {
           if (payload && payload.request) {
             handleIncomingFriendRequest(payload.request);
@@ -18887,6 +19940,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               handleGroupInviteResponse(payload);
             }
           })
+          .on('broadcast', { event: 'group_updated' }, ({ payload }: any) => {
+            if (payload) handleGroupUpdatedEvent(payload);
+          })
+          .on('broadcast', { event: 'group_kicked' }, ({ payload }: any) => {
+            if (payload) handleGroupKickedEvent(payload);
+          })
           .on('broadcast', { event: 'friend_request' }, ({ payload }: any) => {
             if (payload && payload.request) {
               handleIncomingFriendRequest(payload.request);
@@ -18948,6 +20007,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('group_created', handleGroupCreated);
       socket.off('group_invite', handleGroupInviteSocket);
       socket.off('group_invite_response', handleGroupInviteResponse);
+      socket.off('group_updated', handleGroupUpdatedEvent);
+      socket.off('group_kicked', handleGroupKickedEvent);
       socket.off('friend_request', handleFriendRequestSocket);
       socket.off('friend_request_accepted', handleFriendRequestAccepted);
       socket.off('dispatch_order_created', handleDispatchOrderCreated);
@@ -19862,10 +20923,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const urlParams = new URLSearchParams(window.location.search || '');
         const hashStr = hash.replace(/^#/, '');
         const hashParams = new URLSearchParams(hashStr.includes('?') ? hashStr.split('?')[1] : hashStr);
-        const pathJoinMatch = (window.location.pathname || '').match(/\/join\/([^/]+)/i);
+        const pathJoinMatch = (window.location.pathname || '').match(/\/(?:join|g|c)\/([^/?#]+)/i);
         const joinToken =
           urlParams.get('join') ||
+          urlParams.get('code') ||
+          urlParams.get('invite') ||
           hashParams.get('join') ||
+          hashParams.get('code') ||
           (pathJoinMatch?.[1] ? decodeURIComponent(pathJoinMatch[1]) : '');
         if (joinToken && joinToken.trim()) {
           pendingJoinCodeRef.current = joinToken.trim();
@@ -20769,6 +21833,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateChat,
         addMembersToGroup,
         removeMemberFromGroup,
+        leaveGroup,
         createGroup,
         createChannel,
         toggleMemberAdmin,

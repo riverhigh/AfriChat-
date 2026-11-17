@@ -163,7 +163,15 @@ export const TownView: React.FC = () => {
       return false;
     }
 
-    // 2. Private groups stay hidden unless the user created, joined, or is a member
+    // 2. Kicked users never see communities they were kicked from
+    if (
+      currentUser.phoneNumber &&
+      item.kickedPhones?.some((kp) => phonesMatch(kp, currentUser.phoneNumber))
+    ) {
+      return false;
+    }
+
+    // 3. Private groups stay hidden unless the user created, joined, or is a member
     if (item.type === 'group' || item.isPrivate) {
       const isCreator =
         (item.creatorId && item.creatorId === currentUser.id) ||
@@ -579,6 +587,17 @@ export const TownView: React.FC = () => {
                             </span>
                             <span>•</span>
                             <span className="truncate">{item.category}</span>
+                            <span>•</span>
+                            <span className="font-mono font-semibold">
+                              {Math.max(item.membersCount || 1, item.memberPhones?.length || 1)}{' '}
+                              {item.type === 'channel'
+                                ? Math.max(item.membersCount || 1, item.memberPhones?.length || 1) === 1
+                                  ? 'subscriber'
+                                  : 'subscribers'
+                                : Math.max(item.membersCount || 1, item.memberPhones?.length || 1) === 1
+                                ? 'member'
+                                : 'members'}
+                            </span>
                             {item.inviteCode && (item.type === 'group' || item.isPrivate) && (
                               <button
                                 type="button"

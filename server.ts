@@ -1310,6 +1310,8 @@ function recordStoredMessage(entry: Omit<StoredChatRelayEntry, 'createdAtMs'> & 
 
 function doesStoredMessageMatchPhone(entry: StoredChatRelayEntry, phoneVariantsSet: Set<string>): boolean {
   if (!entry || phoneVariantsSet.size === 0) return false;
+  const auth = isPhoneCurrentlyAuthorizedForGroupChat(entry.chatId, phoneVariantsSet);
+  if (auth === false) return false;
   const checkPhone = (raw?: string) => {
     if (!raw) return false;
     return getPhoneVariants(raw).some((v) => phoneVariantsSet.has(v));
@@ -1415,6 +1417,77 @@ function savePrivateGroupsFile() {
   }
 }
 
+function dedupePhonesServer(phones: any[]): string[] {
+  const result: string[] = [];
+  for (const raw of phones || []) {
+    const str = String(raw || '').trim();
+    if (!str) continue;
+    const digits = str.replace(/\D/g, '');
+    if (digits.length < 7) continue;
+    if (!result.some((existing) => phonesMatchServer(existing, str))) {
+      result.push(str);
+    }
+  }
+  return result;
+}
+
+function dedupeStringsCaseInsensitive(items: any[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of items || []) {
+    const s = String(raw || '').trim();
+    if (!s) continue;
+    const low = s.toLowerCase();
+    if (seen.has(low)) continue;
+    seen.add(low);
+    result.push(s);
+  }
+  return result;
+}
+
+function computeAuthoritativeMembersCount(g: {
+  members?: any[];
+  memberPhones?: any[];
+}): number {
+  const uniquePhones = dedupePhonesServer(Array.isArray(g?.memberPhones) ? g.memberPhones : []);
+  const rawMembers = dedupeStringsCaseInsensitive(Array.isArray(g?.members) ? g.members : []);
+  const hasBot = rawMembers.some((m) => m.toLowerCase() === 'agcbot' || m.toLowerCase() === 'afribot ai');
+  if (uniquePhones.length > 0) {
+    return Math.max(1, uniquePhones.length + (hasBot ? 1 : 0));
+  }
+  return Math.max(1, rawMembers.length);
+}
+
+function isPhoneInListServer(list: any[] | undefined, phone?: string): boolean {
+  if (!phone || !Array.isArray(list) || list.length === 0) return false;
+  return list.some((p) => p && phonesMatchServer(String(p), phone));
+}
+
+function isPhoneVariantsInListServer(list: any[] | undefined, variantsSet: Set<string>): boolean {
+  if (!Array.isArray(list) || list.length === 0 || variantsSet.size === 0) return false;
+  return list.some((p) => p && getPhoneVariants(String(p)).some((v) => variantsSet.has(v)));
+}
+
+function canUserAccessPrivateGroup(g: any, viewerPhone?: string, viewerId?: string): boolean {
+  if (!g) return false;
+  if (viewerPhone && isPhoneInListServer(g.kickedPhones, viewerPhone)) return false;
+  if (viewerId && Array.isArray(g.kickedIds) && g.kickedIds.includes(String(viewerId))) return false;
+  if (viewerId && g.creatorId && String(g.creatorId) === String(viewerId)) {
+    // Only creator if they haven't left (if memberPhones is populated and creator isn't in it, check)
+    if (!viewerPhone || !Array.isArray(g.memberPhones) || g.memberPhones.length === 0 || isPhoneInListServer(g.memberPhones, viewerPhone)) {
+      return true;
+    }
+  }
+  if (viewerPhone && g.creatorPhone && phonesMatchServer(viewerPhone, g.creatorPhone)) {
+    if (!Array.isArray(g.memberPhones) || g.memberPhones.length === 0 || isPhoneInListServer(g.memberPhones, viewerPhone)) {
+      return true;
+    }
+  }
+  if (viewerPhone && isPhoneInListServer(g.memberPhones, viewerPhone)) return true;
+  if (viewerId && Array.isArray(g.adminIds) && g.adminIds.includes(String(viewerId))) return true;
+  return false;
+}
+
 function isPrivateServerCommunity(c: any): boolean {
   if (!c) return false;
   if (c.isPrivate === true) return true;
@@ -1423,17 +1496,102 @@ function isPrivateServerCommunity(c: any): boolean {
 }
 
 function canUserAccessServerCommunity(c: any, viewerPhone?: string, viewerId?: string): boolean {
+  if (viewerPhone && isPhoneInListServer(c?.kickedPhones, viewerPhone)) return false;
   if (!isPrivateServerCommunity(c)) return true;
-  if (viewerId && c.creatorId && String(c.creatorId) === String(viewerId)) return true;
-  if (!viewerPhone) return false;
-  if (c.creatorPhone && phonesMatchServer(viewerPhone, c.creatorPhone)) return true;
-  if (Array.isArray(c.memberPhones) && c.memberPhones.some((p: string) => phonesMatchServer(viewerPhone, p))) {
+  if (!viewerPhone && !viewerId) return false;
+  if (viewerId && c.creatorId && String(c.creatorId) === String(viewerId)) {
+    if (!viewerPhone || !Array.isArray(c.memberPhones) || c.memberPhones.length === 0 || isPhoneInListServer(c.memberPhones, viewerPhone)) {
+      return true;
+    }
+  }
+  if (viewerPhone && c.creatorPhone && phonesMatchServer(viewerPhone, c.creatorPhone)) {
+    if (!Array.isArray(c.memberPhones) || c.memberPhones.length === 0 || isPhoneInListServer(c.memberPhones, viewerPhone)) {
+      return true;
+    }
+  }
+  if (viewerPhone && Array.isArray(c.memberPhones) && c.memberPhones.some((p: string) => phonesMatchServer(viewerPhone, p))) {
     return true;
   }
-  if (Array.isArray(c.invitedPhones) && c.invitedPhones.some((p: string) => phonesMatchServer(viewerPhone, p))) {
+  if (viewerPhone && Array.isArray(c.invitedPhones) && c.invitedPhones.some((p: string) => phonesMatchServer(viewerPhone, p))) {
     return true;
   }
   return false;
+}
+
+function isPhoneCurrentlyAuthorizedForGroupChat(chatId: string, phoneVariantsSet: Set<string>): boolean | null {
+  if (!chatId || phoneVariantsSet.size === 0) return null;
+  const priv = privateGroupsMap.get(String(chatId));
+  if (priv) {
+    if (isPhoneVariantsInListServer(priv.kickedPhones, phoneVariantsSet)) return false;
+    if (Array.isArray(priv.memberPhones) && priv.memberPhones.length > 0) {
+      return isPhoneVariantsInListServer(priv.memberPhones, phoneVariantsSet);
+    }
+    return null;
+  }
+  if (String(chatId).startsWith('town_comm_')) {
+    const commId = String(chatId).replace('town_comm_', '');
+    const comm = communitiesMap.get(commId);
+    if (comm) {
+      if (isPhoneVariantsInListServer(comm.kickedPhones, phoneVariantsSet)) return false;
+      if (isPrivateServerCommunity(comm) && Array.isArray(comm.memberPhones) && comm.memberPhones.length > 0) {
+        return (
+          isPhoneVariantsInListServer(comm.memberPhones, phoneVariantsSet) ||
+          isPhoneVariantsInListServer(comm.invitedPhones, phoneVariantsSet)
+        );
+      }
+    }
+  }
+  return null;
+}
+
+function canPhoneWriteToGroupChat(chatId: string, phoneVariantsSet: Set<string>, senderName?: string): boolean {
+  const priv = privateGroupsMap.get(String(chatId));
+  const comm = String(chatId).startsWith('town_comm_')
+    ? communitiesMap.get(String(chatId).replace('town_comm_', ''))
+    : undefined;
+  const record = priv || comm;
+  if (!record) return true;
+  const isBroadcastOnly = Boolean(record.isChannel || record.type === 'channel' || record.announceMode);
+  if (!isBroadcastOnly) return true;
+  if (record.creatorPhone && isPhoneVariantsInListServer([record.creatorPhone], phoneVariantsSet)) return true;
+  const admins: string[] = Array.isArray(record.admins) ? record.admins : [];
+  if (admins.length === 0) return true;
+  if (isPhoneVariantsInListServer(admins, phoneVariantsSet)) return true;
+  if (senderName) {
+    const lower = String(senderName).trim().toLowerCase();
+    if (lower && admins.some((a) => String(a || '').trim().toLowerCase() === lower)) return true;
+  }
+  return false;
+}
+
+function emitGroupEventToPhones(eventName: string, phones: string[], chatId: string, payload: any, excludeSocketId?: string) {
+  const sentSockets = new Set<string>(excludeSocketId ? [excludeSocketId] : []);
+  const emitRoomOnce = (roomName: string) => {
+    const room = io.sockets.adapter.rooms.get(roomName);
+    if (!room) return;
+    for (const sid of room) {
+      if (sentSockets.has(sid)) continue;
+      sentSockets.add(sid);
+      io.to(sid).emit(eventName, payload);
+    }
+  };
+  if (chatId) emitRoomOnce(`chat:${chatId}`);
+  dedupePhonesServer(phones).forEach((p) => {
+    getPhoneVariants(p).forEach((v) => emitRoomOnce(`phone:${v}`));
+  });
+}
+
+function removePhonesFromChatRoom(chatId: string, phones: string[]) {
+  if (!chatId || !phones.length) return;
+  const room = io.sockets.adapter.rooms.get(`chat:${chatId}`);
+  if (!room) return;
+  for (const sid of Array.from(room)) {
+    const s = io.sockets.sockets.get(sid) as any;
+    const sockPhone = s?._agcPhone || s?._userCleanPhone;
+    if (sockPhone && phones.some((p) => phonesMatchServer(sockPhone, p))) {
+      s.leave(`chat:${chatId}`);
+    }
+  }
 }
 
 function extractInviteLookupCode(rawInput: string): string {
@@ -5161,24 +5319,72 @@ app.post('/api/communities', (req: Request, res: Response) => {
   res.json({ success: true, community: stored });
 });
 
+// REST: Private Groups & Channels Authoritative Sync
+app.get('/api/groups', (req: Request, res: Response) => {
+  const viewerPhone = String(req.query.phone || '').trim();
+  const viewerId = String(req.query.userId || '').trim();
+  if (!viewerPhone && !viewerId) {
+    return res.json({ success: true, groups: [], excludedGroupIds: [] });
+  }
+  const authorized: any[] = [];
+  const excludedGroupIds: string[] = [];
+  for (const g of privateGroupsMap.values()) {
+    if (!g?.id) continue;
+    if (canUserAccessPrivateGroup(g, viewerPhone, viewerId)) {
+      authorized.push({
+        ...g,
+        membersCount: computeAuthoritativeMembersCount(g),
+      });
+    } else if (
+      (viewerPhone && isPhoneInListServer(g.kickedPhones, viewerPhone)) ||
+      (viewerId && Array.isArray(g.kickedIds) && g.kickedIds.includes(viewerId))
+    ) {
+      excludedGroupIds.push(String(g.id));
+    }
+  }
+  for (const c of communitiesMap.values()) {
+    if (!c?.id || isInvalidServerCommunity(c)) continue;
+    if (viewerPhone && isPhoneInListServer(c.kickedPhones, viewerPhone)) {
+      excludedGroupIds.push(`town_comm_${c.id}`);
+    }
+  }
+  return res.json({ success: true, groups: authorized, excludedGroupIds });
+});
+
 // REST: Private Groups Registry & Join-by-Link / Invite Code
 app.post('/api/groups/register', (req: Request, res: Response) => {
   const g = req.body;
   if (!g || !g.id || !g.name) return res.status(400).json({ error: 'Group id and name required' });
   const existing = privateGroupsMap.get(String(g.id));
-  const mergedPhones = Array.from(
-    new Set([
-      ...(Array.isArray(existing?.memberPhones) ? existing.memberPhones : []),
-      ...(Array.isArray(g.memberPhones) ? g.memberPhones : []),
-      ...(g.creatorPhone ? [g.creatorPhone] : []),
-    ].filter(Boolean))
-  );
-  const mergedMembers = Array.from(
-    new Set([
-      ...(Array.isArray(existing?.members) ? existing.members : []),
-      ...(Array.isArray(g.members) ? g.members : []),
-    ].filter(Boolean))
-  );
+  const kickedPhones = dedupePhonesServer([
+    ...(Array.isArray(existing?.kickedPhones) ? existing.kickedPhones : []),
+    ...(Array.isArray(g.kickedPhones) ? g.kickedPhones : []),
+  ]);
+  const mergedPhones = dedupePhonesServer([
+    ...(Array.isArray(existing?.memberPhones) ? existing.memberPhones : []),
+    ...(Array.isArray(g.memberPhones) ? g.memberPhones : []),
+    ...(g.creatorPhone ? [g.creatorPhone] : []),
+  ]).filter((p) => !isPhoneInListServer(kickedPhones, p));
+  const mergedMembers = dedupeStringsCaseInsensitive([
+    ...(Array.isArray(existing?.members) ? existing.members : []),
+    ...(Array.isArray(g.members) ? g.members : []),
+  ]);
+  const mergedPending = dedupeStringsCaseInsensitive([
+    ...(Array.isArray(existing?.pendingMembers) ? existing.pendingMembers : []),
+    ...(Array.isArray(g.pendingMembers) ? g.pendingMembers : []),
+  ]);
+  const mergedPendingPhones = dedupePhonesServer([
+    ...(Array.isArray(existing?.pendingPhones) ? existing.pendingPhones : []),
+    ...(Array.isArray(g.pendingPhones) ? g.pendingPhones : []),
+  ]);
+  const mergedAdmins = dedupeStringsCaseInsensitive([
+    ...(Array.isArray(existing?.admins) ? existing.admins : []),
+    ...(Array.isArray(g.admins) ? g.admins : []),
+  ]);
+  const mergedAdminIds = dedupeStringsCaseInsensitive([
+    ...(Array.isArray(existing?.adminIds) ? existing.adminIds : []),
+    ...(Array.isArray(g.adminIds) ? g.adminIds : []),
+  ]);
   const nextGroup = {
     ...(existing || {}),
     ...g,
@@ -5186,12 +5392,345 @@ app.post('/api/groups/register', (req: Request, res: Response) => {
     inviteCode: String(g.inviteCode || existing?.inviteCode || g.id).trim().toUpperCase(),
     memberPhones: mergedPhones,
     members: mergedMembers,
-    membersCount: Math.max(Number(g.membersCount || 1), mergedMembers.length, mergedPhones.length, 1),
+    pendingMembers: mergedPending,
+    pendingPhones: mergedPendingPhones,
+    kickedPhones,
+    admins: mergedAdmins,
+    adminIds: mergedAdminIds,
+    membersCount: computeAuthoritativeMembersCount({ members: mergedMembers, memberPhones: mergedPhones }),
     updatedAt: new Date().toISOString(),
   };
   privateGroupsMap.set(nextGroup.id, nextGroup);
   savePrivateGroupsFile();
   return res.json({ success: true, group: nextGroup });
+});
+
+app.post('/api/groups/invite', (req: Request, res: Response) => {
+  const { groupId, targets, actorPhone } = req.body || {};
+  if (!groupId || !Array.isArray(targets) || targets.length === 0) {
+    return res.status(400).json({ success: false, error: 'groupId and targets required' });
+  }
+  const gid = String(groupId);
+  const targetNames = targets.map((t: any) => String(t?.name || t?.phone || '').trim()).filter(Boolean);
+  const targetPhones = dedupePhonesServer(targets.map((t: any) => String(t?.phone || '').trim()).filter(Boolean));
+
+  const priv = privateGroupsMap.get(gid);
+  if (priv) {
+    const nextKicked = (priv.kickedPhones || []).filter((kp: string) => !isPhoneInListServer(targetPhones, kp));
+    const nextPendingMembers = dedupeStringsCaseInsensitive([
+      ...(Array.isArray(priv.pendingMembers) ? priv.pendingMembers : []),
+      ...targetNames,
+    ]);
+    const nextPendingPhones = dedupePhonesServer([
+      ...(Array.isArray(priv.pendingPhones) ? priv.pendingPhones : []),
+      ...targetPhones,
+    ]);
+    const updated = {
+      ...priv,
+      kickedPhones: nextKicked,
+      pendingMembers: nextPendingMembers,
+      pendingPhones: nextPendingPhones,
+      updatedAt: new Date().toISOString(),
+    };
+    privateGroupsMap.set(gid, updated);
+    savePrivateGroupsFile();
+    emitGroupEventToPhones('group_updated', updated.memberPhones || [], gid, { group: updated, actorPhone });
+    return res.json({ success: true, group: updated });
+  }
+
+  if (gid.startsWith('town_comm_')) {
+    const commId = gid.replace('town_comm_', '');
+    const comm = communitiesMap.get(commId);
+    if (comm) {
+      const nextKicked = (comm.kickedPhones || []).filter((kp: string) => !isPhoneInListServer(targetPhones, kp));
+      const nextInvited = dedupePhonesServer([
+        ...(Array.isArray(comm.invitedPhones) ? comm.invitedPhones : []),
+        ...targetPhones,
+      ]);
+      const nextPending = dedupeStringsCaseInsensitive([
+        ...(Array.isArray(comm.pendingMembers) ? comm.pendingMembers : []),
+        ...targetNames,
+      ]);
+      const updatedComm = {
+        ...comm,
+        kickedPhones: nextKicked,
+        invitedPhones: nextInvited,
+        pendingMembers: nextPending,
+      };
+      communitiesMap.set(commId, updatedComm);
+      saveCommunitiesFile();
+      emitGroupEventToPhones('group_updated', updatedComm.memberPhones || [], gid, { group: updatedComm, actorPhone });
+      return res.json({ success: true, community: updatedComm });
+    }
+  }
+  return res.json({ success: true });
+});
+
+app.post('/api/groups/invite-response', (req: Request, res: Response) => {
+  const { groupId, responderPhone, responderName, responderId, accepted } = req.body || {};
+  if (!groupId) return res.status(400).json({ success: false, error: 'groupId required' });
+  const gid = String(groupId);
+  const displayName = String(responderName || responderPhone || 'Member').trim();
+
+  const priv = privateGroupsMap.get(gid);
+  if (priv) {
+    const nextPendingMembers = (priv.pendingMembers || []).filter(
+      (m: string) => m.toLowerCase() !== displayName.toLowerCase() && (!responderPhone || !phonesMatchServer(m, responderPhone))
+    );
+    const nextPendingPhones = (priv.pendingPhones || []).filter(
+      (p: string) => !responderPhone || !phonesMatchServer(p, responderPhone)
+    );
+    let nextPhones = Array.isArray(priv.memberPhones) ? [...priv.memberPhones] : [];
+    let nextMembers = Array.isArray(priv.members) ? [...priv.members] : [];
+    let nextKicked = Array.isArray(priv.kickedPhones) ? [...priv.kickedPhones] : [];
+    if (accepted) {
+      if (responderPhone) {
+        nextKicked = nextKicked.filter((kp) => !phonesMatchServer(kp, responderPhone));
+        nextPhones = dedupePhonesServer([...nextPhones, responderPhone]);
+      }
+      if (displayName && !nextMembers.some((m) => m.toLowerCase() === displayName.toLowerCase() || (responderPhone && phonesMatchServer(m, responderPhone)))) {
+        nextMembers.push(displayName);
+      }
+    }
+    const updated = {
+      ...priv,
+      pendingMembers: nextPendingMembers,
+      pendingPhones: nextPendingPhones,
+      kickedPhones: nextKicked,
+      memberPhones: nextPhones,
+      members: nextMembers,
+      membersCount: computeAuthoritativeMembersCount({ members: nextMembers, memberPhones: nextPhones }),
+      updatedAt: new Date().toISOString(),
+    };
+    privateGroupsMap.set(gid, updated);
+    savePrivateGroupsFile();
+    emitGroupEventToPhones('group_updated', updated.memberPhones || [], gid, {
+      group: updated,
+      responderPhone,
+      responderName: displayName,
+      responderId,
+      accepted: Boolean(accepted),
+    });
+    return res.json({ success: true, group: updated });
+  }
+
+  if (gid.startsWith('town_comm_')) {
+    const commId = gid.replace('town_comm_', '');
+    const comm = communitiesMap.get(commId);
+    if (comm) {
+      const nextPending = (comm.pendingMembers || []).filter(
+        (m: string) => m.toLowerCase() !== displayName.toLowerCase() && (!responderPhone || !phonesMatchServer(m, responderPhone))
+      );
+      let nextPhones = Array.isArray(comm.memberPhones) ? [...comm.memberPhones] : [];
+      let nextMembers = Array.isArray(comm.members) ? [...comm.members] : [];
+      if (accepted) {
+        if (responderPhone) nextPhones = dedupePhonesServer([...nextPhones, responderPhone]);
+        if (displayName && !nextMembers.some((m) => m.toLowerCase() === displayName.toLowerCase())) {
+          nextMembers.push(displayName);
+        }
+      }
+      const updatedComm = {
+        ...comm,
+        pendingMembers: nextPending,
+        memberPhones: nextPhones,
+        members: nextMembers,
+        membersCount: computeAuthoritativeMembersCount({ members: nextMembers, memberPhones: nextPhones }),
+      };
+      communitiesMap.set(commId, updatedComm);
+      saveCommunitiesFile();
+      emitGroupEventToPhones('group_updated', updatedComm.memberPhones || [], gid, {
+        group: { ...updatedComm, id: gid },
+        responderPhone,
+        responderName: displayName,
+        accepted: Boolean(accepted),
+      });
+      return res.json({ success: true, community: updatedComm });
+    }
+  }
+
+  return res.json({ success: true });
+});
+
+app.post('/api/groups/update', (req: Request, res: Response) => {
+  const {
+    groupId,
+    action,
+    actorPhone,
+    actorId,
+    actorName,
+    targetName,
+    targetPhone,
+    updates,
+  } = req.body || {};
+
+  if (!groupId || !action) {
+    return res.status(400).json({ success: false, error: 'groupId and action required' });
+  }
+
+  const gid = String(groupId);
+  const isTown = gid.startsWith('town_comm_');
+  const commId = isTown ? gid.replace('town_comm_', '') : '';
+  const targetRecord = isTown ? communitiesMap.get(commId) : privateGroupsMap.get(gid);
+
+  if (!targetRecord) {
+    return res.json({ success: true, missingOnServer: true });
+  }
+
+  const isTargetMatch = (val: string): boolean => {
+    const s = String(val || '').trim();
+    if (!s) return false;
+    if (targetPhone && phonesMatchServer(s, String(targetPhone))) return true;
+    if (targetName && s.toLowerCase() === String(targetName).trim().toLowerCase()) return true;
+    return false;
+  };
+
+  const isActorAdminOrCreator = (): boolean => {
+    if (actorId && targetRecord.creatorId && String(targetRecord.creatorId) === String(actorId)) return true;
+    if (actorPhone && targetRecord.creatorPhone && phonesMatchServer(String(actorPhone), String(targetRecord.creatorPhone))) return true;
+    if (actorId && Array.isArray(targetRecord.adminIds) && targetRecord.adminIds.includes(String(actorId))) return true;
+    if (Array.isArray(targetRecord.admins)) {
+      if (actorPhone && targetRecord.admins.some((a: string) => phonesMatchServer(a, String(actorPhone)))) return true;
+      if (actorName && targetRecord.admins.some((a: string) => String(a).trim().toLowerCase() === String(actorName).trim().toLowerCase())) return true;
+    }
+    return false;
+  };
+
+  if (action === 'kick' || action === 'remove_member' || action === 'leave') {
+    const isSelfLeave =
+      action === 'leave' ||
+      (actorPhone && targetPhone && phonesMatchServer(String(actorPhone), String(targetPhone)));
+
+    if (!isSelfLeave && (actorPhone || actorId) && !isActorAdminOrCreator()) {
+      return res.status(403).json({ success: false, error: 'Only group/channel admins can remove members.' });
+    }
+
+    const oldPhones: string[] = Array.isArray(targetRecord.memberPhones) ? targetRecord.memberPhones : [];
+    const nextPhones = oldPhones.filter((p) => !isTargetMatch(p));
+    const nextMembers = (Array.isArray(targetRecord.members) ? targetRecord.members : []).filter((m: string) => !isTargetMatch(m));
+    const nextPending = (Array.isArray(targetRecord.pendingMembers) ? targetRecord.pendingMembers : []).filter((m: string) => !isTargetMatch(m));
+    const nextPendingPhones = (Array.isArray(targetRecord.pendingPhones) ? targetRecord.pendingPhones : []).filter((p: string) => !isTargetMatch(p));
+    const nextInvited = (Array.isArray(targetRecord.invitedPhones) ? targetRecord.invitedPhones : []).filter((p: string) => !isTargetMatch(p));
+    const nextAdmins = (Array.isArray(targetRecord.admins) ? targetRecord.admins : []).filter((a: string) => !isTargetMatch(a));
+
+    const removedPhones = dedupePhonesServer([
+      ...(targetPhone ? [String(targetPhone)] : []),
+      ...oldPhones.filter((p) => isTargetMatch(p)),
+    ]);
+
+    const nextKicked =
+      action === 'kick' || (!isSelfLeave && action === 'remove_member')
+        ? dedupePhonesServer([...(Array.isArray(targetRecord.kickedPhones) ? targetRecord.kickedPhones : []), ...removedPhones])
+        : Array.isArray(targetRecord.kickedPhones)
+        ? targetRecord.kickedPhones
+        : [];
+
+    const nextCount = computeAuthoritativeMembersCount({ members: nextMembers, memberPhones: nextPhones });
+    const nextRecord = {
+      ...targetRecord,
+      memberPhones: nextPhones,
+      members: nextMembers,
+      pendingMembers: nextPending,
+      pendingPhones: nextPendingPhones,
+      invitedPhones: nextInvited,
+      admins: nextAdmins,
+      kickedPhones: nextKicked,
+      membersCount: nextCount,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (isTown) {
+      communitiesMap.set(commId, nextRecord);
+      saveCommunitiesFile();
+    } else {
+      privateGroupsMap.set(gid, nextRecord);
+      savePrivateGroupsFile();
+    }
+
+    if (removedPhones.length > 0) {
+      removePhonesFromChatRoom(gid, removedPhones);
+      if (!isSelfLeave) {
+        emitGroupEventToPhones('group_kicked', removedPhones, '', {
+          groupId: gid,
+          groupName: nextRecord.name,
+          targetPhone: removedPhones[0],
+          targetName: targetName || removedPhones[0],
+          actorName: actorName || 'Admin',
+          reason: 'Removed by admin',
+        });
+      }
+    }
+
+    const broadcastGroup = isTown ? { ...nextRecord, id: gid } : nextRecord;
+    emitGroupEventToPhones('group_updated', nextPhones, gid, {
+      group: broadcastGroup,
+      removedName: targetName,
+      removedPhone: removedPhones[0] || targetPhone,
+      action,
+    });
+
+    return res.json({ success: true, group: broadcastGroup });
+  }
+
+  if (action === 'toggle_admin') {
+    if ((actorPhone || actorId) && !isActorAdminOrCreator()) {
+      return res.status(403).json({ success: false, error: 'Only admins can change admin roles.' });
+    }
+    const currentAdmins: string[] = Array.isArray(targetRecord.admins) ? [...targetRecord.admins] : [];
+    const already = currentAdmins.some((a) => isTargetMatch(a));
+    const nextAdmins = already
+      ? currentAdmins.filter((a) => !isTargetMatch(a))
+      : dedupeStringsCaseInsensitive([...currentAdmins, targetName || targetPhone]);
+    const nextRecord = {
+      ...targetRecord,
+      admins: nextAdmins,
+      updatedAt: new Date().toISOString(),
+    };
+    if (isTown) {
+      communitiesMap.set(commId, nextRecord);
+      saveCommunitiesFile();
+    } else {
+      privateGroupsMap.set(gid, nextRecord);
+      savePrivateGroupsFile();
+    }
+    const broadcastGroup = isTown ? { ...nextRecord, id: gid } : nextRecord;
+    emitGroupEventToPhones('group_updated', nextRecord.memberPhones || [], gid, {
+      group: broadcastGroup,
+      action: 'toggle_admin',
+    });
+    return res.json({ success: true, group: broadcastGroup });
+  }
+
+  if (action === 'update_meta' && updates && typeof updates === 'object') {
+    if ((actorPhone || actorId) && !isActorAdminOrCreator()) {
+      return res.status(403).json({ success: false, error: 'Only admins can update settings.' });
+    }
+    const allowed: Record<string, any> = {};
+    if (typeof updates.name === 'string' && updates.name.trim()) allowed.name = updates.name.trim();
+    if (typeof updates.description === 'string') allowed.description = updates.description;
+    if (typeof updates.announceMode === 'boolean') allowed.announceMode = updates.announceMode;
+    if (typeof updates.disappearingTimer === 'string') allowed.disappearingTimer = updates.disappearingTimer;
+    if (updates.pinnedMessage !== undefined) allowed.pinnedMessage = updates.pinnedMessage;
+    const nextRecord = {
+      ...targetRecord,
+      ...allowed,
+      updatedAt: new Date().toISOString(),
+    };
+    if (isTown) {
+      communitiesMap.set(commId, nextRecord);
+      saveCommunitiesFile();
+    } else {
+      privateGroupsMap.set(gid, nextRecord);
+      savePrivateGroupsFile();
+    }
+    const broadcastGroup = isTown ? { ...nextRecord, id: gid } : nextRecord;
+    emitGroupEventToPhones('group_updated', nextRecord.memberPhones || [], gid, {
+      group: broadcastGroup,
+      action: 'update_meta',
+    });
+    return res.json({ success: true, group: broadcastGroup });
+  }
+
+  return res.status(400).json({ success: false, error: 'Unknown action' });
 });
 
 app.post('/api/groups/join', (req: Request, res: Response) => {
@@ -5209,22 +5748,41 @@ app.post('/api/groups/join', (req: Request, res: Response) => {
   });
 
   if (matchedGroup) {
-    const nextPhones = Array.from(
-      new Set([...(Array.isArray(matchedGroup.memberPhones) ? matchedGroup.memberPhones : []), phone].filter(Boolean))
+    if (phone && isPhoneInListServer(matchedGroup.kickedPhones, phone)) {
+      return res.status(403).json({ success: false, error: 'You were removed from this group/channel by an admin.' });
+    }
+    const nextPhones = dedupePhonesServer([
+      ...(Array.isArray(matchedGroup.memberPhones) ? matchedGroup.memberPhones : []),
+      phone,
+    ]);
+    const nextMembers = dedupeStringsCaseInsensitive([
+      ...(Array.isArray(matchedGroup.members) ? matchedGroup.members : []),
+      name || phone,
+    ]);
+    const nextPendingMembers = (matchedGroup.pendingMembers || []).filter(
+      (m: string) => (!name || m.toLowerCase() !== String(name).toLowerCase()) && (!phone || !phonesMatchServer(m, phone))
     );
-    const nextMembers = Array.from(
-      new Set([...(Array.isArray(matchedGroup.members) ? matchedGroup.members : []), name || phone].filter(Boolean))
+    const nextPendingPhones = (matchedGroup.pendingPhones || []).filter(
+      (p: string) => !phone || !phonesMatchServer(p, phone)
     );
     const updatedGroup = {
       ...matchedGroup,
       memberPhones: nextPhones,
       members: nextMembers,
-      membersCount: Math.max(Number(matchedGroup.membersCount || 1), nextMembers.length, nextPhones.length),
+      pendingMembers: nextPendingMembers,
+      pendingPhones: nextPendingPhones,
+      membersCount: computeAuthoritativeMembersCount({ members: nextMembers, memberPhones: nextPhones }),
       updatedAt: new Date().toISOString(),
     };
     privateGroupsMap.set(updatedGroup.id, updatedGroup);
     savePrivateGroupsFile();
-    io.to(`chat:${updatedGroup.id}`).emit('group_invite_response', {
+    emitGroupEventToPhones('group_updated', updatedGroup.memberPhones, updatedGroup.id, {
+      group: updatedGroup,
+      responderPhone: phone || '',
+      responderName: name || phone || 'Member',
+      accepted: true,
+    });
+    emitGroupEventToPhones('group_invite_response', updatedGroup.memberPhones, updatedGroup.id, {
       groupId: updatedGroup.id,
       responderPhone: phone || '',
       responderName: name || phone || 'Member',
@@ -5242,17 +5800,31 @@ app.post('/api/groups/join', (req: Request, res: Response) => {
   });
 
   if (matchedComm) {
-    const nextPhones = Array.from(
-      new Set([...(Array.isArray(matchedComm.memberPhones) ? matchedComm.memberPhones : []), phone].filter(Boolean))
-    );
+    if (phone && isPhoneInListServer(matchedComm.kickedPhones, phone)) {
+      return res.status(403).json({ success: false, error: 'You were removed from this community by an admin.' });
+    }
+    const nextPhones = dedupePhonesServer([
+      ...(Array.isArray(matchedComm.memberPhones) ? matchedComm.memberPhones : []),
+      phone,
+    ]);
+    const nextMembers = dedupeStringsCaseInsensitive([
+      ...(Array.isArray(matchedComm.members) ? matchedComm.members : []),
+      name || phone,
+    ]);
     const updatedComm = {
       ...matchedComm,
       memberPhones: nextPhones,
-      membersCount: Math.max(Number(matchedComm.membersCount || 1), nextPhones.length, 1),
-      ...(userId && !matchedComm.creatorId ? {} : {}),
+      members: nextMembers,
+      membersCount: computeAuthoritativeMembersCount({ members: nextMembers, memberPhones: nextPhones }),
     };
     communitiesMap.set(updatedComm.id, updatedComm);
     saveCommunitiesFile();
+    emitGroupEventToPhones('group_updated', updatedComm.memberPhones, `town_comm_${updatedComm.id}`, {
+      group: { ...updatedComm, id: `town_comm_${updatedComm.id}` },
+      responderPhone: phone || '',
+      responderName: name || phone || 'Member',
+      accepted: true,
+    });
     return res.json({ success: true, kind: 'community', community: updatedComm });
   }
 
@@ -5347,6 +5919,19 @@ app.post('/api/messages/send', (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'chatId and message required' });
     }
     const senderPhone = String(message.senderPhone || '').replace(/\D/g, '');
+
+    // Authoritative server check: block kicked/non-member users and non-admins in channels/announce mode
+    if (senderPhone && message.sender !== 'system' && message.sender !== 'ai') {
+      const senderVariants = new Set(getPhoneVariants(senderPhone));
+      const senderAuth = isPhoneCurrentlyAuthorizedForGroupChat(String(chatId), senderVariants);
+      if (senderAuth === false) {
+        return res.status(403).json({ success: false, error: 'You are no longer a member of this group or channel.' });
+      }
+      if (!canPhoneWriteToGroupChat(String(chatId), senderVariants, message.senderName)) {
+        return res.status(403).json({ success: false, error: 'Only admins can send messages here.' });
+      }
+    }
+
     let finalTarget = targetPhone ? String(targetPhone).replace(/\D/g, '') : '';
     if (!finalTarget && String(chatId).startsWith('dm_')) {
       const senderVariants = new Set(getPhoneVariants(senderPhone));
@@ -5355,24 +5940,46 @@ app.post('/api/messages/send', (req: Request, res: Response) => {
     }
 
     const groupFlag = Boolean(isGroup || String(chatId).startsWith('group_') || String(chatId).startsWith('channel_') || chat?.isGroup || chat?.isChannel);
+    const serverPriv = privateGroupsMap.get(String(chatId));
+    const serverComm = String(chatId).startsWith('town_comm_') ? communitiesMap.get(String(chatId).replace('town_comm_', '')) : undefined;
+    const authRecord = serverPriv || serverComm;
+    const authoritativePhones: string[] = Array.isArray(authRecord?.memberPhones) && authRecord.memberPhones.length > 0
+      ? authRecord.memberPhones.filter((p: string) => !isPhoneInListServer(authRecord.kickedPhones, p))
+      : Array.isArray(memberPhones)
+      ? memberPhones
+      : [];
+    const wireChatWithAuth = authRecord && chat
+      ? {
+          ...chat,
+          members: authRecord.members || chat.members,
+          memberPhones: authoritativePhones,
+          membersCount: computeAuthoritativeMembersCount({ members: authRecord.members || chat.members, memberPhones: authoritativePhones }),
+        }
+      : chat;
+
     recordStoredMessage({
       id: String(message.id),
       chatId: String(chatId),
       message,
       senderPhone,
       targetPhone: finalTarget || undefined,
-      memberPhones: Array.isArray(memberPhones) ? memberPhones : undefined,
-      chat,
+      memberPhones: authoritativePhones.length > 0 ? authoritativePhones : undefined,
+      chat: wireChatWithAuth,
       isGroup: groupFlag,
     });
 
-    const outPayload = { chatId, message, targetPhone: finalTarget, chat, isGroup: groupFlag };
+    const outPayload = { chatId, message, targetPhone: finalTarget, chat: wireChatWithAuth, isGroup: groupFlag };
     const deliveredSockets = new Set<string>(senderSocketId ? [String(senderSocketId)] : []);
+    const kickedPhonesList: string[] = Array.isArray(authRecord?.kickedPhones) ? authRecord.kickedPhones : [];
     const emitOnce = (roomName: string) => {
       const room = io.sockets.adapter.rooms.get(roomName);
       if (!room) return;
       for (const sid of room) {
         if (deliveredSockets.has(sid)) continue;
+        const targetSock = io.sockets.sockets.get(sid) as any;
+        if (kickedPhonesList.length > 0 && targetSock?._agcPhone && isPhoneInListServer(kickedPhonesList, targetSock._agcPhone)) {
+          continue;
+        }
         deliveredSockets.add(sid);
         io.to(sid).emit('new_message', outPayload);
       }
@@ -5386,11 +5993,9 @@ app.post('/api/messages/send', (req: Request, res: Response) => {
       // Sync sender's other open tabs/devices too
       getPhoneVariants(senderPhone).forEach((v) => emitOnce(`phone:${v}`));
     }
-    if (Array.isArray(memberPhones)) {
-      memberPhones.forEach((p: string) => {
-        getPhoneVariants(p).forEach((v) => emitOnce(`phone:${v}`));
-      });
-    }
+    authoritativePhones.forEach((p: string) => {
+      getPhoneVariants(p).forEach((v) => emitOnce(`phone:${v}`));
+    });
 
     return res.json({ success: true, id: message.id, relayedSockets: Math.max(0, deliveredSockets.size - (senderSocketId ? 1 : 0)) });
   } catch (err: any) {
@@ -5412,7 +6017,14 @@ app.get('/api/messages/sync', (req: Request, res: Response) => {
 app.get('/api/messages/chat/:chatId', (req: Request, res: Response) => {
   const chatId = decodeURIComponent(String(req.params.chatId || ''));
   const sinceMs = Number(req.query.sinceMs) || 0;
+  const viewerPhone = String(req.query.phone || '').trim();
   if (!chatId) return res.json({ success: true, messages: [] });
+  if (viewerPhone) {
+    const auth = isPhoneCurrentlyAuthorizedForGroupChat(chatId, new Set(getPhoneVariants(viewerPhone)));
+    if (auth === false) {
+      return res.json({ success: true, messages: [], removed: true, serverTimeMs: Date.now() });
+    }
+  }
   const list = storedMessagesList
     .filter((entry) => entry.chatId === chatId && entry.createdAtMs > sinceMs)
     .slice(-150);
@@ -8022,14 +8634,24 @@ io.on('connection', (socket: Socket) => {
     const senderVariants = new Set(getPhoneVariants(senderPhone));
     const targetVariants = getPhoneVariants(targetPhone);
     if (targetVariants.some((v) => senderVariants.has(v))) return;
-    // Record invited phone on server town community if applicable
+    // Record invited phone on server private group / town community if applicable
     const gid = String(payload?.invite?.groupId || '');
+    if (gid) {
+      const priv = privateGroupsMap.get(gid);
+      if (priv) {
+        const nextKicked = (priv.kickedPhones || []).filter((kp: string) => !phonesMatchServer(kp, targetPhone));
+        const nextPendingPhones = dedupePhonesServer([...(Array.isArray(priv.pendingPhones) ? priv.pendingPhones : []), targetPhone]);
+        privateGroupsMap.set(gid, { ...priv, kickedPhones: nextKicked, pendingPhones: nextPendingPhones });
+        savePrivateGroupsFile();
+      }
+    }
     if (gid.startsWith('town_comm_')) {
       const commId = gid.replace('town_comm_', '');
       const comm = communitiesMap.get(commId);
       if (comm) {
-        const nextInvited = Array.from(new Set([...(Array.isArray(comm.invitedPhones) ? comm.invitedPhones : []), targetPhone]));
-        communitiesMap.set(commId, { ...comm, invitedPhones: nextInvited });
+        const nextKicked = (comm.kickedPhones || []).filter((kp: string) => !phonesMatchServer(kp, targetPhone));
+        const nextInvited = dedupePhonesServer([...(Array.isArray(comm.invitedPhones) ? comm.invitedPhones : []), targetPhone]);
+        communitiesMap.set(commId, { ...comm, kickedPhones: nextKicked, invitedPhones: nextInvited });
         saveCommunitiesFile();
       }
     }
@@ -8042,38 +8664,73 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('group_invite_response', (payload: any) => {
     if (!payload?.groupId) return;
+    const gid = String(payload.groupId);
+    const displayName = String(payload.responderName || payload.responderPhone || 'Member').trim();
+    let memberPhonesToNotify: string[] = [];
+    let updatedGroupForBroadcast: any = null;
+
     if (payload.accepted && payload.responderPhone) {
-      const gid = String(payload.groupId);
       const priv = privateGroupsMap.get(gid);
       if (priv) {
-        const nextPhones = Array.from(new Set([...(Array.isArray(priv.memberPhones) ? priv.memberPhones : []), payload.responderPhone]));
-        const nextMembers = Array.from(new Set([...(Array.isArray(priv.members) ? priv.members : []), payload.responderName || payload.responderPhone]));
-        privateGroupsMap.set(gid, {
+        const nextKicked = (priv.kickedPhones || []).filter((kp: string) => !phonesMatchServer(kp, payload.responderPhone));
+        const nextPhones = dedupePhonesServer([...(Array.isArray(priv.memberPhones) ? priv.memberPhones : []), payload.responderPhone]);
+        const nextMembers = dedupeStringsCaseInsensitive([...(Array.isArray(priv.members) ? priv.members : []), displayName]);
+        const nextPendingMembers = (priv.pendingMembers || []).filter(
+          (m: string) => m.toLowerCase() !== displayName.toLowerCase() && !phonesMatchServer(m, payload.responderPhone)
+        );
+        const nextPendingPhones = (priv.pendingPhones || []).filter(
+          (p: string) => !phonesMatchServer(p, payload.responderPhone)
+        );
+        const updatedPriv = {
           ...priv,
+          kickedPhones: nextKicked,
           memberPhones: nextPhones,
           members: nextMembers,
-          membersCount: Math.max(Number(priv.membersCount || 1), nextMembers.length, nextPhones.length),
-        });
+          pendingMembers: nextPendingMembers,
+          pendingPhones: nextPendingPhones,
+          membersCount: computeAuthoritativeMembersCount({ members: nextMembers, memberPhones: nextPhones }),
+          updatedAt: new Date().toISOString(),
+        };
+        privateGroupsMap.set(gid, updatedPriv);
         savePrivateGroupsFile();
+        memberPhonesToNotify = nextPhones;
+        updatedGroupForBroadcast = updatedPriv;
       }
       if (gid.startsWith('town_comm_')) {
         const commId = gid.replace('town_comm_', '');
         const comm = communitiesMap.get(commId);
         if (comm) {
-          const nextPhones = Array.from(new Set([...(Array.isArray(comm.memberPhones) ? comm.memberPhones : []), payload.responderPhone]));
-          communitiesMap.set(commId, {
+          const nextPhones = dedupePhonesServer([...(Array.isArray(comm.memberPhones) ? comm.memberPhones : []), payload.responderPhone]);
+          const nextMembers = dedupeStringsCaseInsensitive([...(Array.isArray(comm.members) ? comm.members : []), displayName]);
+          const updatedComm = {
             ...comm,
             memberPhones: nextPhones,
-            membersCount: Math.max(Number(comm.membersCount || 1), nextPhones.length),
-          });
+            members: nextMembers,
+            membersCount: computeAuthoritativeMembersCount({ members: nextMembers, memberPhones: nextPhones }),
+          };
+          communitiesMap.set(commId, updatedComm);
           saveCommunitiesFile();
+          memberPhonesToNotify = nextPhones;
+          updatedGroupForBroadcast = { ...updatedComm, id: gid };
         }
       }
     }
     if (payload.targetPhone) {
       emitToPhoneVariantsOnce(payload.targetPhone, 'group_invite_response', payload);
     }
-    socket.to(`chat:${payload.groupId}`).emit('group_invite_response', payload);
+    if (memberPhonesToNotify.length > 0) {
+      emitGroupEventToPhones('group_invite_response', memberPhonesToNotify, gid, payload, socket.id);
+      if (updatedGroupForBroadcast) {
+        emitGroupEventToPhones('group_updated', memberPhonesToNotify, gid, {
+          group: updatedGroupForBroadcast,
+          responderPhone: payload.responderPhone,
+          responderName: displayName,
+          accepted: Boolean(payload.accepted),
+        }, socket.id);
+      }
+    } else {
+      socket.to(`chat:${gid}`).emit('group_invite_response', payload);
+    }
   });
 
   // 1d. Friend Request Relay (one-way only, never echoed back to sender)
@@ -8101,6 +8758,18 @@ io.on('connection', (socket: Socket) => {
     const senderPhone = (socket as any)._agcPhone || (message?.senderPhone || '').replace(/\D/g, '');
     const senderVariants = new Set(getPhoneVariants(senderPhone));
 
+    // Reject if sender was kicked/removed or is a non-admin in channel/announce mode
+    if (senderPhone && message.sender !== 'system' && message.sender !== 'ai') {
+      const auth = isPhoneCurrentlyAuthorizedForGroupChat(String(chatId), senderVariants);
+      if (auth === false) {
+        socket.leave(`chat:${chatId}`);
+        return;
+      }
+      if (!canPhoneWriteToGroupChat(String(chatId), senderVariants, message.senderName)) {
+        return;
+      }
+    }
+
     // Derive target phone if not explicitly provided (normalize before comparing!)
     let finalTarget = targetPhone ? targetPhone.replace(/\D/g, '') : '';
     if (!finalTarget && chatId.startsWith('dm_')) {
@@ -8109,7 +8778,24 @@ io.on('connection', (socket: Socket) => {
     }
 
     const isGroup = Boolean(chatId.startsWith('group_') || chatId.startsWith('channel_') || chat?.isGroup || chat?.isChannel);
-    const outPayload = { chatId, message, targetPhone: finalTarget, chat, isGroup };
+    const serverPriv = privateGroupsMap.get(String(chatId));
+    const serverComm = String(chatId).startsWith('town_comm_') ? communitiesMap.get(String(chatId).replace('town_comm_', '')) : undefined;
+    const authRecord = serverPriv || serverComm;
+    const authoritativePhones: string[] = Array.isArray(authRecord?.memberPhones) && authRecord.memberPhones.length > 0
+      ? authRecord.memberPhones.filter((p: string) => !isPhoneInListServer(authRecord.kickedPhones, p))
+      : Array.isArray(memberPhones)
+      ? memberPhones
+      : [];
+    const wireChatWithAuth = authRecord && chat
+      ? {
+          ...chat,
+          members: authRecord.members || chat.members,
+          memberPhones: authoritativePhones,
+          membersCount: computeAuthoritativeMembersCount({ members: authRecord.members || chat.members, memberPhones: authoritativePhones }),
+        }
+      : chat;
+
+    const outPayload = { chatId, message, targetPhone: finalTarget, chat: wireChatWithAuth, isGroup };
 
     recordStoredMessage({
       id: String(message.id || `msg_${Date.now()}`),
@@ -8117,20 +8803,24 @@ io.on('connection', (socket: Socket) => {
       message,
       senderPhone,
       targetPhone: finalTarget || undefined,
-      memberPhones,
-      chat,
+      memberPhones: authoritativePhones.length > 0 ? authoritativePhones : undefined,
+      chat: wireChatWithAuth,
       isGroup,
     });
 
     // Emit at most once per remote socket across chat room + phone variant rooms
     const deliveredSockets = new Set<string>([socket.id]);
+    const kickedPhonesList: string[] = Array.isArray(authRecord?.kickedPhones) ? authRecord.kickedPhones : [];
     const emitOnceToRoom = (roomName: string, skipSenderCheck = false) => {
       const room = io.sockets.adapter.rooms.get(roomName);
       if (!room) return;
       for (const targetSocketId of room) {
         if (deliveredSockets.has(targetSocketId)) continue;
+        const targetSock = io.sockets.sockets.get(targetSocketId) as any;
+        if (kickedPhonesList.length > 0 && targetSock?._agcPhone && isPhoneInListServer(kickedPhonesList, targetSock._agcPhone)) {
+          continue;
+        }
         if (skipSenderCheck && senderPhone) {
-          const targetSock = io.sockets.sockets.get(targetSocketId) as any;
           if (targetSock?._agcPhone && phonesMatchServer(targetSock._agcPhone, senderPhone) && !chatId.includes('self')) {
             continue;
           }
@@ -8148,8 +8838,8 @@ io.on('connection', (socket: Socket) => {
       });
     }
 
-    if (Array.isArray(memberPhones) && memberPhones.length > 0) {
-      memberPhones.forEach((phone: string) => {
+    if (authoritativePhones.length > 0) {
+      authoritativePhones.forEach((phone: string) => {
         if (senderPhone && phonesMatchServer(phone, senderPhone)) return;
         getPhoneVariants(phone).forEach((v) => {
           emitOnceToRoom(`phone:${v}`, true);
@@ -8640,6 +9330,15 @@ io.on('connection', (socket: Socket) => {
     const clean = (rawPhone || '').replace(/\D/g, '');
     if (!clean) return;
 
+    const prevPhone = (socket as any)._agcPhone;
+    if (prevPhone && !phonesMatchServer(prevPhone, clean)) {
+      for (const roomName of Array.from(socket.rooms)) {
+        if (roomName.startsWith('phone:') || roomName.startsWith('chat:')) {
+          socket.leave(roomName);
+        }
+      }
+    }
+
     const variants = getPhoneVariants(clean);
     variants.forEach((v) => {
       socket.join(`phone:${v}`);
@@ -8660,6 +9359,16 @@ io.on('connection', (socket: Socket) => {
         socket.emit(entry.event, buildGameEventPayload(entry.event, entry.data));
       }
     });
+  });
+
+  socket.on('logout_user_rooms', () => {
+    for (const roomName of Array.from(socket.rooms)) {
+      if (roomName.startsWith('phone:') || roomName.startsWith('chat:')) {
+        socket.leave(roomName);
+      }
+    }
+    delete (socket as any)._agcPhone;
+    delete (socket as any)._userCleanPhone;
   });
 
   // 6. WebRTC Call Room Signaling Relay

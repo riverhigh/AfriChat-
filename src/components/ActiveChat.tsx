@@ -71,7 +71,13 @@ import {
   AtSign,
   Flag,
 } from 'lucide-react';
-import { useApp, isStatusExpiredClient, phonesMatch } from '../context/AppContext';
+import {
+  useApp,
+  isStatusExpiredClient,
+  phonesMatch,
+  isUserChatAdmin,
+  computeClientMembersCount,
+} from '../context/AppContext';
 import { ChatMessage, GhostTimerSetting, Product, LanguageCode } from '../types';
 import { EmojiMemeDrawer } from './EmojiMemeDrawer';
 import { DisplayWallpaperModal } from './DisplayWallpaperModal';
@@ -520,24 +526,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         })
       : undefined);
   const isGroupChat = Boolean(currentChat?.isGroup);
-  const isGroupAdmin = Boolean(
-    currentUser &&
-      currentChat?.isGroup &&
-      (currentChat.creatorId === currentUser.id ||
-        currentChat.adminIds?.includes(currentUser.id) ||
-        currentChat.admins?.includes(currentUser.fullName) ||
-        (currentUser.phoneNumber && currentChat.admins?.includes(currentUser.phoneNumber)) ||
-        currentChat.admins?.includes('You'))
-  );
-  const isChannelAdmin = Boolean(
-    currentUser &&
-      currentChat?.isChannel &&
-      (currentChat.creatorId === currentUser.id ||
-        currentChat.adminIds?.includes(currentUser.id) ||
-        currentChat.admins?.includes(currentUser.fullName) ||
-        currentChat.admins?.includes('You'))
-  );
-  const isChannelMember = currentChat?.isChannel && !isChannelAdmin;
+  const isGroupAdmin = Boolean(currentChat?.isGroup && isUserChatAdmin(currentChat, currentUser));
+  const isChannelAdmin = Boolean(currentChat?.isChannel && isUserChatAdmin(currentChat, currentUser));
+  const isChannelMember = Boolean(currentChat?.isChannel && !isChannelAdmin);
 
   const myPhoneRaw = currentUser.phoneNumber || currentUser.id || '';
   const myVoterKey = normPhone(myPhoneRaw) || currentUser.id || 'local_user';
@@ -1195,18 +1186,31 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         <span>BOT</span>
                       </span>
                     )}
-                    {currentChat.isGroup && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setIsGroupInfoOpen(true);
-                        }}
-                        className="text-[10px] font-mono bg-white/15 hover:bg-white/25 px-1.5 py-0.2 rounded font-normal transition-colors"
-                        title="Group info"
-                      >
-                        {currentChat.membersCount} members
-                      </button>
-                    )}
+                    {(currentChat.isGroup || currentChat.isChannel) && (() => {
+                      const badgeCount = Math.max(
+                        currentChat.membersCount || 1,
+                        computeClientMembersCount(currentChat.members, currentChat.memberPhones)
+                      );
+                      return (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setIsGroupInfoOpen(true);
+                          }}
+                          className="text-[10px] font-mono bg-white/15 hover:bg-white/25 px-1.5 py-0.2 rounded font-normal transition-colors"
+                          title={currentChat.isChannel ? 'Channel info' : 'Group info'}
+                        >
+                          {badgeCount}{' '}
+                          {currentChat.isChannel
+                            ? badgeCount === 1
+                              ? 'subscriber'
+                              : 'subscribers'
+                            : badgeCount === 1
+                            ? 'member'
+                            : 'members'}
+                        </button>
+                      );
+                    })()}
                     {currentChat.disappearingTimer && currentChat.disappearingTimer !== 'off' && (
                       <span
                         className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-purple-500/30 border border-purple-300/40 text-purple-100 text-[9px] font-mono font-bold shrink-0"
@@ -4066,7 +4070,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       {/* Input Bar / Channel Read-only Banner */}
       {(isChannelMember || (currentChat?.announceMode && !isGroupAdmin)) ? (
         <div className="px-4 py-3 bg-slate-100 dark:bg-neutral-900 shrink-0 flex items-center justify-center border-t border-slate-200 dark:border-neutral-800">
-          <span className="text-xs text-slate-400 dark:text-slate-500">🔇 Only admins can post in this channel</span>
+          <span className="text-xs text-slate-400 dark:text-slate-500">
+            {currentChat?.isChannel
+              ? '🔇 Only admins can post in this channel'
+              : '🔇 Announce Mode — only admins can send messages'}
+          </span>
         </div>
       ) : (
       <div className="px-2 py-2 bg-transparent shrink-0 flex items-center gap-1.5 z-20">
@@ -4156,8 +4164,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         targetChatId={currentChat.id}
       />
 
-      {/* Group Info Modal (WhatsApp-style) */}
-      {currentChat?.isGroup && (
+      {/* Group & Channel Info Modal (WhatsApp-style) */}
+      {(currentChat?.isGroup || currentChat?.isChannel) && (
         <GroupInfoModal
           isOpen={isGroupInfoOpen}
           onClose={() => setIsGroupInfoOpen(false)}

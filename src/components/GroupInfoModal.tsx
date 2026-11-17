@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   X,
   Crown,
   UserMinus,
   Link2,
   BellOff,
+  Bell,
   ShieldAlert,
   Copy,
   CheckCircle2,
@@ -13,9 +14,17 @@ import {
   MessageSquareOff,
   Ghost,
   Pin,
+  Bot,
+  Clock,
 } from 'lucide-react';
 import { ChatThread, GhostTimerSetting } from '../types';
-import { useApp } from '../context/AppContext';
+import {
+  useApp,
+  phonesMatch,
+  isUserChatAdmin,
+  computeClientMembersCount,
+  dedupePhoneList,
+} from '../context/AppContext';
 
 interface GroupInfoModalProps {
   isOpen: boolean;
@@ -29,60 +38,130 @@ interface GroupMember {
   name: string;
   avatar: string;
   isAdmin: boolean;
+  isBot?: boolean;
   phone?: string;
 }
 
+function entryMatchesAdmin(admins: string[], ...candidates: (string | undefined)[]): boolean {
+  const cleanCandidates = candidates.map((c) => String(c || '').trim()).filter(Boolean);
+  if (cleanCandidates.length === 0) return false;
+  return admins.some((a) => {
+    const clean = String(a || '').trim();
+    if (!clean) return false;
+    return cleanCandidates.some(
+      (cand) => cand.toLowerCase() === clean.toLowerCase() || phonesMatch(clean, cand)
+    );
+  });
+}
+
 function buildMemberList(chat: ChatThread, currentUser: any, deviceContacts: any[]): GroupMember[] {
-  const admins = chat.admins || [currentUser?.fullName || 'You'];
-  const rawMembers = chat.members || [];
+  const admins = Array.isArray(chat.admins) ? chat.admins : [];
+  const rawMembers = Array.isArray(chat.members) ? chat.members : [];
+  const rawPhones = dedupePhoneList(chat.memberPhones);
   const list: GroupMember[] = [];
 
-  // Add current user first
   const myName = currentUser?.fullName || 'You';
+  const myPhone = currentUser?.phoneNumber;
+  const myHandle = currentUser?.username ? `@${currentUser.username}` : '';
+
+  const isMe = (val?: string): boolean => {
+    const clean = String(val || '').trim();
+    if (!clean) return false;
+    const lower = clean.toLowerCase();
+    if (lower === 'you' || (myName && lower === myName.toLowerCase())) return true;
+    if (myHandle && lower === myHandle.toLowerCase()) return true;
+    if (myPhone && phonesMatch(clean, myPhone)) return true;
+    return false;
+  };
+
   list.push({
     id: 'member_me',
     rawKey: myName,
     name: `${myName} (You)`,
     avatar: currentUser?.avatarUrl || 'https://api.dicebear.com/7.x/thumbs/svg?seed=me',
-    isAdmin: admins.includes(myName) || admins.includes('You'),
-    phone: currentUser?.phoneNumber,
+    isAdmin: isUserChatAdmin(chat, currentUser),
+    phone: myPhone,
   });
 
-  // Add from real chat members
-  rawMembers.forEach((mem, idx) => {
-    if (mem === myName || mem === 'You' || mem === currentUser?.phoneNumber) return;
+  const seenNames = new Set<string>([myName.toLowerCase(), 'you']);
+  const seenPhones: string[] = myPhone ? [myPhone] : [];
 
-    const contactMatch = deviceContacts?.find(
-      (c) => c.name === mem || c.phoneNumber === mem || c.phone === mem
+  const findContact = (keyOrPhone: string) =>
+    (deviceContacts || []).find(
+      (c) =>
+        (c.name && c.name.toLowerCase() === keyOrPhone.toLowerCase()) ||
+        (c.normalizedPhoneNumber && phonesMatch(c.normalizedPhoneNumber, keyOrPhone)) ||
+        (c.rawPhoneNumber && phonesMatch(c.rawPhoneNumber, keyOrPhone)) ||
+        (c.phoneNumber && phonesMatch(c.phoneNumber, keyOrPhone)) ||
+        (c.phone && phonesMatch(c.phone, keyOrPhone))
     );
+
+  // Add from chat.members
+  rawMembers.forEach((mem, idx) => {
+    const clean = String(mem || '').trim();
+    if (!clean || isMe(clean)) return;
+
+    const isBot = clean.toLowerCase() === 'agcbot' || clean.toLowerCase() === 'afribot ai';
+    const contactMatch = isBot ? undefined : findContact(clean);
+    const resolvedPhone = isBot
+      ? undefined
+      : contactMatch?.normalizedPhoneNumber ||
+        contactMatch?.phoneNumber ||
+        contactMatch?.phone ||
+        (/^\+?\d{7,}$/.test(clean.replace(/[\s\-()]/g, '')) ? clean : undefined);
+    const resolvedName = isBot ? 'AgcBot' : contactMatch?.name || clean;
+
+    if (seenNames.has(resolvedName.toLowerCase())) return;
+    if (resolvedPhone && seenPhones.some((p) => phonesMatch(p, resolvedPhone))) return;
+
+    seenNames.add(resolvedName.toLowerCase());
+    if (resolvedPhone) seenPhones.push(resolvedPhone);
+
+    const isCreator =
+      Boolean(resolvedPhone && chat.creatorPhone && phonesMatch(chat.creatorPhone, resolvedPhone));
 
     list.push({
-      id: `mem_${idx}_${mem.replace(/\W/g, '')}`,
-      rawKey: mem,
-      name: contactMatch?.name || mem,
-      avatar: contactMatch?.avatar || `https://api.dicebear.com/7.x/thumbs/svg?seed=${mem}`,
-      isAdmin: admins.includes(mem) || (contactMatch && admins.includes(contactMatch.name)),
-      phone: contactMatch?.phoneNumber || contactMatch?.phone,
+      id: `mem_${idx}_${resolvedName.replace(/\W/g, '')}`,
+      rawKey: resolvedName,
+      name: resolvedName,
+      avatar: isBot
+        ? 'https://api.dicebear.com/7.x/bottts/svg?seed=AgcBot'
+        : contactMatch?.avatar || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(resolvedName)}`,
+      isAdmin: isBot || isCreator || entryMatchesAdmin(admins, clean, resolvedName, resolvedPhone),
+      isBot,
+      phone: resolvedPhone,
     });
   });
 
-  // If no members were specified in array but membersCount > 1, show registered contacts
-  if (list.length === 1 && (chat.membersCount ?? 1) > 1) {
-    const registered = (deviceContacts || []).filter(
-      (c) => c.phoneNumber !== currentUser?.phoneNumber && c.name !== myName
-    );
-    const countNeeded = Math.min((chat.membersCount ?? 2) - 1, 10);
-    registered.slice(0, countNeeded).forEach((c, idx) => {
-      list.push({
-        id: `reg_${idx}_${c.id}`,
-        rawKey: c.name,
-        name: c.name,
-        avatar: c.avatar || `https://api.dicebear.com/7.x/thumbs/svg?seed=${c.name}`,
-        isAdmin: admins.includes(c.name),
-        phone: c.phoneNumber || c.phone,
-      });
+  // Ensure any phone-only joiners from chat.memberPhones are also visible
+  rawPhones.forEach((ph, idx) => {
+    if (!ph || isMe(ph)) return;
+    if (seenPhones.some((p) => phonesMatch(p, ph))) return;
+
+    const contactMatch = findContact(ph);
+    if (contactMatch?.name && seenNames.has(contactMatch.name.toLowerCase())) {
+      const existing = list.find((m) => m.name.toLowerCase() === contactMatch.name.toLowerCase());
+      if (existing && !existing.phone) existing.phone = ph;
+      seenPhones.push(ph);
+      return;
+    }
+
+    const displayName = contactMatch?.name || ph;
+    seenPhones.push(ph);
+    seenNames.add(displayName.toLowerCase());
+    const isCreator = Boolean(chat.creatorPhone && phonesMatch(chat.creatorPhone, ph));
+
+    list.push({
+      id: `phone_${idx}_${ph.replace(/\W/g, '')}`,
+      rawKey: contactMatch?.name || ph,
+      name: displayName,
+      avatar:
+        contactMatch?.avatar ||
+        `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(displayName)}`,
+      isAdmin: isCreator || entryMatchesAdmin(admins, ph, contactMatch?.name),
+      phone: ph,
     });
-  }
+  });
 
   return list;
 }
@@ -94,22 +173,45 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
     updateChat,
     setDisappearingTimer,
     pinChatMessage,
+    toggleMemberAdmin,
     removeMemberFromGroup,
-    deleteChat,
-    inviteBotToGroup,
+    leaveGroup,
   } = useApp();
   const [copied, setCopied] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
-  const [announceMode, setAnnounceMode] = useState(false);
-  const [members, setMembers] = useState<GroupMember[]>(() =>
-    buildMemberList(chat, currentUser, deviceContacts)
+  const [confirmLeave, setConfirmLeave] = useState(false);
+
+  const members = useMemo(
+    () => buildMemberList(chat, currentUser, deviceContacts),
+    [chat, currentUser, deviceContacts]
   );
+
+  const pendingList = useMemo(() => {
+    const pending = Array.isArray(chat.pendingMembers) ? chat.pendingMembers : [];
+    return pending.filter(
+      (pm) =>
+        !members.some(
+          (m) =>
+            m.rawKey.toLowerCase() === pm.toLowerCase() ||
+            m.name.toLowerCase() === pm.toLowerCase() ||
+            (m.phone && phonesMatch(m.phone, pm))
+        )
+    );
+  }, [chat.pendingMembers, members]);
 
   if (!isOpen) return null;
 
+  const isChannel = Boolean(chat.isChannel);
   const joinToken = chat.inviteCode || chat.id;
   const inviteLink = `${typeof window !== 'undefined' ? window.location.origin : 'https://agc.chat'}/?join=${joinToken}`;
-  const isAdmin = members.find((m) => m.id === 'member_me')?.isAdmin ?? false;
+  const isAdmin = isUserChatAdmin(chat, currentUser);
+  const announceMode = Boolean(chat.announceMode);
+  const isMuted = Boolean(chat.isMuted);
+  const displayCount = Math.max(
+    chat.membersCount || 1,
+    computeClientMembersCount(chat.members, chat.memberPhones),
+    members.length
+  );
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(inviteLink).catch(() => {});
@@ -123,17 +225,12 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
     setTimeout(() => setCopiedCode(false), 2500);
   };
 
-  const handlePromote = (rawKey: string) => {
-    const updatedAdmins = Array.from(new Set([...(chat.admins || []), rawKey]));
-    updateChat(chat.id, { admins: updatedAdmins });
-    setMembers((prev) =>
-      prev.map((m) => (m.rawKey === rawKey ? { ...m, isAdmin: true } : m))
-    );
+  const handlePromoteToggle = (m: GroupMember) => {
+    toggleMemberAdmin(chat.id, m.rawKey, m.isBot ? undefined : m.phone);
   };
 
-  const handleRemove = (rawKey: string) => {
-    removeMemberFromGroup(chat.id, rawKey);
-    setMembers((prev) => prev.filter((m) => m.rawKey !== rawKey));
+  const handleRemove = (m: GroupMember) => {
+    removeMemberFromGroup(chat.id, m.rawKey, m.isBot ? undefined : m.phone);
   };
 
   return (
@@ -151,7 +248,16 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
             <Users className="w-5 h-5 text-purple-600" />
             <div>
               <p className="font-bold text-slate-900 dark:text-white text-sm">{chat.name}</p>
-              <p className="text-xs text-slate-400">{members.length} members</p>
+              <p className="text-xs text-slate-400">
+                {displayCount}{' '}
+                {isChannel
+                  ? displayCount === 1
+                    ? 'subscriber'
+                    : 'subscribers'
+                  : displayCount === 1
+                  ? 'member'
+                  : 'members'}
+              </p>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-600">
@@ -162,7 +268,7 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
         {/* Body */}
         <div className="flex-1 overflow-y-auto">
           {/* Admin controls */}
-          {isAdmin && (
+          {isAdmin && !isChannel && (
             <div className="px-5 py-4 border-b border-slate-100 dark:border-neutral-800 space-y-3">
               <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5">
                 <Settings className="w-3.5 h-3.5" /> Admin Controls
@@ -177,7 +283,8 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
                   <p className="text-xs text-slate-400">Only admins can send messages</p>
                 </div>
                 <button
-                  onClick={() => setAnnounceMode((v) => !v)}
+                  type="button"
+                  onClick={() => updateChat(chat.id, { announceMode: !announceMode })}
                   className={`w-11 h-6 rounded-full transition-colors ${
                     announceMode ? 'bg-purple-600' : 'bg-slate-300 dark:bg-neutral-700'
                   } relative`}
@@ -229,13 +336,15 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
                     {chat.pinnedMessage.text}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => pinChatMessage(chat.id, null)}
-                  className="text-[10px] font-bold text-rose-500 hover:underline shrink-0"
-                >
-                  Unpin
-                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => pinChatMessage(chat.id, null)}
+                    className="text-[10px] font-bold text-rose-500 hover:underline shrink-0"
+                  >
+                    Unpin
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -243,7 +352,7 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
           {/* Invite Link & Code */}
           <div className="px-5 py-4 border-b border-slate-100 dark:border-neutral-800 space-y-2.5">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5">
-              <Link2 className="w-3.5 h-3.5" /> Private Invite Link &amp; Code
+              <Link2 className="w-3.5 h-3.5" /> {isChannel ? 'Channel Invite Link & Code' : 'Private Invite Link & Code'}
             </p>
             <div className="flex items-center gap-2 bg-slate-50 dark:bg-neutral-900 rounded-xl px-3 py-2 border border-slate-200 dark:border-neutral-800">
               <span className="flex-1 text-xs text-slate-600 dark:text-slate-300 truncate font-mono">
@@ -276,7 +385,7 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
           {/* Members list */}
           <div className="px-5 py-4">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-1.5">
-              <Users className="w-3.5 h-3.5" /> Members ({members.length})
+              <Users className="w-3.5 h-3.5" /> {isChannel ? 'Subscribers' : 'Members'} ({displayCount})
             </p>
             <ul className="space-y-2">
               {members.map((m) => (
@@ -288,7 +397,12 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
                   />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate flex items-center gap-1.5">
-                      {m.name}
+                      <span>{m.name}</span>
+                      {m.isBot && (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-pink-500 bg-pink-50 dark:bg-pink-950/40 px-1.5 py-0.5 rounded-full border border-pink-200 dark:border-pink-800">
+                          <Bot className="w-2.5 h-2.5" /> Bot
+                        </span>
+                      )}
                       {m.isAdmin && (
                         <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-amber-500 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded-full border border-amber-200 dark:border-amber-700">
                           <Crown className="w-2.5 h-2.5" /> Admin
@@ -300,19 +414,25 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
                   {/* Admin actions on other members */}
                   {isAdmin && m.id !== 'member_me' && (
                     <div className="flex items-center gap-1">
-                      {!m.isAdmin && (
+                      {!m.isBot && (
                         <button
-                          onClick={() => handlePromote(m.rawKey)}
-                          className="p-1.5 text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-full transition-colors"
-                          title="Promote to admin"
+                          type="button"
+                          onClick={() => handlePromoteToggle(m)}
+                          className={`p-1.5 rounded-full transition-colors ${
+                            m.isAdmin
+                              ? 'text-amber-500 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100'
+                              : 'text-slate-400 hover:text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/40'
+                          }`}
+                          title={m.isAdmin ? 'Dismiss as admin' : 'Promote to admin'}
                         >
                           <Crown className="w-3.5 h-3.5" />
                         </button>
                       )}
                       <button
-                        onClick={() => handleRemove(m.rawKey)}
+                        type="button"
+                        onClick={() => handleRemove(m)}
                         className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-full transition-colors"
-                        title="Remove from group"
+                        title={`Remove from ${isChannel ? 'channel' : 'group'}`}
                       >
                         <UserMinus className="w-3.5 h-3.5" />
                       </button>
@@ -320,28 +440,82 @@ export const GroupInfoModal: React.FC<GroupInfoModalProps> = ({ isOpen, onClose,
                   )}
                 </li>
               ))}
+              {pendingList.map((pm) => (
+                <li key={`pending_${pm}`} className="flex items-center gap-3 opacity-75">
+                  <div className="w-9 h-9 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-500 shrink-0">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate flex items-center gap-1.5">
+                      <span>{pm}</span>
+                      <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded-full border border-amber-200 dark:border-amber-800">
+                        Pending Invite
+                      </span>
+                    </p>
+                  </div>
+                </li>
+              ))}
             </ul>
           </div>
 
-          {/* Leave / Report */}
+          {/* Leave / Mute */}
           <div className="px-5 pb-6 pt-2 flex flex-col gap-2">
-            <button className="w-full py-2.5 text-sm font-semibold text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors flex items-center justify-center gap-2 border border-rose-200 dark:border-rose-900/40">
-              <BellOff className="w-4 h-4" /> Mute Notifications
-            </button>
             <button
-              onClick={() => {
-                if (window.confirm('Are you sure you want to leave this group?')) {
-                  removeMemberFromGroup(chat.id, currentUser?.fullName || 'You');
-                  onClose();
-                }
-              }}
-              className="w-full py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors flex items-center justify-center gap-2"
+              type="button"
+              onClick={() => updateChat(chat.id, { isMuted: !isMuted })}
+              className="w-full py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-neutral-900 rounded-xl transition-colors flex items-center justify-center gap-2 border border-slate-200 dark:border-neutral-800"
             >
-              <ShieldAlert className="w-4 h-4" /> Leave Group
+              {isMuted ? (
+                <>
+                  <Bell className="w-4 h-4 text-emerald-500" /> Unmute Notifications
+                </>
+              ) : (
+                <>
+                  <BellOff className="w-4 h-4 text-rose-500" /> Mute Notifications
+                </>
+              )}
             </button>
+
+            {confirmLeave ? (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 space-y-2">
+                <p className="text-xs text-rose-700 dark:text-rose-300 font-medium text-center">
+                  Leave {chat.name}? You will no longer receive messages or see this{' '}
+                  {isChannel ? 'channel' : 'group'}.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmLeave(false)}
+                    className="py-2 rounded-lg text-xs font-semibold bg-white dark:bg-neutral-900 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-neutral-800"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      leaveGroup(chat.id);
+                      setConfirmLeave(false);
+                      onClose();
+                    }}
+                    className="py-2 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white"
+                  >
+                    Confirm Leave
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmLeave(true)}
+                className="w-full py-2.5 text-sm font-semibold text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                <ShieldAlert className="w-4 h-4" /> {isChannel ? 'Unsubscribe & Leave Channel' : 'Leave Group'}
+              </button>
+            )}
           </div>
         </div>
       </div>
     </div>
   );
 };
+

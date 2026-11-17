@@ -40,6 +40,7 @@ export const ChatList: React.FC = () => {
     isUserOnline,
     typingUsers,
     deleteChat,
+    leaveGroup,
     toggleShelfChat,
     setChatLabel,
     getBadgeForPhone,
@@ -56,6 +57,7 @@ export const ChatList: React.FC = () => {
     'all' | 'unread' | 'groups' | 'channels' | 'stores'
   >('all');
   const [selectedProfileChat, setSelectedProfileChat] = useState<ChatThread | null>(null);
+  const [confirmDeleteChat, setConfirmDeleteChat] = useState<ChatThread | null>(null);
   const [avatarPrompt, setAvatarPrompt] = useState<{ chat: ChatThread; status: any } | null>(null);
 
   // Swipe gesture state
@@ -452,13 +454,7 @@ export const ChatList: React.FC = () => {
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    const isGroupOrChannel = chat.isGroup || chat.isChannel;
-                    const confirmMsg = isGroupOrChannel
-                      ? `Delete "${chat.name}"? This will permanently delete this conversation and its messages.`
-                      : `Delete chat with "${chat.name}"?`;
-                    if (window.confirm(confirmMsg)) {
-                      deleteChat(chat.id);
-                    }
+                    setConfirmDeleteChat(chat);
                     setSwipedChatId(null);
                   }}
                   className="w-16 bg-rose-600 hover:bg-rose-700 text-white flex flex-col items-center justify-center gap-1 text-[10px] font-bold transition-colors"
@@ -913,8 +909,65 @@ export const ChatList: React.FC = () => {
         </div>
       )}
 
+      {confirmDeleteChat && (
+        <div
+          onClick={() => setConfirmDeleteChat(null)}
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-xs bg-white dark:bg-neutral-900 rounded-3xl p-5 border border-slate-200 dark:border-neutral-800 shadow-2xl text-center space-y-4 animate-in zoom-in-95"
+          >
+            <div className="w-12 h-12 rounded-full bg-rose-500/15 text-rose-500 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                {confirmDeleteChat.isChannel
+                  ? `Leave "${confirmDeleteChat.name}"?`
+                  : confirmDeleteChat.isGroup
+                  ? `Leave & Delete "${confirmDeleteChat.name}"?`
+                  : `Delete chat with "${confirmDeleteChat.name}"?`}
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-neutral-400 mt-1">
+                {confirmDeleteChat.isGroup || confirmDeleteChat.isChannel
+                  ? 'You will leave this conversation and remove its local messages.'
+                  : 'This will remove the conversation from your chat list.'}
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteChat(null)}
+                className="py-2.5 rounded-xl bg-slate-100 dark:bg-neutral-800 text-slate-700 dark:text-neutral-200 text-xs font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirmDeleteChat.isGroup || confirmDeleteChat.isChannel) {
+                    leaveGroup(confirmDeleteChat.id);
+                  } else {
+                    deleteChat(confirmDeleteChat.id);
+                  }
+                  setConfirmDeleteChat(null);
+                }}
+                className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold"
+              >
+                {confirmDeleteChat.isGroup || confirmDeleteChat.isChannel ? 'Leave' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ContactProfileModal
-        chat={selectedProfileChat}
+        chat={
+          selectedProfileChat
+            ? chats.find((c) => c.id === selectedProfileChat.id) || selectedProfileChat
+            : null
+        }
         isOpen={Boolean(selectedProfileChat)}
         onClose={() => setSelectedProfileChat(null)}
       />

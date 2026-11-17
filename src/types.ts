@@ -739,9 +739,12 @@ export interface ChatThread {
   adminIds?: string[];
   description?: string;
   creatorId?: string;
+  creatorPhone?: string;
   members?: string[];
   memberPhones?: string[];
   pendingMembers?: string[];
+  pendingPhones?: string[];
+  kickedPhones?: string[];
   inviteCode?: string;
   invitationStatus?: 'pending' | 'accepted' | 'declined';
   invitedBy?: string;
@@ -1067,6 +1070,7 @@ export interface TownCommunity {
   inviteCode?: string;
   memberPhones?: string[];
   invitedPhones?: string[];
+  kickedPhones?: string[];
 }
 
 // 19. Healthcare & Telehealth System

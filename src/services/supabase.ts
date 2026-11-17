@@ -461,21 +461,54 @@ export async function deleteTownCommunityInDb(idOrName: string, fallbackName?: s
 export async function updateTownCommunityInDb(nameOrId: string, updates: {
   members_count?: number;
   members?: string[];
+  kicked?: string[];
   tags?: string[];
   description?: string;
 }) {
-  const tags: string[] = Array.isArray(updates.tags) ? [...updates.tags] : [];
-  if (updates.members && updates.members.length > 0) {
-    tags.push(`members:${JSON.stringify(updates.members)}`);
+  const isUuid = COMMUNITY_UUID_REGEX.test(nameOrId);
+  let mergedTags: string[] | undefined;
+
+  if (Array.isArray(updates.tags)) {
+    mergedTags = [...updates.tags];
+  } else if (updates.members !== undefined || updates.kicked !== undefined) {
+    try {
+      const existingQuery = isUuid
+        ? supabase.from('town_communities').select('tags').eq('id', nameOrId).maybeSingle()
+        : supabase.from('town_communities').select('tags').eq('name', nameOrId).maybeSingle();
+      const { data: existingRow } = await existingQuery;
+      const baseTags: string[] = Array.isArray(existingRow?.tags) ? existingRow.tags : [];
+      mergedTags = baseTags.filter((t) => {
+        if (updates.members !== undefined && t.startsWith('members:')) return false;
+        if (updates.kicked !== undefined && t.startsWith('kicked:')) return false;
+        return true;
+      });
+    } catch (_) {
+      mergedTags = [];
+    }
+  }
+
+  if (mergedTags) {
+    if (updates.members !== undefined) {
+      mergedTags = mergedTags.filter((t) => !t.startsWith('members:'));
+      mergedTags.push(`members:${JSON.stringify(updates.members)}`);
+    }
+    if (updates.kicked !== undefined) {
+      mergedTags = mergedTags.filter((t) => !t.startsWith('kicked:'));
+      if (updates.kicked.length > 0) {
+        mergedTags.push(`kicked:${JSON.stringify(updates.kicked)}`);
+      }
+    }
   }
 
   const payload: any = {};
   if (updates.members_count !== undefined) payload.members_count = updates.members_count;
   if (updates.description !== undefined) payload.description = updates.description;
-  if (tags.length > 0) payload.tags = tags;
+  if (mergedTags && mergedTags.length > 0) payload.tags = mergedTags;
+
+  if (Object.keys(payload).length === 0) return { data: null, error: null };
 
   // Try updating by UUID or name
-  if (nameOrId.includes('-') && nameOrId.length >= 32) {
+  if (isUuid || (nameOrId.includes('-') && nameOrId.length >= 32)) {
     return supabase.from('town_communities').update(payload).eq('id', nameOrId);
   }
   return supabase.from('town_communities').update(payload).eq('name', nameOrId);
