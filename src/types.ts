@@ -352,11 +352,32 @@ export interface LudoGameState {
   updatedAt: string;
 }
 
+export const AGC_BILL_CATEGORIES = [
+  'Store & Market',
+  'Artisan Hub',
+  'Errands',
+  'Escrow Order',
+  'Dispatch',
+  'Store Tier',
+  'Ajo / Esusu',
+  'Creator Hub',
+  'Tutors & Courses',
+  'Writers Guild',
+  'AfriHealth',
+  'AfriLaw',
+  'Pet Shop',
+  'Job Board',
+] as const;
+
+export type AgcBillCategory = (typeof AGC_BILL_CATEGORIES)[number];
+
 export interface BillRequest {
   id: string;
   chatId: string;
   title: string;
-  category: 'Utility / PHCN' | 'Rent' | 'Food' | 'Medical' | 'School' | 'Transport' | 'Custom';
+  category: AgcBillCategory;
+  featureKey?: keyof FeatureFlags;
+  featureRefId?: string;
   amount: number;
   currency: CurrencyCode;
   note?: string;

@@ -2807,7 +2807,24 @@ app.get('/api/admin/wallet-transactions', (req: Request, res: Response) => {
   res.json({ success: true, transactions: rows.slice(0, 500), total: rows.length });
 });
 
-// REST: Atomic Send My Bill (Pay on Behalf) Settlement
+const ALLOWED_AGC_BILL_CATEGORIES = new Set([
+  'Store & Market',
+  'Artisan Hub',
+  'Errands',
+  'Escrow Order',
+  'Dispatch',
+  'Store Tier',
+  'Ajo / Esusu',
+  'Creator Hub',
+  'Tutors & Courses',
+  'Writers Guild',
+  'AfriHealth',
+  'AfriLaw',
+  'Pet Shop',
+  'Job Board',
+]);
+
+// REST: Atomic Send My Bill (Pay on Behalf - Strictly AGC System Features)
 app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
   const {
     billId,
@@ -2818,9 +2835,18 @@ app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
     amount,
     title,
     category,
+    featureKey,
+    featureRefId,
     channel,
     paystackRef,
   } = req.body || {};
+
+  if (!category || !ALLOWED_AGC_BILL_CATEGORIES.has(String(category))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Send My Bill is strictly for AGC system features (Store, Artisan, Errands, Escrow, etc.).',
+    });
+  }
 
   const numericAmt = Math.round(Number(amount) || 0);
   if (!payerPhone || !requesterPhone || !Number.isFinite(numericAmt) || numericAmt < 50) {
@@ -2863,8 +2889,8 @@ app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
     userPhone: payerMatch?.user.phoneNumber || String(payerPhone),
     userName: payerMatch?.user.fullName || String(payerName || 'Payer'),
     type: 'bill_paid',
-    title: `Paid Bill: ${title || category || 'User Bill'} (for ${requesterName || requesterPhone})`,
-    description: `Paid bill on behalf of ${requesterName || requesterPhone}${category ? ` · ${category}` : ''}`,
+    title: `Paid AGC Bill (${category}): ${title || category} (for ${requesterName || requesterPhone})`,
+    description: `Paid AGC ${category} bill on behalf of ${requesterName || requesterPhone}${featureRefId ? ` · Ref: ${featureRefId}` : ''}`,
     amount: numericAmt,
     fee: 0,
     balanceAfter: payerWallet.availableBalance,
@@ -2875,7 +2901,7 @@ app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
     reference: ref,
     referenceId: ref,
     channel: payChannel,
-    metadata: { billId, requesterPhone },
+    metadata: { billId, requesterPhone, category, featureKey, featureRefId },
   };
   payerWallet.transactions = [payerTx, ...payerWallet.transactions].slice(0, 100);
 
@@ -2887,8 +2913,8 @@ app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
     userPhone: reqMatch?.user.phoneNumber || String(requesterPhone),
     userName: reqMatch?.user.fullName || String(requesterName || 'Requester'),
     type: 'bill_received',
-    title: `Bill Paid by ${payerName || payerMatch?.user.fullName || payerPhone}`,
-    description: `${title || 'Bill Request'} settled by ${payerName || payerPhone}`,
+    title: `AGC Bill Paid by ${payerName || payerMatch?.user.fullName || payerPhone}`,
+    description: `${category}: ${title || 'AGC Bill Request'} settled by ${payerName || payerPhone}${featureRefId ? ` · Ref: ${featureRefId}` : ''}`,
     amount: numericAmt,
     fee: 0,
     balanceAfter: requesterWallet.availableBalance,
@@ -2899,7 +2925,7 @@ app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
     reference: `${ref}_R`,
     referenceId: ref,
     channel: payChannel,
-    metadata: { billId, payerPhone },
+    metadata: { billId, payerPhone, category, featureKey, featureRefId },
   };
   requesterWallet.transactions = [reqTx, ...requesterWallet.transactions].slice(0, 100);
 

@@ -198,7 +198,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                   {(() => {
                     const allTools: { label: string; sub: string; icon: React.ElementType; action: () => void; cat: 'finance' | 'services' | 'tools'; featureKey?: string }[] = [
                       { label: 'Wallet', sub: 'Paystack & Escrow', icon: Wallet, action: () => setIsWalletModalOpen(true), cat: 'finance', featureKey: 'wallet' },
-                      { label: 'Send My Bill', sub: 'Pay on Behalf', icon: Receipt, action: () => setIsSendBillModalOpen(true), cat: 'finance', featureKey: 'wallet' },
+                      { label: 'Send My Bill', sub: 'AGC Features Only', icon: Receipt, action: () => setIsSendBillModalOpen(true), cat: 'finance', featureKey: 'wallet' },
                       { label: 'Artisan Hub', sub: '₦5k · Book Skill', icon: Wrench, action: () => setIsServicesModalOpen(true), cat: 'services', featureKey: 'artisan' },
                       { label: 'Errands', sub: 'Runners & Market', icon: ShoppingBag, action: () => setIsErrandsModalOpen(true), cat: 'services', featureKey: 'errands' },
                       { label: 'AfriHealth', sub: 'Queues & Telehealth', icon: HeartPulse, action: () => setIsHealthModalOpen(true), cat: 'services', featureKey: 'healthcare' },

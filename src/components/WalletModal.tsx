@@ -284,7 +284,7 @@ export const WalletModal: React.FC = () => {
                   className="w-full py-2 px-3 bg-white/15 hover:bg-white/25 text-white rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
                 >
                   <Receipt className="w-3.5 h-3.5 text-emerald-300" />
-                  <span>Send My Bill (Pay on Behalf)</span>
+                  <span>Send My Bill (AGC Features)</span>
                 </button>
               </div>
 

@@ -469,6 +469,7 @@ import {
   WhotGameState,
   LudoGameState,
   BillRequest,
+  AGC_BILL_CATEGORIES,
   LocationPinMeta,
   UserProfile,
   DeviceContact,
@@ -959,6 +960,8 @@ interface AppContextType {
     recipientAvatar?: string;
     title: string;
     category: BillRequest['category'];
+    featureKey?: keyof FeatureFlags;
+    featureRefId?: string;
     amount: number;
     note?: string;
   }) => Promise<{ success: boolean; message?: string; bill?: BillRequest }>;
@@ -10779,12 +10782,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     recipientAvatar?: string;
     title: string;
     category: BillRequest['category'];
+    featureKey?: keyof FeatureFlags;
+    featureRefId?: string;
     amount: number;
     note?: string;
   }): Promise<{ success: boolean; message?: string; bill?: BillRequest }> => {
     const myPhone = currentUser.phoneNumber || currentUser.id;
     if (!params.recipientPhone || phonesMatch(myPhone, params.recipientPhone)) {
       return { success: false, message: 'Select a valid recipient (cannot send a bill to yourself).' };
+    }
+    if (!AGC_BILL_CATEGORIES.includes(params.category)) {
+      return {
+        success: false,
+        message: 'Send My Bill is strictly for AGC system features (Store, Artisan, Errands, Escrow, etc.).',
+      };
+    }
+    if (params.featureKey && !isFeatureEnabled(params.featureKey)) {
+      return {
+        success: false,
+        message: `The ${params.category} feature is currently disabled on AGC.`,
+      };
     }
     const numericAmt = Math.round(Number(params.amount) || 0);
     if (!Number.isFinite(numericAmt) || numericAmt < 50) {
@@ -10798,6 +10815,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       chatId: dmChatId,
       title: params.title.trim(),
       category: params.category,
+      featureKey: params.featureKey,
+      featureRefId: params.featureRefId?.trim() || undefined,
       amount: numericAmt,
       currency: currency || 'NGN',
       note: params.note,
@@ -10906,6 +10925,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           amount: bill.amount,
           title: bill.title,
           category: bill.category,
+          featureKey: bill.featureKey,
+          featureRefId: bill.featureRefId,
           channel,
           paystackRef,
         }),

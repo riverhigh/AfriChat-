@@ -2686,7 +2686,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       <div className="flex items-center justify-between gap-2 pb-2 border-b border-black/10 dark:border-white/10">
                         <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
                           <Receipt className="w-4 h-4 text-emerald-500 shrink-0" />
-                          <span>Send My Bill</span>
+                          <span>AGC Feature Bill</span>
                         </div>
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-purple-500/15 text-purple-600 dark:text-purple-300">
                           {bill.category}
@@ -2700,6 +2700,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         <div className="text-lg font-black font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
                           {formatPrice(bill.amount, bCur)}
                         </div>
+                        {bill.featureRefId && (
+                          <div className="inline-block px-2 py-0.5 rounded-md bg-purple-500/10 border border-purple-500/20 text-[10px] font-mono text-purple-600 dark:text-purple-300">
+                            Ref: {bill.featureRefId}
+                          </div>
+                        )}
                         {bill.note && (
                           <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed pt-0.5">
                             {bill.note}
