@@ -6153,9 +6153,23 @@ async function startServer() {
                 const normalizedId = id.replace(/\\/g, '/').split('?')[0];
                 if (normalizedId.endsWith('/vite/dist/client/client.mjs')) {
                   return {
+                    code: code
+                      .replace(
+                        'transport.connect(createHMRHandler(handleMessage));',
+                        '/* HMR WebSocket disabled (ws: false, hmr: false) */'
+                      )
+                      .replace(
+                        'else throw new SendBeforeConnectError("send was called before connect");',
+                        'else return;'
+                      ),
+                    map: null,
+                  };
+                }
+                if (normalizedId.includes('pwa-entry-point-loaded')) {
+                  return {
                     code: code.replace(
-                      'transport.connect(createHMRHandler(handleMessage));',
-                      '/* HMR WebSocket disabled (ws: false, hmr: false) */'
+                      "import.meta.hot.send('vite-pwa-plugin:dev-ready');",
+                      "Promise.resolve(import.meta.hot?.send?.('vite-pwa-plugin:dev-ready')).catch(() => {});"
                     ),
                     map: null,
                   };
