@@ -26,6 +26,9 @@ import {
   Sliders,
   Send,
   CloudSun,
+  Loader2,
+  Bot,
+  AlertCircle,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { DispatchDeliveryOrder, DispatchProvider } from '../types';
@@ -57,11 +60,18 @@ export const DispatchModal: React.FC = () => {
   );
   const [isSearching, setIsSearching] = useState(false);
   const [orderCreatedSuccess, setOrderCreatedSuccess] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'delivered'>('all');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [showSmartFilters, setShowSmartFilters] = useState(false);
   const [aiPromptInput, setAiPromptInput] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiReply, setAiReply] = useState<{
+    text: string;
+    intent?: string;
+    filledFields?: string[];
+  } | null>(null);
 
   // Sync active tracking order when dispatchOrders updates via live socket/API
   useEffect(() => {
@@ -88,14 +98,103 @@ export const DispatchModal: React.FC = () => {
     return packageWeight >= 5 || vehicleType === 'van' ? 'pickkr' : 'gokada';
   };
 
+  const handleDispatchAiSubmit = async (overridePrompt?: string) => {
+    const query = (overridePrompt ?? aiPromptInput).trim();
+    if (!query) {
+      setAiReply({
+        text: 'Ask anything about Dispatch rates & tracking, or describe a delivery — e.g. "Send iPhone to Amara 08012345678 at 14 Admiralty Way Lekki".',
+        intent: 'hint',
+      });
+      return;
+    }
+
+    setAiLoading(true);
+    setFormError(null);
+    try {
+      const resp = await fetch('/api/dispatch/ai-assist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: query,
+          currentPickup: senderAddress,
+          feePercent,
+          recentOrders: dispatchOrders.slice(0, 5),
+        }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.success) {
+        setAiReply({
+          text: data?.error || 'Dispatch AI is temporarily unavailable. You can still fill the booking form below.',
+        });
+        return;
+      }
+
+      const booking = data.booking || {};
+      const filled: string[] = [];
+      if (booking.vehicleType === 'bike' || booking.vehicleType === 'van') {
+        setVehicleType(booking.vehicleType);
+        filled.push(booking.vehicleType === 'van' ? 'Van' : 'Bike');
+      }
+      if (booking.senderAddress && String(booking.senderAddress).trim()) {
+        setSenderAddress(String(booking.senderAddress).trim());
+        filled.push('Pickup');
+      }
+      if (booking.recipientAddress && String(booking.recipientAddress).trim()) {
+        setRecipientAddress(String(booking.recipientAddress).trim());
+        filled.push('Dropoff');
+      }
+      if (booking.recipientName && String(booking.recipientName).trim()) {
+        setRecipientName(String(booking.recipientName).trim());
+        filled.push('Recipient');
+      }
+      if (booking.recipientPhone && String(booking.recipientPhone).trim()) {
+        setRecipientPhone(String(booking.recipientPhone).trim());
+        filled.push('Phone');
+      }
+      if (booking.packageDescription && String(booking.packageDescription).trim()) {
+        setPackageDesc(String(booking.packageDescription).trim());
+        filled.push('Item');
+      }
+      if (typeof booking.packageWeight === 'number' && booking.packageWeight > 0) {
+        setPackageWeight(booking.packageWeight);
+      }
+
+      if (data.intent === 'track') {
+        const matched = data.trackingCode
+          ? dispatchOrders.find((o) => o.trackingCode.toUpperCase() === String(data.trackingCode).toUpperCase())
+          : dispatchOrders[0];
+        if (matched) setActiveTrackingOrder(matched);
+        setActiveTab('history');
+      } else if (data.intent === 'fill_booking' || filled.length > 0) {
+        setActiveTab('book');
+      }
+
+      setAiReply({
+        text: String(data.reply || 'Done!'),
+        intent: data.intent,
+        filledFields: filled,
+      });
+      if (!overridePrompt) {
+        setAiPromptInput('');
+      }
+    } catch {
+      setAiReply({
+        text: 'Could not reach Dispatch AI right now. Check your connection and try again.',
+      });
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const handleBookDispatch = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     if (!recipientName.trim() || !recipientPhone.trim() || !recipientAddress.trim()) {
-      alert('Please fill out all recipient delivery details');
+      setFormError('Please fill out all recipient delivery details.');
       return;
     }
     if (!packageDesc.trim()) {
-      alert('Please describe the item(s) you are sending');
+      setFormError('Please describe the item(s) you are sending.');
       return;
     }
 
@@ -258,9 +357,9 @@ export const DispatchModal: React.FC = () => {
             </div>
           </div>
 
-          {/* FLOATING AI PROMPT BAR ("Ask AgcBot AI") */}
-          <div className="pt-2">
-            <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-full bg-white/90 dark:bg-white/10 backdrop-blur-xl border border-white/20 shadow-lg text-slate-800 dark:text-white">
+          {/* FLOATING AI PROMPT BAR ("Ask Dispatch AI") */}
+          <div className="pt-2 space-y-2">
+            <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-white/95 dark:bg-white/10 backdrop-blur-xl border border-white/20 shadow-lg text-slate-800 dark:text-white">
               <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-purple-600 to-pink-500 flex items-center justify-center text-white text-[10px] font-bold shrink-0">
                 AI
               </div>
@@ -269,25 +368,46 @@ export const DispatchModal: React.FC = () => {
                 value={aiPromptInput}
                 onChange={(e) => setAiPromptInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && aiPromptInput.trim()) {
-                    setIsDispatchModalOpen(false);
-                    startAiChat();
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void handleDispatchAiSubmit();
                   }
                 }}
-                placeholder="Ask AgcBot AI or book dispatch..."
+                placeholder="Ask Dispatch AI or describe parcel to book..."
                 className="flex-1 bg-transparent text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-white/60 focus:outline-none"
               />
               <button
                 type="button"
-                onClick={() => {
-                  setIsDispatchModalOpen(false);
-                  startAiChat();
-                }}
-                className="w-7 h-7 rounded-full bg-black/10 dark:bg-white/20 hover:bg-purple-600 hover:text-white flex items-center justify-center text-slate-600 dark:text-white transition-colors shrink-0"
-                title="Launch AgcBot Assistant"
+                disabled={aiLoading}
+                onClick={() => void handleDispatchAiSubmit()}
+                className="w-7 h-7 rounded-full bg-purple-600 hover:bg-purple-500 disabled:opacity-60 flex items-center justify-center text-white transition-colors shrink-0 shadow-sm"
+                title="Ask Dispatch AI"
               >
-                <Zap className="w-3.5 h-3.5" />
+                {aiLoading ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Send className="w-3.5 h-3.5" />
+                )}
               </button>
+            </div>
+
+            {/* Quick AI Chips */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
+              {[
+                { label: 'Bike vs Van rates', prompt: 'What are Bike vs Van dispatch rates?' },
+                { label: 'Track my order', prompt: 'Track my latest delivery order' },
+                { label: 'Auto-fill sample', prompt: 'Send iPhone to Amara 08012345678 at 14 Admiralty Way Lekki' },
+              ].map((chip) => (
+                <button
+                  key={chip.label}
+                  type="button"
+                  disabled={aiLoading}
+                  onClick={() => void handleDispatchAiSubmit(chip.prompt)}
+                  className="px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-[10px] font-medium text-white/90 whitespace-nowrap shrink-0 transition-colors"
+                >
+                  {chip.label}
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -333,17 +453,75 @@ export const DispatchModal: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => setShowSmartFilters(!showSmartFilters)}
-              className="text-xs text-slate-500 dark:text-neutral-400 hover:text-purple-600 flex items-center gap-1"
+              onClick={() => {
+                setShowSmartFilters((prev) => !prev);
+                setActiveTab('history');
+              }}
+              className={`text-xs flex items-center gap-1 transition-colors ${
+                showSmartFilters ? 'text-purple-600 font-bold' : 'text-slate-500 dark:text-neutral-400 hover:text-purple-600'
+              }`}
             >
               <Sliders className="w-3.5 h-3.5" />
               <span>Smart Filters</span>
             </button>
           </div>
 
+          {/* Inline Dispatch AI Assistant Reply Card */}
+          {aiReply && (
+            <div className="mx-5 mt-3 p-3 rounded-2xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/60 text-xs space-y-2 animate-in slide-in-from-top-2 shrink-0">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2 min-w-0">
+                  <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-purple-600 to-pink-500 text-white flex items-center justify-center shrink-0 mt-0.5">
+                    <Bot className="w-3.5 h-3.5" />
+                  </div>
+                  <div className="text-slate-800 dark:text-slate-100 leading-relaxed">
+                    {aiReply.text}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAiReply(null)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white p-0.5 shrink-0"
+                  aria-label="Dismiss AI reply"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-2 pl-8">
+                <div className="flex flex-wrap gap-1">
+                  {(aiReply.filledFields || []).map((f) => (
+                    <span
+                      key={f}
+                      className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold"
+                    >
+                      Filled: {f}
+                    </span>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDispatchModalOpen(false);
+                    startAiChat();
+                  }}
+                  className="text-[10px] font-bold text-purple-600 dark:text-purple-300 hover:underline shrink-0"
+                >
+                  Open AgcBot Chat →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {formError && (
+            <div className="mx-5 mt-2 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs font-medium flex items-center gap-2 shrink-0">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
           {/* Success Banner */}
           {orderCreatedSuccess && (
-            <div className="mx-5 my-2 p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-medium flex items-center gap-2 animate-in slide-in-from-top-2">
+            <div className="mx-5 my-2 p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-medium flex items-center gap-2 animate-in slide-in-from-top-2 shrink-0">
               <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
               <span>Order placed! Connecting nearest Gokada / Pickkr dispatch rider...</span>
             </div>
@@ -553,6 +731,37 @@ export const DispatchModal: React.FC = () => {
           {/* ── TAB 2: MY DELIVERIES & LIVE TRACKING ── */}
           {activeTab === 'history' && (
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {showSmartFilters && (
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 space-y-2">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Filter by code, recipient, address, item..."
+                      className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-white dark:bg-black/40 border border-slate-200 dark:border-neutral-700 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {(['all', 'active', 'delivered'] as const).map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setStatusFilter(st)}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-colors ${
+                          statusFilter === st
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-white dark:bg-neutral-800 text-slate-600 dark:text-neutral-300 border border-slate-200 dark:border-neutral-700'
+                        }`}
+                      >
+                        {st}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Active Tracking Hero Card */}
               {activeTrackingOrder && (
                 <div className="p-4 rounded-2xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/40 space-y-3">

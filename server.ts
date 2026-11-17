@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1700,7 +1700,7 @@ const GAME_ESCROWS_FILE = path.join(__dirname, 'data_game_escrows.json');
 
 interface ServerGameEscrow {
   gameId: string;
-  gameType: 'xo' | 'whot' | 'ludo';
+  gameType: 'xo' | 'whot' | 'ludo' | 'poker';
   betAmount: number;
   currency: 'NGN' | 'KES' | 'GHS' | 'ZAR';
   challengerPhone: string;
@@ -2465,8 +2465,8 @@ app.post('/api/games/bet/lock', (req: Request, res: Response) => {
     const cleanPlayer = String(playerPhone || '').trim();
     const stake = Math.round(Number(betAmount) || 0);
     const playerRole: 'challenger' | 'opponent' = role === 'opponent' ? 'opponent' : 'challenger';
-    const gType: 'xo' | 'whot' | 'ludo' =
-      gameType === 'whot' ? 'whot' : gameType === 'ludo' ? 'ludo' : 'xo';
+    const gType: 'xo' | 'whot' | 'ludo' | 'poker' =
+      gameType === 'whot' ? 'whot' : gameType === 'ludo' ? 'ludo' : gameType === 'poker' ? 'poker' : 'xo';
 
     if (!cleanGameId || !cleanPlayer || !Number.isFinite(stake) || stake < 50) {
       return res.status(400).json({
@@ -2682,9 +2682,9 @@ app.post('/api/games/bet/settle', (req: Request, res: Response) => {
       });
     }
 
-    const gType: 'xo' | 'whot' | 'ludo' =
-      existingEscrow?.gameType || (gameType === 'whot' ? 'whot' : gameType === 'ludo' ? 'ludo' : 'xo');
-    const label = gType === 'whot' ? 'Whot!' : gType === 'ludo' ? 'Ludo' : 'X/O';
+    const gType: 'xo' | 'whot' | 'ludo' | 'poker' =
+      existingEscrow?.gameType || (gameType === 'whot' ? 'whot' : gameType === 'ludo' ? 'ludo' : gameType === 'poker' ? 'poker' : 'xo');
+    const label = gType === 'whot' ? 'Whot!' : gType === 'ludo' ? 'Ludo' : gType === 'poker' ? 'Poker' : 'X/O';
     const stake = Math.round(Number(existingEscrow?.betAmount || betAmount || 0));
     const cur = (existingEscrow?.currency || currency || 'NGN') as 'NGN' | 'KES' | 'GHS' | 'ZAR';
     const chalPhone = String(existingEscrow?.challengerPhone || challengerPhone || '').trim();
@@ -3709,6 +3709,255 @@ app.patch('/api/dispatch/orders/:id/status', (req: Request, res: Response) => {
   saveDispatchFile();
   io.emit('dispatch_status_updated', { id, status, order });
   res.json({ success: true, order });
+});
+
+function buildLocalDispatchAiResult(
+  prompt: string,
+  currentPickup: string,
+  feePercent: number,
+  orders: any[]
+) {
+  const text = prompt.trim();
+  const lower = text.toLowerCase();
+  const bikeTotal = 2400 + Math.round(2400 * (feePercent / 100));
+  const vanTotal = 6500 + Math.round(6500 * (feePercent / 100));
+
+  // 1. Check tracking / status intent
+  const codeMatch = text.match(/AGC-(?:GKD|PCK)-\d{4,6}/i);
+  if (
+    codeMatch ||
+    /\b(track|tracking|where is|status of|my order|latest delivery|my delivery|rider)\b/i.test(lower)
+  ) {
+    const targetOrder = codeMatch
+      ? orders.find((o) => String(o.trackingCode || '').toUpperCase() === codeMatch[0].toUpperCase())
+      : orders[0];
+    if (targetOrder) {
+      return {
+        intent: 'track' as const,
+        trackingCode: targetOrder.trackingCode,
+        reply: `Order ${targetOrder.trackingCode} (${targetOrder.packageDescription || 'Parcel'}) is currently **${String(targetOrder.status || 'rider_assigned').replace(/_/g, ' ')}**. Rider: ${targetOrder.riderName || 'Assigned'} (${targetOrder.riderPlate || 'GKD'}) going to ${targetOrder.recipientAddress || 'destination'}.`,
+        booking: {},
+        readyToConfirm: false,
+      };
+    }
+    return {
+      intent: 'answer' as const,
+      reply: `You don't have any active dispatch deliveries yet. Describe a pickup, dropoff, recipient, and item here (e.g. "Send laptop to Amara 08012345678 at 14 Admiralty Way Lekki") and I'll fill the booking form for you!`,
+      booking: {},
+      readyToConfirm: false,
+    };
+  }
+
+  // 2. Answer rate/FAQ questions directly if not a booking command with recipient/address
+  const isRateOrFaqQuestion =
+    /\b(what are|how much|price|pricing|rates?|cost|fees?|commission|compare|difference|how does|insur|weight|gokada|pickkr)\b/i.test(lower) &&
+    !/\b(send|deliver|ship)\s+.+\s+(to|at)\b/i.test(lower);
+
+  if (isRateOrFaqQuestion) {
+    const mentionsVan = /\b(van|truck|heavy|bulk)\b/i.test(lower);
+    const mentionsBike = /\b(bike|motorbike|okada)\b/i.test(lower);
+    const mentionedVehicle = mentionsVan && !mentionsBike ? 'van' : mentionsBike && !mentionsVan ? 'bike' : undefined;
+    return {
+      intent: 'answer' as const,
+      reply: `AGC Dispatch fares from ${currentPickup || 'your pickup'}: **Motorbike Express** is ₦${bikeTotal.toLocaleString()} total (₦2,400 + ${feePercent}% platform fee, up to 10kg via Gokada) and **Delivery Van** is ₦${vanTotal.toLocaleString()} total (₦6,500 + ${feePercent}% fee, bulk up to 500kg via PickkR). Every order includes live tracking & rider phone contact!`,
+      booking: mentionedVehicle ? { vehicleType: mentionedVehicle } : {},
+      readyToConfirm: false,
+    };
+  }
+
+  // 3. Parse natural-language booking details
+  const booking: Record<string, any> = {};
+
+  if (/\b(van|truck|heavy|bulk|fridge|tv|television|furniture|mattress|cartons?|crates?)\b/i.test(lower)) {
+    booking.vehicleType = 'van';
+  } else if (/\b(bike|motorbike|okada|dispatch bike|express|fast)\b/i.test(lower)) {
+    booking.vehicleType = 'bike';
+  }
+
+  const phoneMatch = text.match(/(\+?234\s?\d{3}\s?\d{3}\s?\d{4}|0[789][01]\d[\s-]?\d{3}[\s-]?\d{4}|\+?\d{10,14})/);
+  if (phoneMatch) {
+    booking.recipientPhone = phoneMatch[0].replace(/[\s-]+/g, '');
+  }
+
+  const pickupMatch = text.match(/\bfrom\s+([^,.;\n]+(?:,[^.;\n]+)?)(?=\s+(?:to|for|at)\b|$)/i);
+  if (pickupMatch && pickupMatch[1]) {
+    booking.senderAddress = pickupMatch[1].trim();
+  }
+
+  const locationHints =
+    '(?:Lekki|Ikeja|Victoria Island|V\\.?I\\.?|Ikoyi|Yaba|Surulere|Ajah|Gbagada|Maryland|Festac|Apapa|Ogba|Agege|Magodo|Oshodi|Mushin|Ikotun|Ikorodu|Wuse|Maitama|Garki|Gwarinpa|Asokoro|Ibadan|Abuja|Lagos|Port Harcourt|Street|St\\.?|Way|Road|Rd\\.?|Ave(?:nue)?|Close|Crescent|Phase|Estate|Plaza|Mall|Complex)';
+  const explicitAtRegex = new RegExp(`(?:\\bat|dropoff[:\\s]+|address[:\\s]+)\\s+([^.;\\n]*${locationHints}[^.;\\n]*)`, 'i');
+  const fallbackToRegex = new RegExp(`\\bto\\s+([^.;\\n]*${locationHints}[^.;\\n]*)`, 'i');
+  const dropoffMatch = text.match(explicitAtRegex) || text.match(fallbackToRegex);
+  if (dropoffMatch && dropoffMatch[1]) {
+    const addr = dropoffMatch[1]
+      .replace(/(\+?234\s?\d{3}\s?\d{3}\s?\d{4}|0[789][01]\d[\s-]?\d{3}[\s-]?\d{4})/g, '')
+      .replace(/\bfrom\s+.+$/i, '')
+      .trim()
+      .replace(/^[,:\-\s]+|[,:\-\s]+$/g, '');
+    if (addr.length >= 3) booking.recipientAddress = addr;
+  }
+
+  const nameMatch = text.match(/\b(?:to|for)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/);
+  const placeBlocklist = new Set(['lekki', 'ikeja', 'ikoyi', 'yaba', 'surulere', 'ajah', 'abuja', 'lagos', 'victoria', 'island', 'mainland', 'gbagada', 'maryland', 'wuse', 'maitama']);
+  if (nameMatch && nameMatch[1] && !placeBlocklist.has(nameMatch[1].split(' ')[0].toLowerCase())) {
+    booking.recipientName = nameMatch[1].trim();
+  }
+
+  const itemMatch = text.match(/\b(?:send|deliver|ship|move|courier)\s+(?:a|an|the|my)?\s*([^,.;\n]+?)(?=\s+(?:to|for|at|from|by|via)\b|$)/i);
+  if (itemMatch && itemMatch[1]) {
+    const cleanedItem = itemMatch[1].trim();
+    if (cleanedItem.length >= 2 && !/^package$/i.test(cleanedItem)) {
+      booking.packageDescription = /[A-Z]/.test(cleanedItem)
+        ? cleanedItem
+        : cleanedItem.charAt(0).toUpperCase() + cleanedItem.slice(1);
+    }
+  }
+
+  const weightMatch = text.match(/(\d+(?:\.\d+)?)\s*kg/i);
+  if (weightMatch) {
+    booking.packageWeight = Number(weightMatch[1]);
+    if (booking.packageWeight >= 5 && !booking.vehicleType) booking.vehicleType = 'van';
+  }
+
+  const extractedKeys = Object.keys(booking).filter((k) => booking[k] !== undefined && booking[k] !== '');
+
+  if (extractedKeys.length > 0) {
+    const filledLabels: string[] = [];
+    if (booking.packageDescription) filledLabels.push(`Item: ${booking.packageDescription}`);
+    if (booking.vehicleType) filledLabels.push(`Vehicle: ${booking.vehicleType === 'van' ? 'Delivery Van' : 'Motorbike Express'}`);
+    if (booking.recipientName) filledLabels.push(`Recipient: ${booking.recipientName}`);
+    if (booking.recipientPhone) filledLabels.push(`Phone: ${booking.recipientPhone}`);
+    if (booking.recipientAddress) filledLabels.push(`Dropoff: ${booking.recipientAddress}`);
+    if (booking.senderAddress) filledLabels.push(`Pickup: ${booking.senderAddress}`);
+
+    const missing: string[] = [];
+    if (!booking.recipientAddress) missing.push('dropoff address');
+    if (!booking.recipientName) missing.push('recipient name');
+    if (!booking.recipientPhone) missing.push('recipient phone');
+    if (!booking.packageDescription) missing.push('package description');
+
+    const chosenEst = booking.vehicleType === 'van' ? vanTotal : bikeTotal;
+    return {
+      intent: 'fill_booking' as const,
+      reply:
+        missing.length === 0
+          ? `I filled your Dispatch form (${filledLabels.join(' · ')}). Estimated total: ₦${chosenEst.toLocaleString()} (${feePercent}% fee included). Tap Confirm & Book Rider below!`
+          : `I pre-filled ${filledLabels.join(' · ') || 'your vehicle selection'} in the form below. Please add the remaining detail(s): ${missing.join(', ')}.`,
+      booking,
+      readyToConfirm: missing.length === 0,
+    };
+  }
+
+  return {
+    intent: 'answer' as const,
+    reply: `I'm your AGC Dispatch Assistant! Tell me what to send and where — e.g. "Send MacBook to Tunde 08031234567 at 14 Admiralty Way Lekki" — or ask about Bike (₦${bikeTotal.toLocaleString()}) vs Van (₦${vanTotal.toLocaleString()}) rates or order tracking.`,
+    booking: {},
+    readyToConfirm: false,
+  };
+}
+
+app.post('/api/dispatch/ai-assist', async (req: Request, res: Response) => {
+  try {
+    const { prompt, currentPickup, feePercent: clientFeePct, recentOrders } = req.body || {};
+    const userPrompt = String(prompt || '').trim();
+    if (!userPrompt) {
+      return res.status(400).json({ success: false, error: 'Please type a dispatch request or question.' });
+    }
+
+    const feePercent = Number(systemConfig.dispatchCommissionPercent ?? clientFeePct ?? 5) || 5;
+    const pickup = String(currentPickup || 'Ikeja, Lagos').trim();
+    const serverOrders = Array.from(dispatchOrdersMap.values()).sort(
+      (a: any, b: any) => (new Date(b.createdAt).getTime() || 0) - (new Date(a.createdAt).getTime() || 0)
+    );
+    const mergedOrders = serverOrders.length > 0 ? serverOrders : (Array.isArray(recentOrders) ? recentOrders : []);
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      const localResult = buildLocalDispatchAiResult(userPrompt, pickup, feePercent, mergedOrders);
+      return res.json({ success: true, mode: 'dispatch_smart', ...localResult });
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: { 'User-Agent': 'aistudio-build' },
+        },
+      });
+
+      const bikeTotal = 2400 + Math.round(2400 * (feePercent / 100));
+      const vanTotal = 6500 + Math.round(6500 * (feePercent / 100));
+      const orderSummary = mergedOrders
+        .slice(0, 5)
+        .map(
+          (o: any) =>
+            `${o.trackingCode} | ${o.status} | ${o.packageDescription} | To: ${o.recipientName} (${o.recipientAddress}) | Rider: ${o.riderName || 'TBD'}`
+        )
+        .join('\n');
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: `User request in AGC Dispatch: "${userPrompt}"\nCurrent pickup address: "${pickup}"\nRecent dispatch orders:\n${orderSummary || 'None yet'}`,
+        config: {
+          systemInstruction: `You are the AGC Dispatch AI Assistant inside the Dispatch courier booking modal (Gokada Express Bike & PickkR Delivery Van).
+Pricing:
+- Motorbike Express (Gokada, up to 10kg): ₦2,400 base + ${feePercent}% platform fee = ₦${bikeTotal.toLocaleString()} total.
+- Delivery Van (PickkR, bulk/heavy up to 500kg): ₦6,500 base + ${feePercent}% platform fee = ₦${vanTotal.toLocaleString()} total.
+
+Determine the user's intent:
+- "fill_booking": User wants to send/deliver a parcel or pre-fill fields. Extract any provided vehicleType ("bike" or "van"), senderAddress, recipientAddress, recipientName, recipientPhone, packageDescription, packageWeight. Leave unmentioned fields empty or omitted.
+- "track": User asks to track or check status of a delivery or rider. Set trackingCode if known.
+- "answer": User asks about dispatch pricing, riders, providers, insurance, or how AGC Dispatch works.
+Keep reply concise (1-3 helpful sentences) and strictly relevant to AGC Dispatch.`,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              intent: { type: Type.STRING, description: 'One of: fill_booking, track, answer' },
+              reply: { type: Type.STRING, description: 'Helpful response to display in Dispatch modal' },
+              trackingCode: { type: Type.STRING, description: 'Matched tracking code if tracking' },
+              readyToConfirm: { type: Type.BOOLEAN, description: 'True if recipientName, recipientPhone, recipientAddress, and packageDescription are all present' },
+              booking: {
+                type: Type.OBJECT,
+                properties: {
+                  vehicleType: { type: Type.STRING, description: 'bike or van' },
+                  senderAddress: { type: Type.STRING },
+                  recipientAddress: { type: Type.STRING },
+                  recipientName: { type: Type.STRING },
+                  recipientPhone: { type: Type.STRING },
+                  packageDescription: { type: Type.STRING },
+                  packageWeight: { type: Type.NUMBER },
+                },
+              },
+            },
+            required: ['intent', 'reply'],
+          },
+        },
+      });
+
+      const rawJson = (response.text || '').trim();
+      if (rawJson) {
+        const parsed = JSON.parse(rawJson);
+        return res.json({
+          success: true,
+          mode: 'gemini',
+          intent: parsed.intent || 'answer',
+          reply: parsed.reply || 'Here is your Dispatch update.',
+          trackingCode: parsed.trackingCode,
+          readyToConfirm: Boolean(parsed.readyToConfirm),
+          booking: parsed.booking || {},
+        });
+      }
+    } catch (geminiErr: any) {
+      console.warn('Dispatch AI Gemini fallback:', geminiErr?.message || geminiErr);
+    }
+
+    const fallback = buildLocalDispatchAiResult(userPrompt, pickup, feePercent, mergedOrders);
+    return res.json({ success: true, mode: 'dispatch_smart', ...fallback });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Dispatch AI error' });
+  }
 });
 
 // Helper: fetch live stores & artisan stations from Supabase + merge server overrides

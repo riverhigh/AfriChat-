@@ -308,6 +308,8 @@ export interface WhotGameState {
   topCard: WhotCard;
   requestedShape?: WhotShape | null;
   pendingDrawCount?: number;
+  pendingDrawType?: 'pick_two' | 'pick_three' | null;
+  reshuffleCount?: number;
   currentTurnPhone: string;
   currentTurnName: string;
   lastActionNote?: string;
@@ -342,13 +344,77 @@ export interface LudoGameState {
   mode: 'friendly' | 'bet';
   betAmount: number;
   currency: CurrencyCode;
+  /** 8 seeds per player: indices 0..3 = Castle A, indices 4..7 = Castle B */
   challengerTokens: number[];
   opponentTokens: number[];
+  /** Current remaining unused dice in this roll (up to 2 dice) */
+  diceValues?: number[];
+  /** Original 2 dice rolled this turn */
+  rolledDice?: [number, number] | null;
+  /** Backwards-compatible primary die value */
   diceValue: number | null;
   hasRolled: boolean;
+  consecutiveSixes?: number;
   currentTurnPhone: string;
   currentTurnName: string;
   lastActionNote?: string;
+  moveCount: number;
+  status: 'pending' | 'active' | 'won' | 'draw' | 'declined' | 'cancelled';
+  winnerPhone?: string;
+  winnerName?: string;
+  totalPot: number;
+  platformFeeRate: number;
+  platformFee: number;
+  winnerPayout: number;
+  settledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type PokerSuit = 'spades' | 'hearts' | 'diamonds' | 'clubs';
+export type PokerPhase = 'preflop' | 'flop' | 'turn' | 'river' | 'showdown';
+
+export interface PokerCard {
+  id: string;
+  suit: PokerSuit;
+  rank: number; // 2..14 (11=J, 12=Q, 13=K, 14=A)
+}
+
+export interface PokerGameState {
+  id: string;
+  chatId: string;
+  gameType: 'poker';
+  challengerId: string;
+  challengerPhone: string;
+  challengerName: string;
+  challengerAvatar?: string;
+  opponentPhone?: string;
+  opponentName?: string;
+  opponentAvatar?: string;
+  isAiOpponent?: boolean;
+  aiDifficulty?: 'hard';
+  mode: 'friendly' | 'bet';
+  betAmount: number;
+  currency: CurrencyCode;
+  deck: PokerCard[];
+  challengerHole: PokerCard[];
+  opponentHole: PokerCard[];
+  communityCards: PokerCard[];
+  phase: PokerPhase;
+  pot: number;
+  challengerChips: number;
+  opponentChips: number;
+  challengerBet: number;
+  opponentBet: number;
+  smallBlind: number;
+  bigBlind: number;
+  currentTurnPhone: string;
+  currentTurnName: string;
+  actedThisPhase: string[];
+  lastActionNote?: string;
+  winningHandLabel?: string;
+  challengerHandLabel?: string;
+  opponentHandLabel?: string;
   moveCount: number;
   status: 'pending' | 'active' | 'won' | 'draw' | 'declined' | 'cancelled';
   winnerPhone?: string;
@@ -488,6 +554,7 @@ export interface ChatMessage {
     | 'game_xo'
     | 'game_whot'
     | 'game_ludo'
+    | 'game_poker'
     | 'bill_request'
     | 'location';
   imageUrl?: string;
@@ -507,6 +574,7 @@ export interface ChatMessage {
   xoGame?: TicTacToeGameState;
   whotGame?: WhotGameState;
   ludoGame?: LudoGameState;
+  pokerGame?: PokerGameState;
   billRequest?: BillRequest;
   locationData?: LocationPinMeta;
   metadata?: Record<string, any>;

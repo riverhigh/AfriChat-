@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { WhotCard, WhotGameState, WhotShape } from '../types';
 import { useApp, phonesMatch } from '../context/AppContext';
+import { isWhotCardPlayable } from '../utils/gameAiEngine';
 
 const SHAPE_COLORS: Record<WhotShape, { text: string; bg: string; label: string }> = {
   circle: { text: 'text-rose-600', bg: 'bg-rose-50', label: 'Circle' },
@@ -22,6 +23,15 @@ const SHAPE_COLORS: Record<WhotShape, { text: string; bg: string; label: string 
   square: { text: 'text-amber-600', bg: 'bg-amber-50', label: 'Square' },
   star: { text: 'text-purple-700', bg: 'bg-purple-50', label: 'Star' },
   whot: { text: 'text-fuchsia-700', bg: 'bg-fuchsia-50', label: 'WHOT' },
+};
+
+const ACTION_TAG: Record<number, string> = {
+  1: 'HOLD',
+  2: '+2',
+  5: '+3',
+  8: 'SUSP',
+  14: 'GEN',
+  20: 'WILD',
 };
 
 const WhotShapeSvg: React.FC<{ shape: WhotShape; className?: string }> = ({
@@ -74,6 +84,7 @@ const WhotPlayingCard: React.FC<{
 }> = ({ card, playable = false, disabled = false, compact = false, onClick }) => {
   const meta = SHAPE_COLORS[card.shape] || SHAPE_COLORS.circle;
   const displayNum = card.shape === 'whot' ? '20' : String(card.number);
+  const tag = ACTION_TAG[card.shape === 'whot' ? 20 : card.number];
 
   return (
     <button
@@ -90,8 +101,15 @@ const WhotPlayingCard: React.FC<{
           : 'border-slate-300'
       }`}
     >
-      <div className={`text-[10px] font-black leading-none text-left ${meta.text}`}>
-        {displayNum}
+      <div className="flex items-center justify-between gap-0.5">
+        <span className={`text-[10px] font-black leading-none ${meta.text}`}>
+          {displayNum}
+        </span>
+        {tag && (
+          <span className="text-[7px] font-black leading-none px-1 py-0.5 rounded bg-slate-100 text-slate-600">
+            {tag}
+          </span>
+        )}
       </div>
       <div className={`flex items-center justify-center ${meta.text}`}>
         <WhotShapeSvg shape={card.shape} className={compact ? 'w-5 h-5' : 'w-6 h-6'} />
@@ -137,6 +155,7 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
 
   const isMyTurn =
     game.status === 'active' && phonesMatch(myPhone, game.currentTurnPhone);
+  const pendingDraw = game.pendingDrawCount || 0;
   const sym =
     game.currency === 'KES'
       ? 'KSh'
@@ -148,11 +167,7 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
 
   const canPlayCard = (card: WhotCard): boolean => {
     if (!isMyTurn) return false;
-    if (card.shape === 'whot' || card.number === 20) return true;
-    if (game.requestedShape) {
-      return card.shape === game.requestedShape;
-    }
-    return card.shape === game.topCard.shape || card.number === game.topCard.number;
+    return isWhotCardPlayable(card, game);
   };
 
   const handleAccept = async () => {
@@ -317,13 +332,17 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
               onClick={handleDraw}
               className={`flex flex-col items-center justify-center w-16 h-20 rounded-xl border-2 transition-all ${
                 isMyTurn && !busy
-                  ? 'bg-gradient-to-br from-purple-700 to-indigo-800 border-purple-400 text-white shadow-md hover:scale-105 cursor-pointer'
+                  ? pendingDraw > 0
+                    ? 'bg-gradient-to-br from-rose-600 to-amber-600 border-rose-300 text-white shadow-md hover:scale-105 cursor-pointer animate-pulse'
+                    : 'bg-gradient-to-br from-purple-700 to-indigo-800 border-purple-400 text-white shadow-md hover:scale-105 cursor-pointer'
                   : 'bg-purple-900/40 border-purple-800/40 text-purple-200 opacity-70 cursor-not-allowed'
               }`}
-              title="Draw from Market"
+              title={pendingDraw > 0 ? `Pick ${pendingDraw} penalty cards` : 'Draw from Market'}
             >
               <Layers className="w-5 h-5 mb-1" />
-              <span className="text-[10px] font-bold">MARKET</span>
+              <span className="text-[10px] font-bold">
+                {pendingDraw > 0 && isMyTurn ? `PICK ${pendingDraw}` : 'MARKET'}
+              </span>
               <span className="text-[9px] font-mono opacity-85">
                 {game.deck?.length ?? 0} left
               </span>
@@ -337,6 +356,11 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
                   ? `Need: ${SHAPE_COLORS[game.requestedShape]?.label}`
                   : 'Call Card'}
               </span>
+              {(game.reshuffleCount || 0) > 0 && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-semibold">
+                  Reshuffled ×{game.reshuffleCount}
+                </span>
+              )}
             </div>
           </div>
         )}
@@ -368,13 +392,17 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
           <div
             className={`px-3 py-1.5 rounded-xl text-[11px] font-semibold text-center ${
               isMyTurn
-                ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60'
+                ? pendingDraw > 0
+                  ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60'
+                  : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60'
                 : 'bg-slate-100 dark:bg-neutral-800 text-slate-600 dark:text-neutral-300'
             }`}
           >
             {isMyTurn
-              ? game.pendingDrawCount && game.pendingDrawCount > 0
-                ? `Your turn · Pick ${game.pendingDrawCount} or defend`
+              ? pendingDraw > 0
+                ? `Pick ${pendingDraw} or stack another ${
+                    game.pendingDrawType === 'pick_three' ? '5 (Pick 3)' : '2 (Pick 2)'
+                  }!`
                 : 'Your turn — play a matching card or draw'
               : `Waiting for ${game.currentTurnName}...`}
           </div>
@@ -421,10 +449,12 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
                   type="button"
                   disabled={busy}
                   onClick={handleDraw}
-                  className="text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-1"
+                  className={`hover:underline flex items-center gap-1 ${
+                    pendingDraw > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-purple-600 dark:text-purple-400'
+                  }`}
                 >
                   <Hand className="w-3 h-3" />
-                  Draw
+                  {pendingDraw > 0 ? `Pick ${pendingDraw}` : 'Draw'}
                 </button>
               )}
             </div>

@@ -405,7 +405,15 @@ import {
 import {
   pickHardXoMove,
   pickHardWhotMove,
-  pickHardLudoToken,
+  isWhotCardPlayable,
+  pickHardLudoPlan,
+  getLudoSeedOffset,
+  canMoveLudoSingleDie,
+  canMoveLudoCombinedDice,
+  hasAnyLegalLudoMove,
+  evaluateBest5PokerHand,
+  comparePokerEvaluations,
+  pickHardPokerAction,
 } from '../utils/gameAiEngine';
 import { playAnimalSound, getNotificationSound } from '../utils/soundUtils';
 import {
@@ -477,6 +485,10 @@ import {
   WhotCard,
   WhotGameState,
   LudoGameState,
+  PokerSuit,
+  PokerCard,
+  PokerPhase,
+  PokerGameState,
   STANDARD_GAME_BET_LIMIT,
   VERIFIED_GAME_BET_LIMIT,
   BillRequest,
@@ -805,7 +817,7 @@ interface AppContextType {
     game: TicTacToeGameState,
     cellIndex: number
   ) => Promise<{ success: boolean; message?: string }>;
-  // 6c. Real-Time Multiplayer Whot! & Ludo Games
+  // 6c. Real-Time Multiplayer Whot!, Ludo & Texas Hold'em Poker Games
   sendWhotChallenge: (
     chatId: string,
     mode: 'friendly' | 'bet',
@@ -841,7 +853,24 @@ interface AppContextType {
   ) => Promise<{ success: boolean; message?: string }>;
   moveLudoToken: (
     game: LudoGameState,
-    tokenIndex: number
+    tokenIndex: number,
+    dieChoice?: 'die0' | 'die1' | 'combined'
+  ) => Promise<{ success: boolean; message?: string }>;
+  sendPokerChallenge: (
+    chatId: string,
+    mode: 'friendly' | 'bet',
+    betAmount: number
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string; game?: PokerGameState }>;
+  acceptPokerChallenge: (
+    game: PokerGameState
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string }>;
+  declinePokerChallenge: (
+    game: PokerGameState
+  ) => Promise<{ success: boolean; message?: string }>;
+  performPokerAction: (
+    game: PokerGameState,
+    action: 'fold' | 'check' | 'call' | 'raise',
+    raiseBy?: number
   ) => Promise<{ success: boolean; message?: string }>;
   // 7. Ajo / Esusu Group Savings
   activeAjoGroup: AjoGroup | null;
@@ -9179,7 +9208,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const lockGameBetOnServer = async (params: {
     gameId: string;
-    gameType: 'xo' | 'whot' | 'ludo';
+    gameType: 'xo' | 'whot' | 'ludo' | 'poker';
     role: 'challenger' | 'opponent';
     playerPhone: string;
     playerName?: string;
@@ -9222,7 +9251,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const settleGameBetOnServer = async (params: {
     gameId: string;
-    gameType: 'xo' | 'whot' | 'ludo';
+    gameType: 'xo' | 'whot' | 'ludo' | 'poker';
     status: 'won' | 'draw' | 'declined' | 'cancelled';
     winnerPhone?: string;
     winnerName?: string;
@@ -9879,7 +9908,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  // ── 6c. Lightweight Whot! & Ludo Multiplayer Games + Send My Bill (Pay on Behalf) ──
+  // ── 6c. Lightweight Whot!, Ludo (8 seeds / 2 Castles / 2 Dice) & Texas Hold'em Poker + Send My Bill ──
+  const shuffleArray = <T,>(items: T[]): T[] => {
+    const arr = [...items];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  };
+
   const createWhotDeck = (): WhotCard[] => {
     const deck: WhotCard[] = [];
     const circleTriNums = [1, 2, 3, 4, 5, 7, 8, 10, 11, 12, 13, 14];
@@ -9900,15 +9938,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     for (let i = 0; i < 4; i++) {
       deck.push({ id: `wc_${seq++}`, shape: 'whot', number: 20 });
     }
-    for (let i = deck.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [deck[i], deck[j]] = [deck[j], deck[i]];
+    return shuffleArray(deck);
+  };
+
+  /**
+   * Empty Market Reshuffle Rule:
+   * When a player needs to draw and deck.length === 0, keep the active top card in discardPile,
+   * Fisher-Yates shuffle the remaining discardPile cards back into deck, and keep all player hands untouched.
+   */
+  const drawCardsFromWhotMarket = (
+    deck: WhotCard[],
+    discardPile: WhotCard[],
+    count: number,
+    existingReshuffles: number = 0
+  ): {
+    drawn: WhotCard[];
+    nextDeck: WhotCard[];
+    nextDiscard: WhotCard[];
+    reshuffleCount: number;
+    didReshuffle: boolean;
+  } => {
+    let nextDeck = [...deck];
+    let nextDiscard = [...discardPile];
+    const drawn: WhotCard[] = [];
+    let reshuffleCount = existingReshuffles;
+    let didReshuffle = false;
+
+    for (let k = 0; k < count; k++) {
+      if (nextDeck.length === 0 && nextDiscard.length > 1) {
+        const activeTop = nextDiscard[nextDiscard.length - 1];
+        const recycled = nextDiscard.slice(0, -1);
+        nextDeck = shuffleArray(recycled);
+        nextDiscard = [activeTop];
+        reshuffleCount += 1;
+        didReshuffle = true;
+      }
+      if (nextDeck.length > 0) {
+        drawn.push(nextDeck.shift()!);
+      }
     }
-    return deck;
+    return { drawn, nextDeck, nextDiscard, reshuffleCount, didReshuffle };
+  };
+
+  const createPokerDeck = (): PokerCard[] => {
+    const suits: PokerSuit[] = ['spades', 'hearts', 'diamonds', 'clubs'];
+    const cards: PokerCard[] = [];
+    for (const suit of suits) {
+      for (let rank = 2; rank <= 14; rank++) {
+        cards.push({ id: `pk_${suit}_${rank}`, suit, rank });
+      }
+    }
+    return shuffleArray(cards);
   };
 
   const broadcastGamePayload = useCallback(
-    (eventName: 'whot_game_update' | 'ludo_game_update' | 'bill_request_update', payloadData: any, chatId: string, extraPhones: string[] = []) => {
+    (
+      eventName: 'whot_game_update' | 'ludo_game_update' | 'poker_game_update' | 'bill_request_update',
+      payloadData: any,
+      chatId: string,
+      extraPhones: string[] = []
+    ) => {
       try {
         const bc = new BroadcastChannel('AGC_chats_sync');
         bc.postMessage({ type: eventName, payload: payloadData, senderId: currentUser.id });
@@ -9949,7 +10038,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const settleBetGameEscrowIfNeeded = (params: {
     gameId: string;
-    gameType?: 'xo' | 'whot' | 'ludo';
+    gameType?: 'xo' | 'whot' | 'ludo' | 'poker';
     label: string;
     mode: 'friendly' | 'bet';
     betAmount: number;
@@ -9979,7 +10068,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       gameId: params.gameId,
       gameType:
         params.gameType ||
-        (params.label.toLowerCase().includes('ludo')
+        (params.label.toLowerCase().includes('poker')
+          ? 'poker'
+          : params.label.toLowerCase().includes('ludo')
           ? 'ludo'
           : params.label.toLowerCase().includes('whot')
           ? 'whot'
@@ -10150,6 +10241,84 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [currentUser.phoneNumber, CURRENCY_SYMBOLS]
   );
 
+  const applyPokerGameUpdate = useCallback(
+    (incomingGame: PokerGameState) => {
+      if (!incomingGame?.id || !incomingGame?.chatId) return;
+      const myPhone = currentUser.phoneNumber || '';
+      const isParticipant =
+        phonesMatch(myPhone, incomingGame.challengerPhone) ||
+        phonesMatch(myPhone, incomingGame.opponentPhone);
+
+      setMessages((prev) => {
+        let targetCid = incomingGame.chatId;
+        if (targetCid.startsWith('dm_') && myPhone) {
+          const parts = targetCid.replace('dm_', '').split('_');
+          const other = phonesMatch(parts[0], myPhone) ? parts[1] : parts[0];
+          if (other) targetCid = getDirectChatId(myPhone, other) || targetCid;
+        }
+        const resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
+        const list = prev[resolvedCid] || [];
+        const existingIdx = list.findIndex((m) => m.pokerGame?.id === incomingGame.id);
+
+        let nextList: ChatMessage[];
+        if (existingIdx >= 0) {
+          const cur = list[existingIdx]?.pokerGame;
+          if (cur) {
+            const curRank = getXoStatusRank(cur.status);
+            const incRank = getXoStatusRank(incomingGame.status);
+            if (incRank < curRank) return prev;
+            if (incRank === curRank && curRank === 3) return prev;
+            if (incRank === curRank && (incomingGame.moveCount || 0) < (cur.moveCount || 0)) return prev;
+            if (incRank === curRank && (incomingGame.moveCount || 0) === (cur.moveCount || 0) && (incomingGame.updatedAt || '') <= (cur.updatedAt || '')) return prev;
+          }
+          nextList = list.map((m, i) => (i === existingIdx ? { ...m, pokerGame: incomingGame } : m));
+        } else {
+          const newCard: ChatMessage = {
+            id: `msg_poker_${incomingGame.id}`,
+            chatId: resolvedCid,
+            sender: phonesMatch(myPhone, incomingGame.challengerPhone) ? 'user' : 'other',
+            senderName: incomingGame.challengerName,
+            senderPhone: incomingGame.challengerPhone,
+            senderAvatar: incomingGame.challengerAvatar,
+            type: 'game_poker',
+            pokerGame: incomingGame,
+            text:
+              incomingGame.mode === 'bet'
+                ? `♠️ Texas Hold'em Poker (${CURRENCY_SYMBOLS[incomingGame.currency || 'NGN']}${incomingGame.betAmount.toLocaleString()} bet)`
+                : "♠️ Friendly Texas Hold'em Poker",
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            status: 'delivered',
+          };
+          nextList = [...list, newCard];
+        }
+        const updated = { ...prev, [resolvedCid]: nextList };
+        try {
+          const userKey = getUserStorageKey('AGC_messages_v2', currentUser.phoneNumber);
+          localStorage.setItem(userKey, JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
+      });
+
+      settleBetGameEscrowIfNeeded({
+        gameId: incomingGame.id,
+        gameType: 'poker',
+        label: 'Poker',
+        mode: incomingGame.mode,
+        betAmount: incomingGame.betAmount,
+        currency: incomingGame.currency,
+        status: incomingGame.status,
+        winnerPhone: incomingGame.winnerPhone,
+        winnerName: incomingGame.winnerName,
+        challengerPhone: incomingGame.challengerPhone,
+        opponentPhone: incomingGame.opponentPhone,
+        winnerPayout: incomingGame.winnerPayout,
+        platformFee: incomingGame.platformFee,
+        isParticipant,
+      });
+    },
+    [currentUser.phoneNumber, CURRENCY_SYMBOLS]
+  );
+
   const applyBillRequestUpdate = useCallback(
     (incomingBill: BillRequest) => {
       if (!incomingBill?.id || !incomingBill?.chatId) return;
@@ -10232,7 +10401,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const deck = createWhotDeck();
     const challengerHand = deck.splice(0, 5);
     const opponentHand = deck.splice(0, 5);
-    let topIdx = deck.findIndex((c) => c.shape !== 'whot' && ![1, 2, 14].includes(c.number));
+    let topIdx = deck.findIndex((c) => c.shape !== 'whot' && ![1, 2, 5, 8, 14, 20].includes(c.number));
     if (topIdx < 0) topIdx = 0;
     const [topCard] = deck.splice(topIdx, 1);
 
@@ -10265,6 +10434,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       topCard,
       requestedShape: null,
       pendingDrawCount: 0,
+      pendingDrawType: null,
+      reshuffleCount: 0,
       currentTurnPhone: myPhone,
       currentTurnName: currentUser.fullName || 'Player 1',
       lastActionNote: isAiChat ? 'AgcBot (Hard AI) accepted! Your move first.' : undefined,
@@ -10431,33 +10602,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (cardIdx < 0) return { success: false, message: 'Card not found in hand.' };
 
     const card = hand[cardIdx];
-    const isValid =
-      card.shape === 'whot' ||
-      card.number === 20 ||
-      (game.requestedShape ? card.shape === game.requestedShape : card.shape === game.topCard.shape || card.number === game.topCard.number);
-    if (!isValid) return { success: false, message: 'Card does not match Call Card.' };
+    if (!isWhotCardPlayable(card, game)) {
+      if ((game.pendingDrawCount || 0) > 0) {
+        return {
+          success: false,
+          message:
+            game.pendingDrawType === 'pick_three'
+              ? `Stack another 5 (Pick Three) or tap Pick ${game.pendingDrawCount}!`
+              : `Stack another 2 (Pick Two) or tap Pick ${game.pendingDrawCount}!`,
+        };
+      }
+      return { success: false, message: 'Card does not match Call Card.' };
+    }
 
     hand.splice(cardIdx, 1);
     let nextDeck = [...game.deck];
-    const nextDiscard = [...game.discardPile, card];
-
-    const refillIfEmpty = () => {
-      if (nextDeck.length === 0 && nextDiscard.length > 1) {
-        const keepTop = nextDiscard.pop()!;
-        nextDeck = [...nextDiscard];
-        nextDiscard.length = 0;
-        nextDiscard.push(keepTop);
-      }
-    };
+    let nextDiscard = [...game.discardPile, card];
+    let nextReshuffles = game.reshuffleCount || 0;
 
     const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
     const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
     const myName = isChallenger ? game.challengerName : game.opponentName || 'Player 2';
-
-    let nextTurnPhone = oppPhone;
-    let nextTurnName = oppName;
-    let nextRequestedShape: WhotShape | null = null;
-    let actionNote = `${myName} played ${card.shape === 'whot' ? 'WHOT 20' : `${card.number} ${card.shape}`}`;
 
     if (hand.length === 0) {
       const wonGame: WhotGameState = {
@@ -10468,9 +10633,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         discardPile: nextDiscard,
         topCard: card,
         requestedShape: null,
+        pendingDrawCount: 0,
+        pendingDrawType: null,
+        reshuffleCount: nextReshuffles,
         status: 'won',
         winnerPhone: myPhone,
         winnerName: myName,
+        lastActionNote: `${myName} cleared all cards!`,
         moveCount: (game.moveCount || 0) + 1,
         settledAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -10495,6 +10664,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: true };
     }
 
+    let nextTurnPhone = oppPhone;
+    let nextTurnName = oppName;
+    let nextRequestedShape: WhotShape | null = null;
+    let nextPendingDrawCount = 0;
+    let nextPendingDrawType: 'pick_two' | 'pick_three' | null = null;
+    let actionNote = `${myName} played ${card.shape === 'whot' ? 'WHOT 20' : `${card.number} ${card.shape}`}`;
+
     if (card.shape === 'whot' || card.number === 20) {
       nextRequestedShape = requestedShape && requestedShape !== 'whot' ? requestedShape : 'circle';
       actionNote = `${myName} played WHOT (20) & asked for ${nextRequestedShape.toUpperCase()}`;
@@ -10504,21 +10680,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       nextTurnName = myName;
       actionNote = `${myName} played Hold On (1) — plays again!`;
     } else if (card.number === 2) {
-      // Pick Two: opponent draws 2 & loses turn
-      for (let k = 0; k < 2; k++) {
-        refillIfEmpty();
-        if (nextDeck.length > 0) oppHand.push(nextDeck.shift()!);
-      }
+      // Pick Two (Stackable): opponent must stack another 2 or draw pendingDrawCount
+      nextPendingDrawCount = (game.pendingDrawCount || 0) + 2;
+      nextPendingDrawType = 'pick_two';
+      nextTurnPhone = oppPhone;
+      nextTurnName = oppName;
+      actionNote = `${myName} played Pick 2! ${oppName} must stack 2 or Pick ${nextPendingDrawCount}`;
+    } else if (card.number === 5) {
+      // Pick Three (Stackable): opponent must stack another 5 or draw pendingDrawCount
+      nextPendingDrawCount = (game.pendingDrawCount || 0) + 3;
+      nextPendingDrawType = 'pick_three';
+      nextTurnPhone = oppPhone;
+      nextTurnName = oppName;
+      actionNote = `${myName} played Pick 3! ${oppName} must stack 5 or Pick ${nextPendingDrawCount}`;
+    } else if (card.number === 8) {
+      // Suspension: skips next player's turn -> current player plays again
       nextTurnPhone = myPhone;
       nextTurnName = myName;
-      actionNote = `${myName} played Pick 2! ${oppName} picked 2 cards`;
+      actionNote = `${myName} played Suspension (8) — ${oppName} skipped!`;
     } else if (card.number === 14) {
-      // General Market: opponent draws 1 & loses turn
-      refillIfEmpty();
-      if (nextDeck.length > 0) oppHand.push(nextDeck.shift()!);
+      // General Market: opponent draws 1 card from Market (reshuffle discard pile if empty) & current player goes again
+      const drawRes = drawCardsFromWhotMarket(nextDeck, nextDiscard, 1, nextReshuffles);
+      oppHand.push(...drawRes.drawn);
+      nextDeck = drawRes.nextDeck;
+      nextDiscard = drawRes.nextDiscard;
+      nextReshuffles = drawRes.reshuffleCount;
       nextTurnPhone = myPhone;
       nextTurnName = myName;
-      actionNote = `${myName} played General Market (14)! ${oppName} picked 1`;
+      actionNote = `${myName} played General Market (14)! ${oppName} picked 1${drawRes.didReshuffle ? ' (Market reshuffled)' : ''}`;
     }
 
     const updatedGame: WhotGameState = {
@@ -10529,7 +10718,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       discardPile: nextDiscard,
       topCard: card,
       requestedShape: nextRequestedShape,
-      pendingDrawCount: 0,
+      pendingDrawCount: nextPendingDrawCount,
+      pendingDrawType: nextPendingDrawType,
+      reshuffleCount: nextReshuffles,
       currentTurnPhone: nextTurnPhone,
       currentTurnName: nextTurnName,
       lastActionNote: actionNote,
@@ -10551,17 +10742,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isChallenger = phonesMatch(myPhone, game.challengerPhone);
     const hand = isChallenger ? [...game.challengerHand] : [...game.opponentHand];
     const oppHand = isChallenger ? [...game.opponentHand] : [...game.challengerHand];
-    let nextDeck = [...game.deck];
-    const nextDiscard = [...game.discardPile];
-    if (nextDeck.length === 0 && nextDiscard.length > 1) {
-      const top = nextDiscard.pop()!;
-      nextDeck = [...nextDiscard];
-      nextDiscard.length = 0;
-      nextDiscard.push(top);
-    }
-    if (nextDeck.length > 0) {
-      hand.push(nextDeck.shift()!);
-    }
+    const drawQty = game.pendingDrawCount && game.pendingDrawCount > 0 ? game.pendingDrawCount : 1;
+
+    const drawRes = drawCardsFromWhotMarket(
+      game.deck,
+      game.discardPile,
+      drawQty,
+      game.reshuffleCount || 0
+    );
+    hand.push(...drawRes.drawn);
+
     const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
     const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
     const myName = isChallenger ? game.challengerName : game.opponentName || 'Player 2';
@@ -10570,11 +10760,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...game,
       challengerHand: isChallenger ? hand : oppHand,
       opponentHand: isChallenger ? oppHand : hand,
-      deck: nextDeck,
-      discardPile: nextDiscard,
+      deck: drawRes.nextDeck,
+      discardPile: drawRes.nextDiscard,
+      pendingDrawCount: 0,
+      pendingDrawType: null,
+      reshuffleCount: drawRes.reshuffleCount,
       currentTurnPhone: oppPhone,
       currentTurnName: oppName,
-      lastActionNote: `${myName} went to Market`,
+      lastActionNote:
+        drawQty > 1
+          ? `${myName} picked ${drawQty} penalty cards${drawRes.didReshuffle ? ' (Market reshuffled)' : ''}`
+          : `${myName} went to Market${drawRes.didReshuffle ? ' (Market reshuffled)' : ''}`,
       moveCount: (game.moveCount || 0) + 1,
       updatedAt: new Date().toISOString(),
     };
@@ -10584,6 +10780,226 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return { success: true };
   };
+
+  // Pure Ludo 2-Dice / 8-Seed / 2-Castle Helpers
+  const resolveLudoRoll = (
+    game: LudoGameState,
+    rollerPhone: string,
+    rollerName: string,
+    oppPhone: string,
+    oppName: string
+  ): LudoGameState => {
+    const isChallenger = phonesMatch(rollerPhone, game.challengerPhone);
+    const myTokens = isChallenger ? game.challengerTokens : game.opponentTokens;
+    const d1 = Math.floor(Math.random() * 6) + 1;
+    const d2 = Math.floor(Math.random() * 6) + 1;
+    const dicePair: [number, number] = [d1, d2];
+    const rolledSix = d1 === 6 || d2 === 6;
+    const nextSixStreak = rolledSix ? (game.consecutiveSixes || 0) + 1 : 0;
+
+    if (rolledSix && nextSixStreak >= 3) {
+      return {
+        ...game,
+        diceValues: [],
+        rolledDice: dicePair,
+        diceValue: d1,
+        hasRolled: false,
+        consecutiveSixes: 0,
+        currentTurnPhone: oppPhone,
+        currentTurnName: oppName,
+        lastActionNote: `${rollerName} rolled [${d1}, ${d2}] — 3 consecutive 6s forfeit turn!`,
+        moveCount: (game.moveCount || 0) + 1,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    const hasLegal = hasAnyLegalLudoMove(myTokens, dicePair);
+    if (!hasLegal) {
+      return {
+        ...game,
+        diceValues: [],
+        rolledDice: dicePair,
+        diceValue: d1,
+        hasRolled: false,
+        consecutiveSixes: 0,
+        currentTurnPhone: oppPhone,
+        currentTurnName: oppName,
+        lastActionNote: `${rollerName} rolled [${d1}, ${d2}] (no valid move — turn passed)`,
+        moveCount: (game.moveCount || 0) + 1,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    return {
+      ...game,
+      diceValues: [...dicePair],
+      rolledDice: dicePair,
+      diceValue: d1,
+      hasRolled: true,
+      consecutiveSixes: nextSixStreak,
+      lastActionNote: `${rollerName} rolled [${d1} & ${d2}]`,
+      moveCount: (game.moveCount || 0) + 1,
+      updatedAt: new Date().toISOString(),
+    };
+  };
+
+  const resolveLudoMove = (
+    game: LudoGameState,
+    moverPhone: string,
+    tokenIndex: number,
+    dieChoice: 'die0' | 'die1' | 'combined' = 'die0'
+  ): { error?: string; nextGame?: LudoGameState; finishedNow?: boolean } => {
+    const isChallenger = phonesMatch(moverPhone, game.challengerPhone);
+    const myTokens = [...(isChallenger ? game.challengerTokens : game.opponentTokens)];
+    const oppTokens = [...(isChallenger ? game.opponentTokens : game.challengerTokens)];
+    const curStep = myTokens[tokenIndex];
+    if (curStep === undefined || curStep >= 56) {
+      return { error: 'Seed already finished.' };
+    }
+
+    const remaining =
+      game.diceValues && game.diceValues.length > 0
+        ? [...game.diceValues]
+        : game.diceValue
+        ? [game.diceValue]
+        : [];
+    if (remaining.length === 0) return { error: 'Roll the dice first.' };
+
+    const myName = isChallenger ? game.challengerName : game.opponentName || 'Amber Player';
+    const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
+    const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
+
+    const executeSingleStep = (stepAmount: number): { valid: boolean; capturedNow: boolean; errorMsg?: string } => {
+      const s = myTokens[tokenIndex];
+      if (!canMoveLudoSingleDie(s, stepAmount)) {
+        return {
+          valid: false,
+          capturedNow: false,
+          errorMsg: s < 0 ? 'Need a 6 to exit Castle.' : 'Exact roll needed to reach home.',
+        };
+      }
+      const nextStep = s < 0 ? 0 : s + stepAmount;
+      myTokens[tokenIndex] = nextStep;
+      let capturedNow = false;
+      if (nextStep >= 0 && nextStep <= 50) {
+        const myOffset = getLudoSeedOffset(tokenIndex, isChallenger, myTokens.length);
+        const myTrackIdx = (nextStep + myOffset) % 52;
+        if (!LUDO_SAFE_TRACK_SET_CTX.has(myTrackIdx)) {
+          for (let i = 0; i < oppTokens.length; i++) {
+            const os = oppTokens[i];
+            if (os >= 0 && os <= 50) {
+              const oppOffset = getLudoSeedOffset(i, !isChallenger, oppTokens.length);
+              if ((os + oppOffset) % 52 === myTrackIdx) {
+                oppTokens[i] = -1;
+                capturedNow = true;
+              }
+            }
+          }
+        }
+      }
+      return { valid: true, capturedNow };
+    };
+
+    let captured = false;
+    let nextRemaining = [...remaining];
+    let moveLabel = '';
+
+    if (dieChoice === 'combined') {
+      if (remaining.length < 2) return { error: 'Need 2 unused dice to combine.' };
+      const [d0, d1] = remaining;
+      if (!canMoveLudoCombinedDice(curStep, d0, d1)) {
+        return { error: 'Cannot combine both dice on this seed.' };
+      }
+      const order: [number, number] = curStep < 0 && d1 === 6 && d0 !== 6 ? [d1, d0] : [d0, d1];
+      const r1 = executeSingleStep(order[0]);
+      if (!r1.valid) return { error: r1.errorMsg || 'Invalid combined move.' };
+      const r2 = executeSingleStep(order[1]);
+      if (!r2.valid) return { error: r2.errorMsg || 'Invalid combined move.' };
+      captured = r1.capturedNow || r2.capturedNow;
+      nextRemaining = [];
+      moveLabel = `${myName} combined [${order[0]}+${order[1]}] on seed #${tokenIndex + 1}`;
+    } else {
+      const dieIdx = dieChoice === 'die1' && remaining.length > 1 ? 1 : 0;
+      const dieVal = remaining[dieIdx];
+      const r1 = executeSingleStep(dieVal);
+      if (!r1.valid) return { error: r1.errorMsg || 'Invalid move.' };
+      captured = r1.capturedNow;
+      nextRemaining.splice(dieIdx, 1);
+      moveLabel =
+        curStep < 0
+          ? `${myName} deployed seed #${tokenIndex + 1} (${tokenIndex < 4 ? 'Castle A' : 'Castle B'})`
+          : `${myName} moved seed #${tokenIndex + 1} by ${dieVal}`;
+    }
+
+    const finishedNow = myTokens.every((s) => s >= 56);
+    if (finishedNow) {
+      return {
+        finishedNow: true,
+        nextGame: {
+          ...game,
+          challengerTokens: isChallenger ? myTokens : oppTokens,
+          opponentTokens: isChallenger ? oppTokens : myTokens,
+          diceValues: [],
+          diceValue: null,
+          hasRolled: false,
+          consecutiveSixes: 0,
+          status: 'won',
+          winnerPhone: moverPhone,
+          winnerName: myName,
+          lastActionNote: `${myName} finished all ${myTokens.length} seeds!`,
+          moveCount: (game.moveCount || 0) + 1,
+          settledAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    }
+
+    // If a 2nd die still has a legal move in this roll, keep hasRolled = true on same player!
+    if (nextRemaining.length > 0 && hasAnyLegalLudoMove(myTokens, nextRemaining)) {
+      return {
+        finishedNow: false,
+        nextGame: {
+          ...game,
+          challengerTokens: isChallenger ? myTokens : oppTokens,
+          opponentTokens: isChallenger ? oppTokens : myTokens,
+          diceValues: nextRemaining,
+          diceValue: nextRemaining[0],
+          hasRolled: true,
+          lastActionNote: captured
+            ? `${moveLabel} & CAPTURED! Play remaining die [${nextRemaining[0]}]`
+            : `${moveLabel} · Play remaining die [${nextRemaining[0]}]`,
+          moveCount: (game.moveCount || 0) + 1,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    }
+
+    const hadSixBonus = Boolean(game.rolledDice?.includes(6));
+    const keepTurn = hadSixBonus || captured;
+    return {
+      finishedNow: false,
+      nextGame: {
+        ...game,
+        challengerTokens: isChallenger ? myTokens : oppTokens,
+        opponentTokens: isChallenger ? oppTokens : myTokens,
+        diceValues: [],
+        diceValue: null,
+        hasRolled: false,
+        consecutiveSixes: keepTurn ? game.consecutiveSixes || 0 : 0,
+        currentTurnPhone: keepTurn ? moverPhone : oppPhone,
+        currentTurnName: keepTurn ? myName : oppName,
+        lastActionNote: captured
+          ? `${moveLabel} & CAPTURED opponent seed! Bonus roll!`
+          : hadSixBonus
+          ? `${moveLabel} · Rolled 6 bonus roll!`
+          : moveLabel,
+        moveCount: (game.moveCount || 0) + 1,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+  };
+
+  const LUDO_SAFE_TRACK_SET_CTX = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
 
   const sendLudoChallenge = async (
     chatId: string,
@@ -10657,13 +11073,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       mode,
       betAmount: cleanBet,
       currency: currency || 'NGN',
-      challengerTokens: [-1, -1, -1, -1],
-      opponentTokens: [-1, -1, -1, -1],
+      challengerTokens: Array(8).fill(-1),
+      opponentTokens: Array(8).fill(-1),
+      diceValues: [],
+      rolledDice: null,
       diceValue: null,
       hasRolled: false,
+      consecutiveSixes: 0,
       currentTurnPhone: myPhone,
       currentTurnName: currentUser.fullName || 'Purple Player',
-      lastActionNote: isAiChat ? 'AgcBot (Hard AI) accepted! Roll the dice to start.' : undefined,
+      lastActionNote: isAiChat ? '8 Seeds · 2 Castles · 2 Dice! Roll to start vs AgcBot.' : undefined,
       moveCount: 0,
       status: isAiChat ? 'active' : 'pending',
       totalPot,
@@ -10683,7 +11102,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderAvatar: currentUser.avatarUrl,
       type: 'game_ludo',
       ludoGame: newGame,
-      text: mode === 'bet' ? `🎲 Ludo Challenge (${sym}${cleanBet.toLocaleString()} bet)` : '🎲 Friendly Ludo Challenge',
+      text: mode === 'bet' ? `🎲 Ludo 8-Seed Challenge (${sym}${cleanBet.toLocaleString()} bet)` : '🎲 Friendly Ludo 8-Seed Challenge',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'sent',
     };
@@ -10760,7 +11179,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       opponentAvatar: currentUser.avatarUrl || game.opponentAvatar,
       status: 'active',
       moveCount: (game.moveCount || 0) + 1,
-      lastActionNote: `${game.challengerName} rolls first`,
+      lastActionNote: `${game.challengerName} rolls 2 dice first`,
       updatedAt: new Date().toISOString(),
     };
     if (accepted.mode === 'bet' && accepted.betAmount > 0) {
@@ -10821,34 +11240,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Cannot roll right now.' };
     }
     const isChallenger = phonesMatch(myPhone, game.challengerPhone);
-    const myTokens = isChallenger ? game.challengerTokens : game.opponentTokens;
     const myName = isChallenger ? game.challengerName : game.opponentName || 'Amber Player';
     const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
     const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
 
-    const rolled = Math.floor(Math.random() * 6) + 1;
-    const hasLegalMove = myTokens.some((s) => (s < 0 ? rolled === 6 : s < 56 && s + rolled <= 56));
-
-    const updated: LudoGameState = hasLegalMove
-      ? {
-          ...game,
-          diceValue: rolled,
-          hasRolled: true,
-          lastActionNote: `${myName} rolled ${rolled}`,
-          moveCount: (game.moveCount || 0) + 1,
-          updatedAt: new Date().toISOString(),
-        }
-      : {
-          ...game,
-          diceValue: rolled,
-          hasRolled: false,
-          currentTurnPhone: oppPhone,
-          currentTurnName: oppName,
-          lastActionNote: `${myName} rolled ${rolled} (no valid move — turn passed)`,
-          moveCount: (game.moveCount || 0) + 1,
-          updatedAt: new Date().toISOString(),
-        };
-
+    const updated = resolveLudoRoll(game, myPhone, myName, oppPhone, oppName);
     applyLudoGameUpdate(updated);
     if (!updated.isAiOpponent && updated.chatId !== AFRIBOT_ID) {
       broadcastGamePayload('ludo_game_update', updated, updated.chatId, [updated.challengerPhone, updated.opponentPhone || '']);
@@ -10856,81 +11252,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const moveLudoToken = async (game: LudoGameState, tokenIndex: number) => {
+  const moveLudoToken = async (
+    game: LudoGameState,
+    tokenIndex: number,
+    dieChoice: 'die0' | 'die1' | 'combined' = 'die0'
+  ) => {
     const myPhone = currentUser.phoneNumber || currentUser.id;
-    if (game.status !== 'active' || !phonesMatch(myPhone, game.currentTurnPhone) || !game.hasRolled || !game.diceValue) {
+    if (game.status !== 'active' || !phonesMatch(myPhone, game.currentTurnPhone) || !game.hasRolled) {
       return { success: false, message: 'Roll the dice first.' };
     }
-    const isChallenger = phonesMatch(myPhone, game.challengerPhone);
-    const myTokens = [...(isChallenger ? game.challengerTokens : game.opponentTokens)];
-    const oppTokens = [...(isChallenger ? game.opponentTokens : game.challengerTokens)];
-    const curStep = myTokens[tokenIndex];
-    const dice = game.diceValue;
-
-    if (curStep === undefined || curStep >= 56) return { success: false, message: 'Token already finished.' };
-    if (curStep < 0 && dice !== 6) return { success: false, message: 'Need a 6 to exit yard.' };
-    if (curStep >= 0 && curStep + dice > 56) return { success: false, message: 'Exact roll needed to reach home.' };
-
-    const nextStep = curStep < 0 ? 0 : curStep + dice;
-    myTokens[tokenIndex] = nextStep;
-
-    const myName = isChallenger ? game.challengerName : game.opponentName || 'Amber Player';
-    const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
-    const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
-
-    // Check capture on main 52-cell track (steps 0..50, non-safe squares)
-    let captured = false;
-    const SAFE_TRACK = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
-    if (nextStep >= 0 && nextStep <= 50) {
-      const myOffset = isChallenger ? 0 : 26;
-      const oppOffset = isChallenger ? 26 : 0;
-      const myTrackIdx = (nextStep + myOffset) % 52;
-      if (!SAFE_TRACK.has(myTrackIdx)) {
-        for (let i = 0; i < oppTokens.length; i++) {
-          const os = oppTokens[i];
-          if (os >= 0 && os <= 50 && (os + oppOffset) % 52 === myTrackIdx) {
-            oppTokens[i] = -1;
-            captured = true;
-          }
-        }
-      }
+    const res = resolveLudoMove(game, myPhone, tokenIndex, dieChoice);
+    if (res.error || !res.nextGame) {
+      return { success: false, message: res.error || 'Invalid move.' };
     }
-
-    const finishedNow = myTokens.every((s) => s >= 56);
-    const keepTurn = dice === 6 || captured;
-    const updated: LudoGameState = finishedNow
-      ? {
-          ...game,
-          challengerTokens: isChallenger ? myTokens : oppTokens,
-          opponentTokens: isChallenger ? oppTokens : myTokens,
-          diceValue: null,
-          hasRolled: false,
-          status: 'won',
-          winnerPhone: myPhone,
-          winnerName: myName,
-          lastActionNote: `${myName} finished all 4 tokens!`,
-          moveCount: (game.moveCount || 0) + 1,
-          settledAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }
-      : {
-          ...game,
-          challengerTokens: isChallenger ? myTokens : oppTokens,
-          opponentTokens: isChallenger ? oppTokens : myTokens,
-          diceValue: null,
-          hasRolled: false,
-          currentTurnPhone: keepTurn ? myPhone : oppPhone,
-          currentTurnName: keepTurn ? myName : oppName,
-          lastActionNote: captured
-            ? `${myName} captured a piece! Bonus roll!`
-            : dice === 6
-            ? `${myName} rolled 6 — bonus roll!`
-            : `${myName} moved token #${tokenIndex + 1}`,
-          moveCount: (game.moveCount || 0) + 1,
-          updatedAt: new Date().toISOString(),
-        };
-
-    if (finishedNow && updated.mode === 'bet' && updated.betAmount > 0) {
+    const updated = res.nextGame;
+    if (res.finishedNow && updated.mode === 'bet' && updated.betAmount > 0) {
       await settleGameBetOnServer({
         gameId: updated.id,
         gameType: 'ludo',
@@ -10943,7 +11279,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currency: updated.currency || 'NGN',
       });
     }
-
     applyLudoGameUpdate(updated);
     if (!updated.isAiOpponent && updated.chatId !== AFRIBOT_ID) {
       broadcastGamePayload('ludo_game_update', updated, updated.chatId, [updated.challengerPhone, updated.opponentPhone || '']);
@@ -10951,7 +11286,495 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  // Hard-Level AI Turn Runner for Friendly X/O, Whot!, and Ludo in AI Chat
+  // ── Texas Hold'em Poker Engine ──
+  const resolvePokerAction = (
+    game: PokerGameState,
+    actorPhone: string,
+    action: 'fold' | 'check' | 'call' | 'raise',
+    raiseBy: number = 40
+  ): { error?: string; nextGame?: PokerGameState; settledNow?: boolean } => {
+    const isChallenger = phonesMatch(actorPhone, game.challengerPhone);
+    const actorName = isChallenger ? game.challengerName : game.opponentName || 'Player 2';
+    const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
+    const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
+
+    let myChips = isChallenger ? game.challengerChips : game.opponentChips;
+    let oppChips = isChallenger ? game.opponentChips : game.challengerChips;
+    let myBet = isChallenger ? game.challengerBet : game.opponentBet;
+    let oppBet = isChallenger ? game.opponentBet : game.challengerBet;
+    let pot = game.pot;
+    const deck = [...game.deck];
+    let communityCards = [...game.communityCards];
+    let phase: PokerPhase = game.phase;
+    let acted = Array.isArray(game.actedThisPhase) ? [...game.actedThisPhase] : [];
+    const nowIso = new Date().toISOString();
+
+    if (action === 'fold') {
+      return {
+        settledNow: true,
+        nextGame: {
+          ...game,
+          status: 'won',
+          winnerPhone: oppPhone,
+          winnerName: oppName,
+          winningHandLabel: `${actorName} folded`,
+          lastActionNote: `${actorName} folded · ${oppName} wins ${pot} chips!`,
+          moveCount: (game.moveCount || 0) + 1,
+          settledAt: nowIso,
+          updatedAt: nowIso,
+        },
+      };
+    }
+
+    let note = '';
+    const toCall = Math.max(0, oppBet - myBet);
+
+    if (action === 'check') {
+      if (toCall > 0) return { error: `Cannot check — must call ${toCall} chips.` };
+      if (!acted.some((p) => phonesMatch(p, actorPhone))) acted.push(actorPhone);
+      note = `${actorName} checked`;
+    } else if (action === 'call') {
+      const paid = Math.min(myChips, toCall);
+      myChips -= paid;
+      myBet += paid;
+      pot += paid;
+      if (!acted.some((p) => phonesMatch(p, actorPhone))) acted.push(actorPhone);
+      note = toCall > 0 ? `${actorName} called ${paid}` : `${actorName} checked`;
+    } else if (action === 'raise') {
+      if (myChips <= 0) return { error: 'No chips remaining to raise.' };
+      const cleanRaise = Math.max(game.bigBlind || 20, Math.round(raiseBy || 40));
+      const totalAdd = Math.min(myChips, toCall + cleanRaise);
+      if (totalAdd <= toCall && toCall > 0) {
+        // Call all-in instead
+        myChips -= totalAdd;
+        myBet += totalAdd;
+        pot += totalAdd;
+        if (!acted.some((p) => phonesMatch(p, actorPhone))) acted.push(actorPhone);
+        note = `${actorName} went All-In (${totalAdd})`;
+      } else {
+        myChips -= totalAdd;
+        myBet += totalAdd;
+        pot += totalAdd;
+        acted = [actorPhone];
+        note = myChips === 0 ? `${actorName} went ALL-IN (${myBet})!` : `${actorName} raised to ${myBet}`;
+      }
+    }
+
+    const bothActed =
+      acted.some((p) => phonesMatch(p, game.challengerPhone)) &&
+      acted.some((p) => phonesMatch(p, oppPhone || AFRIBOT_PHONE));
+    const someoneAllIn = myChips === 0 || oppChips === 0;
+    const betsMatched = myBet === oppBet || (someoneAllIn && bothActed);
+
+    if (bothActed && betsMatched) {
+      myBet = 0;
+      oppBet = 0;
+      acted = [];
+
+      if (someoneAllIn || phase === 'river') {
+        while (communityCards.length < 5 && deck.length > 0) {
+          communityCards.push(deck.shift()!);
+        }
+        phase = 'showdown';
+      } else if (phase === 'preflop') {
+        for (let k = 0; k < 3 && deck.length > 0; k++) communityCards.push(deck.shift()!);
+        phase = 'flop';
+      } else if (phase === 'flop') {
+        if (deck.length > 0) communityCards.push(deck.shift()!);
+        phase = 'turn';
+      } else if (phase === 'turn') {
+        if (deck.length > 0) communityCards.push(deck.shift()!);
+        phase = 'river';
+      }
+
+      if (phase === 'showdown') {
+        const chEval = evaluateBest5PokerHand([...game.challengerHole, ...communityCards]);
+        const opEval = evaluateBest5PokerHand([...game.opponentHole, ...communityCards]);
+        const cmp = comparePokerEvaluations(chEval, opEval);
+        const finalChallengerChips = isChallenger ? myChips : oppChips;
+        const finalOpponentChips = isChallenger ? oppChips : myChips;
+
+        if (cmp === 0) {
+          const half = Math.floor(pot / 2);
+          return {
+            settledNow: true,
+            nextGame: {
+              ...game,
+              deck,
+              communityCards,
+              phase: 'showdown',
+              pot,
+              challengerChips: finalChallengerChips + half,
+              opponentChips: finalOpponentChips + (pot - half),
+              challengerBet: 0,
+              opponentBet: 0,
+              actedThisPhase: [],
+              challengerHandLabel: chEval.label,
+              opponentHandLabel: opEval.label,
+              winningHandLabel: `Split Pot (${chEval.label})`,
+              lastActionNote: `Showdown Tie! Both hold ${chEval.label}`,
+              status: 'draw',
+              moveCount: (game.moveCount || 0) + 1,
+              settledAt: nowIso,
+              updatedAt: nowIso,
+            },
+          };
+        }
+
+        const chWon = cmp > 0;
+        return {
+          settledNow: true,
+          nextGame: {
+            ...game,
+            deck,
+            communityCards,
+            phase: 'showdown',
+            pot,
+            challengerChips: finalChallengerChips + (chWon ? pot : 0),
+            opponentChips: finalOpponentChips + (chWon ? 0 : pot),
+            challengerBet: 0,
+            opponentBet: 0,
+            actedThisPhase: [],
+            challengerHandLabel: chEval.label,
+            opponentHandLabel: opEval.label,
+            winningHandLabel: chWon ? chEval.label : opEval.label,
+            winnerPhone: chWon ? game.challengerPhone : game.opponentPhone,
+            winnerName: chWon ? game.challengerName : game.opponentName || 'Player 2',
+            lastActionNote: `Showdown: ${chWon ? game.challengerName : game.opponentName || 'Player 2'} wins with ${chWon ? chEval.label : opEval.label}!`,
+            status: 'won',
+            moveCount: (game.moveCount || 0) + 1,
+            settledAt: nowIso,
+            updatedAt: nowIso,
+          },
+        };
+      }
+
+      return {
+        settledNow: false,
+        nextGame: {
+          ...game,
+          deck,
+          communityCards,
+          phase,
+          pot,
+          challengerChips: isChallenger ? myChips : oppChips,
+          opponentChips: isChallenger ? oppChips : myChips,
+          challengerBet: 0,
+          opponentBet: 0,
+          actedThisPhase: [],
+          currentTurnPhone: game.challengerPhone,
+          currentTurnName: game.challengerName,
+          lastActionNote: `${note} · Dealing ${phase.toUpperCase()}`,
+          moveCount: (game.moveCount || 0) + 1,
+          updatedAt: nowIso,
+        },
+      };
+    }
+
+    return {
+      settledNow: false,
+      nextGame: {
+        ...game,
+        deck,
+        communityCards,
+        phase,
+        pot,
+        challengerChips: isChallenger ? myChips : oppChips,
+        opponentChips: isChallenger ? oppChips : myChips,
+        challengerBet: isChallenger ? myBet : oppBet,
+        opponentBet: isChallenger ? oppBet : myBet,
+        actedThisPhase: acted,
+        currentTurnPhone: oppPhone,
+        currentTurnName: oppName,
+        lastActionNote: note,
+        moveCount: (game.moveCount || 0) + 1,
+        updatedAt: nowIso,
+      },
+    };
+  };
+
+  const sendPokerChallenge = async (
+    chatId: string,
+    mode: 'friendly' | 'bet',
+    betAmount: number
+  ): Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string; game?: PokerGameState }> => {
+    const targetChat = chats.find((c) => c.id === chatId);
+    const isAiChat = chatId === AFRIBOT_ID || Boolean(targetChat?.isBot);
+    if (isAiChat && mode === 'bet') {
+      return {
+        success: false,
+        message: 'AgcBot only plays Friendly matches (no betting in AI Chat).',
+      };
+    }
+
+    const cleanBet = mode === 'bet' ? Math.round(Number(betAmount) || 0) : 0;
+    const sym = CURRENCY_SYMBOLS[currency || 'NGN'] || '₦';
+    if (mode === 'bet' && cleanBet < 50) {
+      return { success: false, message: `Minimum bet amount is ${sym}50.` };
+    }
+    if (mode === 'bet') {
+      const { isVerified, maxBet } = getGameBetLimit();
+      if (cleanBet > maxBet) {
+        return {
+          success: false,
+          requiresVerifiedBadge: !isVerified,
+          message: isVerified
+            ? `Maximum bet per game is ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}.`
+            : `Standard max bet is ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} per game. Get the Verified Badge (₦4,000/mo) to unlock a ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()} limit!`,
+        };
+      }
+    }
+    if (mode === 'bet' && wallet.availableBalance < cleanBet) {
+      return {
+        success: false,
+        insufficientFunds: true,
+        message: `Insufficient wallet balance for ${sym}${cleanBet.toLocaleString()} bet.`,
+      };
+    }
+
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    let opponentPhone = isAiChat
+      ? AFRIBOT_PHONE
+      : !targetChat?.isGroup && !targetChat?.isChannel
+      ? (targetChat?.phoneNumber || targetChat?.phone || '')
+      : '';
+    if (!isAiChat && !opponentPhone && chatId.startsWith('dm_')) {
+      const parts = chatId.replace('dm_', '').split('_');
+      opponentPhone = parts.find((p) => !phonesMatch(p, myPhone)) || '';
+    }
+
+    const deck = createPokerDeck();
+    const challengerHole = deck.splice(0, 2);
+    const opponentHole = deck.splice(0, 2);
+    const nowIso = new Date().toISOString();
+    const gameId = `poker_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const totalPot = mode === 'bet' ? cleanBet * 2 : 0;
+    const platformFee = mode === 'bet' ? Math.round(totalPot * 0.01) : 0;
+    const winnerPayout = totalPot - platformFee;
+
+    const newGame: PokerGameState = {
+      id: gameId,
+      chatId,
+      gameType: 'poker',
+      challengerId: currentUser.id,
+      challengerPhone: myPhone,
+      challengerName: currentUser.fullName || 'Player 1',
+      challengerAvatar: currentUser.avatarUrl,
+      opponentPhone: opponentPhone || undefined,
+      opponentName: isAiChat ? 'AgcBot (Hard AI)' : !targetChat?.isGroup ? targetChat?.name : undefined,
+      opponentAvatar: isAiChat ? AFRIBOT_AVATAR : !targetChat?.isGroup ? targetChat?.avatar : undefined,
+      isAiOpponent: isAiChat,
+      aiDifficulty: isAiChat ? 'hard' : undefined,
+      mode,
+      betAmount: cleanBet,
+      currency: currency || 'NGN',
+      deck,
+      challengerHole,
+      opponentHole,
+      communityCards: [],
+      phase: 'preflop',
+      pot: 30,
+      challengerChips: 990,
+      opponentChips: 980,
+      challengerBet: 10,
+      opponentBet: 20,
+      smallBlind: 10,
+      bigBlind: 20,
+      currentTurnPhone: myPhone,
+      currentTurnName: currentUser.fullName || 'Player 1',
+      actedThisPhase: [],
+      lastActionNote: isAiChat
+        ? 'Blinds 10/20 posted vs AgcBot (Hard AI). Your action Pre-Flop!'
+        : 'Blinds 10/20 posted. Waiting for opponent to accept.',
+      moveCount: 0,
+      status: isAiChat ? 'active' : 'pending',
+      totalPot,
+      platformFeeRate: 0.01,
+      platformFee,
+      winnerPayout,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const cardMsg: ChatMessage = {
+      id: `msg_poker_${gameId}`,
+      chatId,
+      sender: 'user',
+      senderName: currentUser.fullName || 'AGC Player',
+      senderPhone: myPhone,
+      senderAvatar: currentUser.avatarUrl,
+      type: 'game_poker',
+      pokerGame: newGame,
+      text:
+        mode === 'bet'
+          ? `♠️ Texas Hold'em Poker (${sym}${cleanBet.toLocaleString()} bet)`
+          : "♠️ Friendly Texas Hold'em Poker",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'sent',
+    };
+
+    if (mode === 'bet' && cleanBet > 0) {
+      const lockRes = await lockGameBetOnServer({
+        gameId,
+        gameType: 'poker',
+        role: 'challenger',
+        playerPhone: myPhone,
+        playerName: currentUser.fullName || 'Player 1',
+        opponentPhone: opponentPhone || undefined,
+        opponentName: !targetChat?.isGroup ? targetChat?.name : undefined,
+        betAmount: cleanBet,
+        currency: newGame.currency,
+        title: `Poker Bet Escrow Lock (${targetChat?.name || 'Match'})`,
+      });
+      if (!lockRes.success) {
+        return {
+          success: false,
+          insufficientFunds: lockRes.insufficientFunds,
+          requiresVerifiedBadge: lockRes.requiresVerifiedBadge,
+          message: lockRes.message || 'Insufficient wallet balance for bet.',
+        };
+      }
+    }
+
+    setMessages((prev) => {
+      const updated = { ...prev, [chatId]: [...(prev[chatId] || []), cardMsg] };
+      persistPartitionedMessages(updated, currentUser.phoneNumber);
+      return updated;
+    });
+    setChats((prev) => {
+      const updated = prev.map((c) =>
+        c.id === chatId ? { ...c, lastMessage: cardMsg.text || "♠️ Poker Challenge", lastMessageTime: cardMsg.timestamp } : c
+      );
+      persistPartitionedChats(updated, currentUser.phoneNumber);
+      return updated;
+    });
+
+    if (!isAiChat) {
+      broadcastLiveMessage(chatId, cardMsg);
+      broadcastGamePayload('poker_game_update', newGame, chatId, [myPhone, opponentPhone, ...(targetChat?.memberPhones || [])]);
+    }
+    return { success: true, game: newGame, message: 'Poker Challenge sent!' };
+  };
+
+  const acceptPokerChallenge = async (game: PokerGameState) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (phonesMatch(myPhone, game.challengerPhone)) {
+      return { success: false, message: 'Waiting for your opponent to accept.' };
+    }
+    if (game.mode === 'bet' && game.betAmount > 0) {
+      const { isVerified, maxBet } = getGameBetLimit();
+      const sym = CURRENCY_SYMBOLS[game.currency || 'NGN'] || '₦';
+      if (game.betAmount > maxBet) {
+        return {
+          success: false,
+          requiresVerifiedBadge: !isVerified,
+          message: `Stakes above ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} require a Verified Badge (₦4,000/mo, up to ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}).`,
+        };
+      }
+      if (wallet.availableBalance < game.betAmount) {
+        return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+      }
+    }
+    if (game.status !== 'pending') {
+      return { success: false, message: `Challenge is already ${game.status}.` };
+    }
+    const accepted: PokerGameState = {
+      ...game,
+      opponentPhone: myPhone,
+      opponentName: currentUser.fullName || game.opponentName || 'Player 2',
+      opponentAvatar: currentUser.avatarUrl || game.opponentAvatar,
+      status: 'active',
+      moveCount: (game.moveCount || 0) + 1,
+      lastActionNote: `${game.challengerName} acts first Pre-Flop`,
+      updatedAt: new Date().toISOString(),
+    };
+    if (accepted.mode === 'bet' && accepted.betAmount > 0) {
+      const lockRes = await lockGameBetOnServer({
+        gameId: accepted.id,
+        gameType: 'poker',
+        role: 'opponent',
+        playerPhone: myPhone,
+        playerName: currentUser.fullName || 'Player 2',
+        opponentPhone: accepted.challengerPhone,
+        opponentName: accepted.challengerName,
+        betAmount: accepted.betAmount,
+        currency: accepted.currency || 'NGN',
+        title: `Poker Match Bet Stake (${accepted.challengerName})`,
+      });
+      if (!lockRes.success) {
+        return {
+          success: false,
+          insufficientFunds: lockRes.insufficientFunds,
+          requiresVerifiedBadge: lockRes.requiresVerifiedBadge,
+          message: lockRes.message || 'Insufficient wallet balance to accept bet.',
+        };
+      }
+    }
+    applyPokerGameUpdate(accepted);
+    broadcastGamePayload('poker_game_update', accepted, accepted.chatId, [accepted.challengerPhone, myPhone]);
+    return { success: true, message: 'Poker match started!' };
+  };
+
+  const declinePokerChallenge = async (game: PokerGameState) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    const closed: PokerGameState = {
+      ...game,
+      status: phonesMatch(myPhone, game.challengerPhone) ? 'cancelled' : 'declined',
+      moveCount: (game.moveCount || 0) + 1,
+      settledAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    if (closed.mode === 'bet' && closed.betAmount > 0) {
+      await settleGameBetOnServer({
+        gameId: closed.id,
+        gameType: 'poker',
+        status: closed.status as 'declined' | 'cancelled',
+        challengerPhone: closed.challengerPhone,
+        opponentPhone: closed.opponentPhone,
+        betAmount: closed.betAmount,
+        currency: closed.currency || 'NGN',
+      });
+    }
+    applyPokerGameUpdate(closed);
+    broadcastGamePayload('poker_game_update', closed, closed.chatId, [closed.challengerPhone, closed.opponentPhone || '']);
+    return { success: true };
+  };
+
+  const performPokerAction = async (
+    game: PokerGameState,
+    action: 'fold' | 'check' | 'call' | 'raise',
+    raiseBy?: number
+  ) => {
+    const myPhone = currentUser.phoneNumber || currentUser.id;
+    if (game.status !== 'active' || !phonesMatch(myPhone, game.currentTurnPhone)) {
+      return { success: false, message: 'Not your turn to act.' };
+    }
+    const res = resolvePokerAction(game, myPhone, action, raiseBy);
+    if (res.error || !res.nextGame) {
+      return { success: false, message: res.error || 'Action not allowed.' };
+    }
+    const updated = res.nextGame;
+    if (res.settledNow && updated.mode === 'bet' && updated.betAmount > 0 && (updated.status === 'won' || updated.status === 'draw')) {
+      await settleGameBetOnServer({
+        gameId: updated.id,
+        gameType: 'poker',
+        status: updated.status,
+        winnerPhone: updated.winnerPhone,
+        winnerName: updated.winnerName,
+        challengerPhone: updated.challengerPhone,
+        opponentPhone: updated.opponentPhone,
+        betAmount: updated.betAmount,
+        currency: updated.currency || 'NGN',
+      });
+    }
+    applyPokerGameUpdate(updated);
+    if (!updated.isAiOpponent && updated.chatId !== AFRIBOT_ID) {
+      broadcastGamePayload('poker_game_update', updated, updated.chatId, [updated.challengerPhone, updated.opponentPhone || '']);
+    }
+    return { success: true };
+  };
+
+  // Hard-Level AI Turn Runner for Friendly X/O, Whot!, Ludo, and Texas Hold'em Poker in AI Chat
   const scheduledAiTurnKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -11015,7 +11838,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
 
-        // 2. Whot! Hard AI Turn
+        // 2. Whot! Hard AI Turn (Stacking Pick 2/5, 8 Suspension, 14 Gen Market, Market Reshuffle)
         if (msg.type === 'game_whot' && msg.whotGame) {
           const g = msg.whotGame;
           const isAiGame = Boolean(g.isAiOpponent || phonesMatch(g.opponentPhone, AFRIBOT_PHONE) || g.chatId === AFRIBOT_ID);
@@ -11027,30 +11850,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 const aiHand = [...(g.opponentHand || [])];
                 const humanHand = [...(g.challengerHand || [])];
                 let nextDeck = [...(g.deck || [])];
-                const nextDiscard = [...(g.discardPile || [])];
-
-                const refillIfEmpty = () => {
-                  if (nextDeck.length === 0 && nextDiscard.length > 1) {
-                    const keepTop = nextDiscard.pop()!;
-                    nextDeck = [...nextDiscard];
-                    nextDiscard.length = 0;
-                    nextDiscard.push(keepTop);
-                  }
-                };
+                let nextDiscard = [...(g.discardPile || [])];
+                let nextReshuffles = g.reshuffleCount || 0;
 
                 const decision = pickHardWhotMove(g, aiHand, humanHand.length);
                 if (decision.action === 'draw') {
-                  refillIfEmpty();
-                  if (nextDeck.length > 0) aiHand.push(nextDeck.shift()!);
+                  const drawQty = g.pendingDrawCount && g.pendingDrawCount > 0 ? g.pendingDrawCount : 1;
+                  const drawRes = drawCardsFromWhotMarket(nextDeck, nextDiscard, drawQty, nextReshuffles);
+                  aiHand.push(...drawRes.drawn);
                   const updated: WhotGameState = {
                     ...g,
                     challengerHand: humanHand,
                     opponentHand: aiHand,
-                    deck: nextDeck,
-                    discardPile: nextDiscard,
+                    deck: drawRes.nextDeck,
+                    discardPile: drawRes.nextDiscard,
+                    pendingDrawCount: 0,
+                    pendingDrawType: null,
+                    reshuffleCount: drawRes.reshuffleCount,
                     currentTurnPhone: g.challengerPhone,
                     currentTurnName: g.challengerName,
-                    lastActionNote: `${aiName} went to Market`,
+                    lastActionNote:
+                      drawQty > 1
+                        ? `${aiName} picked ${drawQty} penalty cards${drawRes.didReshuffle ? ' (Market reshuffled)' : ''}`
+                        : `${aiName} went to Market${drawRes.didReshuffle ? ' (Market reshuffled)' : ''}`,
                     moveCount: (g.moveCount || 0) + 1,
                     updatedAt: new Date().toISOString(),
                   };
@@ -11072,6 +11894,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     discardPile: nextDiscard,
                     topCard: card,
                     requestedShape: null,
+                    pendingDrawCount: 0,
+                    pendingDrawType: null,
+                    reshuffleCount: nextReshuffles,
                     status: 'won',
                     winnerPhone: AFRIBOT_PHONE,
                     winnerName: aiName,
@@ -11087,6 +11912,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 let nextTurnPhone = g.challengerPhone;
                 let nextTurnName = g.challengerName;
                 let nextRequestedShape: WhotShape | null = null;
+                let nextPendingDrawCount = 0;
+                let nextPendingDrawType: 'pick_two' | 'pick_three' | null = null;
                 let actionNote = `${aiName} played ${card.shape === 'whot' ? 'WHOT 20' : `${card.number} ${card.shape}`}`;
 
                 if (card.shape === 'whot' || card.number === 20) {
@@ -11100,19 +11927,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   nextTurnName = aiName;
                   actionNote = `${aiName} played Hold On (1) — plays again!`;
                 } else if (card.number === 2) {
-                  for (let k = 0; k < 2; k++) {
-                    refillIfEmpty();
-                    if (nextDeck.length > 0) humanHand.push(nextDeck.shift()!);
-                  }
+                  nextPendingDrawCount = (g.pendingDrawCount || 0) + 2;
+                  nextPendingDrawType = 'pick_two';
+                  nextTurnPhone = g.challengerPhone;
+                  nextTurnName = g.challengerName;
+                  actionNote = `${aiName} played Pick 2! Stack 2 or Pick ${nextPendingDrawCount}`;
+                } else if (card.number === 5) {
+                  nextPendingDrawCount = (g.pendingDrawCount || 0) + 3;
+                  nextPendingDrawType = 'pick_three';
+                  nextTurnPhone = g.challengerPhone;
+                  nextTurnName = g.challengerName;
+                  actionNote = `${aiName} played Pick 3! Stack 5 or Pick ${nextPendingDrawCount}`;
+                } else if (card.number === 8) {
                   nextTurnPhone = AFRIBOT_PHONE;
                   nextTurnName = aiName;
-                  actionNote = `${aiName} played Pick 2! You picked 2 cards`;
+                  actionNote = `${aiName} played Suspension (8) — you are skipped!`;
                 } else if (card.number === 14) {
-                  refillIfEmpty();
-                  if (nextDeck.length > 0) humanHand.push(nextDeck.shift()!);
+                  const drawRes = drawCardsFromWhotMarket(nextDeck, nextDiscard, 1, nextReshuffles);
+                  humanHand.push(...drawRes.drawn);
+                  nextDeck = drawRes.nextDeck;
+                  nextDiscard = drawRes.nextDiscard;
+                  nextReshuffles = drawRes.reshuffleCount;
                   nextTurnPhone = AFRIBOT_PHONE;
                   nextTurnName = aiName;
-                  actionNote = `${aiName} played General Market (14)! You picked 1`;
+                  actionNote = `${aiName} played General Market (14)! You picked 1${drawRes.didReshuffle ? ' (Market reshuffled)' : ''}`;
                 }
 
                 const updated: WhotGameState = {
@@ -11123,7 +11961,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   discardPile: nextDiscard,
                   topCard: card,
                   requestedShape: nextRequestedShape,
-                  pendingDrawCount: 0,
+                  pendingDrawCount: nextPendingDrawCount,
+                  pendingDrawType: nextPendingDrawType,
+                  reshuffleCount: nextReshuffles,
                   currentTurnPhone: nextTurnPhone,
                   currentTurnName: nextTurnName,
                   lastActionNote: actionNote,
@@ -11136,7 +11976,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
 
-        // 3. Ludo Hard AI Turn (Roll -> Hard Token Move)
+        // 3. Ludo Hard AI Turn (2 Dice Roll -> 8-Seed Split/Combined Move Tree)
         if (msg.type === 'game_ludo' && msg.ludoGame) {
           const g = msg.ludoGame;
           const isAiGame = Boolean(g.isAiOpponent || phonesMatch(g.opponentPhone, AFRIBOT_PHONE) || g.chatId === AFRIBOT_ID);
@@ -11146,39 +11986,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               scheduledAiTurnKeysRef.current.add(key);
               if (!g.hasRolled) {
                 setTimeout(() => {
-                  const aiTokens = g.opponentTokens || [-1, -1, -1, -1];
-                  const rolled = Math.floor(Math.random() * 6) + 1;
-                  const hasLegal = aiTokens.some((s) => (s < 0 ? rolled === 6 : s < 56 && s + rolled <= 56));
-                  const updated: LudoGameState = hasLegal
-                    ? {
-                        ...g,
-                        diceValue: rolled,
-                        hasRolled: true,
-                        lastActionNote: `${aiName} rolled ${rolled}`,
-                        moveCount: (g.moveCount || 0) + 1,
-                        updatedAt: new Date().toISOString(),
-                      }
-                    : {
-                        ...g,
-                        diceValue: rolled,
-                        hasRolled: false,
-                        currentTurnPhone: g.challengerPhone,
-                        currentTurnName: g.challengerName,
-                        lastActionNote: `${aiName} rolled ${rolled} (no valid move — your turn)`,
-                        moveCount: (g.moveCount || 0) + 1,
-                        updatedAt: new Date().toISOString(),
-                      };
+                  const updated = resolveLudoRoll(
+                    g,
+                    AFRIBOT_PHONE,
+                    aiName,
+                    g.challengerPhone,
+                    g.challengerName
+                  );
                   applyLudoGameUpdate(updated);
                 }, 550);
-              } else if (g.diceValue) {
+              } else {
                 setTimeout(() => {
-                  const dice = g.diceValue!;
-                  const tokenIdx = pickHardLudoToken(g, dice, false);
-                  if (tokenIdx === null) {
+                  const remainingDice =
+                    g.diceValues && g.diceValues.length > 0
+                      ? g.diceValues
+                      : g.diceValue
+                      ? [g.diceValue]
+                      : [];
+                  const plan = pickHardLudoPlan(g, remainingDice, false);
+                  if (!plan) {
                     const passTurn: LudoGameState = {
                       ...g,
+                      diceValues: [],
                       diceValue: null,
                       hasRolled: false,
+                      consecutiveSixes: 0,
                       currentTurnPhone: g.challengerPhone,
                       currentTurnName: g.challengerName,
                       lastActionNote: `${aiName} had no move — your turn`,
@@ -11188,70 +12020,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     applyLudoGameUpdate(passTurn);
                     return;
                   }
-
-                  const aiTokens = [...(g.opponentTokens || [-1, -1, -1, -1])];
-                  const humanTokens = [...(g.challengerTokens || [-1, -1, -1, -1])];
-                  const curStep = aiTokens[tokenIdx];
-                  const nextStep = curStep < 0 ? 0 : curStep + dice;
-                  aiTokens[tokenIdx] = nextStep;
-
-                  let captured = false;
-                  const SAFE_TRACK = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
-                  if (nextStep >= 0 && nextStep <= 50) {
-                    const aiTrackIdx = (nextStep + 26) % 52;
-                    if (!SAFE_TRACK.has(aiTrackIdx)) {
-                      for (let i = 0; i < humanTokens.length; i++) {
-                        const hs = humanTokens[i];
-                        if (hs >= 0 && hs <= 50 && hs % 52 === aiTrackIdx) {
-                          humanTokens[i] = -1;
-                          captured = true;
-                        }
-                      }
-                    }
+                  const res = resolveLudoMove(g, AFRIBOT_PHONE, plan.tokenIndex, plan.dieChoice);
+                  if (res.nextGame) {
+                    applyLudoGameUpdate(res.nextGame);
                   }
-
-                  const finishedNow = aiTokens.every((s) => s >= 56);
-                  const keepTurn = dice === 6 || captured;
-                  const updated: LudoGameState = finishedNow
-                    ? {
-                        ...g,
-                        challengerTokens: humanTokens,
-                        opponentTokens: aiTokens,
-                        diceValue: null,
-                        hasRolled: false,
-                        status: 'won',
-                        winnerPhone: AFRIBOT_PHONE,
-                        winnerName: aiName,
-                        lastActionNote: `${aiName} finished all 4 tokens!`,
-                        moveCount: (g.moveCount || 0) + 1,
-                        settledAt: new Date().toISOString(),
-                        updatedAt: new Date().toISOString(),
-                      }
-                    : {
-                        ...g,
-                        challengerTokens: humanTokens,
-                        opponentTokens: aiTokens,
-                        diceValue: null,
-                        hasRolled: false,
-                        currentTurnPhone: keepTurn ? AFRIBOT_PHONE : g.challengerPhone,
-                        currentTurnName: keepTurn ? aiName : g.challengerName,
-                        lastActionNote: captured
-                          ? `${aiName} captured your piece! Bonus roll!`
-                          : dice === 6
-                          ? `${aiName} rolled 6 — bonus roll!`
-                          : `${aiName} moved token #${tokenIdx + 1}`,
-                        moveCount: (g.moveCount || 0) + 1,
-                        updatedAt: new Date().toISOString(),
-                      };
-                  applyLudoGameUpdate(updated);
                 }, 650);
               }
             }
           }
         }
+
+        // 4. Texas Hold'em Poker 3-Layer Hard AI Turn
+        if (msg.type === 'game_poker' && msg.pokerGame) {
+          const g = msg.pokerGame;
+          const isAiGame = Boolean(g.isAiOpponent || phonesMatch(g.opponentPhone, AFRIBOT_PHONE) || g.chatId === AFRIBOT_ID);
+          if (isAiGame && g.status === 'active' && phonesMatch(g.currentTurnPhone, AFRIBOT_PHONE)) {
+            const key = `poker:${g.id}:${g.moveCount}:${g.phase}`;
+            if (!scheduledAiTurnKeysRef.current.has(key)) {
+              scheduledAiTurnKeysRef.current.add(key);
+              setTimeout(() => {
+                const decision = pickHardPokerAction(
+                  g,
+                  g.opponentHole || [],
+                  g.opponentChips,
+                  g.opponentBet,
+                  g.challengerBet
+                );
+                const res = resolvePokerAction(
+                  g,
+                  AFRIBOT_PHONE,
+                  decision.action,
+                  decision.raiseBy
+                );
+                if (res.nextGame) {
+                  applyPokerGameUpdate(res.nextGame);
+                }
+              }, 700);
+            }
+          }
+        }
       }
     }
-  }, [messages, applyXoGameUpdate, applyWhotGameUpdate, applyLudoGameUpdate]);
+  }, [messages, applyXoGameUpdate, applyWhotGameUpdate, applyLudoGameUpdate, applyPokerGameUpdate]);
 
   // Send My Bill (Pay on Behalf) Handlers
   const sendBillRequest = async (params: {
@@ -14350,6 +15160,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             message.type === 'game_xo' ||
             message.type === 'game_whot' ||
             message.type === 'game_ludo' ||
+            message.type === 'game_poker' ||
             message.type === 'bill_request'
           ) {
             const updatedList = list.map((m, idx) => {
@@ -14382,6 +15193,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 xoGame: nextXo,
                 whotGame: message.whotGame ?? m.whotGame,
                 ludoGame: message.ludoGame ?? m.ludoGame,
+                pokerGame: message.pokerGame ?? m.pokerGame,
                 billRequest: message.billRequest ?? m.billRequest,
               };
             });
@@ -14810,6 +15622,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           applyLudoGameUpdate(e.data.payload);
           return;
         }
+        if (e.data && e.data.type === 'poker_game_update' && e.data.payload) {
+          applyPokerGameUpdate(e.data.payload);
+          return;
+        }
         if (e.data && e.data.type === 'bill_request_update' && e.data.payload) {
           applyBillRequestUpdate(e.data.payload);
           return;
@@ -14893,6 +15709,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             applyLudoGameUpdate(payload.payload);
           }
         })
+        .on('broadcast', { event: 'poker_game_update' }, ({ payload }: any) => {
+          if (payload?.payload) {
+            applyPokerGameUpdate(payload.payload);
+          }
+        })
         .on('broadcast', { event: 'bill_request_update' }, ({ payload }: any) => {
           if (payload?.payload) {
             applyBillRequestUpdate(payload.payload);
@@ -14960,6 +15781,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .on('broadcast', { event: 'ludo_game_update' }, ({ payload }: any) => {
             if (payload?.payload) {
               applyLudoGameUpdate(payload.payload);
+            }
+          })
+          .on('broadcast', { event: 'poker_game_update' }, ({ payload }: any) => {
+            if (payload?.payload) {
+              applyPokerGameUpdate(payload.payload);
             }
           })
           .on('broadcast', { event: 'bill_request_update' }, ({ payload }: any) => {
@@ -15043,7 +15869,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
       if (sbTownFeed) sbTownFeed.unsubscribe();
     };
-  }, [currentUser.id, currentUser.phoneNumber, isAuthenticated, handleIncomingMessage, applyXoGameUpdate, applyRemoteMessageReaction]);
+  }, [currentUser.id, currentUser.phoneNumber, isAuthenticated, handleIncomingMessage, applyXoGameUpdate, applyWhotGameUpdate, applyLudoGameUpdate, applyPokerGameUpdate, applyBillRequestUpdate, applyRemoteMessageReaction]);
 
   const syncCurrentUserFromRecord = useCallback((me?: AdminUserRecord) => {
     if (!me || !currentUser?.phoneNumber) return;
@@ -16809,7 +17635,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         acceptXoChallenge,
         declineXoChallenge,
         makeXoMove,
-        // 6c. Live Whot! & Ludo Games
+        // 6c. Live Whot!, Ludo & Texas Hold'em Poker Games
         sendWhotChallenge,
         acceptWhotChallenge,
         declineWhotChallenge,
@@ -16820,6 +17646,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         declineLudoChallenge,
         rollLudoDice,
         moveLudoToken,
+        sendPokerChallenge,
+        acceptPokerChallenge,
+        declinePokerChallenge,
+        performPokerAction,
         // 7. Ajo / Esusu Group Savings
         activeAjoGroup,
         setActiveAjoGroup,

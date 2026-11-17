@@ -14,6 +14,7 @@ import {
   Lock,
   Bot,
   CheckCircle2,
+  Spade,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import {
@@ -22,7 +23,7 @@ import {
   VERIFIED_BADGE_MONTHLY_FEE,
 } from '../types';
 
-type SelectedGameType = 'xo' | 'whot' | 'ludo';
+type SelectedGameType = 'xo' | 'whot' | 'ludo' | 'poker';
 
 const GAME_OPTIONS: {
   id: SelectedGameType;
@@ -51,10 +52,18 @@ const GAME_OPTIONS: {
   {
     id: 'ludo',
     label: 'Ludo',
-    tagline: '2-Player Board',
-    desc: 'Fast lightweight 2-player Ludo race with 4 tokens per player, roll-6 bonus, safe stars, captures & Home finish!',
+    tagline: '8 Seeds · 2 Dice',
+    desc: '8 seeds across 2 Castles per player with 2 dice! Split moves across seeds or combine dice, capture foes & race to Home!',
     icon: Dices,
     accent: 'text-emerald-500',
+  },
+  {
+    id: 'poker',
+    label: 'Poker',
+    tagline: "Texas Hold'em",
+    desc: 'Heads-up Texas Hold\'em with Flop, Turn, River & Showdown. Fold, Check, Call, Raise, or go All-In!',
+    icon: Spade,
+    accent: 'text-teal-500',
   },
 ];
 
@@ -73,6 +82,7 @@ export const GameXoChallengeModal: React.FC = () => {
     sendXoChallenge,
     sendWhotChallenge,
     sendLudoChallenge,
+    sendPokerChallenge,
     setIsWalletModalOpen,
     getGameBetLimit,
     upgradeVerificationBadge,
@@ -169,6 +179,8 @@ export const GameXoChallengeModal: React.FC = () => {
           ? await sendWhotChallenge(resolvedChatId, effectiveMode, parsedBet)
           : selectedGame === 'ludo'
           ? await sendLudoChallenge(resolvedChatId, effectiveMode, parsedBet)
+          : selectedGame === 'poker'
+          ? await sendPokerChallenge(resolvedChatId, effectiveMode, parsedBet)
           : await sendXoChallenge(resolvedChatId, effectiveMode, parsedBet);
 
       if (!res.success) {
@@ -270,7 +282,7 @@ export const GameXoChallengeModal: React.FC = () => {
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
               Choose Lightweight Game
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               {GAME_OPTIONS.map((opt) => {
                 const IconComp = opt.icon;
                 const active = selectedGame === opt.id;

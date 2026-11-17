@@ -1,10 +1,16 @@
 import {
   LudoGameState,
+  PokerCard,
+  PokerGameState,
   TicTacToeCell,
   WhotCard,
   WhotGameState,
   WhotShape,
 } from '../types';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 1. X / O (TIC-TAC-TOE) HARD MINIMAX AI
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const XO_WIN_LINES: number[][] = [
   [0, 1, 2],
@@ -18,7 +24,6 @@ const XO_WIN_LINES: number[][] = [
 ];
 
 function evaluateXoBoard(board: TicTacToeCell[], aiSymbol: 'X' | 'O'): 'ai' | 'human' | 'draw' | null {
-  const humanSymbol = aiSymbol === 'O' ? 'X' : 'O';
   for (const [a, b, c] of XO_WIN_LINES) {
     if (board[a] && board[a] === board[b] && board[a] === board[c]) {
       return board[a] === aiSymbol ? 'ai' : 'human';
@@ -72,17 +77,12 @@ function minimaxXo(
   }
 }
 
-/**
- * Hard-level X/O AI using full alpha-beta Minimax + positional tie-breakers (center > corners > edges).
- */
 export function pickHardXoMove(board: TicTacToeCell[], aiSymbol: 'X' | 'O' = 'O'): number {
   const copy = [...board];
-  // Quick optimal opening if board is empty or only 1 move played
   const emptyCount = copy.filter((c) => c === null).length;
-  if (emptyCount === 9) return 4; // Center
+  if (emptyCount === 9) return 4;
   if (emptyCount === 8 && copy[4] === null) return 4;
 
-  // Positional preference order when scores tie: center, corners, edges
   const preferredOrder = [4, 0, 2, 6, 8, 1, 3, 5, 7];
   let bestMove = -1;
   let bestScore = -Infinity;
@@ -101,36 +101,56 @@ export function pickHardXoMove(board: TicTacToeCell[], aiSymbol: 'X' | 'O' = 'O'
   return bestMove >= 0 ? bestMove : copy.findIndex((c) => c === null);
 }
 
-/**
- * Hard-level Whot! AI:
- * - Wins immediately if 1 card left and playable
- * - Chains action cards (Pick 2, General Market 14, Hold On 1) when AI holds follow-ups or human is low on cards
- * - Preserves Whot 20 wildcards unless winning, blocking Last Card threat, or no non-Whot move exists
- * - Picks the dominant remaining shape when playing Whot 20
- */
+// ═══════════════════════════════════════════════════════════════════════════════
+// 2. WHOT! FULL RULES & HARD STRATEGY AI
+//    - Stacking Pick 2 (2) and Pick 3 (5)
+//    - Hold On (1), Suspension (8), General Market (14), Whot (20)
+//    - Discard-pile memory (card counting) for reshuffled market probabilities
+//    - Hold defense cards for Last Card threat; shed high-value Stars early
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export function isWhotCardPlayable(card: WhotCard, game: WhotGameState): boolean {
+  const pending = game.pendingDrawCount || 0;
+  if (pending > 0) {
+    if (game.pendingDrawType === 'pick_three') return card.number === 5;
+    if (game.pendingDrawType === 'pick_two') return card.number === 2;
+    return false;
+  }
+  if (card.shape === 'whot' || card.number === 20) return true;
+  if (game.requestedShape) return card.shape === game.requestedShape;
+  return card.shape === game.topCard.shape || card.number === game.topCard.number;
+}
+
 export function pickHardWhotMove(
   game: WhotGameState,
   aiHand: WhotCard[],
   humanCardCount: number
 ): { action: 'play'; card: WhotCard; requestedShape?: WhotShape } | { action: 'draw' } {
-  const isPlayable = (card: WhotCard): boolean => {
-    if (card.shape === 'whot' || card.number === 20) return true;
-    if (game.requestedShape) return card.shape === game.requestedShape;
-    return card.shape === game.topCard.shape || card.number === game.topCard.number;
-  };
-
-  const legal = aiHand.filter(isPlayable);
+  const legal = aiHand.filter((c) => isWhotCardPlayable(c, game));
   if (legal.length === 0) return { action: 'draw' };
 
+  // Discard-pile memory: track which suits have been heavily played vs likely in market/reshuffle
+  const discardCounts: Record<Exclude<WhotShape, 'whot'>, number> = {
+    circle: 0,
+    triangle: 0,
+    cross: 0,
+    square: 0,
+    star: 0,
+  };
+  (game.discardPile || []).forEach((c) => {
+    if (c.shape !== 'whot') discardCounts[c.shape] += 1;
+  });
+
+  // Suit selection for Whot (20): pick the suit in AI hand with the most cards
   const pickBestRequestedShape = (remainingHand: WhotCard[]): WhotShape => {
-    const counts: Record<Exclude<WhotShape, 'whot'>, number> = {
+    const handCounts: Record<Exclude<WhotShape, 'whot'>, number> = {
       circle: 0,
       triangle: 0,
       cross: 0,
       square: 0,
       star: 0,
     };
-    const actionBonus: Record<Exclude<WhotShape, 'whot'>, number> = {
+    const pointValue: Record<Exclude<WhotShape, 'whot'>, number> = {
       circle: 0,
       triangle: 0,
       cross: 0,
@@ -139,19 +159,26 @@ export function pickHardWhotMove(
     };
     remainingHand.forEach((c) => {
       if (c.shape !== 'whot') {
-        counts[c.shape] += 1;
-        if (c.number === 1 || c.number === 2 || c.number === 14) {
-          actionBonus[c.shape] += 0.6;
-        }
+        handCounts[c.shape] += 1;
+        pointValue[c.shape] += c.shape === 'star' ? c.number * 2 : c.number;
       }
     });
+
+    const maxSuitCount = Math.max(...Object.values(handCounts));
     let bestShape: Exclude<WhotShape, 'whot'> = 'circle';
-    let bestVal = -1;
-    (Object.keys(counts) as Exclude<WhotShape, 'whot'>[]).forEach((sh) => {
-      // Slightly avoid requesting the exact same shape if human is on 1-2 cards
-      const sameShapePenalty =
-        humanCardCount <= 2 && game.topCard.shape === sh ? -0.35 : 0;
-      const val = counts[sh] + actionBonus[sh] + sameShapePenalty;
+    let bestVal = -Infinity;
+
+    (Object.keys(handCounts) as Exclude<WhotShape, 'whot'>[]).forEach((sh) => {
+      // Strictly prefer maximum count in hand; break ties with point shedding & card-counting probability
+      const isMaxCountBonus = maxSuitCount > 0 && handCounts[sh] === maxSuitCount ? 100 : 0;
+      const discardSupplyBonus = Math.min(discardCounts[sh], 8) * 0.15;
+      const avoidSameShapePenalty = humanCardCount <= 2 && game.topCard.shape === sh ? -0.4 : 0;
+      const val =
+        isMaxCountBonus +
+        handCounts[sh] * 10 +
+        pointValue[sh] * 0.05 +
+        discardSupplyBonus +
+        avoidSameShapePenalty;
       if (val > bestVal) {
         bestVal = val;
         bestShape = sh;
@@ -160,18 +187,27 @@ export function pickHardWhotMove(
     return bestShape;
   };
 
-  // 1. If AI has 1 card left, play it immediately to win!
+  // Immediate win if 1 card left and playable
   if (aiHand.length === 1) {
     const card = legal[0];
     return {
       action: 'play',
       card,
-      requestedShape:
-        card.shape === 'whot' || card.number === 20 ? 'circle' : undefined,
+      requestedShape: card.shape === 'whot' || card.number === 20 ? 'circle' : undefined,
     };
   }
 
-  // Score each legal card
+  // If facing pending Pick 2 / Pick 3 stack, always defend/stack when legal card is available!
+  if ((game.pendingDrawCount || 0) > 0) {
+    const stackCard = legal[0];
+    return { action: 'play', card: stackCard };
+  }
+
+  const nonDefenseOptions = legal.filter(
+    (c) => c.number !== 2 && c.number !== 5 && c.number !== 8 && c.shape !== 'whot' && c.number !== 20
+  );
+  const humanThreatening = humanCardCount <= 2;
+
   let bestCard = legal[0];
   let bestScore = -Infinity;
 
@@ -181,25 +217,23 @@ export function pickHardWhotMove(
 
     const isWhot = card.shape === 'whot' || card.number === 20;
     const isPickTwo = card.number === 2;
-    const isGeneralMarket = card.number === 14;
+    const isPickThree = card.number === 5;
+    const isSuspension = card.number === 8;
     const isHoldOn = card.number === 1;
+    const isGeneralMarket = card.number === 14;
 
     if (isWhot) {
-      // Save Whot 20 as trump unless we have <= 2 cards, no non-Whot options, or human is threatening win
-      const hasNonWhot = legal.some((c) => c.shape !== 'whot' && c.number !== 20);
       if (remaining.length === 1) {
-        score += 900; // Setup immediate next-turn finish
-      } else if (!hasNonWhot) {
-        score += 120;
-      } else if (humanCardCount <= 2) {
-        // Check if changing shape shuts down the current shape while helping AI
-        const targetShape = pickBestRequestedShape(remaining);
-        score += targetShape !== game.topCard.shape ? 310 : 80;
+        score += 1100; // Sets up winning final card
+      } else if (legal.every((c) => c.shape === 'whot' || c.number === 20)) {
+        score += 150; // Only Whot cards are playable
+      } else if (humanThreatening) {
+        const nextShape = pickBestRequestedShape(remaining);
+        score += nextShape !== game.topCard.shape ? 320 : 60;
       } else {
-        score -= 220; // Hold Whot 20 for later
+        score -= 260; // Hold wild Whot (20) for emergencies or late game
       }
     } else {
-      // Action cards grant AI an immediate extra turn!
       const followUps = remaining.filter(
         (r) =>
           r.shape === 'whot' ||
@@ -208,28 +242,35 @@ export function pickHardWhotMove(
           r.number === card.number
       );
 
-      if (isPickTwo) {
-        score += 420;
-        if (humanCardCount <= 2) score += 500; // Punish Last Card threat!
-        if (followUps.length > 0) score += 180 + followUps.length * 30;
-        else score -= 40; // Still makes opponent draw 2, just less combo value
-      } else if (isGeneralMarket) {
-        score += 340;
-        if (humanCardCount <= 2) score += 420;
-        if (followUps.length > 0) score += 160 + followUps.length * 25;
-      } else if (isHoldOn) {
-        score += 240;
-        if (followUps.length > 0) score += 190 + followUps.length * 25;
-        else score -= 70; // Don't waste Hold On without a follow-up if alternatives exist
+      // Defense cards: Hold Pick 2 (2), Pick 3 (5), and Suspension (8) unless human is at <= 2 cards or no safe alternative
+      if (isPickThree || isPickTwo || isSuspension) {
+        if (humanThreatening) {
+          score += isPickThree ? 720 : isPickTwo ? 660 : 610;
+        } else if (remaining.length <= 2) {
+          score += 520;
+        } else if (nonDefenseOptions.length > 0) {
+          score -= 140; // Reserve defensive action card for Last Card block!
+        } else {
+          score += 110;
+        }
+        if ((isSuspension || isHoldOn) && followUps.length > 0) {
+          score += 140 + followUps.length * 25;
+        }
+      } else if (isHoldOn || isGeneralMarket) {
+        score += isGeneralMarket ? 330 : 240;
+        if (humanThreatening && isGeneralMarket) score += 360;
+        if (followUps.length > 0) score += 170 + followUps.length * 25;
+        else if (isHoldOn) score -= 90;
       }
 
-      // Shape & number connectivity in remaining hand: keep AI flexible
+      // Connectivity in remaining hand
       const sameShapeCount = remaining.filter((r) => r.shape === card.shape).length;
       const sameNumCount = remaining.filter((r) => r.number === card.number).length;
-      score += sameShapeCount * 45 + sameNumCount * 35;
+      score += sameShapeCount * 42 + sameNumCount * 32;
 
-      // Shed higher point cards first when scores are close
-      score += card.number * 2;
+      // Score Minimization: shed Stars (double penalty points!) and high numbers early
+      const penaltyPoints = card.shape === 'star' ? card.number * 2 : card.number;
+      score += penaltyPoints * 4.5;
     }
 
     if (score > bestScore) {
@@ -248,126 +289,636 @@ export function pickHardWhotMove(
   };
 }
 
-const LUDO_SAFE_TRACK = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
+// ═══════════════════════════════════════════════════════════════════════════════
+// 3. LUDO (8 SEEDS, 2 CASTLES [4+4], 2 DICE, SPLIT VS COMBINED) RULES & AI TREE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const LUDO_SAFE_TRACK_SET = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
 
 /**
- * Hard-level Ludo AI:
- * Evaluates every legal token move based on exact finishes, captures, escaping capture range,
- * entering safe squares / home column, exiting yard on 6, and avoiding danger.
+ * Castle layout on the 52-cell outer loop:
+ * - Challenger (Purple): Castle A (seeds 0..3) starts at 0; Castle B (seeds 4..7) starts at 26
+ * - Opponent (Amber): Castle A (seeds 0..3) starts at 13; Castle B (seeds 4..7) starts at 39
  */
-export function pickHardLudoToken(
-  game: LudoGameState,
-  dice: number,
-  isAiChallenger: boolean = false
-): number | null {
-  const aiTokens = isAiChallenger ? game.challengerTokens : game.opponentTokens;
-  const humanTokens = isAiChallenger ? game.opponentTokens : game.challengerTokens;
-  const aiOffset = isAiChallenger ? 0 : 26;
-  const humanOffset = isAiChallenger ? 26 : 0;
-
-  const legalIndices: number[] = [];
-  for (let i = 0; i < aiTokens.length; i++) {
-    const s = aiTokens[i];
-    if (s >= 56) continue;
-    if (s < 0 && dice === 6) legalIndices.push(i);
-    else if (s >= 0 && s + dice <= 56) legalIndices.push(i);
+export function getLudoSeedOffset(seedIndex: number, isChallenger: boolean, totalSeeds: number = 8): number {
+  if (totalSeeds <= 4) {
+    return isChallenger ? 0 : 26;
   }
+  const isCastleB = seedIndex >= 4;
+  if (isChallenger) {
+    return isCastleB ? 26 : 0;
+  }
+  return isCastleB ? 39 : 13;
+}
 
-  if (legalIndices.length === 0) return null;
+export function canMoveLudoSingleDie(step: number, die: number): boolean {
+  if (step >= 56) return false;
+  if (step < 0) return die === 6;
+  return step + die <= 56;
+}
 
-  // Helper: check if an AI track step [0..50] is threatened (within 1..6 steps ahead of a human token)
-  const isTrackThreatened = (aiStep: number): boolean => {
-    if (aiStep < 0 || aiStep > 50) return false;
-    const aiTrackIdx = (aiStep + aiOffset) % 52;
-    if (LUDO_SAFE_TRACK.has(aiTrackIdx)) return false;
-
-    for (const hs of humanTokens) {
-      if (hs < 0 || hs > 50) continue;
-      const hTrackIdx = (hs + humanOffset) % 52;
-      const dist = (aiTrackIdx - hTrackIdx + 52) % 52;
-      if (dist >= 1 && dist <= 6 && hs + dist <= 50) {
-        return true;
-      }
-    }
+export function canMoveLudoCombinedDice(step: number, d1: number, d2: number): boolean {
+  if (step >= 56) return false;
+  if (step < 0) {
+    if (d1 === 6) return 0 + d2 <= 56;
+    if (d2 === 6) return 0 + d1 <= 56;
     return false;
-  };
+  }
+  return step + d1 + d2 <= 56;
+}
 
-  let bestIdx = legalIndices[0];
-  let bestScore = -Infinity;
+export function hasAnyLegalLudoMove(tokens: number[], remainingDice: number[]): boolean {
+  for (const die of remainingDice) {
+    if (tokens.some((s) => canMoveLudoSingleDie(s, die))) return true;
+  }
+  if (remainingDice.length === 2) {
+    const [d1, d2] = remainingDice;
+    if (tokens.some((s) => canMoveLudoCombinedDice(s, d1, d2))) return true;
+  }
+  return false;
+}
 
-  for (const idx of legalIndices) {
-    const curStep = aiTokens[idx];
-    const nextStep = curStep < 0 ? 0 : curStep + dice;
-    let score = 0;
+export interface LudoAiMovePlan {
+  tokenIndex: number;
+  dieChoice: 'die0' | 'die1' | 'combined';
+}
 
-    // 1. Exact Home Finish
-    if (nextStep === 56) {
-      score += 1200;
-    }
+interface LudoSimOutcome {
+  aiTokens: number[];
+  humanTokens: number[];
+  captures: number;
+  capturedValue: number;
+  castleAExited: number;
+  castleBExited: number;
+  finishedNow: number;
+  usedSplit: boolean;
+  usedCombined: boolean;
+}
 
-    // 2. Capture opponent token on unsafe main track square
-    if (nextStep >= 0 && nextStep <= 50) {
-      const nextTrackIdx = (nextStep + aiOffset) % 52;
-      if (!LUDO_SAFE_TRACK.has(nextTrackIdx)) {
-        for (const hs of humanTokens) {
-          if (hs >= 0 && hs <= 50 && (hs + humanOffset) % 52 === nextTrackIdx) {
-            score += 950 + hs * 6; // Capturing advanced opponent tokens is even stronger!
+function applySingleDieSim(
+  aiTokens: number[],
+  humanTokens: number[],
+  seedIdx: number,
+  die: number,
+  isAiChallenger: boolean
+): { valid: boolean; nextAi: number[]; nextHuman: number[]; capturedSteps: number[] } {
+  const cur = aiTokens[seedIdx];
+  if (!canMoveLudoSingleDie(cur, die)) {
+    return { valid: false, nextAi: aiTokens, nextHuman: humanTokens, capturedSteps: [] };
+  }
+  const nextStep = cur < 0 ? 0 : cur + die;
+  const nextAi = [...aiTokens];
+  nextAi[seedIdx] = nextStep;
+  const nextHuman = [...humanTokens];
+  const capturedSteps: number[] = [];
+
+  if (nextStep >= 0 && nextStep <= 50) {
+    const aiOffset = getLudoSeedOffset(seedIdx, isAiChallenger, nextAi.length);
+    const aiTrackIdx = (nextStep + aiOffset) % 52;
+    if (!LUDO_SAFE_TRACK_SET.has(aiTrackIdx)) {
+      for (let j = 0; j < nextHuman.length; j++) {
+        const hs = nextHuman[j];
+        if (hs >= 0 && hs <= 50) {
+          const hOffset = getLudoSeedOffset(j, !isAiChallenger, nextHuman.length);
+          if ((hs + hOffset) % 52 === aiTrackIdx) {
+            capturedSteps.push(hs);
+            nextHuman[j] = -1;
           }
         }
       }
     }
+  }
 
-    // 3. Exit Yard on 6
-    if (curStep < 0 && dice === 6) {
-      const activeCount = aiTokens.filter((s) => s >= 0 && s < 56).length;
-      score += activeCount === 0 ? 900 : 540;
+  return { valid: true, nextAi, nextHuman, capturedSteps };
+}
+
+function scoreLudoBoardState(
+  sim: LudoSimOutcome,
+  origAiTokens: number[],
+  isAiChallenger: boolean
+): number {
+  let score = 0;
+
+  // 1. Capture Moves (Top Priority, weighted by how far opponent seed was)
+  score += sim.captures * 1400 + sim.capturedValue * 12;
+
+  // 2. Finishing seeds at exact 56
+  score += sim.finishedNow * 1350;
+
+  // Helper: threat check on unsafe track squares
+  const countThreatened = (aiToks: number[], humToks: number[]): number => {
+    let threatPenalty = 0;
+    for (let i = 0; i < aiToks.length; i++) {
+      const s = aiToks[i];
+      if (s < 0 || s > 50) continue;
+      const aiOffset = getLudoSeedOffset(i, isAiChallenger, aiToks.length);
+      const aiTrack = (s + aiOffset) % 52;
+      if (LUDO_SAFE_TRACK_SET.has(aiTrack)) continue;
+      for (let j = 0; j < humToks.length; j++) {
+        const hs = humToks[j];
+        if (hs < 0 || hs > 50) continue;
+        const hOffset = getLudoSeedOffset(j, !isAiChallenger, humToks.length);
+        const hTrack = (hs + hOffset) % 52;
+        const dist = (aiTrack - hTrack + 52) % 52;
+        if (dist >= 1 && dist <= 6 && hs + dist <= 50) {
+          threatPenalty += 220 + s * 3.2;
+          break;
+        }
+      }
     }
+    return threatPenalty;
+  };
 
-    // 4. Enter safe Home Column (steps 51..55)
-    if (curStep <= 50 && nextStep >= 51 && nextStep < 56) {
-      score += 520;
-    }
+  // Threat delta & safety
+  const beforeThreat = countThreatened(origAiTokens, sim.humanTokens);
+  const afterThreat = countThreatened(sim.aiTokens, sim.humanTokens);
+  score += (beforeThreat - afterThreat);
 
-    // 5. Land on safe star square
-    const nextIsSafe =
-      nextStep >= 51 ||
-      (nextStep >= 0 && nextStep <= 50 && LUDO_SAFE_TRACK.has((nextStep + aiOffset) % 52));
-    if (nextIsSafe && nextStep < 56) {
-      score += 310;
-    }
+  // 3. Castle Deployment Strategy (stagger between Castle A [0..3] and Castle B [4..7])
+  const castleAActive = sim.aiTokens.slice(0, 4).filter((s) => s >= 0 && s < 56).length;
+  const castleBActive = sim.aiTokens.slice(4, 8).filter((s) => s >= 0 && s < 56).length;
+  const totalActiveBefore = origAiTokens.filter((s) => s >= 0 && s < 56).length;
 
-    // 6. Escape active threat
-    const threatenedNow = isTrackThreatened(curStep);
-    const threatenedAfter = isTrackThreatened(nextStep);
-    if (threatenedNow && !threatenedAfter) {
-      score += 380 + curStep * 3;
-    } else if (!threatenedNow && threatenedAfter) {
-      score -= 280 + nextStep * 2.5;
-    }
-
-    // 7. Avoid leaving a safe square into an unsafe/threatened square unless capturing
-    const curIsSafe =
-      curStep >= 0 && curStep <= 50 && LUDO_SAFE_TRACK.has((curStep + aiOffset) % 52);
-    if (curIsSafe && threatenedAfter) {
-      score -= 160;
-    }
-
-    // 8. Slight preference to advance leading active token closer to Home
-    if (curStep >= 0) {
-      score += nextStep * 2;
-    }
-
-    // 9. Avoid stacking two AI tokens on the same unsafe square unnecessarily
-    if (nextStep >= 0 && nextStep <= 50 && !nextIsSafe) {
-      const hasAllySameSquare = aiTokens.some((s, j) => j !== idx && s === nextStep);
-      if (hasAllySameSquare) score -= 45;
-    }
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestIdx = idx;
+  if (sim.castleAExited > 0 || sim.castleBExited > 0) {
+    score += totalActiveBefore === 0 ? 920 : 540;
+    // Stagger bonus if balancing Castle A & Castle B presence!
+    if (Math.abs(castleAActive - castleBActive) <= 1) {
+      score += 180;
     }
   }
 
-  return bestIdx;
+  // 4. Progress, safe squares, home column & avoiding exact-finish stalls
+  for (let i = 0; i < sim.aiTokens.length; i++) {
+    const s = sim.aiTokens[i];
+    if (s >= 56) {
+      score += 400;
+    } else if (s >= 51) {
+      score += 480 + (s - 50) * 35;
+      if (s === 55) score -= 45; // Avoid stalling on 55 needing exact 1 if another good move exists
+    } else if (s >= 0) {
+      score += s * 4.2;
+      const offset = getLudoSeedOffset(i, isAiChallenger, sim.aiTokens.length);
+      if (LUDO_SAFE_TRACK_SET.has((s + offset) % 52)) {
+        score += 240;
+      }
+    }
+  }
+
+  // Slight bonus for smart split or smart combined execution
+  if (sim.usedCombined && sim.captures > 0) score += 60;
+  if (sim.usedSplit && castleAActive > 0 && castleBActive > 0) score += 35;
+
+  return score;
+}
+
+/**
+ * Evaluates full 2-dice split & combined permutation tree across all 8 AI seeds (Castle A + Castle B).
+ */
+export function pickHardLudoPlan(
+  game: LudoGameState,
+  remainingDice: number[],
+  isAiChallenger: boolean = false
+): LudoAiMovePlan | null {
+  const aiTokens = isAiChallenger ? game.challengerTokens : game.opponentTokens;
+  const humanTokens = isAiChallenger ? game.opponentTokens : game.challengerTokens;
+
+  if (!remainingDice || remainingDice.length === 0) return null;
+
+  // If only 1 die left in turn, pick best single-die move
+  if (remainingDice.length === 1) {
+    const d = remainingDice[0];
+    let bestPlan: LudoAiMovePlan | null = null;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < aiTokens.length; i++) {
+      const stepRes = applySingleDieSim(aiTokens, humanTokens, i, d, isAiChallenger);
+      if (!stepRes.valid) continue;
+      const sim: LudoSimOutcome = {
+        aiTokens: stepRes.nextAi,
+        humanTokens: stepRes.nextHuman,
+        captures: stepRes.capturedSteps.length,
+        capturedValue: stepRes.capturedSteps.reduce((a, b) => a + b, 0),
+        castleAExited: aiTokens[i] < 0 && stepRes.nextAi[i] >= 0 && i < 4 ? 1 : 0,
+        castleBExited: aiTokens[i] < 0 && stepRes.nextAi[i] >= 0 && i >= 4 ? 1 : 0,
+        finishedNow: aiTokens[i] < 56 && stepRes.nextAi[i] >= 56 ? 1 : 0,
+        usedSplit: false,
+        usedCombined: false,
+      };
+      const sc = scoreLudoBoardState(sim, aiTokens, isAiChallenger);
+      if (sc > bestScore) {
+        bestScore = sc;
+        bestPlan = { tokenIndex: i, dieChoice: 'die0' };
+      }
+    }
+    return bestPlan;
+  }
+
+  // 2 dice available: evaluate BOTH split moves (dieIdx0 -> seedA, dieIdx1 -> seedB) AND combined moves (same seed sequential)
+  const [d0, d1] = remainingDice;
+  let bestPlan: LudoAiMovePlan | null = null;
+  let bestScore = -Infinity;
+
+  // A. Evaluate all 2-step sequences starting with dieIdx (0 or 1)
+  for (let firstDieIdx = 0; firstDieIdx < 2; firstDieIdx++) {
+    const firstDie = remainingDice[firstDieIdx];
+    const secondDie = remainingDice[firstDieIdx === 0 ? 1 : 0];
+    const dieChoice: 'die0' | 'die1' = firstDieIdx === 0 ? 'die0' : 'die1';
+
+    for (let i = 0; i < aiTokens.length; i++) {
+      const s1 = applySingleDieSim(aiTokens, humanTokens, i, firstDie, isAiChallenger);
+      if (!s1.valid) continue;
+
+      let foundSecondStep = false;
+      for (let j = 0; j < s1.nextAi.length; j++) {
+        const s2 = applySingleDieSim(s1.nextAi, s1.nextHuman, j, secondDie, isAiChallenger);
+        if (!s2.valid) continue;
+        foundSecondStep = true;
+
+        const sim: LudoSimOutcome = {
+          aiTokens: s2.nextAi,
+          humanTokens: s2.nextHuman,
+          captures: s1.capturedSteps.length + s2.capturedSteps.length,
+          capturedValue:
+            s1.capturedSteps.reduce((a, b) => a + b, 0) +
+            s2.capturedSteps.reduce((a, b) => a + b, 0),
+          castleAExited:
+            (aiTokens[i] < 0 && s1.nextAi[i] >= 0 && i < 4 ? 1 : 0) +
+            (s1.nextAi[j] < 0 && s2.nextAi[j] >= 0 && j < 4 ? 1 : 0),
+          castleBExited:
+            (aiTokens[i] < 0 && s1.nextAi[i] >= 0 && i >= 4 ? 1 : 0) +
+            (s1.nextAi[j] < 0 && s2.nextAi[j] >= 0 && j >= 4 ? 1 : 0),
+          finishedNow:
+            (aiTokens[i] < 56 && s1.nextAi[i] >= 56 ? 1 : 0) +
+            (s1.nextAi[j] < 56 && s2.nextAi[j] >= 56 ? 1 : 0),
+          usedSplit: i !== j,
+          usedCombined: i === j,
+        };
+        const sc = scoreLudoBoardState(sim, aiTokens, isAiChallenger);
+        if (sc > bestScore) {
+          bestScore = sc;
+          bestPlan =
+            i === j && aiTokens[i] >= 0 && s1.capturedSteps.length === 0
+              ? { tokenIndex: i, dieChoice: 'combined' }
+              : { tokenIndex: i, dieChoice };
+        }
+      }
+
+      // Single-step fallback if second die cannot be used afterward
+      if (!foundSecondStep) {
+        const sim: LudoSimOutcome = {
+          aiTokens: s1.nextAi,
+          humanTokens: s1.nextHuman,
+          captures: s1.capturedSteps.length,
+          capturedValue: s1.capturedSteps.reduce((a, b) => a + b, 0),
+          castleAExited: aiTokens[i] < 0 && s1.nextAi[i] >= 0 && i < 4 ? 1 : 0,
+          castleBExited: aiTokens[i] < 0 && s1.nextAi[i] >= 0 && i >= 4 ? 1 : 0,
+          finishedNow: aiTokens[i] < 56 && s1.nextAi[i] >= 56 ? 1 : 0,
+          usedSplit: false,
+          usedCombined: false,
+        };
+        const sc = scoreLudoBoardState(sim, aiTokens, isAiChallenger) - 35;
+        if (sc > bestScore) {
+          bestScore = sc;
+          bestPlan = { tokenIndex: i, dieChoice };
+        }
+      }
+    }
+  }
+
+  // Also explicitly check direct combined jump if d0 + d1 moves a token
+  for (let i = 0; i < aiTokens.length; i++) {
+    if (aiTokens[i] >= 0 && canMoveLudoCombinedDice(aiTokens[i], d0, d1)) {
+      const s1 = applySingleDieSim(aiTokens, humanTokens, i, d0, isAiChallenger);
+      if (s1.valid) {
+        const s2 = applySingleDieSim(s1.nextAi, s1.nextHuman, i, d1, isAiChallenger);
+        if (s2.valid) {
+          const sim: LudoSimOutcome = {
+            aiTokens: s2.nextAi,
+            humanTokens: s2.nextHuman,
+            captures: s1.capturedSteps.length + s2.capturedSteps.length,
+            capturedValue:
+              s1.capturedSteps.reduce((a, b) => a + b, 0) +
+              s2.capturedSteps.reduce((a, b) => a + b, 0),
+            castleAExited: 0,
+            castleBExited: 0,
+            finishedNow: s2.nextAi[i] >= 56 ? 1 : 0,
+            usedSplit: false,
+            usedCombined: true,
+          };
+          const sc = scoreLudoBoardState(sim, aiTokens, isAiChallenger);
+          if (sc > bestScore) {
+            bestScore = sc;
+            bestPlan = { tokenIndex: i, dieChoice: 'combined' };
+          }
+        }
+      }
+    }
+  }
+
+  return bestPlan;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 4. TEXAS HOLD'EM POKER HAND EVALUATOR & 3-LAYER HARD AI
+//    - Layer 1: Pre-Flop Starting Hand Strength
+//    - Layer 2: Post-Flop 7-card -> Best 5-card Evaluator (Royal Flush..High Card)
+//    - Layer 3: Pot Odds + Calibrated Bluff Frequency Behavioral Layer
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface PokerHandEvaluation {
+  category: number; // 9=Royal Flush .. 0=High Card
+  tieBreakers: number[];
+  label: string;
+}
+
+function rankName(r: number, plural = false): string {
+  const map: Record<number, string> = {
+    14: 'Ace',
+    13: 'King',
+    12: 'Queen',
+    11: 'Jack',
+    10: 'Ten',
+    9: 'Nine',
+    8: 'Eight',
+    7: 'Seven',
+    6: 'Six',
+    5: 'Five',
+    4: 'Four',
+    3: 'Three',
+    2: 'Two',
+  };
+  const base = map[r] || String(r);
+  if (!plural) return base;
+  return r === 6 ? 'Sixes' : `${base}s`;
+}
+
+function evaluate5Cards(five: PokerCard[]): PokerHandEvaluation {
+  const ranks = five.map((c) => c.rank).sort((a, b) => b - a);
+  const suits = five.map((c) => c.suit);
+  const isFlush = suits.every((s) => s === suits[0]);
+
+  const uniqueRanksDesc = Array.from(new Set(ranks)).sort((a, b) => b - a);
+  let straightHigh = 0;
+  if (uniqueRanksDesc.length === 5) {
+    if (uniqueRanksDesc[0] - uniqueRanksDesc[4] === 4) {
+      straightHigh = uniqueRanksDesc[0];
+    } else if (
+      uniqueRanksDesc[0] === 14 &&
+      uniqueRanksDesc[1] === 5 &&
+      uniqueRanksDesc[2] === 4 &&
+      uniqueRanksDesc[3] === 3 &&
+      uniqueRanksDesc[4] === 2
+    ) {
+      straightHigh = 5; // Wheel straight A-2-3-4-5
+    }
+  }
+
+  const freqMap = new Map<number, number>();
+  for (const r of ranks) freqMap.set(r, (freqMap.get(r) || 0) + 1);
+  const groups = Array.from(freqMap.entries()).sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return b[0] - a[0];
+  });
+
+  if (isFlush && straightHigh === 14) {
+    return { category: 9, tieBreakers: [14], label: 'Royal Flush' };
+  }
+  if (isFlush && straightHigh > 0) {
+    return {
+      category: 8,
+      tieBreakers: [straightHigh],
+      label: `Straight Flush (${rankName(straightHigh)} High)`,
+    };
+  }
+  if (groups[0][1] === 4) {
+    return {
+      category: 7,
+      tieBreakers: [groups[0][0], groups[1][0]],
+      label: `Four of a Kind (${rankName(groups[0][0], true)})`,
+    };
+  }
+  if (groups[0][1] === 3 && groups[1]?.[1] === 2) {
+    return {
+      category: 6,
+      tieBreakers: [groups[0][0], groups[1][0]],
+      label: `Full House (${rankName(groups[0][0], true)} full of ${rankName(groups[1][0], true)})`,
+    };
+  }
+  if (isFlush) {
+    return {
+      category: 5,
+      tieBreakers: ranks,
+      label: `Flush (${rankName(ranks[0])} High)`,
+    };
+  }
+  if (straightHigh > 0) {
+    return {
+      category: 4,
+      tieBreakers: [straightHigh],
+      label: `Straight (${rankName(straightHigh)} High)`,
+    };
+  }
+  if (groups[0][1] === 3) {
+    const kickers = groups.slice(1).map((g) => g[0]);
+    return {
+      category: 3,
+      tieBreakers: [groups[0][0], ...kickers],
+      label: `Three of a Kind (${rankName(groups[0][0], true)})`,
+    };
+  }
+  if (groups[0][1] === 2 && groups[1]?.[1] === 2) {
+    const highPair = Math.max(groups[0][0], groups[1][0]);
+    const lowPair = Math.min(groups[0][0], groups[1][0]);
+    const kicker = groups[2]?.[0] || 0;
+    return {
+      category: 2,
+      tieBreakers: [highPair, lowPair, kicker],
+      label: `Two Pair (${rankName(highPair, true)} & ${rankName(lowPair, true)})`,
+    };
+  }
+  if (groups[0][1] === 2) {
+    const kickers = groups.slice(1).map((g) => g[0]);
+    return {
+      category: 1,
+      tieBreakers: [groups[0][0], ...kickers],
+      label: `One Pair (${rankName(groups[0][0], true)})`,
+    };
+  }
+  return {
+    category: 0,
+    tieBreakers: ranks,
+    label: `High Card (${rankName(ranks[0])})`,
+  };
+}
+
+export function comparePokerEvaluations(a: PokerHandEvaluation, b: PokerHandEvaluation): number {
+  if (a.category !== b.category) return a.category - b.category;
+  const len = Math.max(a.tieBreakers.length, b.tieBreakers.length);
+  for (let i = 0; i < len; i++) {
+    const av = a.tieBreakers[i] || 0;
+    const bv = b.tieBreakers[i] || 0;
+    if (av !== bv) return av - bv;
+  }
+  return 0;
+}
+
+export function evaluateBest5PokerHand(cards: PokerCard[]): PokerHandEvaluation {
+  if (cards.length <= 5) return evaluate5Cards(cards);
+  let best: PokerHandEvaluation | null = null;
+  const n = cards.length;
+  for (let a = 0; a < n - 4; a++) {
+    for (let b = a + 1; b < n - 3; b++) {
+      for (let c = b + 1; c < n - 2; c++) {
+        for (let d = c + 1; d < n - 1; d++) {
+          for (let e = d + 1; e < n; e++) {
+            const ev = evaluate5Cards([cards[a], cards[b], cards[c], cards[d], cards[e]]);
+            if (!best || comparePokerEvaluations(ev, best) > 0) {
+              best = ev;
+            }
+          }
+        }
+      }
+    }
+  }
+  return best!;
+}
+
+function scorePreFlopStrength(hole: PokerCard[]): number {
+  if (hole.length < 2) return 0.3;
+  const r1 = Math.max(hole[0].rank, hole[1].rank);
+  const r2 = Math.min(hole[0].rank, hole[1].rank);
+  const suited = hole[0].suit === hole[1].suit;
+  const gap = r1 - r2;
+
+  if (r1 === r2) {
+    // Pocket pairs: 2-2 (~0.62) up to A-A (~0.98)
+    return Math.min(0.98, 0.56 + (r1 / 14) * 0.42);
+  }
+  let score = (r1 * 2 + r2) / 42; // 0.14 .. 0.95
+  if (suited) score += 0.08;
+  if (gap <= 1) score += 0.06;
+  else if (gap === 2) score += 0.03;
+  else if (gap >= 5 && r1 < 12) score -= 0.08; // Weak disconnected rags (e.g., 2-7 offsuit)
+  if (r1 === 14 && r2 >= 10) score += 0.1;
+  return Math.max(0.05, Math.min(0.94, score));
+}
+
+function estimateDrawBonus(hole: PokerCard[], community: PokerCard[]): number {
+  const combined = [...hole, ...community];
+  if (combined.length >= 7) return 0;
+  let bonus = 0;
+
+  // Flush draw (4 of a suit with hole participation)
+  for (const s of ['spades', 'hearts', 'diamonds', 'clubs'] as const) {
+    const suitCards = combined.filter((c) => c.suit === s);
+    if (suitCards.length === 4 && hole.some((h) => h.suit === s)) {
+      bonus += 0.16;
+    }
+  }
+
+  // Open-ended straight draw (4 consecutive unique ranks)
+  const uniq = Array.from(new Set(combined.map((c) => c.rank))).sort((a, b) => a - b);
+  for (let i = 0; i <= uniq.length - 4; i++) {
+    if (uniq[i + 3] - uniq[i] === 3) {
+      bonus += 0.12;
+      break;
+    }
+  }
+  return bonus;
+}
+
+export function pickHardPokerAction(
+  game: PokerGameState,
+  aiHole: PokerCard[],
+  aiChips: number,
+  aiCurrentBet: number,
+  humanCurrentBet: number
+): { action: 'fold' | 'check' | 'call' | 'raise'; raiseBy?: number } {
+  const toCall = Math.max(0, humanCurrentBet - aiCurrentBet);
+  const pot = Math.max(1, game.pot);
+  const potOdds = toCall > 0 ? toCall / (pot + toCall) : 0;
+
+  // Deterministic-feeling per-turn bluff roll mixed with true randomness
+  const bluffRoll = Math.random();
+  const bluffTriggered = bluffRoll < 0.17;
+
+  // Layer 1: Pre-Flop
+  if (game.phase === 'preflop' || game.communityCards.length === 0) {
+    const strength = scorePreFlopStrength(aiHole);
+    if (toCall === 0) {
+      if ((strength >= 0.68 || bluffTriggered) && aiChips >= 40) {
+        const raiseSize = Math.min(aiChips, strength >= 0.85 ? 80 : 40);
+        return { action: 'raise', raiseBy: raiseSize };
+      }
+      return { action: 'check' };
+    }
+
+    // Facing a bet/raise pre-flop
+    if (strength < 0.34 && toCall > game.bigBlind * 2 && !bluffTriggered) {
+      return { action: 'fold' };
+    }
+    if (strength >= 0.78 && aiChips > toCall + 40 && Math.random() < 0.65) {
+      const raiseSize = Math.min(aiChips - toCall, 60);
+      return { action: 'raise', raiseBy: raiseSize };
+    }
+    if (strength >= potOdds + 0.15 || toCall <= game.bigBlind) {
+      return { action: 'call' };
+    }
+    return { action: 'fold' };
+  }
+
+  // Layer 2: Post-Flop 7-Card Hand Evaluation + Draw Equity
+  const myEval = evaluateBest5PokerHand([...aiHole, ...game.communityCards]);
+  const boardOnlyEval =
+    game.communityCards.length >= 5
+      ? evaluateBest5PokerHand(game.communityCards)
+      : null;
+
+  // Base normalized strength 0..1 from poker hand category
+  const categoryStrengthMap: Record<number, number> = {
+    0: 0.22,
+    1: 0.46,
+    2: 0.66,
+    3: 0.78,
+    4: 0.84,
+    5: 0.88,
+    6: 0.93,
+    7: 0.97,
+    8: 0.99,
+    9: 1.0,
+  };
+  let handStrength = categoryStrengthMap[myEval.category] ?? 0.25;
+  if (myEval.category === 1 && myEval.tieBreakers[0] >= 11) {
+    handStrength += 0.09; // Top/high pair
+  }
+  // If AI only plays the board (hole didn't improve), discount confidence
+  if (boardOnlyEval && comparePokerEvaluations(myEval, boardOnlyEval) === 0 && myEval.category > 0) {
+    handStrength = Math.max(0.24, handStrength - 0.25);
+  }
+  handStrength = Math.min(0.99, handStrength + estimateDrawBonus(aiHole, game.communityCards));
+
+  // Layer 3: Pot Odds + Behavioral Bluff Engine
+  if (toCall === 0) {
+    if (handStrength >= 0.68 && aiChips >= 40) {
+      const raiseSize = Math.min(
+        aiChips,
+        Math.max(40, Math.round(pot * (handStrength >= 0.85 ? 0.75 : 0.5) / 10) * 10)
+      );
+      return { action: 'raise', raiseBy: raiseSize };
+    }
+    if (bluffTriggered && aiChips >= 40) {
+      return { action: 'raise', raiseBy: Math.min(aiChips, 40) };
+    }
+    return { action: 'check' };
+  }
+
+  // Facing bet post-flop: compare handStrength vs potOdds!
+  if (handStrength >= 0.84 && aiChips > toCall + 40 && Math.random() < 0.7) {
+    const raiseSize = Math.min(aiChips - toCall, Math.max(40, Math.round((pot * 0.6) / 10) * 10));
+    return { action: 'raise', raiseBy: raiseSize };
+  }
+  if (handStrength >= potOdds + 0.08 || (bluffTriggered && toCall <= pot * 0.5)) {
+    return { action: 'call' };
+  }
+  return { action: 'fold' };
 }
