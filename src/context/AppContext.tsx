@@ -31,8 +31,12 @@ export const normalizePhoneDigits = (raw?: string): string => {
 
 export const phonesMatch = (p1?: string, p2?: string): boolean => {
   if (!p1 || !p2) return false;
+  if (p1 === '+234 BOT AI' || p2 === '+234 BOT AI') {
+    return p1.trim() === p2.trim();
+  }
   const c1 = p1.replace(/\D/g, '');
   const c2 = p2.replace(/\D/g, '');
+  if (!c1 || !c2) return p1.trim().toLowerCase() === p2.trim().toLowerCase();
   if (c1 === c2) return true;
   const n1 = normalizePhoneDigits(p1);
   const n2 = normalizePhoneDigits(p2);
@@ -398,6 +402,11 @@ import {
   AFRIBOT_AVATAR,
   GroqMessage,
 } from '../services/groq';
+import {
+  pickHardXoMove,
+  pickHardWhotMove,
+  pickHardLudoToken,
+} from '../utils/gameAiEngine';
 import { playAnimalSound, getNotificationSound } from '../utils/soundUtils';
 import {
   supabase,
@@ -468,6 +477,8 @@ import {
   WhotCard,
   WhotGameState,
   LudoGameState,
+  STANDARD_GAME_BET_LIMIT,
+  VERIFIED_GAME_BET_LIMIT,
   BillRequest,
   AGC_BILL_CATEGORIES,
   LocationPinMeta,
@@ -778,14 +789,15 @@ interface AppContextType {
   // 6b. Live Socket.IO Multiplayer X/O (Tic-Tac-Toe)
   isGameXoModalOpen: boolean;
   setIsGameXoModalOpen: (val: boolean) => void;
+  getGameBetLimit: () => { isVerified: boolean; maxBet: number };
   sendXoChallenge: (
     chatId: string,
     mode: 'friendly' | 'bet',
     betAmount: number
-  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: TicTacToeGameState }>;
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string; game?: TicTacToeGameState }>;
   acceptXoChallenge: (
     game: TicTacToeGameState
-  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }>;
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string }>;
   declineXoChallenge: (
     game: TicTacToeGameState
   ) => Promise<{ success: boolean; message?: string }>;
@@ -798,10 +810,10 @@ interface AppContextType {
     chatId: string,
     mode: 'friendly' | 'bet',
     betAmount: number
-  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: WhotGameState }>;
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string; game?: WhotGameState }>;
   acceptWhotChallenge: (
     game: WhotGameState
-  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }>;
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string }>;
   declineWhotChallenge: (
     game: WhotGameState
   ) => Promise<{ success: boolean; message?: string }>;
@@ -817,10 +829,10 @@ interface AppContextType {
     chatId: string,
     mode: 'friendly' | 'bet',
     betAmount: number
-  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: LudoGameState }>;
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string; game?: LudoGameState }>;
   acceptLudoChallenge: (
     game: LudoGameState
-  ) => Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }>;
+  ) => Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string }>;
   declineLudoChallenge: (
     game: LudoGameState
   ) => Promise<{ success: boolean; message?: string }>;
@@ -9176,7 +9188,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     betAmount: number;
     currency: CurrencyCode;
     title: string;
-  }): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }> => {
+  }): Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string }> => {
     try {
       const resp = await fetch('/api/games/bet/lock', {
         method: 'POST',
@@ -9191,6 +9203,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           success: false,
           insufficientFunds: Boolean(data?.insufficientFunds),
+          requiresVerifiedBadge: Boolean(data?.requiresVerifiedBadge),
           message: data?.message || 'Unable to lock bet stake in server escrow.',
         };
       }
@@ -9440,29 +9453,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [currentUser.phoneNumber, CURRENCY_SYMBOLS]
   );
 
+  const getGameBetLimit = (): { isVerified: boolean; maxBet: number } => {
+    const activeBadge = currentUser.verificationBadge || getBadgeForPhone(currentUser.phoneNumber);
+    const hasBadge =
+      activeBadge === 'admin' ||
+      currentUser.role === 'admin' ||
+      activeBadge === 'blue' ||
+      activeBadge === 'gold' ||
+      activeBadge === 'creator_plus' ||
+      Boolean(currentUser.isCelebrityVerified);
+    let notExpired = true;
+    if (
+      hasBadge &&
+      activeBadge !== 'admin' &&
+      currentUser.role !== 'admin' &&
+      currentUser.verificationExpiresAt
+    ) {
+      const exp = Date.parse(currentUser.verificationExpiresAt);
+      if (Number.isFinite(exp) && exp <= Date.now()) {
+        notExpired = false;
+      }
+    }
+    const isVerified = hasBadge && notExpired;
+    return {
+      isVerified,
+      maxBet: isVerified ? VERIFIED_GAME_BET_LIMIT : STANDARD_GAME_BET_LIMIT,
+    };
+  };
+
   const sendXoChallenge = async (
     chatId: string,
     mode: 'friendly' | 'bet',
     betAmount: number
-  ): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: TicTacToeGameState }> => {
+  ): Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string; game?: TicTacToeGameState }> => {
+    const targetChat = chats.find((c) => c.id === chatId);
+    const isAiChat = chatId === AFRIBOT_ID || Boolean(targetChat?.isBot);
+    if (isAiChat && mode === 'bet') {
+      return {
+        success: false,
+        message: 'AgcBot only plays Friendly matches (no betting in AI Chat).',
+      };
+    }
+
     const cleanBet = mode === 'bet' ? Math.round(Number(betAmount) || 0) : 0;
+    const sym = CURRENCY_SYMBOLS[currency || 'NGN'] || '₦';
     if (mode === 'bet' && cleanBet < 50) {
-      return { success: false, message: `Minimum bet amount is ${CURRENCY_SYMBOLS[currency || 'NGN']}50.` };
+      return { success: false, message: `Minimum bet amount is ${sym}50.` };
+    }
+    if (mode === 'bet') {
+      const { isVerified, maxBet } = getGameBetLimit();
+      if (cleanBet > maxBet) {
+        return {
+          success: false,
+          requiresVerifiedBadge: !isVerified,
+          message: isVerified
+            ? `Maximum bet per game is ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}.`
+            : `Standard max bet is ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} per game. Get the Verified Badge (₦4,000/mo) to unlock a ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()} limit!`,
+        };
+      }
     }
     if (mode === 'bet' && wallet.availableBalance < cleanBet) {
       return {
         success: false,
         insufficientFunds: true,
-        message: `Insufficient wallet balance for ${CURRENCY_SYMBOLS[currency || 'NGN']}${cleanBet.toLocaleString()} bet.`,
+        message: `Insufficient wallet balance for ${sym}${cleanBet.toLocaleString()} bet.`,
       };
     }
 
-    const targetChat = chats.find((c) => c.id === chatId);
     const myPhone = currentUser.phoneNumber || currentUser.id;
-    let opponentPhone = (!targetChat?.isGroup && !targetChat?.isChannel)
+    let opponentPhone = isAiChat
+      ? AFRIBOT_PHONE
+      : (!targetChat?.isGroup && !targetChat?.isChannel)
       ? (targetChat?.phoneNumber || targetChat?.phone || '')
       : '';
-    if (!opponentPhone && chatId.startsWith('dm_')) {
+    if (!isAiChat && !opponentPhone && chatId.startsWith('dm_')) {
       const parts = chatId.replace('dm_', '').split('_');
       opponentPhone = parts.find((p) => !phonesMatch(p, myPhone)) || '';
     }
@@ -9482,16 +9546,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       challengerName: currentUser.fullName || 'AGC Player',
       challengerAvatar: currentUser.avatarUrl,
       opponentPhone: opponentPhone || undefined,
-      opponentName: !targetChat?.isGroup ? targetChat?.name : undefined,
-      opponentAvatar: !targetChat?.isGroup ? targetChat?.avatar : undefined,
+      opponentName: isAiChat ? 'AgcBot (Hard AI)' : !targetChat?.isGroup ? targetChat?.name : undefined,
+      opponentAvatar: isAiChat ? AFRIBOT_AVATAR : !targetChat?.isGroup ? targetChat?.avatar : undefined,
+      isAiOpponent: isAiChat,
+      aiDifficulty: isAiChat ? 'hard' : undefined,
       mode,
       betAmount: cleanBet,
       currency: currency || 'NGN',
       board: Array(9).fill(null),
       xPlayerPhone: myPhone,
       xPlayerName: currentUser.fullName || 'AGC Player',
+      oPlayerPhone: isAiChat ? AFRIBOT_PHONE : undefined,
+      oPlayerName: isAiChat ? 'AgcBot (Hard AI)' : undefined,
       currentTurn: 'X',
-      status: 'pending',
+      status: isAiChat ? 'active' : 'pending',
       totalPot,
       platformFeeRate: 0.01,
       platformFee,
@@ -9500,7 +9568,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: nowIso,
     };
 
-    const sym = CURRENCY_SYMBOLS[newGame.currency] || '₦';
     const cardMsg: ChatMessage = {
       id: `msg_xo_${gameId}`,
       chatId,
@@ -9535,6 +9602,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           success: false,
           insufficientFunds: lockRes.insufficientFunds,
+          requiresVerifiedBadge: lockRes.requiresVerifiedBadge,
           message: lockRes.message || `Insufficient wallet balance for bet.`,
         };
       }
@@ -9566,28 +9634,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    const memberPhones = targetChat?.memberPhones || [];
-    await upsertXoGameInSupabase(newGame);
-    broadcastLiveMessage(chatId, cardMsg);
-    broadcastXoGameState(newGame, memberPhones);
+    if (!isAiChat) {
+      const memberPhones = targetChat?.memberPhones || [];
+      await upsertXoGameInSupabase(newGame);
+      broadcastLiveMessage(chatId, cardMsg);
+      broadcastXoGameState(newGame, memberPhones);
+    }
 
     return { success: true, game: newGame, message: 'X/O Challenge sent!' };
   };
 
   const acceptXoChallenge = async (
     game: TicTacToeGameState
-  ): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string }> => {
+  ): Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string }> => {
     const myPhone = currentUser.phoneNumber || currentUser.id;
     if (phonesMatch(myPhone, game.challengerPhone) || (currentUser.id && game.challengerId === currentUser.id)) {
       return { success: false, message: 'Waiting for your opponent to accept.' };
     }
-    if (game.mode === 'bet' && game.betAmount > 0 && wallet.availableBalance < game.betAmount) {
+    if (game.mode === 'bet' && game.betAmount > 0) {
+      const { isVerified, maxBet } = getGameBetLimit();
       const sym = CURRENCY_SYMBOLS[game.currency || 'NGN'] || '₦';
-      return {
-        success: false,
-        insufficientFunds: true,
-        message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.`,
-      };
+      if (game.betAmount > maxBet) {
+        return {
+          success: false,
+          requiresVerifiedBadge: !isVerified,
+          message: `Stakes above ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} require a Verified Badge (₦4,000/mo, up to ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}).`,
+        };
+      }
+      if (wallet.availableBalance < game.betAmount) {
+        return {
+          success: false,
+          insufficientFunds: true,
+          message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.`,
+        };
+      }
     }
 
     // Fetch latest persisted state from Supabase to avoid accepting a cancelled/already-accepted game
@@ -9635,6 +9715,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           success: false,
           insufficientFunds: lockRes.insufficientFunds,
+          requiresVerifiedBadge: lockRes.requiresVerifiedBadge,
           message: lockRes.message || 'Insufficient wallet balance to accept bet.',
         };
       }
@@ -9695,7 +9776,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     cellIndex: number
   ): Promise<{ success: boolean; message?: string }> => {
     const myPhone = currentUser.phoneNumber || currentUser.id;
-    const latestFromDb = await fetchXoGameByIdFromSupabase(game.id);
+    const isAiMatch = Boolean(game.isAiOpponent || phonesMatch(game.opponentPhone, AFRIBOT_PHONE) || game.chatId === AFRIBOT_ID);
+    const latestFromDb = isAiMatch ? null : await fetchXoGameByIdFromSupabase(game.id);
     const baseGame = latestFromDb && shouldReplaceXoGame(game, latestFromDb) ? latestFromDb : game;
 
     if (baseGame.status !== 'active') {
@@ -9788,9 +9870,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Optimistic local update + broadcast + Supabase DB persistence
     applyXoGameUpdate(nextGame);
-    const chatObj = chats.find((c) => c.id === nextGame.chatId);
-    broadcastXoGameState(nextGame, chatObj?.memberPhones || []);
-    await upsertXoGameInSupabase(nextGame);
+    if (!isAiMatch) {
+      const chatObj = chats.find((c) => c.id === nextGame.chatId);
+      broadcastXoGameState(nextGame, chatObj?.memberPhones || []);
+      await upsertXoGameInSupabase(nextGame);
+    }
 
     return { success: true };
   };
@@ -10099,23 +10183,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     chatId: string,
     mode: 'friendly' | 'bet',
     betAmount: number
-  ): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: WhotGameState }> => {
+  ): Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string; game?: WhotGameState }> => {
+    const targetChat = chats.find((c) => c.id === chatId);
+    const isAiChat = chatId === AFRIBOT_ID || Boolean(targetChat?.isBot);
+    if (isAiChat && mode === 'bet') {
+      return {
+        success: false,
+        message: 'AgcBot only plays Friendly matches (no betting in AI Chat).',
+      };
+    }
+
     const cleanBet = mode === 'bet' ? Math.round(Number(betAmount) || 0) : 0;
+    const sym = CURRENCY_SYMBOLS[currency || 'NGN'] || '₦';
     if (mode === 'bet' && cleanBet < 50) {
-      return { success: false, message: `Minimum bet amount is ${CURRENCY_SYMBOLS[currency || 'NGN']}50.` };
+      return { success: false, message: `Minimum bet amount is ${sym}50.` };
+    }
+    if (mode === 'bet') {
+      const { isVerified, maxBet } = getGameBetLimit();
+      if (cleanBet > maxBet) {
+        return {
+          success: false,
+          requiresVerifiedBadge: !isVerified,
+          message: isVerified
+            ? `Maximum bet per game is ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}.`
+            : `Standard max bet is ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} per game. Get the Verified Badge (₦4,000/mo) to unlock a ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()} limit!`,
+        };
+      }
     }
     if (mode === 'bet' && wallet.availableBalance < cleanBet) {
       return {
         success: false,
         insufficientFunds: true,
-        message: `Insufficient wallet balance for ${CURRENCY_SYMBOLS[currency || 'NGN']}${cleanBet.toLocaleString()} bet.`,
+        message: `Insufficient wallet balance for ${sym}${cleanBet.toLocaleString()} bet.`,
       };
     }
 
-    const targetChat = chats.find((c) => c.id === chatId);
     const myPhone = currentUser.phoneNumber || currentUser.id;
-    let opponentPhone = !targetChat?.isGroup && !targetChat?.isChannel ? (targetChat?.phoneNumber || targetChat?.phone || '') : '';
-    if (!opponentPhone && chatId.startsWith('dm_')) {
+    let opponentPhone = isAiChat
+      ? AFRIBOT_PHONE
+      : !targetChat?.isGroup && !targetChat?.isChannel
+      ? (targetChat?.phoneNumber || targetChat?.phone || '')
+      : '';
+    if (!isAiChat && !opponentPhone && chatId.startsWith('dm_')) {
       const parts = chatId.replace('dm_', '').split('_');
       opponentPhone = parts.find((p) => !phonesMatch(p, myPhone)) || '';
     }
@@ -10142,8 +10251,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       challengerName: currentUser.fullName || 'Player 1',
       challengerAvatar: currentUser.avatarUrl,
       opponentPhone: opponentPhone || undefined,
-      opponentName: !targetChat?.isGroup ? targetChat?.name : undefined,
-      opponentAvatar: !targetChat?.isGroup ? targetChat?.avatar : undefined,
+      opponentName: isAiChat ? 'AgcBot (Hard AI)' : !targetChat?.isGroup ? targetChat?.name : undefined,
+      opponentAvatar: isAiChat ? AFRIBOT_AVATAR : !targetChat?.isGroup ? targetChat?.avatar : undefined,
+      isAiOpponent: isAiChat,
+      aiDifficulty: isAiChat ? 'hard' : undefined,
       mode,
       betAmount: cleanBet,
       currency: currency || 'NGN',
@@ -10156,8 +10267,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pendingDrawCount: 0,
       currentTurnPhone: myPhone,
       currentTurnName: currentUser.fullName || 'Player 1',
+      lastActionNote: isAiChat ? 'AgcBot (Hard AI) accepted! Your move first.' : undefined,
       moveCount: 0,
-      status: 'pending',
+      status: isAiChat ? 'active' : 'pending',
       totalPot,
       platformFeeRate: 0.01,
       platformFee,
@@ -10166,7 +10278,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: nowIso,
     };
 
-    const sym = CURRENCY_SYMBOLS[newGame.currency] || '₦';
     const cardMsg: ChatMessage = {
       id: `msg_whot_${gameId}`,
       chatId,
@@ -10198,6 +10309,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           success: false,
           insufficientFunds: lockRes.insufficientFunds,
+          requiresVerifiedBadge: lockRes.requiresVerifiedBadge,
           message: lockRes.message || `Insufficient wallet balance for bet.`,
         };
       }
@@ -10216,8 +10328,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    broadcastLiveMessage(chatId, cardMsg);
-    broadcastGamePayload('whot_game_update', newGame, chatId, [myPhone, opponentPhone, ...(targetChat?.memberPhones || [])]);
+    if (!isAiChat) {
+      broadcastLiveMessage(chatId, cardMsg);
+      broadcastGamePayload('whot_game_update', newGame, chatId, [myPhone, opponentPhone, ...(targetChat?.memberPhones || [])]);
+    }
     return { success: true, game: newGame, message: 'Whot! Challenge sent!' };
   };
 
@@ -10226,9 +10340,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (phonesMatch(myPhone, game.challengerPhone)) {
       return { success: false, message: 'Waiting for your opponent to accept.' };
     }
-    if (game.mode === 'bet' && game.betAmount > 0 && wallet.availableBalance < game.betAmount) {
+    if (game.mode === 'bet' && game.betAmount > 0) {
+      const { isVerified, maxBet } = getGameBetLimit();
       const sym = CURRENCY_SYMBOLS[game.currency || 'NGN'] || '₦';
-      return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+      if (game.betAmount > maxBet) {
+        return {
+          success: false,
+          requiresVerifiedBadge: !isVerified,
+          message: `Stakes above ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} require a Verified Badge (₦4,000/mo, up to ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}).`,
+        };
+      }
+      if (wallet.availableBalance < game.betAmount) {
+        return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+      }
     }
     if (game.status !== 'pending') {
       return { success: false, message: `Challenge is already ${game.status}.` };
@@ -10260,6 +10384,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           success: false,
           insufficientFunds: lockRes.insufficientFunds,
+          requiresVerifiedBadge: lockRes.requiresVerifiedBadge,
           message: lockRes.message || 'Insufficient wallet balance to accept bet.',
         };
       }
@@ -10364,7 +10489,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
       applyWhotGameUpdate(wonGame);
-      broadcastGamePayload('whot_game_update', wonGame, wonGame.chatId, [wonGame.challengerPhone, wonGame.opponentPhone || '']);
+      if (!wonGame.isAiOpponent && wonGame.chatId !== AFRIBOT_ID) {
+        broadcastGamePayload('whot_game_update', wonGame, wonGame.chatId, [wonGame.challengerPhone, wonGame.opponentPhone || '']);
+      }
       return { success: true };
     }
 
@@ -10410,7 +10537,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString(),
     };
     applyWhotGameUpdate(updatedGame);
-    broadcastGamePayload('whot_game_update', updatedGame, updatedGame.chatId, [updatedGame.challengerPhone, updatedGame.opponentPhone || '']);
+    if (!updatedGame.isAiOpponent && updatedGame.chatId !== AFRIBOT_ID) {
+      broadcastGamePayload('whot_game_update', updatedGame, updatedGame.chatId, [updatedGame.challengerPhone, updatedGame.opponentPhone || '']);
+    }
     return { success: true };
   };
 
@@ -10450,7 +10579,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString(),
     };
     applyWhotGameUpdate(updatedGame);
-    broadcastGamePayload('whot_game_update', updatedGame, updatedGame.chatId, [updatedGame.challengerPhone, updatedGame.opponentPhone || '']);
+    if (!updatedGame.isAiOpponent && updatedGame.chatId !== AFRIBOT_ID) {
+      broadcastGamePayload('whot_game_update', updatedGame, updatedGame.chatId, [updatedGame.challengerPhone, updatedGame.opponentPhone || '']);
+    }
     return { success: true };
   };
 
@@ -10458,23 +10589,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     chatId: string,
     mode: 'friendly' | 'bet',
     betAmount: number
-  ): Promise<{ success: boolean; insufficientFunds?: boolean; message?: string; game?: LudoGameState }> => {
+  ): Promise<{ success: boolean; insufficientFunds?: boolean; requiresVerifiedBadge?: boolean; message?: string; game?: LudoGameState }> => {
+    const targetChat = chats.find((c) => c.id === chatId);
+    const isAiChat = chatId === AFRIBOT_ID || Boolean(targetChat?.isBot);
+    if (isAiChat && mode === 'bet') {
+      return {
+        success: false,
+        message: 'AgcBot only plays Friendly matches (no betting in AI Chat).',
+      };
+    }
+
     const cleanBet = mode === 'bet' ? Math.round(Number(betAmount) || 0) : 0;
+    const sym = CURRENCY_SYMBOLS[currency || 'NGN'] || '₦';
     if (mode === 'bet' && cleanBet < 50) {
-      return { success: false, message: `Minimum bet amount is ${CURRENCY_SYMBOLS[currency || 'NGN']}50.` };
+      return { success: false, message: `Minimum bet amount is ${sym}50.` };
+    }
+    if (mode === 'bet') {
+      const { isVerified, maxBet } = getGameBetLimit();
+      if (cleanBet > maxBet) {
+        return {
+          success: false,
+          requiresVerifiedBadge: !isVerified,
+          message: isVerified
+            ? `Maximum bet per game is ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}.`
+            : `Standard max bet is ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} per game. Get the Verified Badge (₦4,000/mo) to unlock a ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()} limit!`,
+        };
+      }
     }
     if (mode === 'bet' && wallet.availableBalance < cleanBet) {
       return {
         success: false,
         insufficientFunds: true,
-        message: `Insufficient wallet balance for ${CURRENCY_SYMBOLS[currency || 'NGN']}${cleanBet.toLocaleString()} bet.`,
+        message: `Insufficient wallet balance for ${sym}${cleanBet.toLocaleString()} bet.`,
       };
     }
 
-    const targetChat = chats.find((c) => c.id === chatId);
     const myPhone = currentUser.phoneNumber || currentUser.id;
-    let opponentPhone = !targetChat?.isGroup && !targetChat?.isChannel ? (targetChat?.phoneNumber || targetChat?.phone || '') : '';
-    if (!opponentPhone && chatId.startsWith('dm_')) {
+    let opponentPhone = isAiChat
+      ? AFRIBOT_PHONE
+      : !targetChat?.isGroup && !targetChat?.isChannel
+      ? (targetChat?.phoneNumber || targetChat?.phone || '')
+      : '';
+    if (!isAiChat && !opponentPhone && chatId.startsWith('dm_')) {
       const parts = chatId.replace('dm_', '').split('_');
       opponentPhone = parts.find((p) => !phonesMatch(p, myPhone)) || '';
     }
@@ -10494,8 +10650,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       challengerName: currentUser.fullName || 'Purple Player',
       challengerAvatar: currentUser.avatarUrl,
       opponentPhone: opponentPhone || undefined,
-      opponentName: !targetChat?.isGroup ? targetChat?.name : undefined,
-      opponentAvatar: !targetChat?.isGroup ? targetChat?.avatar : undefined,
+      opponentName: isAiChat ? 'AgcBot (Hard AI)' : !targetChat?.isGroup ? targetChat?.name : undefined,
+      opponentAvatar: isAiChat ? AFRIBOT_AVATAR : !targetChat?.isGroup ? targetChat?.avatar : undefined,
+      isAiOpponent: isAiChat,
+      aiDifficulty: isAiChat ? 'hard' : undefined,
       mode,
       betAmount: cleanBet,
       currency: currency || 'NGN',
@@ -10505,8 +10663,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hasRolled: false,
       currentTurnPhone: myPhone,
       currentTurnName: currentUser.fullName || 'Purple Player',
+      lastActionNote: isAiChat ? 'AgcBot (Hard AI) accepted! Roll the dice to start.' : undefined,
       moveCount: 0,
-      status: 'pending',
+      status: isAiChat ? 'active' : 'pending',
       totalPot,
       platformFeeRate: 0.01,
       platformFee,
@@ -10515,7 +10674,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: nowIso,
     };
 
-    const sym = CURRENCY_SYMBOLS[newGame.currency] || '₦';
     const cardMsg: ChatMessage = {
       id: `msg_ludo_${gameId}`,
       chatId,
@@ -10547,6 +10705,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           success: false,
           insufficientFunds: lockRes.insufficientFunds,
+          requiresVerifiedBadge: lockRes.requiresVerifiedBadge,
           message: lockRes.message || `Insufficient wallet balance for bet.`,
         };
       }
@@ -10565,8 +10724,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    broadcastLiveMessage(chatId, cardMsg);
-    broadcastGamePayload('ludo_game_update', newGame, chatId, [myPhone, opponentPhone, ...(targetChat?.memberPhones || [])]);
+    if (!isAiChat) {
+      broadcastLiveMessage(chatId, cardMsg);
+      broadcastGamePayload('ludo_game_update', newGame, chatId, [myPhone, opponentPhone, ...(targetChat?.memberPhones || [])]);
+    }
     return { success: true, game: newGame, message: 'Ludo Challenge sent!' };
   };
 
@@ -10575,9 +10736,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (phonesMatch(myPhone, game.challengerPhone)) {
       return { success: false, message: 'Waiting for your opponent to accept.' };
     }
-    if (game.mode === 'bet' && game.betAmount > 0 && wallet.availableBalance < game.betAmount) {
+    if (game.mode === 'bet' && game.betAmount > 0) {
+      const { isVerified, maxBet } = getGameBetLimit();
       const sym = CURRENCY_SYMBOLS[game.currency || 'NGN'] || '₦';
-      return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+      if (game.betAmount > maxBet) {
+        return {
+          success: false,
+          requiresVerifiedBadge: !isVerified,
+          message: `Stakes above ${sym}${STANDARD_GAME_BET_LIMIT.toLocaleString()} require a Verified Badge (₦4,000/mo, up to ${sym}${VERIFIED_GAME_BET_LIMIT.toLocaleString()}).`,
+        };
+      }
+      if (wallet.availableBalance < game.betAmount) {
+        return { success: false, insufficientFunds: true, message: `Insufficient balance: need ${sym}${game.betAmount.toLocaleString()} to accept bet.` };
+      }
     }
     if (game.status !== 'pending') {
       return { success: false, message: `Challenge is already ${game.status}.` };
@@ -10609,6 +10780,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           success: false,
           insufficientFunds: lockRes.insufficientFunds,
+          requiresVerifiedBadge: lockRes.requiresVerifiedBadge,
           message: lockRes.message || 'Insufficient wallet balance to accept bet.',
         };
       }
@@ -10678,7 +10850,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
 
     applyLudoGameUpdate(updated);
-    broadcastGamePayload('ludo_game_update', updated, updated.chatId, [updated.challengerPhone, updated.opponentPhone || '']);
+    if (!updated.isAiOpponent && updated.chatId !== AFRIBOT_ID) {
+      broadcastGamePayload('ludo_game_update', updated, updated.chatId, [updated.challengerPhone, updated.opponentPhone || '']);
+    }
     return { success: true };
   };
 
@@ -10771,9 +10945,313 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     applyLudoGameUpdate(updated);
-    broadcastGamePayload('ludo_game_update', updated, updated.chatId, [updated.challengerPhone, updated.opponentPhone || '']);
+    if (!updated.isAiOpponent && updated.chatId !== AFRIBOT_ID) {
+      broadcastGamePayload('ludo_game_update', updated, updated.chatId, [updated.challengerPhone, updated.opponentPhone || '']);
+    }
     return { success: true };
   };
+
+  // Hard-Level AI Turn Runner for Friendly X/O, Whot!, and Ludo in AI Chat
+  const scheduledAiTurnKeysRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const aiName = 'AgcBot (Hard AI)';
+    const allChatIds = Object.keys(messages || {});
+    for (const cid of allChatIds) {
+      const list = messages[cid] || [];
+      for (const msg of list) {
+        // 1. X/O Hard AI Turn
+        if (msg.type === 'game_xo' && msg.xoGame) {
+          const g = msg.xoGame;
+          const isAiGame = Boolean(g.isAiOpponent || phonesMatch(g.oPlayerPhone, AFRIBOT_PHONE) || g.chatId === AFRIBOT_ID);
+          if (isAiGame && g.status === 'active' && g.currentTurn === 'O') {
+            const movesPlayed = g.board.filter((c) => c !== null).length;
+            const key = `xo:${g.id}:${movesPlayed}:${g.currentTurn}`;
+            if (!scheduledAiTurnKeysRef.current.has(key)) {
+              scheduledAiTurnKeysRef.current.add(key);
+              setTimeout(() => {
+                const cellIdx = pickHardXoMove(g.board, 'O');
+                if (cellIdx < 0 || g.board[cellIdx] !== null) return;
+                const nextBoard = [...g.board];
+                nextBoard[cellIdx] = 'O';
+                const nowIso = new Date().toISOString();
+                let winningLine: number[] | undefined;
+                for (const line of XO_WIN_LINES_CLIENT) {
+                  const [a, b, c] = line;
+                  if (nextBoard[a] && nextBoard[a] === nextBoard[b] && nextBoard[a] === nextBoard[c]) {
+                    winningLine = line;
+                    break;
+                  }
+                }
+                const nextGame: TicTacToeGameState = winningLine
+                  ? {
+                      ...g,
+                      board: nextBoard,
+                      status: 'won',
+                      winnerSymbol: 'O',
+                      winnerPhone: AFRIBOT_PHONE,
+                      winnerName: aiName,
+                      winningLine,
+                      settledAt: nowIso,
+                      updatedAt: nowIso,
+                    }
+                  : !nextBoard.includes(null)
+                  ? {
+                      ...g,
+                      board: nextBoard,
+                      status: 'draw',
+                      settledAt: nowIso,
+                      updatedAt: nowIso,
+                    }
+                  : {
+                      ...g,
+                      board: nextBoard,
+                      currentTurn: 'X',
+                      updatedAt: nowIso,
+                    };
+                applyXoGameUpdate(nextGame);
+              }, 550);
+            }
+          }
+        }
+
+        // 2. Whot! Hard AI Turn
+        if (msg.type === 'game_whot' && msg.whotGame) {
+          const g = msg.whotGame;
+          const isAiGame = Boolean(g.isAiOpponent || phonesMatch(g.opponentPhone, AFRIBOT_PHONE) || g.chatId === AFRIBOT_ID);
+          if (isAiGame && g.status === 'active' && phonesMatch(g.currentTurnPhone, AFRIBOT_PHONE)) {
+            const key = `whot:${g.id}:${g.moveCount}`;
+            if (!scheduledAiTurnKeysRef.current.has(key)) {
+              scheduledAiTurnKeysRef.current.add(key);
+              setTimeout(() => {
+                const aiHand = [...(g.opponentHand || [])];
+                const humanHand = [...(g.challengerHand || [])];
+                let nextDeck = [...(g.deck || [])];
+                const nextDiscard = [...(g.discardPile || [])];
+
+                const refillIfEmpty = () => {
+                  if (nextDeck.length === 0 && nextDiscard.length > 1) {
+                    const keepTop = nextDiscard.pop()!;
+                    nextDeck = [...nextDiscard];
+                    nextDiscard.length = 0;
+                    nextDiscard.push(keepTop);
+                  }
+                };
+
+                const decision = pickHardWhotMove(g, aiHand, humanHand.length);
+                if (decision.action === 'draw') {
+                  refillIfEmpty();
+                  if (nextDeck.length > 0) aiHand.push(nextDeck.shift()!);
+                  const updated: WhotGameState = {
+                    ...g,
+                    challengerHand: humanHand,
+                    opponentHand: aiHand,
+                    deck: nextDeck,
+                    discardPile: nextDiscard,
+                    currentTurnPhone: g.challengerPhone,
+                    currentTurnName: g.challengerName,
+                    lastActionNote: `${aiName} went to Market`,
+                    moveCount: (g.moveCount || 0) + 1,
+                    updatedAt: new Date().toISOString(),
+                  };
+                  applyWhotGameUpdate(updated);
+                  return;
+                }
+
+                const card = decision.card;
+                const idx = aiHand.findIndex((c) => c.id === card.id);
+                if (idx >= 0) aiHand.splice(idx, 1);
+                nextDiscard.push(card);
+
+                if (aiHand.length === 0) {
+                  const wonGame: WhotGameState = {
+                    ...g,
+                    challengerHand: humanHand,
+                    opponentHand: aiHand,
+                    deck: nextDeck,
+                    discardPile: nextDiscard,
+                    topCard: card,
+                    requestedShape: null,
+                    status: 'won',
+                    winnerPhone: AFRIBOT_PHONE,
+                    winnerName: aiName,
+                    lastActionNote: `${aiName} cleared all cards!`,
+                    moveCount: (g.moveCount || 0) + 1,
+                    settledAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                  };
+                  applyWhotGameUpdate(wonGame);
+                  return;
+                }
+
+                let nextTurnPhone = g.challengerPhone;
+                let nextTurnName = g.challengerName;
+                let nextRequestedShape: WhotShape | null = null;
+                let actionNote = `${aiName} played ${card.shape === 'whot' ? 'WHOT 20' : `${card.number} ${card.shape}`}`;
+
+                if (card.shape === 'whot' || card.number === 20) {
+                  nextRequestedShape =
+                    decision.requestedShape && decision.requestedShape !== 'whot'
+                      ? decision.requestedShape
+                      : 'circle';
+                  actionNote = `${aiName} played WHOT (20) & asked for ${nextRequestedShape.toUpperCase()}`;
+                } else if (card.number === 1) {
+                  nextTurnPhone = AFRIBOT_PHONE;
+                  nextTurnName = aiName;
+                  actionNote = `${aiName} played Hold On (1) — plays again!`;
+                } else if (card.number === 2) {
+                  for (let k = 0; k < 2; k++) {
+                    refillIfEmpty();
+                    if (nextDeck.length > 0) humanHand.push(nextDeck.shift()!);
+                  }
+                  nextTurnPhone = AFRIBOT_PHONE;
+                  nextTurnName = aiName;
+                  actionNote = `${aiName} played Pick 2! You picked 2 cards`;
+                } else if (card.number === 14) {
+                  refillIfEmpty();
+                  if (nextDeck.length > 0) humanHand.push(nextDeck.shift()!);
+                  nextTurnPhone = AFRIBOT_PHONE;
+                  nextTurnName = aiName;
+                  actionNote = `${aiName} played General Market (14)! You picked 1`;
+                }
+
+                const updated: WhotGameState = {
+                  ...g,
+                  challengerHand: humanHand,
+                  opponentHand: aiHand,
+                  deck: nextDeck,
+                  discardPile: nextDiscard,
+                  topCard: card,
+                  requestedShape: nextRequestedShape,
+                  pendingDrawCount: 0,
+                  currentTurnPhone: nextTurnPhone,
+                  currentTurnName: nextTurnName,
+                  lastActionNote: actionNote,
+                  moveCount: (g.moveCount || 0) + 1,
+                  updatedAt: new Date().toISOString(),
+                };
+                applyWhotGameUpdate(updated);
+              }, 650);
+            }
+          }
+        }
+
+        // 3. Ludo Hard AI Turn (Roll -> Hard Token Move)
+        if (msg.type === 'game_ludo' && msg.ludoGame) {
+          const g = msg.ludoGame;
+          const isAiGame = Boolean(g.isAiOpponent || phonesMatch(g.opponentPhone, AFRIBOT_PHONE) || g.chatId === AFRIBOT_ID);
+          if (isAiGame && g.status === 'active' && phonesMatch(g.currentTurnPhone, AFRIBOT_PHONE)) {
+            const key = `ludo:${g.id}:${g.moveCount}:${g.hasRolled ? 'r' : 'nr'}`;
+            if (!scheduledAiTurnKeysRef.current.has(key)) {
+              scheduledAiTurnKeysRef.current.add(key);
+              if (!g.hasRolled) {
+                setTimeout(() => {
+                  const aiTokens = g.opponentTokens || [-1, -1, -1, -1];
+                  const rolled = Math.floor(Math.random() * 6) + 1;
+                  const hasLegal = aiTokens.some((s) => (s < 0 ? rolled === 6 : s < 56 && s + rolled <= 56));
+                  const updated: LudoGameState = hasLegal
+                    ? {
+                        ...g,
+                        diceValue: rolled,
+                        hasRolled: true,
+                        lastActionNote: `${aiName} rolled ${rolled}`,
+                        moveCount: (g.moveCount || 0) + 1,
+                        updatedAt: new Date().toISOString(),
+                      }
+                    : {
+                        ...g,
+                        diceValue: rolled,
+                        hasRolled: false,
+                        currentTurnPhone: g.challengerPhone,
+                        currentTurnName: g.challengerName,
+                        lastActionNote: `${aiName} rolled ${rolled} (no valid move — your turn)`,
+                        moveCount: (g.moveCount || 0) + 1,
+                        updatedAt: new Date().toISOString(),
+                      };
+                  applyLudoGameUpdate(updated);
+                }, 550);
+              } else if (g.diceValue) {
+                setTimeout(() => {
+                  const dice = g.diceValue!;
+                  const tokenIdx = pickHardLudoToken(g, dice, false);
+                  if (tokenIdx === null) {
+                    const passTurn: LudoGameState = {
+                      ...g,
+                      diceValue: null,
+                      hasRolled: false,
+                      currentTurnPhone: g.challengerPhone,
+                      currentTurnName: g.challengerName,
+                      lastActionNote: `${aiName} had no move — your turn`,
+                      moveCount: (g.moveCount || 0) + 1,
+                      updatedAt: new Date().toISOString(),
+                    };
+                    applyLudoGameUpdate(passTurn);
+                    return;
+                  }
+
+                  const aiTokens = [...(g.opponentTokens || [-1, -1, -1, -1])];
+                  const humanTokens = [...(g.challengerTokens || [-1, -1, -1, -1])];
+                  const curStep = aiTokens[tokenIdx];
+                  const nextStep = curStep < 0 ? 0 : curStep + dice;
+                  aiTokens[tokenIdx] = nextStep;
+
+                  let captured = false;
+                  const SAFE_TRACK = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
+                  if (nextStep >= 0 && nextStep <= 50) {
+                    const aiTrackIdx = (nextStep + 26) % 52;
+                    if (!SAFE_TRACK.has(aiTrackIdx)) {
+                      for (let i = 0; i < humanTokens.length; i++) {
+                        const hs = humanTokens[i];
+                        if (hs >= 0 && hs <= 50 && hs % 52 === aiTrackIdx) {
+                          humanTokens[i] = -1;
+                          captured = true;
+                        }
+                      }
+                    }
+                  }
+
+                  const finishedNow = aiTokens.every((s) => s >= 56);
+                  const keepTurn = dice === 6 || captured;
+                  const updated: LudoGameState = finishedNow
+                    ? {
+                        ...g,
+                        challengerTokens: humanTokens,
+                        opponentTokens: aiTokens,
+                        diceValue: null,
+                        hasRolled: false,
+                        status: 'won',
+                        winnerPhone: AFRIBOT_PHONE,
+                        winnerName: aiName,
+                        lastActionNote: `${aiName} finished all 4 tokens!`,
+                        moveCount: (g.moveCount || 0) + 1,
+                        settledAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                      }
+                    : {
+                        ...g,
+                        challengerTokens: humanTokens,
+                        opponentTokens: aiTokens,
+                        diceValue: null,
+                        hasRolled: false,
+                        currentTurnPhone: keepTurn ? AFRIBOT_PHONE : g.challengerPhone,
+                        currentTurnName: keepTurn ? aiName : g.challengerName,
+                        lastActionNote: captured
+                          ? `${aiName} captured your piece! Bonus roll!`
+                          : dice === 6
+                          ? `${aiName} rolled 6 — bonus roll!`
+                          : `${aiName} moved token #${tokenIdx + 1}`,
+                        moveCount: (g.moveCount || 0) + 1,
+                        updatedAt: new Date().toISOString(),
+                      };
+                  applyLudoGameUpdate(updated);
+                }, 650);
+              }
+            }
+          }
+        }
+      }
+    }
+  }, [messages, applyXoGameUpdate, applyWhotGameUpdate, applyLudoGameUpdate]);
 
   // Send My Bill (Pay on Behalf) Handlers
   const sendBillRequest = async (params: {
@@ -11082,16 +11560,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       transactions: [newTx, ...prev.transactions],
     }));
 
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const updatedUser: UserProfile = {
       ...currentUser,
       verificationBadge: badge,
       platformFeeRate: feeRate,
-      verificationExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      verificationExpiresAt: expiresAt,
     };
     setCurrentUser(updatedUser);
     persistPartitionedUserProfile(updatedUser);
 
-    return { success: true, message: `${badgeTitle} activated! You can now host verified Ajo clubs.` };
+    // Sync badge upgrade + wallet debit authoritatively with server
+    if (currentUser.phoneNumber) {
+      fetch('/api/wallet/upgrade-badge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: currentUser.phoneNumber, badge }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.success && data?.wallet) {
+            applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+          }
+        })
+        .catch(() => {});
+    }
+
+    return {
+      success: true,
+      message: `${badgeTitle} activated! You unlocked the ₦50,000 game bet limit and verified Ajo hosting.`,
+    };
   };
 
   const createAjoGroup = (ajoData: {
@@ -16306,6 +16804,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // 6b. Live Socket.IO Multiplayer X/O (Tic-Tac-Toe)
         isGameXoModalOpen,
         setIsGameXoModalOpen,
+        getGameBetLimit,
         sendXoChallenge,
         acceptXoChallenge,
         declineXoChallenge,

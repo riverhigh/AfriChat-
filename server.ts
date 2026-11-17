@@ -398,6 +398,9 @@ interface RegisteredUser {
   role?: string;
   status?: 'active' | 'suspended' | 'flagged' | 'banned';
   verificationBadge?: 'blue' | 'gold' | 'creator_plus' | 'admin' | null;
+  verificationExpiresAt?: string;
+  platformFeeRate?: number;
+  isCelebrityVerified?: boolean;
   kycStatus?: 'unverified' | 'pending' | 'verified' | 'rejected';
   kycType?: 'BVN' | 'NIN';
   walletBalanceNgn?: number;
@@ -2323,6 +2326,123 @@ app.post('/api/wallet/ledger', (req: Request, res: Response) => {
   }
 });
 
+const STANDARD_GAME_BET_LIMIT = 10000;
+const VERIFIED_GAME_BET_LIMIT = 50000;
+
+function hasActiveVerifiedBadgeServer(user?: RegisteredUser | null): boolean {
+  if (!user) return false;
+  const badge = user.verificationBadge;
+  if (badge === 'admin' || user.role === 'admin') return true;
+  const hasBadge =
+    badge === 'blue' ||
+    badge === 'gold' ||
+    badge === 'creator_plus' ||
+    Boolean(user.isCelebrityVerified);
+  if (!hasBadge) return false;
+  if (user.verificationExpiresAt) {
+    const expMs = Date.parse(user.verificationExpiresAt);
+    if (Number.isFinite(expMs) && expMs <= Date.now()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// REST: Atomic Verification Badge Upgrade (₦4,000/mo Blue Verified -> 50k Game Bet Limit)
+app.post('/api/wallet/upgrade-badge', (req: Request, res: Response) => {
+  try {
+    const { phoneNumber, badge } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    const targetBadge: 'blue' | 'gold' | 'creator_plus' =
+      badge === 'gold' ? 'gold' : badge === 'creator_plus' ? 'creator_plus' : 'blue';
+
+    if (!cleanPhone) {
+      return res.status(400).json({ success: false, message: 'Phone number required.' });
+    }
+
+    const cost = targetBadge === 'gold' ? 11000 : targetBadge === 'creator_plus' ? 25000 : 4000;
+    const feeRate = targetBadge === 'gold' ? 0.05 : 0.02;
+    const badgeTitle =
+      targetBadge === 'gold'
+        ? 'Gold Creator Checkmark (₦11,000/mo)'
+        : targetBadge === 'creator_plus'
+        ? 'Creator Plus Plan (₦25,000/mo)'
+        : 'Blue Verified Badge (₦4,000/mo · ₦50k Game Limit)';
+
+    const wallet = getOrCreateServerWallet(cleanPhone);
+    if (wallet.availableBalance < cost) {
+      return res.status(400).json({
+        success: false,
+        insufficientFunds: true,
+        message: `Insufficient wallet balance for ${badgeTitle}. Need ₦${cost.toLocaleString()}.`,
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const match = findUserEntry(cleanPhone);
+    const ref = `VERIFY_${targetBadge.toUpperCase()}_${Date.now()}`;
+
+    wallet.availableBalance = Math.max(0, Number(wallet.availableBalance || 0) - cost);
+    wallet.updatedAt = nowIso;
+
+    const tx: ServerWalletTx = {
+      id: `tx_${Date.now()}_badge`,
+      userId: match?.user.id,
+      userPhone: match?.user.phoneNumber || wallet.phoneNumber || cleanPhone,
+      userName: match?.user.fullName || 'AGC User',
+      type: 'transfer_out',
+      title: badgeTitle,
+      description: `Monthly verified badge subscription (${targetBadge})`,
+      amount: cost,
+      fee: 0,
+      balanceAfter: wallet.availableBalance,
+      currency: wallet.currency || 'NGN',
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: ref,
+      referenceId: ref,
+      channel: 'wallet',
+      metadata: { verificationBadge: targetBadge, expiresAt },
+    };
+
+    wallet.transactions = [tx, ...wallet.transactions].slice(0, 100);
+    serverWallets.set(wallet.phoneKey, wallet);
+    saveWalletsFile();
+    appendUnifiedLedgerTx(tx);
+
+    if (match) {
+      match.user.verificationBadge = targetBadge;
+      match.user.verificationExpiresAt = expiresAt;
+      match.user.platformFeeRate = feeRate;
+      match.user.walletBalanceNgn = wallet.availableBalance;
+      match.user.updatedAt = nowIso;
+      usersByPhone.set(match.key, match.user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(match.user);
+    }
+
+    emitWalletUpdateToPhone(cleanPhone, wallet, badgeTitle, ref);
+
+    return res.json({
+      success: true,
+      verificationBadge: targetBadge,
+      verificationExpiresAt: expiresAt,
+      platformFeeRate: feeRate,
+      wallet: {
+        availableBalance: wallet.availableBalance,
+        escrowLockedBalance: wallet.escrowLockedBalance,
+        currency: wallet.currency,
+        transactions: wallet.transactions,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to upgrade badge' });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // STRICT SERVER-AUTHORITATIVE GAME BET ESCROW ENGINE (X/O, WHOT!, LUDO)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2352,6 +2472,20 @@ app.post('/api/games/bet/lock', (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: 'Valid gameId, playerPhone, and minimum stake of 50 are required.',
+      });
+    }
+
+    const match = findUserEntry(cleanPlayer);
+    const isVerified = hasActiveVerifiedBadgeServer(match?.user);
+    const maxBetLimit = isVerified ? VERIFIED_GAME_BET_LIMIT : STANDARD_GAME_BET_LIMIT;
+    if (stake > maxBetLimit) {
+      return res.status(400).json({
+        success: false,
+        requiresVerifiedBadge: !isVerified,
+        maxBetLimit,
+        message: isVerified
+          ? `Maximum game bet limit is ₦${VERIFIED_GAME_BET_LIMIT.toLocaleString()} per match.`
+          : `Unverified accounts are limited to ₦${STANDARD_GAME_BET_LIMIT.toLocaleString()} max per game bet. Activate the Verified Badge (₦4,000/month) to unlock a ₦${VERIFIED_GAME_BET_LIMIT.toLocaleString()} limit!`,
       });
     }
 
@@ -2402,7 +2536,6 @@ app.post('/api/games/bet/lock', (req: Request, res: Response) => {
 
     const nowIso = new Date().toISOString();
     const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const match = findUserEntry(cleanPlayer);
     const label = gType === 'whot' ? 'Whot!' : gType === 'ludo' ? 'Ludo' : 'X/O';
 
     wallet.availableBalance = Math.max(0, Number(wallet.availableBalance || 0) - stake);

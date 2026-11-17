@@ -235,6 +235,10 @@ export interface FinancialPoll {
   payoutRule: string;
 }
 
+export const STANDARD_GAME_BET_LIMIT = 10000;
+export const VERIFIED_GAME_BET_LIMIT = 50000;
+export const VERIFIED_BADGE_MONTHLY_FEE = 4000;
+
 export type TicTacToeCell = 'X' | 'O' | null;
 
 export interface TicTacToeGameState {
@@ -248,6 +252,8 @@ export interface TicTacToeGameState {
   opponentPhone?: string;
   opponentName?: string;
   opponentAvatar?: string;
+  isAiOpponent?: boolean;
+  aiDifficulty?: 'hard';
   mode: 'friendly' | 'bet';
   betAmount: number;
   currency: CurrencyCode;
@@ -290,6 +296,8 @@ export interface WhotGameState {
   opponentPhone?: string;
   opponentName?: string;
   opponentAvatar?: string;
+  isAiOpponent?: boolean;
+  aiDifficulty?: 'hard';
   mode: 'friendly' | 'bet';
   betAmount: number;
   currency: CurrencyCode;
@@ -329,6 +337,8 @@ export interface LudoGameState {
   opponentPhone?: string;
   opponentName?: string;
   opponentAvatar?: string;
+  isAiOpponent?: boolean;
+  aiDifficulty?: 'hard';
   mode: 'friendly' | 'bet';
   betAmount: number;
   currency: CurrencyCode;

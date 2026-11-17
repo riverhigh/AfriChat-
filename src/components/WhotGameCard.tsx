@@ -9,6 +9,8 @@ import {
   AlertCircle,
   Loader2,
   Sparkles,
+  Bot,
+  BadgeCheck,
 } from 'lucide-react';
 import { WhotCard, WhotGameState, WhotShape } from '../types';
 import { useApp, phonesMatch } from '../context/AppContext';
@@ -113,11 +115,13 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
     playWhotCard,
     drawWhotCard,
     setIsWalletModalOpen,
+    upgradeVerificationBadge,
   } = useApp();
 
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [insufficientFunds, setInsufficientFunds] = useState(false);
+  const [requiresVerifiedBadge, setRequiresVerifiedBadge] = useState(false);
   const [pendingWhotCard, setPendingWhotCard] = useState<WhotCard | null>(null);
 
   const myPhone = currentUser.phoneNumber || currentUser.id;
@@ -155,15 +159,30 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
     setBusy(true);
     setFeedback(null);
     setInsufficientFunds(false);
+    setRequiresVerifiedBadge(false);
     try {
       const res = await acceptWhotChallenge(game);
       if (!res.success) {
         setFeedback(res.message || 'Could not accept Whot! challenge.');
-        if (res.insufficientFunds) setInsufficientFunds(true);
+        if ((res as { insufficientFunds?: boolean }).insufficientFunds) setInsufficientFunds(true);
+        if ((res as { requiresVerifiedBadge?: boolean }).requiresVerifiedBadge) setRequiresVerifiedBadge(true);
       }
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleUpgradeBadge = () => {
+    const res = upgradeVerificationBadge('blue');
+    if (!res.success) {
+      setFeedback(res.message);
+      setInsufficientFunds(true);
+      setRequiresVerifiedBadge(false);
+      return;
+    }
+    setRequiresVerifiedBadge(false);
+    setInsufficientFunds(false);
+    setFeedback('Verified Badge active! Tap Accept to join this match.');
   };
 
   const handleDecline = async () => {
@@ -232,12 +251,20 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
             W!
           </div>
           <div className="min-w-0">
-            <div className="text-xs font-extrabold leading-tight truncate">
-              Whot! Card Match
+            <div className="text-xs font-extrabold leading-tight truncate flex items-center gap-1.5">
+              <span>Whot! Card Match</span>
+              {game.isAiOpponent && (
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-white/20 text-[9px] font-bold">
+                  <Bot className="w-2.5 h-2.5" />
+                  Hard AI
+                </span>
+              )}
             </div>
             <div className="text-[10px] text-purple-100 truncate">
               {game.mode === 'bet'
                 ? `${sym}${game.betAmount.toLocaleString()} Stake · Pot ${sym}${game.winnerPayout.toLocaleString()}`
+                : game.isAiOpponent
+                ? 'Friendly Match vs AgcBot (Hard)'
                 : 'Friendly Match (Free)'}
             </div>
           </div>
@@ -476,19 +503,33 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
         )}
 
         {feedback && (
-          <div className="p-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-[11px] text-rose-700 dark:text-rose-300 flex items-center justify-between gap-2">
-            <span className="flex items-center gap-1.5">
-              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-              {feedback}
-            </span>
-            {insufficientFunds && (
-              <button
-                type="button"
-                onClick={() => setIsWalletModalOpen(true)}
-                className="underline font-bold shrink-0"
-              >
-                Top Up
-              </button>
+          <div className="p-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-[11px] text-rose-700 dark:text-rose-300 space-y-1.5">
+            <div className="flex items-start gap-1.5">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>{feedback}</span>
+            </div>
+            {(requiresVerifiedBadge || insufficientFunds) && (
+              <div className="flex flex-wrap gap-2 pl-5">
+                {requiresVerifiedBadge && (
+                  <button
+                    type="button"
+                    onClick={handleUpgradeBadge}
+                    className="px-2 py-1 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[10px] font-bold inline-flex items-center gap-1"
+                  >
+                    <BadgeCheck className="w-3 h-3" />
+                    <span>Verify (₦4k/mo)</span>
+                  </button>
+                )}
+                {insufficientFunds && (
+                  <button
+                    type="button"
+                    onClick={() => setIsWalletModalOpen(true)}
+                    className="underline font-bold shrink-0"
+                  >
+                    Top Up
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}

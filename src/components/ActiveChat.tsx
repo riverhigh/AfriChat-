@@ -58,6 +58,9 @@ import {
   RotateCcw,
   CornerUpRight,
   Receipt,
+  Grid3X3,
+  Layers,
+  Dices,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ChatMessage, Product, LanguageCode } from '../types';
@@ -107,9 +110,13 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     voteOnFinancialPoll,
     setIsGameXoModalOpen,
     setIsShareLocationModalOpen,
+    sendXoChallenge,
+    sendWhotChallenge,
+    sendLudoChallenge,
     acceptXoChallenge,
     declineXoChallenge,
     makeXoMove,
+    upgradeVerificationBadge,
     setIsWalletModalOpen,
     setIsSendBillModalOpen,
     payBillOnBehalf,
@@ -162,7 +169,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [pollCardErrors, setPollCardErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
   const [xoBusyId, setXoBusyId] = useState<string | null>(null);
-  const [xoErrors, setXoErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
+  const [xoErrors, setXoErrors] = useState<Record<string, { msg: string; insufficient?: boolean; requiresVerifiedBadge?: boolean }>>({});
   const [billBusyId, setBillBusyId] = useState<string | null>(null);
   const [billErrors, setBillErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
   const [billPinPromptId, setBillPinPromptId] = useState<string | null>(null);
@@ -1156,6 +1163,42 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           </div>
         </div>
       </div>
+
+      {/* Friendly Hard-AI Quick Game Bar in AI Chat */}
+      {(currentChat.isBot || currentChat.id === 'chat_afribot_ai') && (
+        <div className="px-3 py-2 bg-gradient-to-r from-purple-950/90 via-[#1b1638] to-indigo-950/90 border-b border-purple-500/25 flex items-center justify-between gap-2 shrink-0 z-10">
+          <div className="flex items-center gap-1.5 min-w-0 text-[11px] font-semibold text-purple-100">
+            <Bot className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+            <span className="truncate">Play Hard AI (Friendly):</span>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => void sendXoChallenge(currentChat.id, 'friendly', 0)}
+              className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white text-[11px] font-bold flex items-center gap-1 transition-colors"
+            >
+              <Grid3X3 className="w-3 h-3 text-purple-300" />
+              <span>X/O</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void sendWhotChallenge(currentChat.id, 'friendly', 0)}
+              className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white text-[11px] font-bold flex items-center gap-1 transition-colors"
+            >
+              <Layers className="w-3 h-3 text-amber-300" />
+              <span>Whot!</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void sendLudoChallenge(currentChat.id, 'friendly', 0)}
+              className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white text-[11px] font-bold flex items-center gap-1 transition-colors"
+            >
+              <Dices className="w-3 h-3 text-emerald-300" />
+              <span>Ludo</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* In-Chat Search Bar */}
       {showChatSearch && (
@@ -2323,6 +2366,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                         <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
                           <Gamepad2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
                           <span>X/O Challenge</span>
+                          {game.isAiOpponent && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 text-[9px] font-extrabold">
+                              <Bot className="w-2.5 h-2.5" />
+                              Hard AI
+                            </span>
+                          )}
                         </div>
                         <span className="font-mono tabular-nums text-[11px] font-bold text-emerald-700 dark:text-emerald-300 whitespace-nowrap">
                           {game.mode === 'bet' ? `${formatPrice(game.betAmount, gCur)} Bet` : 'Friendly'}
@@ -2473,6 +2522,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                                       [game.id]: {
                                         msg: res.message || 'Could not join game.',
                                         insufficient: res.insufficientFunds,
+                                        requiresVerifiedBadge: res.requiresVerifiedBadge,
                                       },
                                     }));
                                   }
@@ -2549,19 +2599,47 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                       )}
 
                       {xoErr && (
-                        <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-[11px] flex items-center justify-between gap-2">
+                        <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-[11px] space-y-1.5">
                           <span>{xoErr.msg}</span>
-                          {xoErr.insufficient && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setIsWalletModalOpen(true);
-                              }}
-                              className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold shrink-0 whitespace-nowrap"
-                            >
-                              Top Up
-                            </button>
+                          {(xoErr.requiresVerifiedBadge || xoErr.insufficient) && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {xoErr.requiresVerifiedBadge && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const upRes = upgradeVerificationBadge('blue');
+                                    if (!upRes.success) {
+                                      setXoErrors((prev) => ({
+                                        ...prev,
+                                        [game.id]: { msg: upRes.message, insufficient: true },
+                                      }));
+                                    } else {
+                                      setXoErrors((prev) => ({
+                                        ...prev,
+                                        [game.id]: { msg: 'Verified Badge active! Tap Accept & Play to join.' },
+                                      }));
+                                    }
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[10px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                                >
+                                  <BadgeCheck className="w-3 h-3" />
+                                  <span>Verify (₦4k/mo)</span>
+                                </button>
+                              )}
+                              {xoErr.insufficient && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setIsWalletModalOpen(true);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold shrink-0 whitespace-nowrap"
+                                >
+                                  Top Up
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
                       )}
