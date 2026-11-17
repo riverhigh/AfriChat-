@@ -4460,7 +4460,7 @@ export const AdminDashboardModal: React.FC = () => {
                         type="text"
                         value={aiFormTopic}
                         onChange={(e) => setAiFormTopic(e.target.value)}
-                        placeholder="e.g. escrow, whot, ludo, send my bill, billboard, contacts"
+                        placeholder="e.g. escrow, whot, ludo, send my bill, outside, contacts"
                         className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white focus:outline-none focus:border-violet-500"
                       />
                     </div>

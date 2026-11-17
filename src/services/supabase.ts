@@ -1115,5 +1115,128 @@ export async function trackAdClickInDb(statusId: string, targetUrl?: string, cli
   } catch (_) {}
 }
 
+// ─── Outside (Events, Nightlife & RSVP Ticket Passes) ────────────────────────
+
+export async function fetchOutsidePartiesFromDb(city?: string, limit = 80) {
+  if (!isSupabaseConfigured) return { data: null, error: null };
+  try {
+    let query = supabase
+      .from('parties')
+      .select('*')
+      .gte('event_date', new Date(Date.now() - 12 * 3_600_000).toISOString())
+      .order('event_date', { ascending: true })
+      .limit(limit);
+    if (city && city !== 'All Cities') {
+      query = query.eq('city', city);
+    }
+    return await query;
+  } catch (err: any) {
+    return { data: null, error: err };
+  }
+}
+
+export async function createOutsidePartyInDb(party: {
+  id?: string;
+  organizer_id?: string | null;
+  organizer_name?: string;
+  organizer_phone?: string;
+  organizer_verified?: boolean;
+  title: string;
+  description?: string;
+  category: string;
+  city: string;
+  venue_name: string;
+  address: string;
+  lat?: number | null;
+  lng?: number | null;
+  is_paid: boolean;
+  ticket_price: number;
+  currency?: string;
+  max_capacity?: number | null;
+  flyer_url: string;
+  event_date: string;
+}) {
+  if (!isSupabaseConfigured) return { data: null, error: null };
+  try {
+    const payload: Record<string, any> = {
+      organizer_name: party.organizer_name || 'AGC Host',
+      organizer_phone: party.organizer_phone || null,
+      organizer_verified: Boolean(party.organizer_verified),
+      title: party.title,
+      description: party.description || '',
+      category: party.category || 'party',
+      city: party.city,
+      venue_name: party.venue_name,
+      address: party.address,
+      lat: party.lat ?? null,
+      lng: party.lng ?? null,
+      is_paid: Boolean(party.is_paid),
+      ticket_price: Number(party.ticket_price) || 0,
+      currency: party.currency || 'NGN',
+      max_capacity: party.max_capacity ?? null,
+      flyer_url: party.flyer_url,
+      event_date: party.event_date,
+    };
+    if (party.id && UUID_REGEX.test(party.id)) {
+      payload.id = party.id;
+    }
+    if (party.organizer_id && UUID_REGEX.test(party.organizer_id)) {
+      payload.organizer_id = party.organizer_id;
+    }
+    return await supabase.from('parties').insert(payload).select().maybeSingle();
+  } catch (err: any) {
+    return { data: null, error: err };
+  }
+}
+
+export async function fetchOutsideRsvpsFromDb(userId?: string, userPhone?: string) {
+  if (!isSupabaseConfigured) return { data: null, error: null };
+  try {
+    if (userId && UUID_REGEX.test(userId)) {
+      return await supabase.from('party_rsvps').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+    }
+    if (userPhone) {
+      return await supabase.from('party_rsvps').select('*').eq('user_phone', userPhone).order('created_at', { ascending: false });
+    }
+    return { data: null, error: null };
+  } catch (err: any) {
+    return { data: null, error: err };
+  }
+}
+
+export async function createOutsideRsvpInDb(rsvp: {
+  party_id: string;
+  user_id?: string | null;
+  user_name: string;
+  user_phone?: string;
+  ticket_code: string;
+  payment_method: 'free' | 'wallet' | 'paystack';
+  payment_reference?: string;
+  amount_paid: number;
+}) {
+  if (!isSupabaseConfigured || !UUID_REGEX.test(rsvp.party_id)) {
+    return { data: null, error: null };
+  }
+  try {
+    const payload: Record<string, any> = {
+      party_id: rsvp.party_id,
+      user_name: rsvp.user_name,
+      user_phone: rsvp.user_phone || null,
+      ticket_code: rsvp.ticket_code,
+      status: 'confirmed',
+      payment_method: rsvp.payment_method,
+      payment_reference: rsvp.payment_reference || null,
+      amount_paid: Number(rsvp.amount_paid) || 0,
+    };
+    if (rsvp.user_id && UUID_REGEX.test(rsvp.user_id)) {
+      payload.user_id = rsvp.user_id;
+    }
+    return await supabase.from('party_rsvps').insert(payload).select().maybeSingle();
+  } catch (err: any) {
+    return { data: null, error: err };
+  }
+}
+
+
 
 

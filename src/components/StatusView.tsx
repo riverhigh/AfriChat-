@@ -16,12 +16,12 @@ import {
   ChevronRight,
   Megaphone,
   ExternalLink,
-  Flame,
+  MapPin,
 } from 'lucide-react';
 import { useApp, phonesMatch, isStatusExpiredClient } from '../context/AppContext';
 import { UserStatus } from '../types';
 import { compressChatMediaImage } from '../utils/imageUtils';
-import { BillboardModal } from './BillboardModal';
+import { OutsideModal } from './OutsideModal';
 
 const THOUGHT_THEMES = [
   { name: 'Indigo Dusk', bg: 'from-indigo-600 via-purple-600 to-pink-600' },
@@ -109,7 +109,7 @@ export const StatusView: React.FC = () => {
 
   const [modalMode, setModalMode] = useState<'none' | 'device_photo' | 'device_video' | 'thought' | 'sponsored_ad'>('none');
   const [showAddStoryMenu, setShowAddStoryMenu] = useState(false);
-  const [showBillboardModal, setShowBillboardModal] = useState(false);
+  const [showOutsideModal, setShowOutsideModal] = useState(false);
   const [showMyStoriesTray, setShowMyStoriesTray] = useState(false);
   const [isViewedExpanded, setIsViewedExpanded] = useState(true);
 
@@ -385,12 +385,12 @@ export const StatusView: React.FC = () => {
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
-            onClick={() => setShowBillboardModal(true)}
+            onClick={() => setShowOutsideModal(true)}
             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-purple-600/15 text-purple-600 dark:text-purple-300 hover:bg-purple-600/25 text-xs font-semibold transition-colors whitespace-nowrap"
-            title="Discover Trends & Billboard"
+            title="Discover Parties, Concerts & Events Outside"
           >
-            <Flame className="w-3.5 h-3.5 text-purple-500 dark:text-purple-400" />
-            <span>Billboard</span>
+            <MapPin className="w-3.5 h-3.5 text-purple-500 dark:text-purple-400" />
+            <span>Outside</span>
           </button>
           <button
             type="button"
@@ -1473,9 +1473,9 @@ export const StatusView: React.FC = () => {
           </div>
         </div>
       )}
-      <BillboardModal
-        isOpen={showBillboardModal}
-        onClose={() => setShowBillboardModal(false)}
+      <OutsideModal
+        isOpen={showOutsideModal}
+        onClose={() => setShowOutsideModal(false)}
       />
     </div>
   );

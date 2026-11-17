@@ -1721,3 +1721,47 @@ export interface GamifyMilestone {
   title: string;
   description: string;
 }
+
+// 32. Outside Events, Parties, Nightlife & RSVP Ticket Passes
+export type OutsideCategory = 'party' | 'concert' | 'rave' | 'tech_mixer' | 'rooftop' | 'hangout';
+
+export interface OutsideParty {
+  id: string;
+  organizerId: string;
+  organizerName: string;
+  organizerPhone?: string;
+  organizerAvatar?: string;
+  organizerVerified?: boolean;
+  title: string;
+  description: string;
+  category: OutsideCategory;
+  city: string;
+  venueName: string;
+  address: string;
+  lat: number | null;
+  lng: number | null;
+  isPaid: boolean;
+  ticketPrice: number;
+  currency: CurrencyCode;
+  maxCapacity: number | null;
+  rsvpCount: number;
+  flyerUrl: string;
+  eventDate: string;
+  createdAt: string;
+}
+
+export interface OutsideRsvp {
+  id: string;
+  partyId: string;
+  userId: string;
+  userName: string;
+  userPhone?: string;
+  ticketCode: string;
+  status: 'confirmed' | 'checked_in' | 'cancelled';
+  paymentMethod: 'free' | 'wallet' | 'paystack';
+  paymentReference?: string;
+  amountPaid: number;
+  checkedInAt?: string;
+  createdAt: string;
+}
+

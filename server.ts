@@ -2179,6 +2179,8 @@ interface ServerWalletTx {
     | 'course_enroll'
     | 'legal_consult'
     | 'health_consult'
+    | 'outside_ticket'
+    | 'outside_payout'
     | 'referral_bonus'
     | 'refund';
   title: string;
@@ -4660,7 +4662,7 @@ const DEFAULT_AI_KNOWLEDGE: ServerAiKnowledgeEntry[] = [
     topic: 'Overview & Modules',
     sourceType: 'manual',
     content:
-      'AGC (All Good Connects) is an African super-messaging and social commerce platform featuring: Encrypted Chat, 24h Stories/Updates & Billboard Discovery, Marketplace Stores with Escrow Vault protection, Send My Bill (pay on behalf), In-chat Games (X/O, Whot!, and Ludo with optional Escrow Bets), Ajo/Esusu communal savings, Gokada/PickkR Dispatch, Artisan Hubs, Street Radio Audio Spaces, Town Communities, Healthcare, Legal, Job Board, and Scam Checker.',
+      'AGC (All Good Connects) is an African super-messaging and social commerce platform featuring: Encrypted Chat, 24h Stories/Updates & Outside Events/Nightlife Discovery, Marketplace Stores with Escrow Vault protection, Send My Bill (pay on behalf), In-chat Games (X/O, Whot!, and Ludo with optional Escrow Bets), Ajo/Esusu communal savings, Gokada/PickkR Dispatch, Artisan Hubs, Street Radio Audio Spaces, Town Communities, Healthcare, Legal, Job Board, and Scam Checker.',
     enabled: true,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -4740,7 +4742,7 @@ const AGC_DOMAIN_KEYWORDS = [
   'escrow', 'wallet', 'paystack', 'bill', 'send my bill', 'pay on behalf',
   'ajo', 'esusu', 'thrift', 'marketplace', 'store', 'vendor', 'product',
   'dispatch', 'gokada', 'pickkr', 'delivery', 'artisan', 'errand',
-  'town', 'community', 'status', 'update', 'story', 'stories', 'billboard',
+  'town', 'community', 'status', 'update', 'story', 'stories', 'outside', 'party', 'rave', 'concert', 'rsvp', 'ticket',
   'audio space', 'street radio', 'space', 'creator', 'writer', 'afribooks',
   'tutor', 'course', 'health', 'afrihealth', 'legal', 'afrilaw', 'job', 'pet',
   'scam', 'checker', 'shield', 'pin', 'security', 'verify', 'verification', 'badge',
@@ -4899,7 +4901,7 @@ app.delete('/api/ai/datacenter/:id', (req: Request, res: Response) => {
 });
 
 const AGC_REFUSAL_MESSAGE =
-  "I can only answer questions about AGC (All Good Connects), its features, systems, or topics added by the AGC Admin in the AI Bot Data Center. Please ask me anything about AGC—such as Escrow Trade, Send My Bill, Wallet, Marketplace, Billboard, Whot!/Ludo/X-O games, Dispatch, or Town communities!";
+  "I can only answer questions about AGC (All Good Connects), its features, systems, or topics added by the AGC Admin in the AI Bot Data Center. Please ask me anything about AGC—such as Escrow Trade, Send My Bill, Wallet, Marketplace, Outside events, Whot!/Ludo/X-O games, Dispatch, or Town communities!";
 
 function buildAgcFallbackReply(userText: string, enabledEntries: ServerAiKnowledgeEntry[]): string {
   const q = userText.toLowerCase().trim();
@@ -4943,7 +4945,7 @@ function buildAgcFallbackReply(userText: string, enabledEntries: ServerAiKnowled
     return `**${bestEntry.title}** (${bestEntry.topic})\n\n${bestEntry.content}`;
   }
 
-  return "I am **AgcBot**, your dedicated AGC assistant! Ask me about AGC's Escrow Trade, Send My Bill (Pay on Behalf), Wallet, Marketplace, Updates Billboard, Contacts discovery, or playing X/O, Whot!, and Ludo in chat.";
+  return "I am **AgcBot**, your dedicated AGC assistant! Ask me about AGC's Escrow Trade, Send My Bill (Pay on Behalf), Wallet, Marketplace, Updates Outside (parties, concerts & RSVP passes), Contacts discovery, or playing X/O, Whot!, and Ludo in chat.";
 }
 
 app.post('/api/ai/chat', async (req: Request, res: Response) => {
@@ -4981,7 +4983,7 @@ Never mention underlying external models, APIs, or infrastructure.
 
 STRICT DOMAIN GUARDRAIL (HIGHEST PRIORITY):
 You MUST ONLY answer questions that are directly related to:
-1) AGC (All Good Connects), its app features, systems, navigation, security, sign-up/login, wallet, Escrow Trade, Send My Bill (pay on behalf), Whot!/Ludo/X-O games, Contacts, Billboard Discovery, Town, Marketplace, Dispatch, Artisans, Creators, Ajo, Payroll, or Admin tools; OR
+1) AGC (All Good Connects), its app features, systems, navigation, security, sign-up/login, wallet, Escrow Trade, Send My Bill (pay on behalf), Whot!/Ludo/X-O games, Contacts, Outside Events & Parties Discovery, Town, Marketplace, Dispatch, Artisans, Creators, Ajo, Payroll, or Admin tools; OR
 2) Topics, URLs, FAQs, and knowledge entries explicitly listed in the Admin AI Bot Data Center below.
 
 If the user asks ANY question unrelated to AGC or its Admin AI Bot Data Center (for example: general trivia, coding help, politics, history, celebrities outside AGC, recipes, general math homework, external news, or creative writing unrelated to AGC), politely refuse using this exact guidance:
@@ -6987,6 +6989,579 @@ app.delete('/api/admin/broadcast', (_req: Request, res: Response) => {
   });
   io.emit('system_broadcast_cleared');
   res.json({ success: true });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// OUTSIDE — NIGHTLIFE, CONCERTS, ROOFTOP PARTIES, MAP PINS & QR PASSES
+// ═══════════════════════════════════════════════════════════════════════════════
+interface ServerOutsideParty {
+  id: string;
+  organizerId: string;
+  organizerName: string;
+  organizerPhone?: string;
+  organizerAvatar?: string;
+  organizerVerified?: boolean;
+  title: string;
+  description: string;
+  category: 'party' | 'concert' | 'rave' | 'tech_mixer' | 'rooftop' | 'hangout';
+  city: string;
+  venueName: string;
+  address: string;
+  lat: number | null;
+  lng: number | null;
+  isPaid: boolean;
+  ticketPrice: number;
+  currency: 'NGN' | 'KES' | 'GHS' | 'ZAR';
+  maxCapacity: number | null;
+  rsvpCount: number;
+  flyerUrl: string;
+  eventDate: string;
+  createdAt: string;
+}
+
+interface ServerOutsideRsvp {
+  id: string;
+  partyId: string;
+  userId: string;
+  userName: string;
+  userPhone?: string;
+  ticketCode: string;
+  status: 'confirmed' | 'checked_in' | 'cancelled';
+  paymentMethod: 'free' | 'wallet' | 'paystack';
+  paymentReference?: string;
+  amountPaid: number;
+  checkedInAt?: string;
+  createdAt: string;
+}
+
+const OUTSIDE_PARTIES_FILE = path.join(__dirname, 'data_outside_parties.json');
+const OUTSIDE_RSVPS_FILE = path.join(__dirname, 'data_outside_rsvps.json');
+
+function buildStarterOutsideParties(): ServerOutsideParty[] {
+  const now = Date.now();
+  const isoPlusHours = (hours: number) => new Date(now + hours * 3_600_000).toISOString();
+  return [
+    {
+      id: 'out_vi_rooftop_sundown',
+      organizerId: 'agc_official_events',
+      organizerName: 'Lagos Sundown Collective',
+      organizerPhone: '+2340000000000',
+      organizerVerified: true,
+      title: 'Amapiano & Lagoon Rooftop Sunset',
+      description: 'Golden-hour Afrobeats & Amapiano rooftop session overlooking the Lekki-Ikoyi link bridge. Curated cocktail bar, live percussion, and sunset DJ sets.',
+      category: 'rooftop',
+      city: 'Lagos Island',
+      venueName: 'Skyline Terrace VI',
+      address: '14 Adeola Odeku St, Victoria Island, Lagos',
+      lat: 6.4281,
+      lng: 3.4219,
+      isPaid: true,
+      ticketPrice: 10000,
+      currency: 'NGN',
+      maxCapacity: 250,
+      rsvpCount: 0,
+      flyerUrl: '/src/assets/images/outside_lagos_rooftop_1794936815220.jpg',
+      eventDate: isoPlusHours(30),
+      createdAt: new Date(now - 3_600_000).toISOString(),
+    },
+    {
+      id: 'out_abuja_night_live',
+      organizerId: 'agc_official_events',
+      organizerName: 'Capital Sound Live',
+      organizerPhone: '+2340000000000',
+      organizerVerified: true,
+      title: 'Abuja Live Stage: Afro-Fusion Open Air',
+      description: 'Open-air live band & Afrobeats showcase under the Wuse II night sky. Early-bird RSVP passes are free until capacity fills.',
+      category: 'concert',
+      city: 'Abuja',
+      venueName: 'Wuse Amphitheatre Park',
+      address: 'Adetokunbo Ademola Cres, Wuse II, Abuja',
+      lat: 9.0765,
+      lng: 7.479,
+      isPaid: false,
+      ticketPrice: 0,
+      currency: 'NGN',
+      maxCapacity: 500,
+      rsvpCount: 0,
+      flyerUrl: '/src/assets/images/outside_abuja_concert_1794936814833.jpg',
+      eventDate: isoPlusHours(52),
+      createdAt: new Date(now - 7_200_000).toISOString(),
+    },
+    {
+      id: 'out_mainland_warehouse_rave',
+      organizerId: 'agc_official_events',
+      organizerName: 'Yaba Sound System',
+      organizerPhone: '+2340000000000',
+      organizerVerified: true,
+      title: 'Mainland Boiler Warehouse Rave',
+      description: 'Underground 360° sound-system rave with back-to-back Afro-house, GQOM, and alté sets till dawn. Strict QR pass entry at the gate.',
+      category: 'rave',
+      city: 'Lagos Mainland',
+      venueName: 'Iganmu Foundry Annex',
+      address: '28 Herbert Macaulay Way, Yaba, Lagos',
+      lat: 6.5095,
+      lng: 3.3711,
+      isPaid: true,
+      ticketPrice: 5000,
+      currency: 'NGN',
+      maxCapacity: 180,
+      rsvpCount: 0,
+      flyerUrl: '/src/assets/images/outside_underground_rave_1794936815211.jpg',
+      eventDate: isoPlusHours(76),
+      createdAt: new Date(now - 10_800_000).toISOString(),
+    },
+  ];
+}
+
+let outsidePartiesList: ServerOutsideParty[] = [];
+let outsideRsvpsList: ServerOutsideRsvp[] = [];
+
+try {
+  if (fs.existsSync(OUTSIDE_PARTIES_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(OUTSIDE_PARTIES_FILE, 'utf8'));
+    if (Array.isArray(raw)) {
+      outsidePartiesList = raw;
+    }
+  } else {
+    outsidePartiesList = buildStarterOutsideParties();
+    fs.writeFileSync(OUTSIDE_PARTIES_FILE, JSON.stringify(outsidePartiesList, null, 2));
+  }
+} catch (err) {
+  console.warn('Notice loading outside parties file:', err);
+  outsidePartiesList = buildStarterOutsideParties();
+}
+
+try {
+  if (fs.existsSync(OUTSIDE_RSVPS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(OUTSIDE_RSVPS_FILE, 'utf8'));
+    if (Array.isArray(raw)) {
+      outsideRsvpsList = raw;
+    }
+  }
+} catch (err) {
+  console.warn('Notice loading outside RSVPs file:', err);
+}
+
+function saveOutsidePartiesFile() {
+  try {
+    fs.writeFileSync(OUTSIDE_PARTIES_FILE, JSON.stringify(outsidePartiesList, null, 2));
+  } catch (err) {
+    console.warn('Failed saving outside parties file:', err);
+  }
+}
+
+function saveOutsideRsvpsFile() {
+  try {
+    fs.writeFileSync(OUTSIDE_RSVPS_FILE, JSON.stringify(outsideRsvpsList, null, 2));
+  } catch (err) {
+    console.warn('Failed saving outside RSVPs file:', err);
+  }
+}
+
+function enrichPartiesWithCounts(list: ServerOutsideParty[]): ServerOutsideParty[] {
+  const counts = new Map<string, number>();
+  outsideRsvpsList.forEach((r) => {
+    if (r.status !== 'cancelled') {
+      counts.set(r.partyId, (counts.get(r.partyId) || 0) + 1);
+    }
+  });
+  return list.map((p) => ({
+    ...p,
+    rsvpCount: counts.get(p.id) ?? p.rsvpCount ?? 0,
+  }));
+}
+
+function generateOutsideTicketCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return `OUT-${code}`;
+}
+
+app.get('/api/outside/parties', (req: Request, res: Response) => {
+  const city = String(req.query.city || '').trim();
+  const category = String(req.query.category || '').trim();
+  const pricing = String(req.query.pricing || '').trim();
+  const includePast = req.query.includePast === 'true';
+  const cutoff = Date.now() - 12 * 3_600_000;
+
+  let results = enrichPartiesWithCounts(outsidePartiesList).filter((p) => {
+    if (includePast) return true;
+    const ms = new Date(p.eventDate).getTime();
+    return Number.isNaN(ms) || ms >= cutoff;
+  });
+
+  if (city && city !== 'All Cities') {
+    results = results.filter((p) => p.city.toLowerCase() === city.toLowerCase());
+  }
+  if (category && category !== 'all') {
+    results = results.filter((p) => p.category === category);
+  }
+  if (pricing === 'free') {
+    results = results.filter((p) => !p.isPaid || Number(p.ticketPrice) <= 0);
+  } else if (pricing === 'paid') {
+    results = results.filter((p) => p.isPaid && Number(p.ticketPrice) > 0);
+  }
+
+  results.sort((a, b) => new Date(a.eventDate).getTime() - new Date(b.eventDate).getTime());
+  return res.json({ success: true, parties: results });
+});
+
+app.post('/api/outside/parties', (req: Request, res: Response) => {
+  const body = req.body || {};
+  const title = String(body.title || '').trim();
+  const city = String(body.city || '').trim();
+  const venueName = String(body.venueName || '').trim();
+  const address = String(body.address || '').trim();
+  const eventDate = String(body.eventDate || '').trim();
+
+  if (!title || !city || !venueName || !address || !eventDate) {
+    return res.status(400).json({
+      success: false,
+      error: 'Title, city, venue name, address, and event date are required.',
+    });
+  }
+
+  const organizerPhone = body.organizerPhone ? String(body.organizerPhone).trim() : '';
+  const organizerMatch = organizerPhone ? findUserEntry(organizerPhone) : null;
+  const isVerifiedHost = Boolean(
+    body.organizerVerified ||
+      organizerMatch?.user?.verificationBadge ||
+      organizerMatch?.user?.role === 'admin' ||
+      organizerMatch?.user?.role === 'creator'
+  );
+
+  const isPaid = Boolean(body.isPaid) && Number(body.ticketPrice || 0) > 0;
+  const ticketPrice = isPaid ? Math.max(100, Number(body.ticketPrice) || 0) : 0;
+  const parsedMaxCap = body.maxCapacity !== null && body.maxCapacity !== undefined && body.maxCapacity !== ''
+    ? Math.max(1, Number(body.maxCapacity) || 0)
+    : null;
+
+  const newParty: ServerOutsideParty = {
+    id: String(body.id || `out_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`),
+    organizerId: String(body.organizerId || organizerMatch?.user?.id || `host_${Date.now()}`),
+    organizerName: String(body.organizerName || organizerMatch?.user?.fullName || 'AGC Host').trim(),
+    organizerPhone: organizerPhone || organizerMatch?.user?.phoneNumber,
+    organizerAvatar: body.organizerAvatar || organizerMatch?.user?.avatarUrl,
+    organizerVerified: isVerifiedHost,
+    title: title.slice(0, 110),
+    description: String(body.description || '').trim().slice(0, 800),
+    category: (['party', 'concert', 'rave', 'tech_mixer', 'rooftop', 'hangout'].includes(String(body.category))
+      ? String(body.category)
+      : 'party') as ServerOutsideParty['category'],
+    city,
+    venueName: venueName.slice(0, 120),
+    address: address.slice(0, 220),
+    lat: typeof body.lat === 'number' && Number.isFinite(body.lat) ? body.lat : null,
+    lng: typeof body.lng === 'number' && Number.isFinite(body.lng) ? body.lng : null,
+    isPaid,
+    ticketPrice,
+    currency: (['NGN', 'KES', 'GHS', 'ZAR'].includes(String(body.currency)) ? String(body.currency) : 'NGN') as ServerOutsideParty['currency'],
+    maxCapacity: parsedMaxCap,
+    rsvpCount: 0,
+    flyerUrl: String(body.flyerUrl || '/src/assets/images/outside_lagos_rooftop_1794936815220.jpg'),
+    eventDate,
+    createdAt: new Date().toISOString(),
+  };
+
+  outsidePartiesList = [newParty, ...outsidePartiesList.filter((p) => p.id !== newParty.id)];
+  saveOutsidePartiesFile();
+  io.emit('outside_party_created', newParty);
+  return res.json({ success: true, party: newParty });
+});
+
+app.delete('/api/outside/parties/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { actorPhone, actorId, isAdmin } = req.body || {};
+  const existing = outsidePartiesList.find((p) => p.id === id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: 'Event not found.' });
+  }
+  const phoneAuthorized = Boolean(
+    actorPhone && existing.organizerPhone && phonesMatchServer(String(actorPhone), existing.organizerPhone)
+  );
+  const idAuthorized = Boolean(actorId && existing.organizerId === String(actorId));
+  if (!isAdmin && !phoneAuthorized && !idAuthorized) {
+    return res.status(403).json({ success: false, error: 'Only the event organizer or an admin can delete this event.' });
+  }
+  outsidePartiesList = outsidePartiesList.filter((p) => p.id !== id);
+  outsideRsvpsList = outsideRsvpsList.filter((r) => r.partyId !== id);
+  saveOutsidePartiesFile();
+  saveOutsideRsvpsFile();
+  io.emit('outside_party_deleted', { id });
+  return res.json({ success: true, id });
+});
+
+app.get('/api/outside/rsvps', (req: Request, res: Response) => {
+  const userId = String(req.query.userId || '').trim();
+  const userPhone = String(req.query.userPhone || '').trim();
+  const partyId = String(req.query.partyId || '').trim();
+
+  let list = outsideRsvpsList;
+  if (partyId) {
+    list = list.filter((r) => r.partyId === partyId);
+  }
+  if (userId || userPhone) {
+    list = list.filter((r) => {
+      if (userId && r.userId === userId) return true;
+      if (userPhone && r.userPhone && phonesMatchServer(userPhone, r.userPhone)) return true;
+      return false;
+    });
+  }
+  return res.json({ success: true, rsvps: list });
+});
+
+app.post('/api/outside/rsvp', (req: Request, res: Response) => {
+  const {
+    partyId,
+    userId,
+    userName,
+    userPhone,
+    paymentMethod = 'free',
+    paymentReference,
+  } = req.body || {};
+
+  if (!partyId || (!userId && !userPhone)) {
+    return res.status(400).json({ success: false, error: 'Party ID and user identity are required.' });
+  }
+
+  const party = outsidePartiesList.find((p) => p.id === partyId);
+  if (!party) {
+    return res.status(404).json({ success: false, error: 'Event no longer exists.' });
+  }
+
+  // Prevent double booking
+  const existingRsvp = outsideRsvpsList.find((r) => {
+    if (r.partyId !== partyId || r.status === 'cancelled') return false;
+    if (userId && r.userId === String(userId)) return true;
+    if (userPhone && r.userPhone && phonesMatchServer(String(userPhone), r.userPhone)) return true;
+    return false;
+  });
+  if (existingRsvp) {
+    return res.json({ success: true, alreadyBooked: true, rsvp: existingRsvp });
+  }
+
+  const activeCount = outsideRsvpsList.filter((r) => r.partyId === partyId && r.status !== 'cancelled').length;
+  if (party.maxCapacity && activeCount >= party.maxCapacity) {
+    return res.status(400).json({ success: false, error: 'This event has reached full capacity.' });
+  }
+
+  const ticketAmount = party.isPaid ? Math.max(0, Number(party.ticketPrice) || 0) : 0;
+  const resolvedMethod: 'free' | 'wallet' | 'paystack' =
+    ticketAmount <= 0 ? 'free' : paymentMethod === 'paystack' ? 'paystack' : 'wallet';
+
+  const attendeeKey = String(userPhone || userId);
+  const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const nowIso = new Date().toISOString();
+  const ref = String(
+    paymentReference || `OUT_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`
+  );
+
+  let updatedAttendeeWallet: ServerWalletRecord | null = null;
+
+  if (ticketAmount > 0) {
+    if (resolvedMethod === 'paystack' && !paymentReference) {
+      return res.status(400).json({ success: false, error: 'Missing Paystack transaction reference.' });
+    }
+    if (resolvedMethod === 'paystack' && processedPaymentRefs.has(ref)) {
+      return res.status(400).json({ success: false, error: 'Duplicate payment reference.' });
+    }
+
+    const attendeeWallet = getOrCreateServerWallet(attendeeKey);
+    const attendeeMatch = findUserEntry(attendeeKey);
+
+    if (resolvedMethod === 'wallet') {
+      if (attendeeWallet.availableBalance < ticketAmount) {
+        return res.status(400).json({
+          success: false,
+          error: `Insufficient AGC Wallet balance. Ticket costs ${party.currency} ${ticketAmount.toLocaleString()}.`,
+        });
+      }
+      attendeeWallet.availableBalance -= ticketAmount;
+    } else {
+      processedPaymentRefs.add(ref);
+    }
+    attendeeWallet.updatedAt = nowIso;
+
+    const ticketTx: ServerWalletTx = {
+      id: `tx_${Date.now()}_out_tkt`,
+      userId: attendeeMatch?.user.id || String(userId || ''),
+      userPhone: attendeeMatch?.user.phoneNumber || (userPhone ? String(userPhone) : undefined),
+      userName: attendeeMatch?.user.fullName || String(userName || 'Guest'),
+      type: 'outside_ticket',
+      title: `Outside Ticket: ${party.title}`,
+      description: `${party.venueName}, ${party.city} · Ref: ${ref}`,
+      amount: ticketAmount,
+      fee: 0,
+      balanceAfter: attendeeWallet.availableBalance,
+      currency: party.currency || 'NGN',
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: ref,
+      referenceId: ref,
+      channel: resolvedMethod === 'paystack' ? 'paystack' : 'wallet',
+      metadata: { partyId: party.id, venueName: party.venueName, city: party.city },
+    };
+    attendeeWallet.transactions = [ticketTx, ...attendeeWallet.transactions].slice(0, 100);
+    serverWallets.set(attendeeWallet.phoneKey, attendeeWallet);
+    appendUnifiedLedgerTx(ticketTx);
+    updatedAttendeeWallet = attendeeWallet;
+
+    if (attendeeMatch) {
+      attendeeMatch.user.walletBalanceNgn = attendeeWallet.availableBalance;
+      usersByPhone.set(attendeeMatch.key, attendeeMatch.user);
+      saveUsersFile();
+    }
+    emitWalletUpdateToPhone(attendeeKey, attendeeWallet, `Ticket confirmed for ${party.title}`, ref);
+
+    // Credit event organizer if they have an AGC phone and aren't buying their own ticket
+    const orgKey = party.organizerPhone || party.organizerId;
+    if (orgKey && orgKey !== 'agc_official_events' && !phonesMatchServer(orgKey, attendeeKey)) {
+      const orgWallet = getOrCreateServerWallet(orgKey);
+      const orgMatch = findUserEntry(orgKey);
+      orgWallet.availableBalance += ticketAmount;
+      orgWallet.updatedAt = nowIso;
+      const orgTx: ServerWalletTx = {
+        id: `tx_${Date.now()}_out_pay`,
+        userId: orgMatch?.user.id || party.organizerId,
+        userPhone: orgMatch?.user.phoneNumber || party.organizerPhone,
+        userName: orgMatch?.user.fullName || party.organizerName,
+        type: 'outside_payout',
+        title: `Outside Ticket Sale: ${party.title}`,
+        description: `Attendee ${String(userName || 'Guest')} · ${party.city}`,
+        amount: ticketAmount,
+        fee: 0,
+        balanceAfter: orgWallet.availableBalance,
+        currency: party.currency || 'NGN',
+        timestamp: nowStr,
+        createdAt: nowIso,
+        status: 'completed',
+        reference: `${ref}_ORG`,
+        referenceId: ref,
+        channel: resolvedMethod === 'paystack' ? 'paystack' : 'wallet',
+        metadata: { partyId: party.id, buyerPhone: userPhone },
+      };
+      orgWallet.transactions = [orgTx, ...orgWallet.transactions].slice(0, 100);
+      serverWallets.set(orgWallet.phoneKey, orgWallet);
+      appendUnifiedLedgerTx(orgTx);
+      if (orgMatch) {
+        orgMatch.user.walletBalanceNgn = orgWallet.availableBalance;
+        usersByPhone.set(orgMatch.key, orgMatch.user);
+        saveUsersFile();
+      }
+      emitWalletUpdateToPhone(orgKey, orgWallet, `Ticket sold for ${party.title}!`, ref);
+    }
+    saveWalletsFile();
+  }
+
+  let ticketCode = generateOutsideTicketCode();
+  const usedCodes = new Set(outsideRsvpsList.map((r) => r.ticketCode));
+  while (usedCodes.has(ticketCode)) {
+    ticketCode = generateOutsideTicketCode();
+  }
+
+  const rsvp: ServerOutsideRsvp = {
+    id: `rsvp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    partyId: party.id,
+    userId: String(userId || attendeeKey),
+    userName: String(userName || 'Guest'),
+    userPhone: userPhone ? String(userPhone) : undefined,
+    ticketCode,
+    status: 'confirmed',
+    paymentMethod: resolvedMethod,
+    paymentReference: ticketAmount > 0 ? ref : undefined,
+    amountPaid: ticketAmount,
+    createdAt: nowIso,
+  };
+
+  outsideRsvpsList = [rsvp, ...outsideRsvpsList];
+  saveOutsideRsvpsFile();
+
+  const updatedCount = outsideRsvpsList.filter((r) => r.partyId === party.id && r.status !== 'cancelled').length;
+  outsidePartiesList = outsidePartiesList.map((p) =>
+    p.id === party.id ? { ...p, rsvpCount: updatedCount } : p
+  );
+  saveOutsidePartiesFile();
+
+  io.emit('outside_rsvp_updated', { partyId: party.id, rsvpCount: updatedCount, rsvp });
+  return res.json({
+    success: true,
+    rsvp,
+    rsvpCount: updatedCount,
+    wallet: updatedAttendeeWallet
+      ? {
+          availableBalance: updatedAttendeeWallet.availableBalance,
+          escrowLockedBalance: updatedAttendeeWallet.escrowLockedBalance,
+          currency: updatedAttendeeWallet.currency,
+          transactions: updatedAttendeeWallet.transactions,
+        }
+      : undefined,
+  });
+});
+
+app.post('/api/outside/verify-ticket', (req: Request, res: Response) => {
+  const { ticketCode, partyId, scannerPhone, scannerId, isAdmin } = req.body || {};
+  const cleanCode = String(ticketCode || '').trim().toUpperCase();
+  if (!cleanCode) {
+    return res.status(400).json({ success: false, error: 'Enter or scan a ticket code to verify.' });
+  }
+
+  const idx = outsideRsvpsList.findIndex(
+    (r) => r.ticketCode.toUpperCase() === cleanCode && (!partyId || r.partyId === String(partyId))
+  );
+  if (idx < 0) {
+    return res.status(404).json({ success: false, error: `No pass found for code "${cleanCode}".` });
+  }
+
+  const rsvp = outsideRsvpsList[idx];
+  const party = outsidePartiesList.find((p) => p.id === rsvp.partyId);
+  if (!party) {
+    return res.status(404).json({ success: false, error: 'Associated event no longer exists.' });
+  }
+
+  const phoneAllowed = Boolean(
+    scannerPhone && party.organizerPhone && phonesMatchServer(String(scannerPhone), party.organizerPhone)
+  );
+  const idAllowed = Boolean(scannerId && party.organizerId === String(scannerId));
+  if (!isAdmin && !phoneAllowed && !idAllowed) {
+    return res.status(403).json({
+      success: false,
+      error: 'Only the event organizer or an admin can check in passes for this event.',
+    });
+  }
+
+  if (rsvp.status === 'cancelled') {
+    return res.status(400).json({ success: false, error: 'This pass was cancelled and cannot be checked in.' });
+  }
+
+  if (rsvp.status === 'checked_in') {
+    return res.json({
+      success: true,
+      alreadyCheckedIn: true,
+      rsvp,
+      partyTitle: party.title,
+    });
+  }
+
+  const checkedInAt = new Date().toISOString();
+  const updated: ServerOutsideRsvp = {
+    ...rsvp,
+    status: 'checked_in',
+    checkedInAt,
+  };
+  outsideRsvpsList[idx] = updated;
+  saveOutsideRsvpsFile();
+
+  io.emit('outside_rsvp_updated', { partyId: party.id, rsvp: updated });
+  return res.json({
+    success: true,
+    alreadyCheckedIn: false,
+    rsvp: updated,
+    partyTitle: party.title,
+  });
 });
 
 // Create raw HTTP server to handle both Express REST and WebSocket upgrades
