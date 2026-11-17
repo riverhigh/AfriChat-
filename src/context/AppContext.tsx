@@ -63,6 +63,7 @@ import {
   isStepFinished,
 } from '../utils/ludoRules';
 import { playAnimalSound, getNotificationSound } from '../utils/soundUtils';
+import { isUnresolvedEscrowBetGameMessage } from '../utils/gameEscrowUtils';
 import {
   supabase,
   isSupabaseConfigured,
@@ -8725,15 +8726,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const clearChat = (chatId: string) => {
+    const currentThreadMsgs = messagesRef.current?.[chatId] || messages[chatId] || [];
+    const preservedPreview = currentThreadMsgs.filter(isUnresolvedEscrowBetGameMessage);
+
     setMessages((prev) => {
-      const updated = { ...prev, [chatId]: [] };
+      const existing = prev[chatId] || [];
+      const preserved = existing.filter(isUnresolvedEscrowBetGameMessage);
+      const updated = { ...prev, [chatId]: preserved };
       persistPartitionedMessages(updated, currentUser.phoneNumber);
       return updated;
     });
     setChats((prev) => {
-      const updated = prev.map((c) =>
-        c.id === chatId ? { ...c, lastMessage: 'Chat history cleared', lastMessageTime: '' } : c
-      );
+      const lastPreserved = preservedPreview[preservedPreview.length - 1];
+      const updated = prev.map((c) => {
+        if (c.id !== chatId) return c;
+        if (lastPreserved) {
+          return {
+            ...c,
+            lastMessage: lastPreserved.text || '🎮 Active Game Bet (Escrow Held)',
+            lastMessageTime: lastPreserved.timestamp || c.lastMessageTime,
+          };
+        }
+        return { ...c, lastMessage: 'Chat history cleared', lastMessageTime: '' };
+      });
       persistPartitionedChats(updated, currentUser.phoneNumber);
       return updated;
     });

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { playSwooshSound, playAnimalSound, getNotificationSound } from '../utils/soundUtils';
+import { getUnresolvedEscrowBetGames } from '../utils/gameEscrowUtils';
 import {
   ArrowLeft,
   Phone,
@@ -4384,56 +4385,81 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       )}
 
       {/* In-App Confirmation Modal for Clear Chat / Delete Group */}
-      {confirmChatAction && (
-        <div
-          className="fixed inset-0 z-[180] bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
-          onClick={() => setConfirmChatAction(null)}
-        >
+      {confirmChatAction && (() => {
+        const activeEscrowBetGames =
+          confirmChatAction === 'clear' ? getUnresolvedEscrowBetGames(currentMessages) : [];
+        return (
           <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm bg-white dark:bg-[#17122c] border border-slate-200 dark:border-purple-900/40 rounded-3xl p-5 shadow-2xl space-y-4 text-slate-900 dark:text-white"
+            className="fixed inset-0 z-[180] bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+            onClick={() => setConfirmChatAction(null)}
           >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 text-rose-500 flex items-center justify-center shrink-0">
-                {confirmChatAction === 'delete' ? <Trash2 className="w-5 h-5" /> : <Eraser className="w-5 h-5" />}
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm bg-white dark:bg-[#17122c] border border-slate-200 dark:border-purple-900/40 rounded-3xl p-5 shadow-2xl space-y-4 text-slate-900 dark:text-white"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-500/15 text-rose-500 flex items-center justify-center shrink-0">
+                  {confirmChatAction === 'delete' ? <Trash2 className="w-5 h-5" /> : <Eraser className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm">
+                    {confirmChatAction === 'delete'
+                      ? `Delete ${currentChat.isChannel ? 'Channel' : 'Group'}?`
+                      : 'Clear Chat History?'}
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {confirmChatAction === 'delete'
+                      ? `"${currentChat.name}" and its messages will be removed.`
+                      : `All messages in "${currentChat.name}" will be cleared from this device.`}
+                  </p>
+                </div>
               </div>
-              <div>
-                <h4 className="font-bold text-sm">
-                  {confirmChatAction === 'delete'
-                    ? `Delete ${currentChat.isChannel ? 'Channel' : 'Group'}?`
-                    : 'Clear Chat History?'}
-                </h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {confirmChatAction === 'delete'
-                    ? `"${currentChat.name}" and its messages will be removed.`
-                    : `All messages in "${currentChat.name}" will be cleared from this device.`}
-                </p>
+              {confirmChatAction === 'clear' && activeEscrowBetGames.length > 0 && (
+                <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs flex items-start gap-2">
+                  <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
+                  <span>
+                    {activeEscrowBetGames.length === 1
+                      ? '1 active game bet with held escrow and no decided winner yet will be kept in chat.'
+                      : `${activeEscrowBetGames.length} active game bets with held escrow and no decided winner yet will be kept in chat.`}
+                  </span>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setConfirmChatAction(null)}
+                  className="py-2.5 rounded-xl bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/15 text-xs font-semibold transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const act = confirmChatAction;
+                    setConfirmChatAction(null);
+                    if (act === 'clear') {
+                      clearChat(currentChat.id);
+                      if (activeEscrowBetGames.length > 0) {
+                        setToastNotice(
+                          `Chat cleared · ${activeEscrowBetGames.length} active bet game${
+                            activeEscrowBetGames.length > 1 ? 's' : ''
+                          } kept (escrow held)`
+                        );
+                        setTimeout(() => setToastNotice(null), 3000);
+                      }
+                    } else if (act === 'delete') {
+                      deleteChat(currentChat.id);
+                    }
+                  }}
+                  className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors"
+                >
+                  {confirmChatAction === 'delete' ? 'Delete' : 'Clear History'}
+                </button>
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2.5 pt-1">
-              <button
-                type="button"
-                onClick={() => setConfirmChatAction(null)}
-                className="py-2.5 rounded-xl bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/15 text-xs font-semibold transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const act = confirmChatAction;
-                  setConfirmChatAction(null);
-                  if (act === 'clear') clearChat(currentChat.id);
-                  else if (act === 'delete') deleteChat(currentChat.id);
-                }}
-                className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors"
-              >
-                {confirmChatAction === 'delete' ? 'Delete' : 'Clear History'}
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
       {/* One-Time Disappearing Text Message Viewer Modal */}
       {lightboxOneTimeText && (
         <div

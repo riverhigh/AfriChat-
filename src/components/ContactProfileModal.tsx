@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { ChatThread } from '../types';
 import { useApp } from '../context/AppContext';
+import { getUnresolvedEscrowBetGames } from '../utils/gameEscrowUtils';
 
 interface ContactProfileModalProps {
   chat: ChatThread | null;
@@ -232,9 +233,18 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
 
   // 10. Clear chat history
   const handleConfirmClear = () => {
+    const activeEscrowGames = getUnresolvedEscrowBetGames(chatMessages);
     clearChat(chat.id);
     setShowClearConfirm(false);
-    showToast('Conversation cleared successfully.');
+    if (activeEscrowGames.length > 0) {
+      showToast(
+        `Chat cleared. ${activeEscrowGames.length} active bet game${
+          activeEscrowGames.length > 1 ? 's' : ''
+        } kept (escrow still held).`
+      );
+    } else {
+      showToast('Conversation cleared successfully.');
+    }
   };
 
   // 11. Export chat transcript
@@ -1330,39 +1340,53 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
       {/* ---------------------------------------------------------------------- */}
       {/* MODAL 5: CLEAR CHAT CONFIRMATION */}
       {/* ---------------------------------------------------------------------- */}
-      {showClearConfirm && (
-        <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
-          <div className="w-full max-w-sm bg-[#18181c] rounded-3xl border border-neutral-800 p-5 space-y-4 shadow-2xl text-center">
-            <div className="w-12 h-12 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/40">
-              <Trash2 className="w-6 h-6" />
-            </div>
+      {showClearConfirm && (() => {
+        const activeEscrowGames = getUnresolvedEscrowBetGames(chatMessages);
+        return (
+          <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+            <div className="w-full max-w-sm bg-[#18181c] rounded-3xl border border-neutral-800 p-5 space-y-4 shadow-2xl text-center">
+              <div className="w-12 h-12 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/40">
+                <Trash2 className="w-6 h-6" />
+              </div>
 
-            <div>
-              <h3 className="text-base font-bold text-white">Clear Conversation?</h3>
-              <p className="text-xs text-neutral-400 mt-1">
-                This will delete all messages and media in this chat history for you. This action cannot be undone.
-              </p>
-            </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Clear Conversation?</h3>
+                <p className="text-xs text-neutral-400 mt-1">
+                  This will delete all messages and media in this chat history for you. This action cannot be undone.
+                </p>
+              </div>
 
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowClearConfirm(false)}
-                className="py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-xl text-xs font-semibold"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmClear}
-                className="py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold"
-              >
-                Clear All
-              </button>
+              {activeEscrowGames.length > 0 && (
+                <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs text-left flex items-start gap-2">
+                  <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+                  <span>
+                    {activeEscrowGames.length === 1
+                      ? '1 active game bet with held escrow and no decided winner yet will be preserved.'
+                      : `${activeEscrowGames.length} active game bets with held escrow and no decided winner yet will be preserved.`}
+                  </span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowClearConfirm(false)}
+                  className="py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-xl text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmClear}
+                  className="py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold"
+                >
+                  Clear All
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ---------------------------------------------------------------------- */}
       {/* MODAL 6: REPORT ENTITY */}
