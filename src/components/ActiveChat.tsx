@@ -2276,21 +2276,137 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     </div>
                   )}
 
-                  {/* Quoted Reply Preview */}
-                  {msg.replyTo && (
-                    <div className={`mb-2 p-2 rounded-xl border-l-3 text-xs ${
-                      isUser
-                        ? 'bg-black/15 border-white text-purple-100'
-                        : 'bg-black/5 dark:bg-white/10 border-purple-500 text-slate-700 dark:text-slate-300'
-                    }`}>
-                      <div className="font-bold text-[10px] opacity-90">
-                        {msg.replyTo.sender}
-                      </div>
-                      <div className="truncate text-[11px] opacity-80 break-words break-all [overflow-wrap:anywhere]">
-                        {msg.replyTo.text}
-                      </div>
-                    </div>
-                  )}
+                  {/* Static Status Preview Card & Quoted Reply Preview */}
+                  {(() => {
+                    const legacyStatusMatch = (!msg.statusReply && !msg.replyTo?.statusReply && msg.text)
+                      ? msg.text.match(/^Replied to status:\s*"([^"]*)":\s*([\s\S]*)$/)
+                      : null;
+                    const sr = msg.statusReply || msg.replyTo?.statusReply || (legacyStatusMatch ? {
+                      userName: isUser ? (currentChat.name || 'User') : (msg.senderName || 'User'),
+                      caption: legacyStatusMatch[1],
+                      statusType: 'thought' as const,
+                    } : null);
+
+                    if (sr) {
+                      const isThought = sr.statusType === 'thought' || (!sr.mediaUrl && !sr.videoUrl && Boolean(sr.thoughtBg || sr.caption));
+                      const isVideo = sr.statusType === 'video' || Boolean(sr.videoUrl);
+
+                      const handleOpenStatus = (e: React.MouseEvent) => {
+                        e.stopPropagation();
+                        if (sr.statusId) {
+                          const liveStatus = statuses.find((s) => s.id === sr.statusId);
+                          if (liveStatus) {
+                            setActiveViewingStatus(liveStatus);
+                            return;
+                          }
+                        }
+                        if (sr.mediaUrl) {
+                          setLightboxImg({
+                            url: sr.mediaUrl,
+                            caption: sr.caption ? `Status: ${sr.caption}` : 'Status preview',
+                          });
+                        }
+                      };
+
+                      return (
+                        <div
+                          onClick={handleOpenStatus}
+                          className={`mb-2.5 rounded-2xl overflow-hidden border transition-all select-none cursor-pointer group/status ${
+                            isUser
+                              ? 'bg-black/25 border-white/20 hover:bg-black/35 text-white'
+                              : 'bg-black/5 dark:bg-white/10 border-purple-500/30 hover:bg-black/10 text-slate-800 dark:text-slate-100'
+                          }`}
+                          title="Status update preview"
+                        >
+                          {/* Header bar */}
+                          <div className={`flex items-center justify-between px-3 py-1.5 text-[10px] font-bold border-b ${
+                            isUser ? 'border-white/10 text-purple-200' : 'border-purple-500/20 text-purple-600 dark:text-purple-300'
+                          }`}>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                              <span className="uppercase tracking-wider">Status</span>
+                              <span className="opacity-50">•</span>
+                              <span className="truncate opacity-90">{sr.userName || 'User'}</span>
+                            </div>
+                            {sr.createdAt && (
+                              <span className="text-[9px] opacity-70 shrink-0 font-mono ml-2">
+                                {sr.createdAt}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Static Visual Preview */}
+                          {isThought ? (
+                            <div className={`p-3.5 bg-gradient-to-br ${sr.thoughtBg || 'from-indigo-600 via-purple-600 to-pink-600'} text-white shadow-inner flex flex-col justify-center min-h-[64px]`}>
+                              <p className="text-xs sm:text-sm font-bold leading-relaxed line-clamp-3 text-center drop-shadow-sm font-display">
+                                &ldquo;{sr.caption || 'Thought update'}&rdquo;
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-3 p-2.5">
+                              {sr.mediaUrl ? (
+                                <div className="relative w-14 h-14 shrink-0 rounded-xl overflow-hidden bg-black/40 border border-white/15 shadow-sm">
+                                  <img
+                                    src={sr.mediaUrl}
+                                    alt={sr.caption || 'Status preview'}
+                                    className="w-full h-full object-cover group-hover/status:scale-105 transition-transform duration-200"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                  {isVideo && (
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-[1px]">
+                                      <div className="w-6 h-6 rounded-full bg-black/60 flex items-center justify-center text-white">
+                                        <Play className="w-3 h-3 fill-white ml-0.5" />
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              ) : sr.videoUrl ? (
+                                <div className="relative w-14 h-14 shrink-0 rounded-xl overflow-hidden bg-black/70 border border-white/15 flex items-center justify-center">
+                                  <div className="w-6 h-6 rounded-full bg-purple-600/80 flex items-center justify-center text-white">
+                                    <Play className="w-3 h-3 fill-white ml-0.5" />
+                                  </div>
+                                </div>
+                              ) : null}
+
+                              <div className="flex-1 min-w-0 pr-1">
+                                {sr.caption ? (
+                                  <p className="text-xs font-medium line-clamp-2 leading-snug opacity-95">
+                                    {sr.caption}
+                                  </p>
+                                ) : (
+                                  <span className="text-xs italic opacity-75">
+                                    {isVideo ? '📹 Video status' : '📷 Photo status'}
+                                  </span>
+                                )}
+                                <span className="text-[10px] opacity-60 block mt-1">
+                                  Tap to view update
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    if (msg.replyTo) {
+                      return (
+                        <div className={`mb-2 p-2 rounded-xl border-l-3 text-xs ${
+                          isUser
+                            ? 'bg-black/15 border-white text-purple-100'
+                            : 'bg-black/5 dark:bg-white/10 border-purple-500 text-slate-700 dark:text-slate-300'
+                        }`}>
+                          <div className="font-bold text-[10px] opacity-90">
+                            {msg.replyTo.sender}
+                          </div>
+                          <div className="truncate text-[11px] opacity-80 break-words break-all [overflow-wrap:anywhere]">
+                            {msg.replyTo.text}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return null;
+                  })()}
 
                   {/* Text Message (with Disappearing 1-Time View support) */}
                   {msg.type === 'text' && (
@@ -2336,7 +2452,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     ) : (
                       <div>
                         <p className="text-sm leading-relaxed whitespace-pre-wrap break-words break-all [overflow-wrap:anywhere] min-w-0 select-text">
-                          {renderTextWithMentions(msg.text || '', isUser)}
+                          {renderTextWithMentions((!msg.statusReply && !msg.replyTo?.statusReply && msg.text?.startsWith('Replied to status:')) ? (msg.text.match(/^Replied to status:\s*"[^"]*":\s*([\s\S]*)$/)?.[1] || msg.text) : (msg.text || ''), isUser)}
                         </p>
 
                         {/* WeChat-style Translated Sub-Card (Only appears when user highlights/taps Translate) */}

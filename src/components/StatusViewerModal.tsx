@@ -13,6 +13,7 @@ import {
   Megaphone,
 } from 'lucide-react';
 import { useApp, isStatusExpiredClient } from '../context/AppContext';
+import type { StatusReplyPreview } from '../types';
 
 const FALLBACK_AVATAR =
   "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%232e1065'/><circle cx='50' cy='38' r='16' fill='%23a855f7'/><path d='M20 86c0-16.5 13.5-30 30-30s30 13.5 30 30' fill='%23a855f7'/></svg>";
@@ -182,7 +183,8 @@ export const StatusViewerModal: React.FC = () => {
 
   const handleSendReply = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!replyText.trim()) return;
+    const cleanReply = replyText.trim();
+    if (!cleanReply) return;
 
     if (status.userPhone || status.userId) {
       const targetChatId = openDirectChat({
@@ -192,9 +194,31 @@ export const StatusViewerModal: React.FC = () => {
         avatar: status.userAvatar,
         location: 'Status Reply',
       });
+
+      const statusPreview: StatusReplyPreview = {
+        statusId: status.id,
+        userName: status.userName || 'User',
+        userPhone: status.userPhone,
+        userAvatar: status.userAvatar,
+        statusType: status.statusType || (status.videoUrl ? 'video' : status.mediaUrl ? 'image' : 'thought'),
+        mediaUrl: status.mediaUrl,
+        videoUrl: status.videoUrl,
+        thoughtBg: status.thoughtBg,
+        caption: status.caption || '',
+        createdAt: status.createdAt,
+      };
+
       sendMessage(
         targetChatId,
-        `Replied to status: "${status.caption}": ${replyText.trim()}`
+        cleanReply,
+        {
+          id: status.id,
+          sender: status.userName || 'Status',
+          text: status.caption || (status.statusType === 'thought' ? 'Thought update' : 'Photo/Video status'),
+          statusReply: statusPreview,
+        },
+        false,
+        statusPreview
       );
       setReplyText('');
       setActiveViewingStatus(null);

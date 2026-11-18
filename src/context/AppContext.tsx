@@ -121,6 +121,7 @@ import {
   Product,
   EscrowOrder,
   ChatMessage,
+  StatusReplyPreview,
   ChatThread,
   CallLogItem,
   UserStatus,
@@ -1177,7 +1178,7 @@ interface AppContextType {
   setActiveEscrowModalOrder: (order: EscrowOrder | null) => void;
   isDarkMode: boolean;
   toggleDarkMode: () => void;
-  sendMessage: (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string }, oneTimeView?: boolean) => void;
+  sendMessage: (chatId: string, text: string, replyTo?: { id?: string; sender: string; text: string; statusReply?: StatusReplyPreview }, oneTimeView?: boolean, statusReply?: StatusReplyPreview) => void;
   forwardMessage: (
     targets: Array<{ chatId?: string; phone?: string; name?: string; avatar?: string }>,
     sourceMessage: ChatMessage
@@ -10713,8 +10714,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const sendMessage = (
     chatId: string,
     text: string,
-    replyTo?: { id?: string; sender: string; text: string },
-    oneTimeView?: boolean
+    replyTo?: { id?: string; sender: string; text: string; statusReply?: StatusReplyPreview },
+    oneTimeView?: boolean,
+    statusReply?: StatusReplyPreview
   ) => {
     if (!text.trim()) return;
 
@@ -10740,6 +10742,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const mentions = extractMentionsFromText(text);
     const previewLabel = useOneTime ? '🔒 1-Time Message' : ghostMs > 0 ? `👻 ${text}` : text;
 
+    const resolvedStatusReply = statusReply || replyTo?.statusReply;
+
     const newMsg: ChatMessage = {
       id: `msg_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       chatId,
@@ -10752,6 +10756,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...(ghostMs > 0 ? { isGhost: true, disappearingDurationMs: ghostMs, expiresAt: Date.now() + ghostMs } : {}),
       ...(mentions.length > 0 ? { mentions } : {}),
       replyTo,
+      ...(resolvedStatusReply ? { statusReply: resolvedStatusReply } : {}),
       translatedText: {
         en: text,
         pcm: text,

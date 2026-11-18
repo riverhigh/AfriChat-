@@ -656,6 +656,19 @@ export interface LocationPinMeta {
   sharedAt: string;
 }
 
+export interface StatusReplyPreview {
+  statusId?: string;
+  userName: string;
+  userPhone?: string;
+  userAvatar?: string;
+  statusType?: 'image' | 'video' | 'thought' | 'media' | 'sponsored';
+  mediaUrl?: string;
+  videoUrl?: string;
+  thoughtBg?: string;
+  caption?: string;
+  createdAt?: string;
+}
+
 export interface ChatMessage {
   id: string;
   chatId: string;
@@ -716,10 +729,12 @@ export interface ChatMessage {
   status: 'sent' | 'delivered' | 'read';
   readAt?: string;
   readBy?: string[];
+  statusReply?: StatusReplyPreview;
   replyTo?: {
     id?: string;
     sender: string;
     text: string;
+    statusReply?: StatusReplyPreview;
   };
   reactions?: Record<string, string[]>;
   deleted?: boolean;
