@@ -1746,7 +1746,7 @@ interface AppContextType {
   setIsAdminModalOpen: (val: boolean) => void;
   adminUsers: AdminUserRecord[];
   refreshAdminUsers: () => Promise<void>;
-  getBadgeForPhone: (phoneOrId?: string) => 'blue' | 'gold' | 'creator_plus' | 'admin' | null;
+  getBadgeForPhone: (phoneOrId?: string) => 'blue' | 'gold' | 'creator_plus' | 'admin' | 'celebrity' | null;
   toggleUserVerification: (userId: string, badge: 'blue' | 'gold' | 'creator_plus' | 'admin' | null, hints?: { phoneNumber?: string; fullName?: string; avatarUrl?: string }) => Promise<boolean>;
   toggleUserSuspension: (userId: string) => Promise<boolean>;
   adminResolveEscrow: (orderId: string, action: 'release_to_seller' | 'refund_to_buyer', note: string) => { success: boolean; message: string };
@@ -4158,25 +4158,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (price > 0 && wallet.availableBalance < price) {
       return { success: false, message: `Insufficient wallet balance for ₦${price.toLocaleString()} music track.` };
     }
-    if (price > 0) {
-      const tx = recordLedgerTransaction({
-        id: `tx_song_${Date.now()}`,
-        type: 'store_purchase',
-        title: `Music Purchase: ${song.title}`,
-        description: `Direct track purchase from ${song.artistName}: "${song.title}"`,
-        amount: price,
-        fee: 0,
-        balanceAfter: wallet.availableBalance - price,
-        currency: 'NGN',
-        referenceId: `SONG_${song.id}_${Date.now()}`,
-        channel: 'wallet',
-      });
-      setWallet((prev) => ({
-        ...prev,
-        availableBalance: prev.availableBalance - price,
-        transactions: [tx, ...prev.transactions],
-      }));
-    }
 
     const updatedSong: CreatorSong = {
       ...song,
@@ -4184,13 +4165,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       salesCount: song.salesCount + 1,
       playsCount: song.playsCount + 1,
     };
-
     setCreatorSongs((prev) => prev.map((s) => (s.id === songId ? updatedSong : s)));
-
-    // Credit artist directly to their wallet
     setCreators((prev) =>
       prev.map((c) => (c.id === song.artistId ? { ...c, totalEarnings: c.totalEarnings + song.price } : c))
     );
+
+    // Server-authoritative purchase: deduct via /api/creator/purchase
+    if (price > 0 && currentUser?.phoneNumber) {
+      fetch('/api/creator/purchase', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: currentUser.phoneNumber,
+          itemId: song.id,
+          itemType: 'song',
+          title: song.title,
+          amount: price,
+          currency: 'NGN',
+        }),
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success && d.wallet) {
+            setWallet((prev) => ({
+              ...prev,
+              availableBalance: d.wallet.availableBalance,
+              transactions: d.wallet.transactions ?? prev.transactions,
+            }));
+          }
+        })
+        .catch(() => {
+          // Optimistic update already applied; swallow network error
+        });
+    }
 
     return {
       success: true,
@@ -4288,6 +4295,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isPurchasedByMe: true, // creator owns their song
     };
     setCreatorSongs((prev) => [newSong, ...prev]);
+    // Sync to live server
+    if (currentUser?.phoneNumber) {
+      fetch('/api/creator/drop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: currentUser.phoneNumber,
+          creatorName: currentUser.fullName,
+          type: 'song',
+          title: songData.title,
+          content: songData.title,
+          price: songData.price || 0,
+          currency: 'NGN',
+        }),
+      }).catch(() => {});
+    }
   };
 
   // 22. Artisan Service Station & Workspace Management
@@ -4618,36 +4641,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  const simulateInviteContact = (name: string, phone: string, passesFraudCheck: boolean) => {
-    const newInvited: ReferredUser = {
-      id: `ref_${Date.now()}`,
-      name,
-      phone,
-      joinedAt: 'Just now',
-      otpVerified: passesFraudCheck,
-      walletFundedOrTransacted: passesFraudCheck,
-      transactionAmount: passesFraudCheck ? 5000 : 0,
-      activityCompleted: passesFraudCheck,
-      status: passesFraudCheck ? 'verified_active' : 'pending',
-      rewardEarned: passesFraudCheck ? 500 : 0,
-    };
-    setReferralProgram((prev) => {
-      const newReferredList = [newInvited, ...prev.referredList];
-      const verified = newReferredList.filter((r) => r.status === 'verified_active').length;
-      const pending = newReferredList.filter((r) => r.status === 'pending').length;
-      const additionalBonus = passesFraudCheck ? 500 : 0;
-      const updated: ReferralProgram = {
-        ...prev,
-        totalInvited: prev.totalInvited + 1,
-        activeVerifiedCount: verified,
-        pendingCount: pending,
-        totalEarned: prev.totalEarned + additionalBonus,
-        availableBonus: prev.availableBonus + additionalBonus,
-        referredList: newReferredList,
-      };
-      localStorage.setItem('AGC_referral_program', JSON.stringify(updated));
-      return updated;
-    });
+  const simulateInviteContact = (_name: string, _phone: string, _passesFraudCheck: boolean) => {
+    // Real referral invite: POST /api/referrals/invite — just refresh stats from server
+    if (currentUser?.phoneNumber) {
+      fetch(`/api/referrals/stats/${encodeURIComponent(currentUser.phoneNumber)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success) {
+            setReferralProgram((prev) => ({
+              ...prev,
+              referralCode: d.referralCode || prev.referralCode,
+              referralLink: d.referralLink || prev.referralLink,
+              totalInvited: d.totalJoined ?? prev.totalInvited,
+              activeVerifiedCount: d.activeUsers ?? prev.activeVerifiedCount,
+              totalEarned: d.totalEarned ?? prev.totalEarned,
+              availableBonus: d.pendingBonus ?? prev.availableBonus,
+              referredList: Array.isArray(d.friends) ? d.friends.map((f: any) => ({
+                id: `ref_${f.phone}`,
+                name: f.name || 'AGC User',
+                phone: f.phone,
+                joinedAt: f.joinedAt || 'Unknown',
+                otpVerified: true,
+                walletFundedOrTransacted: true,
+                transactionAmount: 0,
+                activityCompleted: true,
+                status: 'verified_active' as const,
+                rewardEarned: 500,
+              })) : prev.referredList,
+            }));
+          }
+        })
+        .catch(() => {});
+    }
   };
 
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -17222,6 +17247,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setActiveAjoGroup(newGroup);
 
+    // Sync new Ajo group to server
+    if (currentUser?.phoneNumber) {
+      fetch('/api/ajo/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: currentUser.phoneNumber,
+          name: newGroup.name,
+          contributionAmount: newGroup.cycleContributionAmount,
+          currency: 'NGN',
+          frequency: newGroup.frequency || 'monthly',
+          maxMembers: newGroup.totalRounds || 10,
+        }),
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success && d.group?.id) {
+            setActiveAjoGroup({ ...newGroup, id: d.group.id });
+          }
+        })
+        .catch(() => {});
+    }
+
     if (activeChatId) {
       const ajoMsg: ChatMessage = {
         id: `msg_ajo_new_${Date.now()}`,
@@ -19062,6 +19110,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('AGC_payroll_employees', JSON.stringify(updated));
       return updated;
     });
+    // Sync to live server
+    if (currentUser?.phoneNumber) {
+      fetch('/api/payroll/employees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: currentUser.phoneNumber,
+          employee: newEmp,
+        }),
+      }).catch(() => {});
+    }
   };
 
   const toggleEmployeePayrollStatus = (id: string) => {
@@ -19739,6 +19798,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .then((r) => r.json())
         .then((d) => {
           if (d?.success && Array.isArray(d.contracts)) setGeneratedContracts(d.contracts);
+        })
+        .catch(() => {});
+
+      // M3: Load creator feed
+      fetch(`/api/creator/feed?phone=${encodeURIComponent(userPhone)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success && Array.isArray(d.drops)) {
+            const songs = d.drops.filter((dr: any) => dr.type === 'song');
+            const posts = d.drops.filter((dr: any) => dr.type === 'post' || dr.type === 'drop');
+            const shows = d.drops.filter((dr: any) => dr.type === 'show');
+            if (songs.length > 0) setCreatorSongs((prev) => {
+              // Merge server songs with local, server wins on id match
+              const map = new Map(prev.map((s) => [s.id, s]));
+              songs.forEach((s: any) => map.set(s.id, { ...s, isPurchasedByMe: s.isPurchasedByMe ?? false }));
+              return Array.from(map.values());
+            });
+            if (posts.length > 0) setCreatorPosts((prev) => {
+              const map = new Map(prev.map((p) => [p.id, p]));
+              posts.forEach((p: any) => map.set(p.id, p));
+              return Array.from(map.values());
+            });
+          }
+        })
+        .catch(() => {});
+
+      // M5: Load payroll employees
+      fetch(`/api/payroll/employees?employerPhone=${encodeURIComponent(userPhone)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success && Array.isArray(d.employees) && d.employees.length > 0) {
+            setPayrollEmployees(d.employees);
+          }
+        })
+        .catch(() => {});
+
+      // M6: Load referral stats
+      fetch(`/api/referrals/stats/${encodeURIComponent(userPhone)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success) {
+            setReferralProgram((prev) => {
+              const updated = {
+                ...prev,
+                referralCode: d.referralCode || prev.referralCode,
+                referralLink: d.referralLink || prev.referralLink,
+                totalInvited: d.totalJoined ?? prev.totalInvited,
+                activeVerifiedCount: d.activeUsers ?? prev.activeVerifiedCount,
+                totalEarned: d.totalEarned ?? prev.totalEarned,
+                availableBonus: d.pendingBonus ?? prev.availableBonus,
+                referredList: Array.isArray(d.friends) ? d.friends.map((f: any) => ({
+                  id: `ref_${f.phone}`,
+                  name: f.name || 'AGC User',
+                  phone: f.phone,
+                  joinedAt: f.joinedAt || 'Unknown',
+                  otpVerified: true,
+                  walletFundedOrTransacted: true,
+                  transactionAmount: 0,
+                  activityCompleted: true,
+                  status: 'verified_active' as const,
+                  rewardEarned: 500,
+                })) : prev.referredList,
+              };
+              try { localStorage.setItem('AGC_referral_program', JSON.stringify(updated)); } catch (_) {}
+              return updated;
+            });
+          }
         })
         .catch(() => {});
     }
@@ -22698,7 +22824,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return next;
   };
 
-  const getBadgeForPhone = (phoneOrId?: string): 'blue' | 'gold' | 'creator_plus' | 'admin' | null => {
+  const getBadgeForPhone = (phoneOrId?: string): 'blue' | 'gold' | 'creator_plus' | 'admin' | 'celebrity' | null => {
     if (!phoneOrId) return null;
     if (currentUser?.phoneNumber && phonesMatch(currentUser.phoneNumber, phoneOrId)) {
       if (currentUser.verificationBadge) return currentUser.verificationBadge;

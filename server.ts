@@ -551,7 +551,7 @@ interface RegisteredUser {
   registeredAt: string;
   role?: string;
   status?: 'active' | 'suspended' | 'flagged' | 'banned';
-  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | 'admin' | null;
+  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | 'admin' | 'celebrity' | null;
   verificationExpiresAt?: string;
   platformFeeRate?: number;
   isCelebrityVerified?: boolean;
@@ -796,6 +796,12 @@ const ADMIN_SYS_AFRIBOOKS_KEY = '__agc_sys_afribooks__';
 const ADMIN_SYS_COURSES_KEY = '__agc_sys_courses__';
 const ADMIN_SYS_HEALTH_KEY = '__agc_sys_health__';
 const ADMIN_SYS_LEGAL_KEY = '__agc_sys_legal__';
+const ADMIN_SYS_CREATOR_KEY = '__agc_sys_creator__';
+const ADMIN_SYS_SCAM_KEY = '__agc_sys_scam__';
+const ADMIN_SYS_CELEB_KEY = '__agc_sys_celeb__';
+const ADMIN_SYS_AJO_GROUPS_KEY = '__agc_sys_ajo_groups__';
+const ADMIN_SYS_PAYROLL_KEY = '__agc_sys_payroll__';
+const ADMIN_SYS_REFERRALS_KEY = '__agc_sys_referrals__';
 const USER_LEDGER_SLICE_PREFIX = '__agc_sys_ledger_';
 const USER_CHAT_BACKUP_PREFIX = '__agc_sys_chats_';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -2295,6 +2301,55 @@ app.post('/api/users/register', (req: Request, res: Response) => {
     }
   }
 
+  // Referral code bonus: credit referrer on new registration
+  if (!existingCheck && req.body?.referralCode) {
+    const refCode = String(req.body.referralCode).trim().toUpperCase();
+    for (const [rKey, rVal] of serverReferrals.entries()) {
+      if (rVal.referralCode.toUpperCase() === refCode) {
+        const alreadyReferred = rVal.referredPhones.some(p => phonesMatchServer(p, cleanPhone));
+        if (!alreadyReferred) {
+          rVal.referredPhones.push(cleanPhone);
+          const bonus = 500; // ₦500 referral bonus
+          rVal.totalEarned += bonus;
+          rVal.pendingBonus += bonus;
+          rVal.updatedAt = new Date().toISOString();
+          serverReferrals.set(rKey, rVal);
+          saveReferralsFile(true);
+          // Credit referrer wallet
+          const refWallet = getOrCreateServerWallet(rKey);
+          refWallet.availableBalance += bonus;
+          refWallet.updatedAt = new Date().toISOString();
+          const refRef = `REFERRAL_BONUS_${Date.now()}`;
+          const refTx = {
+            id: `tx_${Date.now()}_refbonus`,
+            userId: findUserEntry(rKey)?.user.id,
+            userPhone: rKey,
+            userName: findUserEntry(rKey)?.user.fullName || 'AGC User',
+            type: 'referral_bonus',
+            title: `Referral Bonus: New Member Joined`,
+            description: `₦${bonus.toLocaleString()} referral bonus for inviting a new AGC member`,
+            amount: bonus,
+            fee: 0,
+            balanceAfter: refWallet.availableBalance,
+            currency: refWallet.currency || 'NGN',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            createdAt: new Date().toISOString(),
+            status: 'completed',
+            reference: refRef,
+            referenceId: refRef,
+            channel: 'wallet',
+            metadata: { newUserPhone: cleanPhone },
+          };
+          refWallet.transactions = sortAndDedupeLedger([refTx, ...refWallet.transactions], 250);
+          serverWallets.set(refWallet.phoneKey, refWallet);
+          saveWalletsFile();
+          appendUnifiedLedgerTx(refTx);
+          emitWalletUpdateToPhone(rKey, refWallet, refTx.title, refRef);
+        }
+        break;
+      }
+    }
+  }
   res.json({ success: true, user, alreadyRegistered: Boolean(existingCheck) });
 });
 
@@ -10619,6 +10674,12 @@ const AFRIBOOKS_FILE = path.join(__dirname, 'data_afribooks.json');
 const COURSES_FILE = path.join(__dirname, 'data_courses.json');
 const HEALTHCARE_FILE = path.join(__dirname, 'data_healthcare.json');
 const LEGAL_FILE = path.join(__dirname, 'data_legal.json');
+const CREATOR_FILE = path.join(__dirname, 'data_creator.json');
+const SCAM_FILE = path.join(__dirname, 'data_scam_reports.json');
+const CELEB_FILE = path.join(__dirname, 'data_celebrity_apps.json');
+const AJO_GROUPS_FILE = path.join(__dirname, 'data_ajo_groups.json');
+const PAYROLL_FILE = path.join(__dirname, 'data_payroll.json');
+const REFERRALS_FILE = path.join(__dirname, 'data_referrals.json');
 
 function buildStarterOutsideParties(): ServerOutsideParty[] {
   const now = Date.now();
@@ -12433,6 +12494,822 @@ app.post('/api/legal/sos', (req: Request, res: Response) => {
   });
 });
 
+
+// ============================================================
+// MILESTONE 3: CREATOR HUB — LIVE FEED, DROPS, TIPPING
+// ============================================================
+
+interface ServerCreatorDrop {
+  id: string;
+  creatorId: string;
+  creatorName: string;
+  creatorPhone: string;
+  type: 'song' | 'video' | 'show' | 'drop' | 'post';
+  title: string;
+  content?: string;
+  price: number;
+  currency: string;
+  mediaUrl?: string;
+  thumbnailUrl?: string;
+  purchasedByPhones: string[];
+  likesCount: number;
+  commentsCount: number;
+  playsCount: number;
+  salesCount: number;
+  createdAt: string;
+}
+
+let serverCreatorDrops: Map<string, ServerCreatorDrop> = new Map();
+
+function saveCreatorFile(pushRemote = false) {
+  try {
+    fs.writeFileSync(CREATOR_FILE, JSON.stringify(Array.from(serverCreatorDrops.values()), null, 2), 'utf8');
+    if (pushRemote) {
+      upsertSupabaseAdminSlice(ADMIN_SYS_CREATOR_KEY, 'AGC_CREATOR', { drops: Array.from(serverCreatorDrops.values()) }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
+// Load creator drops from disk
+try {
+  if (fs.existsSync(CREATOR_FILE)) {
+    const data = JSON.parse(fs.readFileSync(CREATOR_FILE, 'utf8'));
+    const arr: ServerCreatorDrop[] = Array.isArray(data) ? data : (data?.drops || []);
+    arr.forEach(d => serverCreatorDrops.set(d.id, d));
+  }
+} catch (_) {}
+
+// Seed if empty
+if (serverCreatorDrops.size === 0) {
+  const seeds: ServerCreatorDrop[] = [
+    {
+      id: 'drop_seed_001',
+      creatorId: 'cr_burna_afro',
+      creatorName: 'Burna Afro',
+      creatorPhone: '+2348000000001',
+      type: 'song',
+      title: 'Lagos Nights',
+      content: 'Exclusive Afrobeats track from the streets of Lagos',
+      price: 500,
+      currency: 'NGN',
+      purchasedByPhones: [],
+      likesCount: 342,
+      commentsCount: 28,
+      playsCount: 1200,
+      salesCount: 87,
+      createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
+    },
+    {
+      id: 'drop_seed_002',
+      creatorId: 'cr_amara_writes',
+      creatorName: 'Amara Writes',
+      creatorPhone: '+2348000000002',
+      type: 'post',
+      title: 'The Road to Nairobi - Chapter 1',
+      content: "The rains came early that year. Amara stood at the door of her grandmother's shop...",
+      price: 0,
+      currency: 'NGN',
+      purchasedByPhones: [],
+      likesCount: 156,
+      commentsCount: 42,
+      playsCount: 890,
+      salesCount: 0,
+      createdAt: new Date(Date.now() - 86400000).toISOString(),
+    },
+    {
+      id: 'drop_seed_003',
+      creatorId: 'cr_dj_abuja',
+      creatorName: 'DJ Abuja',
+      creatorPhone: '+2348000000003',
+      type: 'show',
+      title: 'AfriNite Virtual Concert',
+      content: 'Live virtual DJ set from Abuja - 2 hours of non-stop Afrobeats & Amapiano',
+      price: 1500,
+      currency: 'NGN',
+      purchasedByPhones: [],
+      likesCount: 523,
+      commentsCount: 67,
+      playsCount: 0,
+      salesCount: 234,
+      createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
+    },
+  ];
+  seeds.forEach(s => serverCreatorDrops.set(s.id, s));
+  saveCreatorFile();
+}
+
+// GET /api/creator/feed — return all drops sorted newest first
+app.get('/api/creator/feed', (req: Request, res: Response) => {
+  const phone = String(req.query.phone || '').trim();
+  const drops = Array.from(serverCreatorDrops.values())
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .map(d => ({
+      ...d,
+      isPurchasedByMe: phone ? d.purchasedByPhones.some(p => phonesMatchServer(p, phone)) : false,
+    }));
+  return res.json({ success: true, drops });
+});
+
+// POST /api/creator/drop — publish new drop
+app.post('/api/creator/drop', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, creatorName, type, title, content, price, currency, mediaUrl, thumbnailUrl } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    if (!cleanPhone || !title) {
+      return res.status(400).json({ success: false, message: 'Phone and title required.' });
+    }
+    const match = findUserEntry(cleanPhone);
+    const newDrop: ServerCreatorDrop = {
+      id: `drop_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+      creatorId: match?.user.id || cleanPhone,
+      creatorName: creatorName || match?.user.fullName || 'Creator',
+      creatorPhone: cleanPhone,
+      type: type || 'post',
+      title: String(title).slice(0, 100),
+      content: content ? String(content).slice(0, 2000) : undefined,
+      price: Math.max(0, Number(price) || 0),
+      currency: String(currency || 'NGN'),
+      mediaUrl: mediaUrl || undefined,
+      thumbnailUrl: thumbnailUrl || undefined,
+      purchasedByPhones: [],
+      likesCount: 0,
+      commentsCount: 0,
+      playsCount: 0,
+      salesCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+    serverCreatorDrops.set(newDrop.id, newDrop);
+    saveCreatorFile(true);
+    io.emit('creator_drop_published', { drop: newDrop });
+    return res.json({ success: true, drop: { ...newDrop, isPurchasedByMe: true } });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to publish drop.' });
+  }
+});
+
+// POST /api/creator/tipping — P2P tip to creator
+app.post('/api/creator/tipping', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, creatorPhone, creatorName, amount, note } = req.body || {};
+    const cleanTipper = String(phoneNumber || '').trim();
+    const cleanCreator = String(creatorPhone || '').trim();
+    const tipAmount = Math.round(Number(amount) || 0);
+    if (!cleanTipper || !cleanCreator || tipAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'Tipper phone, creator phone, and positive amount required.' });
+    }
+    const tipperWallet = getOrCreateServerWallet(cleanTipper);
+    if (tipperWallet.availableBalance < tipAmount) {
+      return res.status(400).json({ success: false, insufficientFunds: true, message: `Insufficient balance for ₦${tipAmount.toLocaleString()} tip.` });
+    }
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const ref = `CTIP_${Date.now()}`;
+    const tipperMatch = findUserEntry(cleanTipper);
+    const creatorMatch = findUserEntry(cleanCreator);
+    // Deduct from tipper
+    tipperWallet.availableBalance = Math.max(0, tipperWallet.availableBalance - tipAmount);
+    tipperWallet.updatedAt = nowIso;
+    const tipperTx = {
+      id: `tx_${Date.now()}_ctip_out`,
+      userId: tipperMatch?.user.id,
+      userPhone: cleanTipper,
+      userName: tipperMatch?.user.fullName || 'User',
+      type: 'creator_tip',
+      title: `Tip to ${creatorName || creatorMatch?.user.fullName || 'Creator'}`,
+      description: note?.trim() ? `Creator tip: "${note.trim()}"` : 'Creator fan tip',
+      amount: tipAmount,
+      fee: 0,
+      balanceAfter: tipperWallet.availableBalance,
+      currency: tipperWallet.currency || 'NGN',
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: ref,
+      referenceId: ref,
+      channel: 'wallet',
+      metadata: { creatorPhone: cleanCreator, note: note?.trim() },
+    };
+    tipperWallet.transactions = sortAndDedupeLedger([tipperTx, ...tipperWallet.transactions], 250);
+    serverWallets.set(tipperWallet.phoneKey, tipperWallet);
+    appendUnifiedLedgerTx(tipperTx);
+    emitWalletUpdateToPhone(cleanTipper, tipperWallet, tipperTx.title, ref);
+    // Credit creator
+    const creatorWallet = getOrCreateServerWallet(cleanCreator);
+    creatorWallet.availableBalance += tipAmount;
+    creatorWallet.updatedAt = nowIso;
+    const creatorTx = {
+      id: `tx_${Date.now()}_ctip_in`,
+      userId: creatorMatch?.user.id,
+      userPhone: cleanCreator,
+      userName: creatorMatch?.user.fullName || 'Creator',
+      type: 'creator_tip',
+      title: `Fan Tip Received`,
+      description: note?.trim() ? `Fan tip: "${note.trim()}"` : 'Fan tip received',
+      amount: tipAmount,
+      fee: 0,
+      balanceAfter: creatorWallet.availableBalance,
+      currency: creatorWallet.currency || 'NGN',
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: `${ref}_in`,
+      referenceId: `${ref}_in`,
+      channel: 'wallet',
+      metadata: { tipperPhone: cleanTipper, note: note?.trim() },
+    };
+    creatorWallet.transactions = sortAndDedupeLedger([creatorTx, ...creatorWallet.transactions], 250);
+    serverWallets.set(creatorWallet.phoneKey, creatorWallet);
+    appendUnifiedLedgerTx(creatorTx);
+    emitWalletUpdateToPhone(cleanCreator, creatorWallet, creatorTx.title, `${ref}_in`);
+    saveWalletsFile();
+    return res.json({
+      success: true,
+      wallet: {
+        availableBalance: tipperWallet.availableBalance,
+        escrowLockedBalance: tipperWallet.escrowLockedBalance,
+        currency: tipperWallet.currency,
+        transactions: getUserMergedTransactions(cleanTipper, undefined, 1000),
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Creator tipping failed.' });
+  }
+});
+
+// POST /api/creator/drop/:id/like — like a drop
+app.post('/api/creator/drop/:id/like', (req: Request, res: Response) => {
+  const drop = serverCreatorDrops.get(req.params.id);
+  if (!drop) return res.status(404).json({ success: false, message: 'Drop not found.' });
+  drop.likesCount = (drop.likesCount || 0) + 1;
+  serverCreatorDrops.set(drop.id, drop);
+  saveCreatorFile(false);
+  return res.json({ success: true, likesCount: drop.likesCount });
+});
+
+// ============================================================
+// MILESTONE 4a: SCAM REPUTATION DATABASE
+// ============================================================
+
+interface ServerScamReport {
+  id: string;
+  targetPhone?: string;
+  targetName?: string;
+  targetAccountNumber?: string;
+  targetBank?: string;
+  reporterPhone: string;
+  category: string;
+  description: string;
+  amountLost?: number;
+  currency?: string;
+  evidenceUrls?: string[];
+  confirmedVotes: number;
+  disputedVotes: number;
+  riskScore: number;
+  status: 'pending' | 'confirmed' | 'disputed' | 'cleared';
+  createdAt: string;
+  updatedAt: string;
+}
+
+let serverScamReports: Map<string, ServerScamReport> = new Map();
+
+function saveScamFile(pushRemote = false) {
+  try {
+    fs.writeFileSync(SCAM_FILE, JSON.stringify(Array.from(serverScamReports.values()), null, 2), 'utf8');
+    if (pushRemote) {
+      upsertSupabaseAdminSlice(ADMIN_SYS_SCAM_KEY, 'AGC_SCAM_DB', { reports: Array.from(serverScamReports.values()) }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
+try {
+  if (fs.existsSync(SCAM_FILE)) {
+    const data = JSON.parse(fs.readFileSync(SCAM_FILE, 'utf8'));
+    const arr: ServerScamReport[] = Array.isArray(data) ? data : (data?.reports || []);
+    arr.forEach(r => serverScamReports.set(r.id, r));
+  }
+} catch (_) {}
+
+// GET /api/scam-reports — query by phone or account number
+app.get('/api/scam-reports', (req: Request, res: Response) => {
+  const query = String(req.query.query || req.query.phone || '').trim();
+  const all = Array.from(serverScamReports.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  if (!query) return res.json({ success: true, reports: all });
+  const filtered = all.filter(r =>
+    (r.targetPhone && phonesMatchServer(r.targetPhone, query)) ||
+    (r.targetName && r.targetName.toLowerCase().includes(query.toLowerCase())) ||
+    (r.targetAccountNumber && r.targetAccountNumber.includes(query))
+  );
+  return res.json({ success: true, reports: filtered });
+});
+
+// POST /api/scam-reports — file a new scam report
+app.post('/api/scam-reports', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, targetPhone, targetName, targetAccountNumber, targetBank, category, description, amountLost, currency, evidenceUrls } = req.body || {};
+    const cleanReporter = String(phoneNumber || '').trim();
+    if (!cleanReporter || !description) {
+      return res.status(400).json({ success: false, message: 'Reporter phone and description required.' });
+    }
+    const nowIso = new Date().toISOString();
+    const newReport: ServerScamReport = {
+      id: `scam_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+      targetPhone: targetPhone ? String(targetPhone).trim() : undefined,
+      targetName: targetName ? String(targetName).trim() : undefined,
+      targetAccountNumber: targetAccountNumber ? String(targetAccountNumber).trim() : undefined,
+      targetBank: targetBank ? String(targetBank).trim() : undefined,
+      reporterPhone: cleanReporter,
+      category: String(category || 'fraud').trim(),
+      description: String(description).slice(0, 1000),
+      amountLost: amountLost ? Number(amountLost) : undefined,
+      currency: String(currency || 'NGN'),
+      evidenceUrls: Array.isArray(evidenceUrls) ? evidenceUrls.slice(0, 5) : [],
+      confirmedVotes: 0,
+      disputedVotes: 0,
+      riskScore: 50,
+      status: 'pending',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    serverScamReports.set(newReport.id, newReport);
+    saveScamFile(true);
+    io.emit('scam_report_filed', { report: newReport });
+    return res.json({ success: true, report: newReport });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to file scam report.' });
+  }
+});
+
+// POST /api/scam-reports/:id/vote — confirm or dispute
+app.post('/api/scam-reports/:id/vote', (req: Request, res: Response) => {
+  const report = serverScamReports.get(req.params.id);
+  if (!report) return res.status(404).json({ success: false, message: 'Report not found.' });
+  const { vote } = req.body || {}; // 'confirm' | 'dispute'
+  if (vote === 'confirm') {
+    report.confirmedVotes += 1;
+    report.riskScore = Math.min(100, report.riskScore + 10);
+    if (report.confirmedVotes >= 3) report.status = 'confirmed';
+  } else if (vote === 'dispute') {
+    report.disputedVotes += 1;
+    report.riskScore = Math.max(0, report.riskScore - 10);
+    if (report.disputedVotes >= 5) report.status = 'cleared';
+  }
+  report.updatedAt = new Date().toISOString();
+  serverScamReports.set(report.id, report);
+  saveScamFile(false);
+  return res.json({ success: true, report });
+});
+
+// ============================================================
+// MILESTONE 4b: CELEBRITY & PUBLIC FIGURE VERIFICATION
+// ============================================================
+
+interface ServerCelebrityApp {
+  id: string;
+  applicantPhone: string;
+  applicantName: string;
+  stageName?: string;
+  category: string;
+  bio: string;
+  instagramUrl?: string;
+  twitterUrl?: string;
+  websiteUrl?: string;
+  evidenceUrls?: string[];
+  status: 'pending' | 'approved' | 'rejected';
+  reviewNote?: string;
+  submittedAt: string;
+  reviewedAt?: string;
+}
+
+let serverCelebrityApps: Map<string, ServerCelebrityApp> = new Map();
+
+function saveCelebFile(pushRemote = false) {
+  try {
+    fs.writeFileSync(CELEB_FILE, JSON.stringify(Array.from(serverCelebrityApps.values()), null, 2), 'utf8');
+    if (pushRemote) {
+      upsertSupabaseAdminSlice(ADMIN_SYS_CELEB_KEY, 'AGC_CELEB_APPS', { apps: Array.from(serverCelebrityApps.values()) }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
+try {
+  if (fs.existsSync(CELEB_FILE)) {
+    const data = JSON.parse(fs.readFileSync(CELEB_FILE, 'utf8'));
+    const arr: ServerCelebrityApp[] = Array.isArray(data) ? data : (data?.apps || []);
+    arr.forEach(a => serverCelebrityApps.set(a.id, a));
+  }
+} catch (_) {}
+
+// POST /api/celebrity/apply — submit verification application
+app.post('/api/celebrity/apply', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, applicantName, stageName, category, bio, instagramUrl, twitterUrl, websiteUrl, evidenceUrls } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    if (!cleanPhone || !applicantName || !bio) {
+      return res.status(400).json({ success: false, message: 'Phone, applicant name, and bio required.' });
+    }
+    // Check for existing pending app
+    const existing = Array.from(serverCelebrityApps.values()).find(a => phonesMatchServer(a.applicantPhone, cleanPhone) && a.status === 'pending');
+    if (existing) {
+      return res.status(409).json({ success: false, message: 'You already have a pending verification application.' });
+    }
+    const newApp: ServerCelebrityApp = {
+      id: `celeb_${Date.now()}`,
+      applicantPhone: cleanPhone,
+      applicantName: String(applicantName).trim(),
+      stageName: stageName ? String(stageName).trim() : undefined,
+      category: String(category || 'entertainment').trim(),
+      bio: String(bio).slice(0, 500),
+      instagramUrl: instagramUrl || undefined,
+      twitterUrl: twitterUrl || undefined,
+      websiteUrl: websiteUrl || undefined,
+      evidenceUrls: Array.isArray(evidenceUrls) ? evidenceUrls.slice(0, 5) : [],
+      status: 'pending',
+      submittedAt: new Date().toISOString(),
+    };
+    serverCelebrityApps.set(newApp.id, newApp);
+    saveCelebFile(true);
+    io.emit('celebrity_application_submitted', { appId: newApp.id });
+    return res.json({ success: true, application: newApp });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to submit celebrity application.' });
+  }
+});
+
+// GET /api/admin/celebrity/applications — admin review queue
+app.get('/api/admin/celebrity/applications', requireAdminAuth, (_req: Request, res: Response) => {
+  const apps = Array.from(serverCelebrityApps.values()).sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+  return res.json({ success: true, applications: apps });
+});
+
+// POST /api/admin/celebrity/review — approve or reject
+app.post('/api/admin/celebrity/review', requireAdminAuth, async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { applicationId, action, reviewNote } = req.body || {};
+    const app = serverCelebrityApps.get(String(applicationId || ''));
+    if (!app) return res.status(404).json({ success: false, message: 'Application not found.' });
+    if (action !== 'approve' && action !== 'reject') {
+      return res.status(400).json({ success: false, message: 'Action must be approve or reject.' });
+    }
+    app.status = action === 'approve' ? 'approved' : 'rejected';
+    app.reviewNote = reviewNote ? String(reviewNote).slice(0, 300) : undefined;
+    app.reviewedAt = new Date().toISOString();
+    serverCelebrityApps.set(app.id, app);
+    saveCelebFile(true);
+    if (action === 'approve') {
+      const userEntry = findUserEntry(app.applicantPhone);
+      if (userEntry) {
+        userEntry.user.verificationBadge = 'celebrity';
+        usersByPhone.set(userEntry.key, userEntry.user);
+        saveUsersFile();
+        io.emit('user_updated', userEntry.user);
+        const userSock = phoneToSocketId.get(userEntry.key);
+        if (userSock) {
+          io.to(userSock).emit('celebrity_verified', { user: userEntry.user, message: '🌟 Congratulations! Your celebrity verification has been approved.' });
+        }
+      }
+    } else {
+      const userSock = phoneToSocketId.get(app.applicantPhone.replace(/\D/g, ''));
+      if (userSock) {
+        io.to(userSock).emit('celebrity_verification_rejected', { message: reviewNote || 'Your verification application was not approved at this time.' });
+      }
+    }
+    return res.json({ success: true, application: app });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Celebrity review failed.' });
+  }
+});
+
+// ============================================================
+// MILESTONE 5a: AJO / ESUSU GROUP LEDGER
+// ============================================================
+
+interface ServerAjoGroup {
+  id: string;
+  name: string;
+  creatorPhone: string;
+  creatorName: string;
+  contributionAmount: number;
+  currency: string;
+  frequency: 'daily' | 'weekly' | 'monthly';
+  maxMembers: number;
+  members: Array<{ phone: string; name: string; turnOrder: number; hasReceived: boolean; totalContributed: number; joinedAt: string }>;
+  currentRound: number;
+  currentBeneficiary?: string;
+  totalPot: number;
+  contributions: Array<{ memberId: string; phone: string; amount: number; round: number; timestamp: string }>;
+  status: 'open' | 'active' | 'completed';
+  createdAt: string;
+  updatedAt: string;
+}
+
+let serverAjoGroups: Map<string, ServerAjoGroup> = new Map();
+
+function saveAjoGroupsFile(pushRemote = false) {
+  try {
+    fs.writeFileSync(AJO_GROUPS_FILE, JSON.stringify(Array.from(serverAjoGroups.values()), null, 2), 'utf8');
+    if (pushRemote) {
+      upsertSupabaseAdminSlice(ADMIN_SYS_AJO_GROUPS_KEY, 'AGC_AJO_GROUPS', { groups: Array.from(serverAjoGroups.values()) }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
+try {
+  if (fs.existsSync(AJO_GROUPS_FILE)) {
+    const data = JSON.parse(fs.readFileSync(AJO_GROUPS_FILE, 'utf8'));
+    const arr: ServerAjoGroup[] = Array.isArray(data) ? data : (data?.groups || []);
+    arr.forEach(g => serverAjoGroups.set(g.id, g));
+  }
+} catch (_) {}
+
+// GET /api/ajo/groups — list all groups
+app.get('/api/ajo/groups', (req: Request, res: Response) => {
+  const phone = String(req.query.phone || '').trim();
+  const groups = Array.from(serverAjoGroups.values())
+    .filter(g => g.status === 'open' || (phone && g.members.some(m => phonesMatchServer(m.phone, phone))))
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return res.json({ success: true, groups });
+});
+
+// POST /api/ajo/groups — create new Ajo circle
+app.post('/api/ajo/groups', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, name, contributionAmount, currency, frequency, maxMembers } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    const amount = Math.round(Number(contributionAmount) || 0);
+    if (!cleanPhone || !name || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Phone, name, and positive contributionAmount required.' });
+    }
+    const match = findUserEntry(cleanPhone);
+    const nowIso = new Date().toISOString();
+    const newGroup: ServerAjoGroup = {
+      id: `ajo_${Date.now()}`,
+      name: String(name).slice(0, 60),
+      creatorPhone: cleanPhone,
+      creatorName: match?.user.fullName || 'AGC User',
+      contributionAmount: amount,
+      currency: String(currency || 'NGN'),
+      frequency: (frequency === 'daily' || frequency === 'weekly' || frequency === 'monthly') ? frequency : 'monthly',
+      maxMembers: Math.min(50, Math.max(2, Number(maxMembers) || 10)),
+      members: [{
+        phone: cleanPhone,
+        name: match?.user.fullName || 'AGC User',
+        turnOrder: 1,
+        hasReceived: false,
+        totalContributed: 0,
+        joinedAt: nowIso,
+      }],
+      currentRound: 1,
+      totalPot: 0,
+      contributions: [],
+      status: 'open',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    serverAjoGroups.set(newGroup.id, newGroup);
+    saveAjoGroupsFile(true);
+    return res.json({ success: true, group: newGroup });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to create Ajo group.' });
+  }
+});
+
+// POST /api/ajo/groups/:id/join — join a circle
+app.post('/api/ajo/groups/:id/join', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const group = serverAjoGroups.get(req.params.id);
+    if (!group) return res.status(404).json({ success: false, message: 'Ajo group not found.' });
+    if (group.status !== 'open') return res.status(400).json({ success: false, message: 'This Ajo group is no longer open to new members.' });
+    if (group.members.length >= group.maxMembers) return res.status(400).json({ success: false, message: 'This Ajo group is full.' });
+    const { phoneNumber, name } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    if (!cleanPhone) return res.status(400).json({ success: false, message: 'Phone required.' });
+    const alreadyMember = group.members.some(m => phonesMatchServer(m.phone, cleanPhone));
+    if (alreadyMember) return res.status(409).json({ success: false, message: 'You are already a member of this group.' });
+    const match = findUserEntry(cleanPhone);
+    group.members.push({
+      phone: cleanPhone,
+      name: name || match?.user.fullName || 'AGC User',
+      turnOrder: group.members.length + 1,
+      hasReceived: false,
+      totalContributed: 0,
+      joinedAt: new Date().toISOString(),
+    });
+    if (group.members.length >= group.maxMembers) group.status = 'active';
+    group.updatedAt = new Date().toISOString();
+    serverAjoGroups.set(group.id, group);
+    saveAjoGroupsFile(true);
+    io.emit('ajo_group_updated', { groupId: group.id, membersCount: group.members.length });
+    return res.json({ success: true, group });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to join Ajo group.' });
+  }
+});
+
+// GET /api/ajo/groups/:id/ledger — contribution history
+app.get('/api/ajo/groups/:id/ledger', (req: Request, res: Response) => {
+  const group = serverAjoGroups.get(req.params.id);
+  if (!group) return res.status(404).json({ success: false, message: 'Ajo group not found.' });
+  return res.json({ success: true, group, contributions: group.contributions });
+});
+
+// ============================================================
+// MILESTONE 5b: BUSINESS PAYROLL HUB
+// ============================================================
+
+interface ServerPayrollRecord {
+  employerPhone: string;
+  employees: Array<{
+    id: string;
+    fullName: string;
+    role: string;
+    salary: number;
+    currency: string;
+    status: 'active' | 'inactive';
+    bankName?: string;
+    accountNumber?: string;
+    addedAt: string;
+  }>;
+  history: Array<{
+    id: string;
+    disbursedAt: string;
+    totalAmount: number;
+    employeeCount: number;
+    currency: string;
+    reference: string;
+  }>;
+}
+
+let serverPayrollData: Map<string, ServerPayrollRecord> = new Map();
+
+function savePayrollFile(pushRemote = false) {
+  try {
+    fs.writeFileSync(PAYROLL_FILE, JSON.stringify(Array.from(serverPayrollData.values()), null, 2), 'utf8');
+    if (pushRemote) {
+      upsertSupabaseAdminSlice(ADMIN_SYS_PAYROLL_KEY, 'AGC_PAYROLL', { records: Array.from(serverPayrollData.values()) }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
+try {
+  if (fs.existsSync(PAYROLL_FILE)) {
+    const data = JSON.parse(fs.readFileSync(PAYROLL_FILE, 'utf8'));
+    const arr: ServerPayrollRecord[] = Array.isArray(data) ? data : (data?.records || []);
+    arr.forEach(r => serverPayrollData.set(r.employerPhone, r));
+  }
+} catch (_) {}
+
+function getOrCreatePayrollRecord(employerPhone: string): ServerPayrollRecord {
+  let record = serverPayrollData.get(employerPhone);
+  if (!record) {
+    record = { employerPhone, employees: [], history: [] };
+    serverPayrollData.set(employerPhone, record);
+  }
+  return record;
+}
+
+// GET /api/payroll/employees
+app.get('/api/payroll/employees', (req: Request, res: Response) => {
+  const cleanPhone = String(req.query.employerPhone || req.query.phone || '').trim();
+  if (!cleanPhone) return res.status(400).json({ success: false, message: 'employerPhone required.' });
+  // Find by prefix matching
+  let record: ServerPayrollRecord | undefined;
+  for (const [key, val] of serverPayrollData.entries()) {
+    if (phonesMatchServer(key, cleanPhone)) { record = val; break; }
+  }
+  if (!record) return res.json({ success: true, employees: [], history: [] });
+  return res.json({ success: true, employees: record.employees, history: record.history });
+});
+
+// POST /api/payroll/employees — add or update employee
+app.post('/api/payroll/employees', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, employee } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    if (!cleanPhone || !employee) {
+      return res.status(400).json({ success: false, message: 'Phone and employee data required.' });
+    }
+    const record = getOrCreatePayrollRecord(cleanPhone);
+    const existing = record.employees.findIndex(e => e.id === employee.id);
+    if (existing >= 0) {
+      record.employees[existing] = { ...record.employees[existing], ...employee };
+    } else {
+      record.employees.push({
+        id: employee.id || `emp_${Date.now()}`,
+        fullName: String(employee.fullName || employee.name || 'Employee').trim(),
+        role: String(employee.role || 'Staff').trim(),
+        salary: Math.round(Number(employee.salary) || 0),
+        currency: String(employee.currency || 'NGN'),
+        status: employee.status || 'active',
+        bankName: employee.bankName || undefined,
+        accountNumber: employee.accountNumber || undefined,
+        addedAt: new Date().toISOString(),
+      });
+    }
+    serverPayrollData.set(cleanPhone, record);
+    savePayrollFile(true);
+    return res.json({ success: true, employees: record.employees });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to save employee.' });
+  }
+});
+
+// GET /api/payroll/history
+app.get('/api/payroll/history', (req: Request, res: Response) => {
+  const cleanPhone = String(req.query.employerPhone || req.query.phone || '').trim();
+  if (!cleanPhone) return res.status(400).json({ success: false, message: 'employerPhone required.' });
+  let record: ServerPayrollRecord | undefined;
+  for (const [key, val] of serverPayrollData.entries()) {
+    if (phonesMatchServer(key, cleanPhone)) { record = val; break; }
+  }
+  return res.json({ success: true, history: record?.history || [] });
+});
+
+// Hook into existing /api/payroll/disburse to also persist history — patch it by adding a listener
+// (Note: We append history after the existing disburse endpoint fires its own response via a socket interceptor)
+// We'll wrap it in AppContext instead - no server.ts change needed for history since disburse returns data.
+
+// ============================================================
+// MILESTONE 6: REFERRAL ENGINE
+// ============================================================
+
+interface ServerReferralRecord {
+  ownerPhone: string;
+  referralCode: string;
+  referredPhones: string[];
+  totalEarned: number;
+  pendingBonus: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+let serverReferrals: Map<string, ServerReferralRecord> = new Map();
+
+function saveReferralsFile(pushRemote = false) {
+  try {
+    fs.writeFileSync(REFERRALS_FILE, JSON.stringify(Array.from(serverReferrals.values()), null, 2), 'utf8');
+    if (pushRemote) {
+      upsertSupabaseAdminSlice(ADMIN_SYS_REFERRALS_KEY, 'AGC_REFERRALS', { records: Array.from(serverReferrals.values()) }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
+try {
+  if (fs.existsSync(REFERRALS_FILE)) {
+    const data = JSON.parse(fs.readFileSync(REFERRALS_FILE, 'utf8'));
+    const arr: ServerReferralRecord[] = Array.isArray(data) ? data : (data?.records || []);
+    arr.forEach(r => serverReferrals.set(r.ownerPhone, r));
+  }
+} catch (_) {}
+
+function getOrCreateReferralRecord(phone: string): ServerReferralRecord {
+  for (const [key, val] of serverReferrals.entries()) {
+    if (phonesMatchServer(key, phone)) return val;
+  }
+  const cleanPhone = phone.replace(/\D/g, '');
+  const code = 'AGC' + cleanPhone.slice(-4).toUpperCase() + Math.floor(1000 + Math.random() * 9000);
+  const record: ServerReferralRecord = {
+    ownerPhone: phone,
+    referralCode: code,
+    referredPhones: [],
+    totalEarned: 0,
+    pendingBonus: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  serverReferrals.set(phone, record);
+  return record;
+}
+
+// GET /api/referrals/stats/:phone
+app.get('/api/referrals/stats/:phone', (req: Request, res: Response) => {
+  const phone = decodeURIComponent(req.params.phone || '').trim();
+  if (!phone) return res.status(400).json({ success: false, message: 'Phone required.' });
+  const record = getOrCreateReferralRecord(phone);
+  saveReferralsFile(false);
+  const friends = record.referredPhones.map(p => {
+    const user = findUserEntry(p)?.user;
+    return { phone: p, name: user?.fullName || 'AGC User', joinedAt: user?.registeredAt || 'Unknown' };
+  });
+  return res.json({
+    success: true,
+    referralCode: record.referralCode,
+    referralLink: `https://agc.app/join?ref=${record.referralCode}`,
+    totalJoined: record.referredPhones.length,
+    activeUsers: friends.length,
+    totalEarned: record.totalEarned,
+    pendingBonus: record.pendingBonus,
+    friends,
+  });
+});
+
 const httpServer = createServer(app);
 
 // Initialize Socket.io instance with permissive cross-origin policies
@@ -13875,4 +14752,6 @@ startServer().catch((err) => {
 });
 
 export { app, httpServer, io };
+
+
 

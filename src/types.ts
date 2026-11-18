@@ -876,7 +876,7 @@ export interface UserProfile {
   isPhoneVerified?: boolean;
   createdAt: string;
   lastSeen: string;
-  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | 'admin' | null;
+  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | 'admin' | 'celebrity' | null;
   verificationExpiresAt?: string;
   isCelebrityVerified?: boolean;
   celebrityCategory?: string;
@@ -1586,7 +1586,7 @@ export interface AdminUserRecord {
   phoneNumber: string;
   avatarUrl: string;
   role: 'user' | 'creator' | 'merchant' | 'admin';
-  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | 'admin' | null;
+  verificationBadge?: 'blue' | 'gold' | 'creator_plus' | 'admin' | 'celebrity' | null;
   isPhoneVerified: boolean;
   status: 'active' | 'suspended' | 'flagged' | 'banned';
   joinedDate: string;
@@ -1902,5 +1902,6 @@ export interface TaskBountyCampaign {
   createdAt: string;
   updatedAt: string;
 }
+
 
 
