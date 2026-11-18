@@ -8506,6 +8506,10 @@ app.get('/api/admin/metrics', async (_req: Request, res: Response) => {
       communitiesCount: communitiesMap.size,
       communities: Array.from(communitiesMap.values()),
       activeStatusesCount,
+      outsidePartiesCount: outsidePartiesList.length,
+      outsideRsvpsCount: outsideRsvpsList.length,
+      outsideParties: outsidePartiesList,
+      outsideRsvps: outsideRsvpsList,
       dispatch: {
         totalOrdersCount: allOrders.length,
         activeDeliveriesCount,
@@ -9131,6 +9135,34 @@ app.patch('/api/admin/stores/:id', async (req: Request, res: Response) => {
   }
 });
 
+app.delete('/api/admin/stores/:id', async (req: Request, res: Response) => {
+  try {
+    const id = decodeURIComponent(req.params.id || '');
+    const existing = storeOverridesMap.get(id);
+    storeOverridesMap.delete(id);
+    saveAdminAuditFile();
+    pushAdminStoresToSupabase();
+    if (UUID_REGEX.test(id)) {
+      fetch(`${SUPABASE_URL}/rest/v1/store_subscriptions?id=eq.${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+      }).catch(() => {});
+    }
+    appendAuditEntry({
+      refId: `STORE_${id}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: 'Store Deleted',
+      target: existing?.storeName || id,
+      details: 'Store removed by admin',
+    });
+    io.emit('admin_store_updated', { id, deleted: true, status: 'deleted' });
+    res.json({ success: true, id });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to delete store' });
+  }
+});
+
 app.patch('/api/admin/artisans/:id', async (req: Request, res: Response) => {
   try {
     const id = decodeURIComponent(req.params.id || '');
@@ -9170,6 +9202,59 @@ app.patch('/api/admin/artisans/:id', async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to update artisan' });
   }
+});
+
+app.delete('/api/admin/artisans/:id', async (req: Request, res: Response) => {
+  try {
+    const id = decodeURIComponent(req.params.id || '');
+    const existing = artisanOverridesMap.get(id);
+    artisanOverridesMap.delete(id);
+    saveAdminAuditFile();
+    pushAdminStoresToSupabase();
+    if (UUID_REGEX.test(id)) {
+      fetch(`${SUPABASE_URL}/rest/v1/artisan_stations?id=eq.${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+      }).catch(() => {});
+    }
+    appendAuditEntry({
+      refId: `ART_${id}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: 'Artisan Station Deleted',
+      target: existing?.stationName || id,
+      details: 'Artisan station removed by admin',
+    });
+    io.emit('admin_artisan_updated', { id, deleted: true });
+    res.json({ success: true, id });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to delete artisan' });
+  }
+});
+
+app.post('/api/admin/statuses/purge-expired', (req: Request, res: Response) => {
+  const now = Date.now();
+  const purgedIds: string[] = [];
+  for (const [id, st] of statusesMap.entries()) {
+    const exp = st.expiresAt ? new Date(st.expiresAt).getTime() : 0;
+    if (exp > 0 && exp <= now) {
+      statusesMap.delete(id);
+      purgedIds.push(id);
+    }
+  }
+  if (purgedIds.length > 0) {
+    saveStatusesFile();
+    io.emit('status_purged', { ids: purgedIds });
+    appendAuditEntry({
+      refId: `STATUS_PURGE_${Date.now()}`,
+      actor: 'Super Admin',
+      actorRole: 'Super Admin',
+      action: '24h Status Purge Executed',
+      target: `${purgedIds.length} expired stories`,
+      details: `Purged IDs: ${purgedIds.join(', ')}`,
+    });
+  }
+  res.json({ success: true, purgedCount: purgedIds.length, purgedIds });
 });
 
 app.patch('/api/admin/users/:phone/kyc', async (req: Request, res: Response) => {

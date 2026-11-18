@@ -55,9 +55,14 @@ import {
   Coins,
   ZoomIn,
   XCircle,
+  Ticket,
+  PartyPopper,
+  Calendar,
+  MapPin,
+  QrCode,
 } from 'lucide-react';
 import { useApp, phonesMatch } from '../context/AppContext';
-import { FeatureFlags, CmsAnnouncement, CmsFaqItem, EscrowOrder, SponsoredStatusAd, AiKnowledgeEntry, TaskBountyCampaign, TaskBountySubmission } from '../types';
+import { FeatureFlags, CmsAnnouncement, CmsFaqItem, EscrowOrder, SponsoredStatusAd, AiKnowledgeEntry, TaskBountyCampaign, TaskBountySubmission, OutsideParty, OutsideRsvp, TownCommunity, UserStatus } from '../types';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { getSocket } from '../services/socket';
 import { AdminAuditDrawer, AdminAuditEntry, AdminWebhookLog } from './admin/AdminAuditDrawer';
@@ -73,10 +78,11 @@ import {
 } from '../services/supabaseAdminSync';
 import { isSyntheticTestUser } from '../utils/testAccountFilter';
 
-type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'professionals' | 'comms' | 'ads' | 'ai_datacenter' | 'security';
+type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'professionals' | 'outside' | 'comms' | 'ads' | 'ai_datacenter' | 'security';
+type OutsideSubTab = 'events' | 'rsvps' | 'verify';
 type FinanceSubTab = 'escrows' | 'tasks' | 'ledger' | 'disputes' | 'dispatch' | 'webhooks' | 'payouts';
 type UsersSubTab = 'directory' | 'kyc' | 'artisans';
-type CommsSubTab = 'nodes' | 'broadcast' | 'cms';
+type CommsSubTab = 'nodes' | 'communities' | 'statuses' | 'broadcast' | 'cms';
 type SecuritySubTab = 'waf' | 'audit' | 'features' | 'config' | 'rbac';
 
 interface SecurityEventItem {
@@ -298,6 +304,30 @@ export const AdminDashboardModal: React.FC = () => {
   const [customerLedgerTxs, setCustomerLedgerTxs] = useState<any[]>([]);
   const [proFilterMode, setProFilterMode] = useState<'pending' | 'all'>('pending');
   const [proBusyId, setProBusyId] = useState<string | null>(null);
+
+  // Outside Events, Parties & RSVPs live state
+  const [outsideTab, setOutsideTab] = useState<OutsideSubTab>('events');
+  const [outsideParties, setOutsideParties] = useState<OutsideParty[]>([]);
+  const [outsideRsvps, setOutsideRsvps] = useState<OutsideRsvp[]>([]);
+  const [outsideLoading, setOutsideLoading] = useState(false);
+  const [outsideVerifyCode, setOutsideVerifyCode] = useState('');
+  const [outsideVerifyResult, setOutsideVerifyResult] = useState<{ success: boolean; message: string; rsvp?: any; party?: any } | null>(null);
+  const [outsideVerifying, setOutsideVerifying] = useState(false);
+
+  // Town Communities & Channels live state
+  const [liveCommunities, setLiveCommunities] = useState<TownCommunity[]>([]);
+  const [communitiesLoading, setCommunitiesLoading] = useState(false);
+  const [newCommName, setNewCommName] = useState('');
+  const [newCommCategory, setNewCommCategory] = useState<'Tech & Hustle' | 'Market & Trade' | 'Campus & Youth' | 'Lifestyle & Faith' | 'Music & Creative'>('Tech & Hustle');
+  const [newCommDesc, setNewCommDesc] = useState('');
+
+  // 24-Hour Stories & User Statuses live state
+  const [liveStatuses, setLiveStatuses] = useState<UserStatus[]>([]);
+  const [statusesLoading, setStatusesLoading] = useState(false);
+  const [purgingStatuses, setPurgingStatuses] = useState(false);
+
+  // Live dispatch order status updater state
+  const [dispatchUpdatingId, setDispatchUpdatingId] = useState<string | null>(null);
 
   // Broadcast compose form state
   const [bcTitle, setBcTitle] = useState('');
@@ -651,7 +681,18 @@ export const AdminDashboardModal: React.FC = () => {
       .catch(() => {});
     fetchAdminTasks();
     refreshProfessionals?.();
+    fetchOutsideData();
+    fetchCommunities();
+    fetchStatuses();
   }, [isAdminModalOpen]);
+
+  useEffect(() => {
+    if (!isAdminModalOpen) return;
+    if (activeSection === 'outside') fetchOutsideData();
+    if (activeSection === 'comms' && commsTab === 'communities') fetchCommunities();
+    if (activeSection === 'comms' && commsTab === 'statuses') fetchStatuses();
+    if (activeSection === 'professionals') refreshProfessionals?.();
+  }, [isAdminModalOpen, activeSection, commsTab, outsideTab]);
 
   useEffect(() => {
     if (!selectedCustomer) {
@@ -1512,6 +1553,253 @@ export const AdminDashboardModal: React.FC = () => {
     }
   };
 
+  const fetchOutsideData = async () => {
+    setOutsideLoading(true);
+    try {
+      const [pRes, rRes] = await Promise.all([
+        fetch('/api/outside/parties?includePast=true').then((r) => r.json()).catch(() => null),
+        fetch('/api/outside/rsvps').then((r) => r.json()).catch(() => null),
+      ]);
+      if (Array.isArray(pRes?.parties)) setOutsideParties(pRes.parties);
+      if (Array.isArray(rRes?.rsvps)) setOutsideRsvps(rRes.rsvps);
+    } finally {
+      setOutsideLoading(false);
+    }
+  };
+
+  const handleDeleteOutsideParty = async (id: string, title: string) => {
+    if (!window.confirm(`Permanently remove outside event "${title}" and all claimed ticket passes?`)) return;
+    try {
+      const res = await fetch(`/api/outside/parties/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isAdmin: true }),
+      });
+      if (res.ok) {
+        notify(`Event "${title}" deleted`);
+        fetchOutsideData();
+        fetchLiveMetrics();
+      } else {
+        notify('Failed to delete event', 'err');
+      }
+    } catch (_) {
+      notify('Failed to delete event', 'err');
+    }
+  };
+
+  const handleVerifyOutsideTicket = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = outsideVerifyCode.trim().toUpperCase();
+    if (!clean) return;
+    setOutsideVerifying(true);
+    setOutsideVerifyResult(null);
+    try {
+      const res = await fetch('/api/outside/verify-ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticketCode: clean, staffRole: 'Super Admin' }),
+      });
+      const data = await res.json().catch(() => null);
+      setOutsideVerifyResult({
+        success: Boolean(res.ok && data?.success),
+        message: data?.message || data?.error || (res.ok ? 'Ticket verified' : 'Ticket check failed'),
+        rsvp: data?.rsvp,
+        party: data?.party,
+      });
+      if (res.ok && data?.success) {
+        notify(`Ticket pass ${clean} validated!`);
+        fetchOutsideData();
+      }
+    } catch (_) {
+      setOutsideVerifyResult({ success: false, message: 'Server connection error during ticket check' });
+    } finally {
+      setOutsideVerifying(false);
+    }
+  };
+
+  const fetchCommunities = async () => {
+    setCommunitiesLoading(true);
+    try {
+      const res = await fetch('/api/communities');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.communities)) setLiveCommunities(data.communities);
+      }
+    } finally {
+      setCommunitiesLoading(false);
+    }
+  };
+
+  const handleDeleteCommunity = async (id: string, name: string) => {
+    if (!window.confirm(`Delete community channel "${name}"?`)) return;
+    try {
+      const res = await fetch(`/api/communities/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (res.ok) {
+        notify(`Deleted community "${name}"`);
+        fetchCommunities();
+        fetchLiveMetrics();
+      } else {
+        notify('Failed to delete community', 'err');
+      }
+    } catch (_) {
+      notify('Failed to delete community', 'err');
+    }
+  };
+
+  const handleCreateCommunity = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCommName.trim()) return;
+    try {
+      const res = await fetch('/api/communities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newCommName.trim(),
+          category: newCommCategory,
+          description: newCommDesc.trim() || `Official ${newCommCategory} community`,
+          type: 'channel',
+          isVerified: true,
+          adminName: 'Super Admin',
+          creatorPhone: currentUser?.phoneNumber || 'Admin',
+        }),
+      });
+      if (res.ok) {
+        notify(`Created community "${newCommName.trim()}"`);
+        setNewCommName('');
+        setNewCommDesc('');
+        fetchCommunities();
+        fetchLiveMetrics();
+      } else {
+        notify('Failed to create community', 'err');
+      }
+    } catch (_) {
+      notify('Failed to create community', 'err');
+    }
+  };
+
+  const fetchStatuses = async () => {
+    setStatusesLoading(true);
+    try {
+      const res = await fetch('/api/statuses');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.statuses)) setLiveStatuses(data.statuses);
+      }
+    } finally {
+      setStatusesLoading(false);
+    }
+  };
+
+  const handleDeleteStatus = async (id: string, author: string) => {
+    if (!window.confirm(`Delete 24h status by "${author}"?`)) return;
+    try {
+      const res = await fetch(`/api/statuses/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (res.ok) {
+        notify(`Status by ${author} deleted`);
+        fetchStatuses();
+        fetchLiveMetrics();
+      } else {
+        notify('Failed to delete status', 'err');
+      }
+    } catch (_) {
+      notify('Failed to delete status', 'err');
+    }
+  };
+
+  const handlePurgeExpiredStatuses = async () => {
+    setPurgingStatuses(true);
+    try {
+      const res = await fetch('/api/admin/statuses/purge-expired', { method: 'POST' });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
+        notify(`Purged ${data.purgedCount || 0} expired 24h stories live!`);
+        fetchStatuses();
+        fetchLiveMetrics();
+      } else {
+        notify('No expired statuses currently in database');
+      }
+    } catch (_) {
+      notify('Purge request failed', 'err');
+    } finally {
+      setPurgingStatuses(false);
+    }
+  };
+
+  const handleUpdateDispatchStatus = async (orderId: string, status: string) => {
+    setDispatchUpdatingId(orderId);
+    try {
+      const res = await fetch(`/api/dispatch/orders/${encodeURIComponent(orderId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      if (res.ok) {
+        notify(`Dispatch #${orderId} marked ${status.replace('_', ' ').toUpperCase()}`);
+        fetchLiveMetrics();
+      } else {
+        notify('Failed to update dispatch status', 'err');
+      }
+    } catch (_) {
+      notify('Failed to update dispatch status', 'err');
+    } finally {
+      setDispatchUpdatingId(null);
+    }
+  };
+
+  const handleDeleteStore = async (store: LiveStoreRecord) => {
+    if (!window.confirm(`Permanently delete merchant store "${store.storeName}"?`)) return;
+    try {
+      const res = await fetch(`/api/admin/stores/${encodeURIComponent(store.id)}`, { method: 'DELETE' });
+      if (res.ok) {
+        notify(`Deleted store "${store.storeName}"`);
+        emitAdminGlobalBroadcast('admin_store_updated', { id: store.id, deleted: true });
+        fetchLiveMetrics();
+      } else {
+        notify('Failed to delete store', 'err');
+      }
+    } catch (_) {
+      notify('Failed to delete store', 'err');
+    }
+  };
+
+  const handleDeleteArtisan = async (artisan: LiveArtisanRecord) => {
+    if (!window.confirm(`Permanently delete artisan hub "${artisan.stationName}"?`)) return;
+    try {
+      const res = await fetch(`/api/admin/artisans/${encodeURIComponent(artisan.id)}`, { method: 'DELETE' });
+      if (res.ok) {
+        notify(`Deleted artisan hub "${artisan.stationName}"`);
+        emitAdminGlobalBroadcast('admin_artisan_updated', { id: artisan.id, deleted: true });
+        fetchLiveMetrics();
+      } else {
+        notify('Failed to delete artisan hub', 'err');
+      }
+    } catch (_) {
+      notify('Failed to delete artisan hub', 'err');
+    }
+  };
+
+  const syncAllSubsystems = async () => {
+    setIsRefreshing(true);
+    notify('Syncing all site systems live from backend...', 'ok');
+    try {
+      await Promise.allSettled([
+        fetchLiveMetrics(),
+        fetchSupabaseUsers(),
+        fetchHealthProbe(),
+        fetchLedgerTransactions(),
+        fetchAdminTasks(),
+        refreshProfessionals?.(),
+        fetchOutsideData(),
+        fetchCommunities(),
+        fetchStatuses(),
+        fetchAiDataCenter(),
+      ]);
+      notify('All site modules synchronized live!');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const handleArtisanMutation = async (artisan: LiveArtisanRecord, isApproved: boolean) => {
     const patch = {
       isApproved,
@@ -1894,6 +2182,12 @@ export const AdminDashboardModal: React.FC = () => {
     { id: 'stores', label: 'Vendors & Stores', icon: Store, badge: mergedStores.length || null },
     { id: 'users', label: 'Users & Artisans', icon: Users, badge: mergedUsers.length || null },
     { id: 'professionals', label: 'Verified Pros', icon: BadgeCheck, badge: pendingProsCount || null },
+    {
+      id: 'outside',
+      label: 'Outside & Tickets',
+      icon: Ticket,
+      badge: outsideParties.length || liveMetrics?.outsidePartiesCount || null,
+    },
     { id: 'comms', label: 'Comms & Social', icon: Radio, badge: systemBroadcast?.active ? 'LIVE' : null },
     {
       id: 'ads',
@@ -1911,6 +2205,7 @@ export const AdminDashboardModal: React.FC = () => {
     stores: 'Vendor & Store Tiers',
     users: 'User & Artisan Directory',
     professionals: 'AfriLaw, AfriHealth & Errands Verification',
+    outside: 'Outside Events, Nightlife & Ticket Verification Desk',
     comms: 'Communication & Social Logs',
     ads: 'Sponsored Ads & Promotion Requests',
     ai_datacenter: 'AI Bot Data Center & Guardrails',
@@ -2150,10 +2445,7 @@ export const AdminDashboardModal: React.FC = () => {
             {/* Refresh Button */}
             <button
               type="button"
-              onClick={() => {
-                fetchLiveMetrics();
-                fetchHealthProbe();
-              }}
+              onClick={syncAllSubsystems}
               disabled={isRefreshing}
               className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white transition-colors"
               title="Sync Live Data"
@@ -2266,6 +2558,112 @@ export const AdminDashboardModal: React.FC = () => {
           {/* ======================================== */}
           {activeSection === 'overview' && (
             <div className="space-y-6">
+              {/* Quick Operations Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-2xl bg-zinc-900/70 border border-zinc-800">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-xs font-semibold text-white">Live Site Operations</span>
+                  <span className="text-[11px] text-zinc-400 font-mono hidden sm:inline">
+                    · Synced {lastRefreshedAt.toLocaleTimeString()}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={syncAllSubsystems}
+                    disabled={isRefreshing}
+                    className="px-3 py-1.5 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                    <span>Sync All Systems</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handlePurgeExpiredStatuses}
+                    disabled={purgingStatuses}
+                    className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium flex items-center gap-1.5 border border-zinc-700"
+                    title="Purge 24h expired user statuses from database"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                    <span>{purgingStatuses ? 'Purging...' : 'Purge 24h Stories'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveSection('comms');
+                      setCommsTab('broadcast');
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium flex items-center gap-1.5 border border-zinc-700"
+                  >
+                    <Megaphone className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Emergency Alert</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const next = !systemConfig?.maintenanceMode;
+                      await updateSystemConfig({ maintenanceMode: next });
+                      setCfgMaintenanceMode(next);
+                      notify(next ? 'Maintenance Mode ENABLED' : 'Maintenance Mode DISABLED');
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border ${
+                      systemConfig?.maintenanceMode || cfgMaintenanceMode
+                        ? 'bg-rose-600/30 text-rose-300 border-rose-500/50'
+                        : 'bg-zinc-800/80 text-zinc-300 border-zinc-700 hover:text-white'
+                    }`}
+                  >
+                    <Lock className="w-3.5 h-3.5 text-amber-400" />
+                    <span>{systemConfig?.maintenanceMode || cfgMaintenanceMode ? 'Maintenance ON' : 'Lockdown Off'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Secondary Live Module Pills */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                <div className="p-3 rounded-xl bg-zinc-900/40 border border-zinc-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] text-zinc-400 uppercase font-mono">Outside Events</span>
+                    <div className="text-base font-bold font-mono text-white">{outsideParties.length || liveMetrics?.outsidePartiesCount || 0}</div>
+                  </div>
+                  <Ticket className="w-4 h-4 text-pink-400" />
+                </div>
+                <div className="p-3 rounded-xl bg-zinc-900/40 border border-zinc-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] text-zinc-400 uppercase font-mono">Ticket Passes</span>
+                    <div className="text-base font-bold font-mono text-white">{outsideRsvps.length || liveMetrics?.outsideRsvpsCount || 0}</div>
+                  </div>
+                  <PartyPopper className="w-4 h-4 text-purple-400" />
+                </div>
+                <div className="p-3 rounded-xl bg-zinc-900/40 border border-zinc-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] text-zinc-400 uppercase font-mono">24h Stories</span>
+                    <div className="text-base font-bold font-mono text-white">{liveStatuses.length || liveMetrics?.activeStatusesCount || 0}</div>
+                  </div>
+                  <Activity className="w-4 h-4 text-amber-400" />
+                </div>
+                <div className="p-3 rounded-xl bg-zinc-900/40 border border-zinc-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] text-zinc-400 uppercase font-mono">Communities</span>
+                    <div className="text-base font-bold font-mono text-white">{liveCommunities.length || liveMetrics?.communitiesCount || 0}</div>
+                  </div>
+                  <Users className="w-4 h-4 text-emerald-400" />
+                </div>
+                <div className="p-3 rounded-xl bg-zinc-900/40 border border-zinc-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] text-zinc-400 uppercase font-mono">Merchants</span>
+                    <div className="text-base font-bold font-mono text-white">{mergedStores.length}</div>
+                  </div>
+                  <Store className="w-4 h-4 text-sky-400" />
+                </div>
+                <div className="p-3 rounded-xl bg-zinc-900/40 border border-zinc-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] text-zinc-400 uppercase font-mono">Artisans</span>
+                    <div className="text-base font-bold font-mono text-white">{mergedArtisans.length}</div>
+                  </div>
+                  <Wrench className="w-4 h-4 text-indigo-400" />
+                </div>
+              </div>
+
               {/* Top Metric Grid (4 Cards) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                 <div className="p-5 rounded-2xl backdrop-blur-md bg-zinc-900/50 border border-zinc-800/90 space-y-2">
@@ -2913,8 +3311,20 @@ export const AdminDashboardModal: React.FC = () => {
                                 <td className="py-3 px-4 text-right font-mono text-emerald-400 tabular-nums">
                                   +₦{comm.toLocaleString()}
                                 </td>
-                                <td className="py-3 px-4 font-mono uppercase text-[11px] text-zinc-300">
-                                  {String(ord.status || '').replace('_', ' ')}
+                                <td className="py-3 px-4">
+                                  <select
+                                    value={ord.status || 'rider_assigned'}
+                                    disabled={dispatchUpdatingId === (ord.id || ord.trackingCode)}
+                                    onChange={(e) => handleUpdateDispatchStatus(ord.id || ord.trackingCode, e.target.value)}
+                                    className="px-2 py-1 rounded bg-zinc-950 border border-zinc-800 text-[11px] font-mono text-zinc-200 focus:outline-none focus:border-violet-500"
+                                  >
+                                    <option value="pending">PENDING</option>
+                                    <option value="rider_assigned">RIDER ASSIGNED</option>
+                                    <option value="picked_up">PICKED UP</option>
+                                    <option value="in_transit">IN TRANSIT</option>
+                                    <option value="delivered">DELIVERED</option>
+                                    <option value="cancelled">CANCELLED</option>
+                                  </select>
                                 </td>
                                 <td className="py-3 px-4 text-right">
                                   <button
