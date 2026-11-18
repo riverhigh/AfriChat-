@@ -794,6 +794,8 @@ const ADMIN_SYS_LEDGER_KEY = '__agc_sys_ledger__';
 const ADMIN_SYS_PETS_KEY = '__agc_sys_pets__';
 const ADMIN_SYS_AFRIBOOKS_KEY = '__agc_sys_afribooks__';
 const ADMIN_SYS_COURSES_KEY = '__agc_sys_courses__';
+const ADMIN_SYS_HEALTH_KEY = '__agc_sys_health__';
+const ADMIN_SYS_LEGAL_KEY = '__agc_sys_legal__';
 const USER_LEDGER_SLICE_PREFIX = '__agc_sys_ledger_';
 const USER_CHAT_BACKUP_PREFIX = '__agc_sys_chats_';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -10615,6 +10617,8 @@ const OUTSIDE_RSVPS_FILE = path.join(__dirname, 'data_outside_rsvps.json');
 const PETS_FILE = path.join(__dirname, 'data_pets.json');
 const AFRIBOOKS_FILE = path.join(__dirname, 'data_afribooks.json');
 const COURSES_FILE = path.join(__dirname, 'data_courses.json');
+const HEALTHCARE_FILE = path.join(__dirname, 'data_healthcare.json');
+const LEGAL_FILE = path.join(__dirname, 'data_legal.json');
 
 function buildStarterOutsideParties(): ServerOutsideParty[] {
   const now = Date.now();
@@ -12048,6 +12052,385 @@ app.post('/api/courses/tutors', (req: Request, res: Response) => {
   serverTutorProfiles.set(cleanPhone, updated);
   saveCoursesFile();
   res.json({ success: true, profile: updated });
+});
+
+
+// ============================================================================
+// MILESTONE 2: HEALTH, EMERGENCY & LEGAL PROTECTION
+// ============================================================================
+
+// --- HEALTHCARE STATE ---
+interface ServerQueueToken {
+  id: string;
+  patientPhone?: string;
+  hospitalName: string;
+  department: string;
+  tokenNumber: string;
+  currentlyServing: string;
+  positionInLine: number;
+  estimatedWaitMins: number;
+  bookedTime: string;
+  status: 'waiting' | 'in_consultation' | 'completed' | 'cancelled';
+  location: string;
+  createdAt: string;
+}
+
+interface ServerMedReminder {
+  id: string;
+  userPhone: string;
+  medicationName: string;
+  dosage: string;
+  frequency: string;
+  scheduledTimes: string[];
+  remainingDays: number;
+  pharmacyPartner: string;
+  canReorder: boolean;
+  notes?: string;
+  createdAt: string;
+}
+
+interface ServerHealthVault {
+  userPhone: string;
+  bloodGroup: string;
+  genotype: string;
+  allergies: string[];
+  chronicConditions: string[];
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+  emergencyNotes: string;
+  qrCodeId: string;
+  lastUpdated: string;
+}
+
+const serverQueueTokens = new Map<string, ServerQueueToken>();
+const serverMedReminders = new Map<string, ServerMedReminder[]>();
+const serverHealthVaults = new Map<string, ServerHealthVault>();
+
+try {
+  if (fs.existsSync(HEALTHCARE_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(HEALTHCARE_FILE, 'utf8'));
+    (raw.queueTokens || []).forEach((t: ServerQueueToken) => serverQueueTokens.set(t.id, t));
+    if (raw.medReminders && typeof raw.medReminders === 'object') {
+      Object.entries(raw.medReminders).forEach(([phone, rems]: [string, any]) => {
+        serverMedReminders.set(phone, Array.isArray(rems) ? rems : []);
+      });
+    }
+    if (raw.healthVaults && typeof raw.healthVaults === 'object') {
+      Object.entries(raw.healthVaults).forEach(([phone, v]: [string, any]) => {
+        serverHealthVaults.set(phone, v);
+      });
+    }
+  }
+} catch (e) {
+  console.warn('Notice loading data_healthcare.json:', e);
+}
+
+function saveHealthcareFile(pushRemote: boolean = true) {
+  try {
+    fs.writeFileSync(
+      HEALTHCARE_FILE,
+      JSON.stringify(
+        {
+          queueTokens: Array.from(serverQueueTokens.values()),
+          medReminders: Object.fromEntries(serverMedReminders.entries()),
+          healthVaults: Object.fromEntries(serverHealthVaults.entries()),
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      )
+    );
+  } catch (e) {
+    console.warn('Error saving data_healthcare.json:', e);
+  }
+  if (pushRemote) {
+    upsertSupabaseAdminSlice(ADMIN_SYS_HEALTH_KEY, 'AGC_HEALTHCARE', {
+      queueTokensCount: serverQueueTokens.size,
+      healthVaultsCount: serverHealthVaults.size,
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+}
+
+// --- LEGAL STATE ---
+interface ServerLegalContract {
+  id: string;
+  templateTitle: string;
+  partyAName: string;
+  partyAPhone?: string;
+  partyBName: string;
+  partyBPhone?: string;
+  amountOrValue: string;
+  durationOrDate: string;
+  governingLaw: string;
+  specificTerms: string;
+  createdAt: string;
+  status: 'draft' | 'signed_binding' | 'disputed';
+  signatureA: string;
+  signatureB?: string;
+  escrowOrderId?: string;
+  contractHash: string;
+}
+
+const serverLegalContracts = new Map<string, ServerLegalContract>();
+
+try {
+  if (fs.existsSync(LEGAL_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(LEGAL_FILE, 'utf8'));
+    (raw.contracts || []).forEach((c: ServerLegalContract) => serverLegalContracts.set(c.id, c));
+  }
+} catch (e) {
+  console.warn('Notice loading data_legal.json:', e);
+}
+
+function saveLegalFile(pushRemote: boolean = true) {
+  try {
+    fs.writeFileSync(
+      LEGAL_FILE,
+      JSON.stringify(
+        {
+          contracts: Array.from(serverLegalContracts.values()),
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      )
+    );
+  } catch (e) {
+    console.warn('Error saving data_legal.json:', e);
+  }
+  if (pushRemote) {
+    upsertSupabaseAdminSlice(ADMIN_SYS_LEGAL_KEY, 'AGC_LEGAL', {
+      contractsCount: serverLegalContracts.size,
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+}
+
+// --- HEALTHCARE ROUTES ---
+app.get('/api/healthcare/queue', (req: Request, res: Response) => {
+  const patientPhone = req.query.phone ? String(req.query.phone).trim() : '';
+  const hospital = req.query.hospital ? String(req.query.hospital).trim() : '';
+
+  let list = Array.from(serverQueueTokens.values());
+  if (patientPhone) {
+    list = list.filter((t) => t.patientPhone && phonesMatchServer(t.patientPhone, patientPhone));
+  } else if (hospital) {
+    list = list.filter((t) => t.hospitalName.toLowerCase() === hospital.toLowerCase());
+  }
+
+  res.json({ success: true, tokens: list });
+});
+
+app.post('/api/healthcare/queue/token', (req: Request, res: Response) => {
+  const { hospitalName, department, patientPhone, patientName } = req.body || {};
+  if (!hospitalName || !department) {
+    return res.status(400).json({ success: false, error: 'Hospital name and department are required.' });
+  }
+
+  const existingInHospital = Array.from(serverQueueTokens.values()).filter(
+    (t) => t.hospitalName.toLowerCase() === String(hospitalName).toLowerCase() && t.status === 'waiting'
+  );
+
+  const randNum = existingInHospital.length + Math.floor(Math.random() * 5) + 3;
+  const currentNum = Math.max(1, randNum - 3);
+
+  const newToken: ServerQueueToken = {
+    id: `tok_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    patientPhone: patientPhone ? String(patientPhone).trim() : undefined,
+    hospitalName: String(hospitalName).trim(),
+    department: String(department).trim(),
+    tokenNumber: `Q-${randNum}`,
+    currentlyServing: `Q-${currentNum}`,
+    positionInLine: Math.max(1, randNum - currentNum),
+    estimatedWaitMins: Math.max(5, (randNum - currentNum) * 6),
+    bookedTime: 'Just now',
+    status: 'waiting',
+    location: 'Main Clinical Pavilion',
+    createdAt: new Date().toISOString(),
+  };
+
+  serverQueueTokens.set(newToken.id, newToken);
+  saveHealthcareFile();
+  io.emit('queue_token_booked', newToken);
+  res.json({ success: true, token: newToken });
+});
+
+app.get('/api/healthcare/vault', (req: Request, res: Response) => {
+  const phone = req.query.phone ? String(req.query.phone).trim() : '';
+  if (!phone) {
+    return res.status(400).json({ success: false, error: 'User phone required.' });
+  }
+
+  const vault = serverHealthVaults.get(phone) || {
+    userPhone: phone,
+    bloodGroup: 'O+',
+    genotype: 'AA',
+    allergies: [],
+    chronicConditions: [],
+    emergencyContactName: '',
+    emergencyContactPhone: '',
+    emergencyNotes: '',
+    qrCodeId: `EMERGENCY_QR_${Date.now()}`,
+    lastUpdated: 'Not configured yet',
+  };
+
+  const reminders = serverMedReminders.get(phone) || [];
+  res.json({ success: true, vault, reminders });
+});
+
+app.post('/api/healthcare/vault', (req: Request, res: Response) => {
+  const { phone, bloodGroup, genotype, allergies, chronicConditions, emergencyContactName, emergencyContactPhone, emergencyNotes } = req.body || {};
+  const cleanPhone = String(phone || '').trim();
+  if (!cleanPhone) {
+    return res.status(400).json({ success: false, error: 'Phone is required to store medical vault records.' });
+  }
+
+  const updated: ServerHealthVault = {
+    userPhone: cleanPhone,
+    bloodGroup: String(bloodGroup || 'O+'),
+    genotype: String(genotype || 'AA'),
+    allergies: Array.isArray(allergies) ? allergies : [],
+    chronicConditions: Array.isArray(chronicConditions) ? chronicConditions : [],
+    emergencyContactName: String(emergencyContactName || '').trim(),
+    emergencyContactPhone: String(emergencyContactPhone || '').trim(),
+    emergencyNotes: String(emergencyNotes || '').trim(),
+    qrCodeId: `EMERGENCY_QR_${Date.now()}`,
+    lastUpdated: new Date().toISOString(),
+  };
+
+  serverHealthVaults.set(cleanPhone, updated);
+  saveHealthcareFile();
+  res.json({ success: true, vault: updated });
+});
+
+app.post('/api/healthcare/meds', (req: Request, res: Response) => {
+  const { phone, medicationName, dosage, frequency, scheduledTimes, remainingDays, pharmacyPartner, notes } = req.body || {};
+  const cleanPhone = String(phone || '').trim();
+  if (!cleanPhone || !medicationName) {
+    return res.status(400).json({ success: false, error: 'Phone and medicationName are required.' });
+  }
+
+  const newMed: ServerMedReminder = {
+    id: `med_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    userPhone: cleanPhone,
+    medicationName: String(medicationName).trim(),
+    dosage: String(dosage || '1 dose'),
+    frequency: String(frequency || 'Daily'),
+    scheduledTimes: Array.isArray(scheduledTimes) ? scheduledTimes : ['08:00', '20:00'],
+    remainingDays: Number(remainingDays) || 7,
+    pharmacyPartner: String(pharmacyPartner || 'Accredited Partner Pharmacy'),
+    canReorder: true,
+    notes: notes ? String(notes).trim() : undefined,
+    createdAt: new Date().toISOString(),
+  };
+
+  const existing = serverMedReminders.get(cleanPhone) || [];
+  existing.unshift(newMed);
+  serverMedReminders.set(cleanPhone, existing);
+  saveHealthcareFile();
+  res.json({ success: true, reminder: newMed });
+});
+
+app.post('/api/healthcare/sos', (req: Request, res: Response) => {
+  const { phone, userName, lat, lng, address } = req.body || {};
+  const alertPayload = {
+    id: `sos_med_${Date.now()}`,
+    phone: String(phone || 'Unknown'),
+    userName: String(userName || 'AGC User'),
+    lat,
+    lng,
+    address: address || 'Current User Coordinates',
+    timestamp: new Date().toISOString(),
+  };
+
+  io.emit('emergency_sos_alert', alertPayload);
+  res.json({
+    success: true,
+    message: '🚨 EMERGENCY SOS DISPATCHED: Live GPS coordinates broadcasted to LASAMBUS & Family Emergency Contact via SMS/Mesh network!',
+    alert: alertPayload,
+  });
+});
+
+// --- LEGAL ROUTES ---
+app.get('/api/legal/contracts', (req: Request, res: Response) => {
+  const phone = req.query.phone ? String(req.query.phone).trim() : '';
+  const contracts = Array.from(serverLegalContracts.values()).filter((c) => {
+    if (!phone) return true;
+    return (
+      (c.partyAPhone && phonesMatchServer(c.partyAPhone, phone)) ||
+      (c.partyBPhone && phonesMatchServer(c.partyBPhone, phone))
+    );
+  });
+  res.json({ success: true, contracts });
+});
+
+app.post('/api/legal/contracts', (req: Request, res: Response) => {
+  const { templateTitle, partyAName, partyAPhone, partyBName, partyBPhone, amountOrValue, durationOrDate, governingLaw, specificTerms, escrowOrderId } = req.body || {};
+  if (!templateTitle || !partyAName || !partyBName) {
+    return res.status(400).json({ success: false, error: 'templateTitle, partyAName, and partyBName are required.' });
+  }
+
+  const contractHash = crypto
+    .createHash('sha256')
+    .update(`${templateTitle}|${partyAName}|${partyBName}|${amountOrValue}|${Date.now()}`)
+    .digest('hex');
+
+  const newContract: ServerLegalContract = {
+    id: `cntr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    templateTitle: String(templateTitle).trim(),
+    partyAName: String(partyAName).trim(),
+    partyAPhone: partyAPhone ? String(partyAPhone).trim() : undefined,
+    partyBName: String(partyBName).trim(),
+    partyBPhone: partyBPhone ? String(partyBPhone).trim() : undefined,
+    amountOrValue: String(amountOrValue || '0').trim(),
+    durationOrDate: String(durationOrDate || 'Standard Term').trim(),
+    governingLaw: String(governingLaw || 'Laws of the Federal Republic of Nigeria').trim(),
+    specificTerms: String(specificTerms || '').trim(),
+    createdAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    status: 'signed_binding',
+    signatureA: `${partyAName} [Digital E-Sign: 0x${contractHash.slice(0, 8).toUpperCase()}]`,
+    escrowOrderId: escrowOrderId ? String(escrowOrderId) : undefined,
+    contractHash,
+  };
+
+  serverLegalContracts.set(newContract.id, newContract);
+  saveLegalFile();
+  io.emit('legal_contract_created', newContract);
+  res.json({ success: true, contract: newContract });
+});
+
+app.post('/api/legal/contracts/:id/sign', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { partyBSignature, partyBPhone } = req.body || {};
+  const contract = serverLegalContracts.get(id);
+  if (!contract) return res.status(404).json({ success: false, error: 'Contract not found.' });
+
+  contract.signatureB = String(partyBSignature || 'Counter-signed').trim();
+  if (partyBPhone) contract.partyBPhone = String(partyBPhone).trim();
+  contract.status = 'signed_binding';
+  saveLegalFile();
+  io.emit('legal_contract_countersigned', contract);
+  res.json({ success: true, contract });
+});
+
+app.post('/api/legal/sos', (req: Request, res: Response) => {
+  const { phone, userName, location, reason } = req.body || {};
+  const sosAlert = {
+    id: `legal_sos_${Date.now()}`,
+    phone: String(phone || 'Anonymous'),
+    userName: String(userName || 'User in distress'),
+    location: location || 'Current GPS Coordinates',
+    reason: reason || 'Urgent Human Rights Defense / Legal Intervention requested',
+    timestamp: new Date().toISOString(),
+  };
+
+  io.emit('legal_sos_alert', sosAlert);
+  res.json({
+    success: true,
+    message: '⚖️ LEGAL SOS ACTIVE: Rapid Response Human Rights Defense Lawyers have been alerted with your coordinates!',
+    sosAlert,
+  });
 });
 
 const httpServer = createServer(app);

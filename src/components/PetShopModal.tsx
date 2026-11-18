@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   PawPrint,
   Heart,
@@ -498,17 +498,50 @@ export const PetShopModal: React.FC<PetShopModalProps> = ({ isOpen, onClose }) =
   const [selectedShopCategory, setSelectedShopCategory] = useState<ShopCategory | 'All'>('All');
   const [showNewListingForm, setShowNewListingForm] = useState(false);
 
+  // ── Live Server Synchronization ──────────────────────────────────────────
+  useEffect(() => {
+    if (!isOpen) return;
+
+    fetch('/api/pets/listings')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.success && Array.isArray(data.listings) && data.listings.length > 0) {
+          setListings(data.listings);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/pets/forum')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.success && Array.isArray(data.posts) && data.posts.length > 0) {
+          setPosts(
+            data.posts.map((p: any) => ({
+              ...p,
+              liked: Array.isArray(p.likedByPhones) && currentUser?.phoneNumber ? p.likedByPhones.includes(currentUser.phoneNumber) : false,
+            }))
+          );
+        }
+      })
+      .catch(() => {});
+  }, [isOpen, currentUser?.phoneNumber]);
+
   // ── Handlers ──────────────────────────────────────────────────────────────
 
   const handleLike = useCallback((id: string) => {
     setPosts((prev) =>
       prev.map((p) =>
         p.id === id
-          ? { ...p, liked: !p.liked, likeCount: p.liked ? p.likeCount - 1 : p.likeCount + 1 }
+          ? { ...p, liked: !p.liked, likeCount: p.liked ? Math.max(0, p.likeCount - 1) : p.likeCount + 1 }
           : p
       )
     );
-  }, []);
+    fetch(`/api/pets/forum/${id}/like`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: currentUser?.phoneNumber }),
+    }).catch(() => {});
+  }, [currentUser?.phoneNumber]);
 
   const handleNewPost = useCallback(
     (text: string, imageBase64: string | undefined, category: ForumCategory) => {
@@ -528,6 +561,26 @@ export const PetShopModal: React.FC<PetShopModalProps> = ({ isOpen, onClose }) =
       };
       setPosts((prev) => [newPost, ...prev]);
       setShowNewPostForm(false);
+
+      fetch('/api/pets/forum', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          authorName: masked,
+          authorAvatar: '🐾',
+          authorPhone: currentUser?.phoneNumber,
+          text,
+          imageBase64,
+          category,
+        }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res?.success && res.post) {
+            setPosts((prev) => prev.map((p) => (p.id === newPost.id ? res.post : p)));
+          }
+        })
+        .catch(() => {});
     },
     [currentUser]
   );
@@ -542,6 +595,23 @@ export const PetShopModal: React.FC<PetShopModalProps> = ({ isOpen, onClose }) =
       };
       setListings((prev) => [newListing, ...prev]);
       setShowNewListingForm(false);
+
+      fetch('/api/pets/listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          sellerPhone: currentUser?.phoneNumber || '',
+          sellerName: currentUser?.fullName || 'Verified Seller',
+        }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res?.success && res.listing) {
+            setListings((prev) => prev.map((l) => (l.id === newListing.id ? res.listing : l)));
+          }
+        })
+        .catch(() => {});
     },
     [currentUser]
   );

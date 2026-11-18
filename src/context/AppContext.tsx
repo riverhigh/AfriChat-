@@ -3727,6 +3727,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       location: 'Main Hospital Wing',
     };
     setQueueTokens((prev) => [newToken, ...prev]);
+
+    // Live backend queue registration
+    fetch('/api/healthcare/queue/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        hospitalName,
+        department,
+        patientPhone: currentUser.phoneNumber,
+        patientName: currentUser.fullName,
+      }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.success && d.token) {
+          setQueueTokens((prev) => prev.map((t) => (t.id === newToken.id ? d.token : t)));
+        }
+      })
+      .catch(() => {});
+
     return { success: true, token: newToken };
   };
 
@@ -3736,17 +3756,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `med_${Date.now()}`,
     };
     setMedicationReminders((prev) => [newRem, ...prev]);
+
+    if (currentUser.phoneNumber) {
+      fetch('/api/healthcare/meds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...reminder,
+          phone: currentUser.phoneNumber,
+        }),
+      }).catch(() => {});
+    }
   };
 
   const updateHealthVault = (record: Partial<HealthVaultRecord>) => {
-    setHealthVault((prev) => ({
-      ...prev,
+    const updated = {
+      ...healthVault,
       ...record,
       lastUpdated: 'Just now',
-    }));
+    };
+    setHealthVault(updated);
+
+    if (currentUser.phoneNumber) {
+      fetch('/api/healthcare/vault', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...updated,
+          phone: currentUser.phoneNumber,
+        }),
+      }).catch(() => {});
+    }
   };
 
   const triggerEmergencySos = () => {
+    if (currentUser.phoneNumber) {
+      fetch('/api/healthcare/sos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: currentUser.phoneNumber,
+          userName: currentUser.fullName,
+        }),
+      }).catch(() => {});
+    }
     return {
       success: true,
       message: '🚨 EMERGENCY SOS DISPATCHED: Live GPS coordinates broadcasted to LASAMBUS & Family Emergency Contact via SMS/Mesh network!',
@@ -3916,6 +3969,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       signatureA: `${data.partyAName} [Digital E-Sign: 0x${Math.random().toString(16).slice(2, 7).toUpperCase()}]`,
     };
     setGeneratedContracts((prev) => [newContract, ...prev]);
+
+    // Live backend smart contract generation
+    fetch('/api/legal/contracts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...data,
+        partyAPhone: currentUser.phoneNumber,
+      }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.success && d.contract) {
+          setGeneratedContracts((prev) => prev.map((c) => (c.id === newContract.id ? d.contract : c)));
+        }
+      })
+      .catch(() => {});
+
     return newContract;
   };
 
@@ -3923,9 +3994,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setGeneratedContracts((prev) =>
       prev.map((c) => (c.id === contractId ? { ...c, signatureB: partyBSignature, status: 'signed_binding' } : c))
     );
+
+    fetch(`/api/legal/contracts/${contractId}/sign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        partyBSignature,
+        partyBPhone: currentUser.phoneNumber,
+      }),
+    }).catch(() => {});
   };
 
   const triggerEmergencyLegalSos = () => {
+    if (currentUser.phoneNumber) {
+      fetch('/api/legal/sos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: currentUser.phoneNumber,
+          userName: currentUser.fullName,
+        }),
+      }).catch(() => {});
+    }
     return {
       success: true,
       message: '⚖️ LEGAL SOS ACTIVE: Rapid Response Human Rights Defense Lawyers have been alerted with your coordinates!',
@@ -19576,6 +19666,84 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
+  // Live Server Sync for AfriBooks, Group Reads, Courses & Tutors
+  useEffect(() => {
+    const userPhone = currentUser?.phoneNumber || '';
+
+    // Fetch live community books
+    fetch(`/api/books?phone=${encodeURIComponent(userPhone)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.success && Array.isArray(d.books) && d.books.length > 0) {
+          setAfriBooks(d.books);
+          localStorage.setItem('AGC_afribooks', JSON.stringify(d.books));
+        }
+      })
+      .catch(() => {});
+
+    // Fetch live group reading sessions
+    fetch('/api/books/group-reads')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.success && Array.isArray(d.sessions)) {
+          setGroupReadSessions(d.sessions);
+          localStorage.setItem('AGC_group_read', JSON.stringify(d.sessions));
+        }
+      })
+      .catch(() => {});
+
+    // Fetch live academy courses
+    fetch(`/api/courses?phone=${encodeURIComponent(userPhone)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.success && Array.isArray(d.courses) && d.courses.length > 0) {
+          setCourses(d.courses);
+          localStorage.setItem('AGC_courses', JSON.stringify(d.courses));
+        }
+      })
+      .catch(() => {});
+
+    // Fetch live certified tutor profile if phone available
+    if (userPhone) {
+      fetch(`/api/courses/tutors/${encodeURIComponent(userPhone)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success && d.profile?.isRegisteredTutor) {
+            setTutorProfile(d.profile);
+            localStorage.setItem('AGC_tutor_profile', JSON.stringify(d.profile));
+          }
+        })
+        .catch(() => {});
+
+      // Load health vault and reminders
+      fetch(`/api/healthcare/vault?phone=${encodeURIComponent(userPhone)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success) {
+            if (d.vault) setHealthVault(d.vault);
+            if (Array.isArray(d.reminders)) setMedicationReminders(d.reminders);
+          }
+        })
+        .catch(() => {});
+
+      // Load active clinic queue tokens
+      fetch(`/api/healthcare/queue?phone=${encodeURIComponent(userPhone)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success && Array.isArray(d.tokens)) setQueueTokens(d.tokens);
+        })
+        .catch(() => {});
+
+      // Load user legal contracts
+      fetch(`/api/legal/contracts?phone=${encodeURIComponent(userPhone)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success && Array.isArray(d.contracts)) setGeneratedContracts(d.contracts);
+        })
+        .catch(() => {});
+    }
+  }, [currentUser?.phoneNumber]);
+
   // 27. Writers System (AfriBooks)
   const [afriBooks, setAfriBooks] = useState<AfriBook[]>(() => {
     try {
@@ -19620,6 +19788,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('AGC_afribooks', JSON.stringify(updated));
       return updated;
     });
+
+    // Sync to live server
+    fetch('/api/books', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...newBook,
+        authorPhone: currentUser?.phoneNumber,
+      }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.success && d.book) {
+          setAfriBooks((prev) => prev.map((b) => (b.id === newBook.id ? d.book : b)));
+        }
+      })
+      .catch(() => {});
 
     return {
       success: true,
@@ -19784,24 +19969,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       channel: 'wallet',
     });
 
-    // Server-authoritative deduction for book purchase
+    // Server-authoritative deduction and unlock for book purchase
     if (currentUser.phoneNumber) {
-      fetch('/api/creator/purchase', {
+      fetch(`/api/books/${bookId}/buy`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          phoneNumber: currentUser.phoneNumber,
-          itemId: bookId,
-          itemType: 'book',
-          title: book.title,
-          amount: book.price,
-          currency: book.currency,
+          buyerPhone: currentUser.phoneNumber,
         }),
       })
         .then((r) => r.json())
         .then((data) => {
-          if (data?.success && data?.wallet) {
-            applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+          if (data?.success && data?.book) {
+            setAfriBooks((prev) => prev.map((b) => (b.id === bookId ? { ...b, isPurchasedByMe: true } : b)));
           }
         })
         .catch(() => {});
@@ -19856,6 +20036,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
     setActiveGroupReadSession(newSession);
+
+    // Sync group read to live server
+    fetch('/api/books/group-reads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newSession),
+    }).catch(() => {});
+
     return newSession;
   };
 
@@ -19989,6 +20177,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTutorProfile(updatedProfile);
     localStorage.setItem('AGC_tutor_profile', JSON.stringify(updatedProfile));
 
+    if (currentUser.phoneNumber) {
+      fetch('/api/courses/tutors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: currentUser.phoneNumber,
+          tutorName: data.tutorName,
+          bio: data.bio,
+          category: data.category,
+          tier: 'starter_10',
+        }),
+      }).catch(() => {});
+    }
+
     return {
       success: true,
       message: '🎉 Congratulations! You are now a Registered AGC Certified Tutor with Verified Blue Check status. You can publish up to 10 courses!',
@@ -20083,6 +20285,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTutorProfile(updatedProfile);
     localStorage.setItem('AGC_tutor_profile', JSON.stringify(updatedProfile));
 
+    // Sync course to live server
+    fetch('/api/courses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...newCourse,
+        tutorPhone: currentUser.phoneNumber,
+      }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.success && d.course) {
+          setCourses((prev) => prev.map((c) => (c.id === newCourse.id ? d.course : c)));
+        }
+      })
+      .catch(() => {});
+
     return {
       success: true,
       course: newCourse,
@@ -20132,6 +20351,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
     setCourses(updatedCourses);
     localStorage.setItem('AGC_courses', JSON.stringify(updatedCourses));
+
+    // Server-authoritative enrollment and tutor payout
+    if (currentUser.phoneNumber) {
+      fetch(`/api/courses/${courseId}/enroll`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentPhone: currentUser.phoneNumber,
+        }),
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success && d.course) {
+            setCourses((prev) => prev.map((c) => (c.id === courseId ? { ...c, isEnrolledByMe: true } : c)));
+          }
+        })
+        .catch(() => {});
+    }
 
     return {
       success: true,
