@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, RefreshCw, CheckCircle2, Smartphone, Sparkles, ExternalLink, ShieldCheck } from 'lucide-react';
+import { Download, RefreshCw, CheckCircle2, Smartphone, Sparkles, ShieldCheck } from 'lucide-react';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -17,12 +17,11 @@ export const PwaInstallCard: React.FC = () => {
   const [showAndroidInstructions, setShowAndroidInstructions] = useState(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
-  const [hasNewUpdate, setHasNewUpdate] = useState(true);
+  const [hasNewUpdate, setHasNewUpdate] = useState(false);
   const [offlineReady, setOfflineReady] = useState(false);
   const [cachedEntries, setCachedEntries] = useState<number>(0);
 
-  const APP_VERSION = 'v2.4.0';
-  const LATEST_VERSION = 'v2.5.0';
+  const APP_VERSION = 'v2.5.0';
 
   const refreshCacheStatus = async () => {
     try {
@@ -40,25 +39,21 @@ export const PwaInstallCard: React.FC = () => {
       if ('serviceWorker' in navigator) {
         const reg = await navigator.serviceWorker.getRegistration();
         if (reg?.active) setOfflineReady(true);
+        if (reg?.waiting) setHasNewUpdate(true);
       }
     } catch {}
   };
 
   useEffect(() => {
-    // Check if running as installed standalone app
     const isStandaloneMode =
       window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as unknown as { standalone?: boolean }).standalone === true;
     setIsStandalone(Boolean(isStandaloneMode));
 
-    // Platform detection
     const ua = window.navigator.userAgent.toLowerCase();
-    const isIosDevice = /iphone|ipad|ipod/.test(ua);
-    const isAndroidDevice = /android/.test(ua);
-    setIsIos(isIosDevice);
-    setIsAndroid(isAndroidDevice);
+    setIsIos(/iphone|ipad|ipod/.test(ua));
+    setIsAndroid(/android/.test(ua));
 
-    // Initial check for globally cached prompt
     if ((window as any).deferredPwaPrompt) {
       setDeferredPrompt((window as any).deferredPwaPrompt);
     }
@@ -70,7 +65,11 @@ export const PwaInstallCard: React.FC = () => {
       refreshCacheStatus();
     };
 
-    // Listen for PWA install prompt event
+    const handleNeedRefresh = () => {
+      setHasNewUpdate(true);
+      setUpdateStatus('A newer version of AGC is ready to apply.');
+    };
+
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       (window as any).deferredPwaPrompt = e;
@@ -95,12 +94,14 @@ export const PwaInstallCard: React.FC = () => {
     window.addEventListener('pwa-prompt-ready', handlePromptReady);
     window.addEventListener('appinstalled', handleAppInstalled);
     window.addEventListener('pwa-offline-ready', handleOfflineReady);
+    window.addEventListener('pwa-need-refresh', handleNeedRefresh);
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('pwa-prompt-ready', handlePromptReady);
       window.removeEventListener('appinstalled', handleAppInstalled);
       window.removeEventListener('pwa-offline-ready', handleOfflineReady);
+      window.removeEventListener('pwa-need-refresh', handleNeedRefresh);
     };
   }, []);
 
@@ -120,16 +121,12 @@ export const PwaInstallCard: React.FC = () => {
       } catch (err) {
         console.warn('Install prompt error:', err);
       }
-    } else if (isAndroid) {
-      // Direct Android instructions (Chrome 3 dots)
-      setShowAndroidInstructions((prev) => !prev);
-      setShowIosInstructions(false);
     } else if (isIos) {
-      // iOS Safari Share instructions
       setShowIosInstructions((prev) => !prev);
       setShowAndroidInstructions(false);
     } else {
       setShowAndroidInstructions((prev) => !prev);
+      setShowIosInstructions(false);
     }
   };
 
@@ -142,25 +139,29 @@ export const PwaInstallCard: React.FC = () => {
         const registration = await navigator.serviceWorker.getRegistration();
         if (registration) {
           await registration.update();
+          if (registration.waiting) {
+            setHasNewUpdate(true);
+            setUpdateStatus('New update downloaded and ready! Tap "Apply Update".');
+            return;
+          }
         }
       }
-      await new Promise((resolve) => setTimeout(resolve, 800));
-
-      setHasNewUpdate(true);
-      setUpdateStatus(`New release ${LATEST_VERSION} ready! Tap "Download Newest" to install.`);
+      await refreshCacheStatus();
+      setHasNewUpdate(false);
+      setUpdateStatus(`You are running the latest version (${APP_VERSION}).`);
     } catch {
-      setHasNewUpdate(true);
-      setUpdateStatus(`New build ${LATEST_VERSION} available for download.`);
+      setUpdateStatus(`Unable to check updates right now (${APP_VERSION}).`);
     } finally {
       setIsCheckingUpdate(false);
     }
   };
 
-  const handleDownloadNewest = async () => {
+  const handleApplyUpdate = async () => {
     try {
-      if ('caches' in window) {
-        const keys = await caches.keys();
-        await Promise.all(keys.map((key) => caches.delete(key)));
+      const updateFn = (window as any).__agcUpdateSW;
+      if (typeof updateFn === 'function') {
+        await updateFn(true);
+        return;
       }
       if ('serviceWorker' in navigator) {
         const registrations = await navigator.serviceWorker.getRegistrations();
@@ -170,14 +171,9 @@ export const PwaInstallCard: React.FC = () => {
           }
         }
       }
-    } catch (e) {
-      console.warn('Cache clear error:', e);
-    }
-    // Force refresh bypassing cache
-    window.location.href = window.location.origin + window.location.pathname + '?v=' + Date.now();
+    } catch {}
+    window.location.reload();
   };
-
-  const handleHardReload = handleDownloadNewest;
 
   return (
     <div className="bg-white dark:bg-[#18152e] rounded-3xl p-4 border border-purple-500/20 dark:border-purple-500/20 shadow-xs space-y-3.5">
@@ -190,13 +186,15 @@ export const PwaInstallCard: React.FC = () => {
           />
           <div>
             <div className="flex items-center gap-1.5 flex-wrap">
-              <h4 className="text-sm font-bold text-slate-900 dark:text-white">AGC App & PWA</h4>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">AGC App &amp; PWA</h4>
               <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400">
                 {APP_VERSION}
               </span>
-              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-                Newest: {LATEST_VERSION}
-              </span>
+              {hasNewUpdate && (
+                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                  Update Ready
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-slate-500 dark:text-neutral-400 flex items-center gap-1.5 flex-wrap">
               <span>{isStandalone ? 'Installed on home screen' : 'Install native web app for offline speed'}</span>
@@ -226,22 +224,20 @@ export const PwaInstallCard: React.FC = () => {
         )}
       </div>
 
-      {/* Android Chrome manual instructions banner */}
       {showAndroidInstructions && (
         <div className="p-3 bg-emerald-50/80 dark:bg-emerald-950/30 rounded-2xl border border-emerald-300/60 dark:border-emerald-800/40 text-xs text-slate-700 dark:text-neutral-300 space-y-1.5 animate-in fade-in duration-200">
           <div className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
             <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-            <span>Install directly on Android</span>
+            <span>Install directly on Android / Desktop</span>
           </div>
           <ol className="list-decimal list-inside text-[11px] space-y-1 text-slate-700 dark:text-neutral-300 font-medium">
-            <li>Tap the <strong>three dots (⋮)</strong> in the top-right corner of Chrome</li>
+            <li>Tap the browser menu <strong>(⋮)</strong> or install icon in the address bar</li>
             <li>Tap <strong>Install app</strong> or <strong>Add to Home screen</strong></li>
-            <li>Tap <strong>Install</strong> to add AGC to your phone's app drawer</li>
+            <li>Tap <strong>Install</strong> to add AGC to your home screen</li>
           </ol>
         </div>
       )}
 
-      {/* iOS Safari manual instructions banner */}
       {showIosInstructions && (
         <div className="p-3 bg-purple-50/70 dark:bg-purple-950/30 rounded-2xl border border-purple-200/60 dark:border-purple-900/30 text-xs text-slate-700 dark:text-neutral-300 space-y-1">
           <div className="font-bold text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
@@ -256,12 +252,11 @@ export const PwaInstallCard: React.FC = () => {
         </div>
       )}
 
-      {/* Update checker row */}
       <div className="pt-2 border-t border-slate-100 dark:border-neutral-800 flex flex-col gap-2.5 text-xs">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-1.5 text-slate-500 dark:text-neutral-400">
             <ShieldCheck className="w-4 h-4 text-emerald-500" />
-            <span>Release channel: <strong>Production {APP_VERSION}</strong></span>
+            <span>Release channel: <strong>AGC {APP_VERSION}</strong></span>
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -274,15 +269,16 @@ export const PwaInstallCard: React.FC = () => {
               <RefreshCw className={`w-3 h-3 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
               <span>{isCheckingUpdate ? 'Checking...' : 'Check for Updates'}</span>
             </button>
-            <button
-              type="button"
-              onClick={handleDownloadNewest}
-              className="text-[11px] font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 shadow-sm active:scale-95"
-              title={`Download and apply newest build ${LATEST_VERSION}`}
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Download Newest</span>
-            </button>
+            {hasNewUpdate && (
+              <button
+                type="button"
+                onClick={handleApplyUpdate}
+                className="text-[11px] font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 shadow-sm active:scale-95"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Apply Update</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -292,14 +288,16 @@ export const PwaInstallCard: React.FC = () => {
               <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span>{updateStatus}</span>
             </div>
-            <button
-              type="button"
-              onClick={handleDownloadNewest}
-              className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-lg font-bold text-[11px] shadow-xs transition-colors shrink-0 flex items-center gap-1"
-            >
-              <Download className="w-3 h-3" />
-              <span>Download Newest ({LATEST_VERSION})</span>
-            </button>
+            {hasNewUpdate && (
+              <button
+                type="button"
+                onClick={handleApplyUpdate}
+                className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-lg font-bold text-[11px] shadow-xs transition-colors shrink-0 flex items-center gap-1"
+              >
+                <Download className="w-3 h-3" />
+                <span>Reload Now</span>
+              </button>
+            )}
           </div>
         )}
       </div>

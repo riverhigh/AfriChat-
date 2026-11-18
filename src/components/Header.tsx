@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { NineDotsIcon } from './NineDotsIcon';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface HeaderProps {
   onOpenLanguageModal: () => void;
@@ -374,6 +375,8 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
               </button>
             </div>
           )}
+
+          <PWAInstallButton />
 
           {/* Scan QR Button */}
           <button

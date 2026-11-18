@@ -67,7 +67,7 @@ if (!self.define) {
     });
   };
 }
-define(['./workbox-d20fdc50'], (function (workbox) { 'use strict';
+define(['./workbox-53feb3a3'], (function (workbox) { 'use strict';
 
   importScripts("/sw-push.js");
   self.skipWaiting();
@@ -79,13 +79,24 @@ define(['./workbox-d20fdc50'], (function (workbox) { 'use strict';
    */
   workbox.precacheAndRoute([{
     "url": "/index.html",
-    "revision": "0.l1m1luab718"
+    "revision": "0.jbu2ufkcsh"
   }], {});
   workbox.cleanupOutdatedCaches();
   workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("/index.html"), {
     allowlist: [/^\/$/],
-    denylist: [/^\/api/, /^\/socket\.io/]
+    denylist: [/^\/api/, /^\/socket\.io/, /^\/@/, /^\/src\//, /^\/node_modules\//, /\/[^/?]+\.[^/?]+$/]
   }));
+  workbox.registerRoute(({
+    url
+  }) => url.origin === self.location.origin && url.pathname.startsWith("/assets/") && /\.(js|css)$/i.test(url.pathname), new workbox.CacheFirst({
+    "cacheName": "agc-assets-cache",
+    plugins: [new workbox.ExpirationPlugin({
+      maxEntries: 160,
+      maxAgeSeconds: 2592000
+    }), new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    })]
+  }), 'GET');
   workbox.registerRoute(({
     url
   }) => url.origin === "https://fonts.googleapis.com" || url.origin === "https://fonts.gstatic.com", new workbox.StaleWhileRevalidate({

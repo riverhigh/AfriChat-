@@ -43,9 +43,8 @@
     <link rel="icon" type="image/png" href="/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="alternate icon" type="image/png" href="/icon-512.png" />
-    <link rel="apple-touch-icon" href="/icon-192.png" />
-    <link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png" />
-    <link rel="apple-touch-icon" sizes="512x512" href="/icon-512.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.json" />
 
     <!-- Google Fonts (non-render-blocking so slow LTE never stalls first paint) -->
@@ -54,8 +53,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
     <noscript><link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 
-    <!-- Official Paystack Inline SDK (deferred so it never delays startup) -->
-    <script src="https://js.paystack.co/v1/inline.js" defer></script>
+    <!-- Official Paystack Inline SDK (async so offline/slow network never stalls startup) -->
+    <script src="https://js.paystack.co/v1/inline.js" async></script>
     <style>
       @keyframes agcBootSpin { to { transform: rotate(360deg); } }
     </style>
@@ -128,6 +127,8 @@
         function renderBootFallback(msg) {
           if (handled || !isPreMount()) return;
           handled = true;
+          // Never wipe caches or force reload when device is offline (preserve offline PWA shell!)
+          if (navigator.onLine === false) return;
           try {
             if (!sessionStorage.getItem('agc_boot_autoreload')) {
               sessionStorage.setItem('agc_boot_autoreload', '1');
@@ -155,18 +156,24 @@
         }
         window.addEventListener('error', function (ev) {
           if (isPreMount()) {
+            var target = ev && ev.target;
+            // Ignore non-critical external script/image errors (e.g. third-party scripts offline)
+            if (target && target.tagName === 'SCRIPT' && target.src && target.src.indexOf(window.location.origin) !== 0) {
+              return;
+            }
             renderBootFallback(ev && ev.message ? ev.message : 'Startup error');
           }
-        });
+        }, true);
         window.addEventListener('unhandledrejection', function (ev) {
           if (isPreMount()) {
             var reason = ev && ev.reason ? (ev.reason.message || String(ev.reason)) : '';
-            if (/import|module|chunk|fetch|Outdated/i.test(reason)) {
+            // Only recover on genuine JS module/chunk failures, NEVER generic background API fetches
+            if (/Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk|ChunkLoadError|Outdated Optimize Dep/i.test(reason)) {
               renderBootFallback(reason);
             }
           }
         });
-        // If React hasn't replaced [data-agc-boot] within 10s, surface 1-tap recovery button
+        // If React hasn't replaced [data-agc-boot] within 12s, surface manual recovery button
         setTimeout(function () {
           if (!isPreMount()) return;
           var slowBox = document.getElementById('agc-boot-slow');
@@ -178,7 +185,7 @@
               clearSwAndCaches().finally(function () { window.location.reload(); });
             });
           }
-        }, 10000);
+        }, 12000);
       })();
     </script>
     <script type="module" src="/src/main.tsx"></script>

@@ -57,33 +57,98 @@ export const LUDO_MAIN_TRACK: [number, number][] = [
 // Authentic Double-Dice Nigerian Ludo: ZERO safe squares on outer track!
 export const LUDO_SAFE_TRACK_INDICES = new Set<number>();
 
-// 4 Home Columns matching Bottom, Top, Left, Right arms
-const PURPLE_HOME_COL_A: [number, number][] = [
+// 4 Home Columns matching Bottom (Red), Top (Yellow), Left (Green), Right (Blue) arms
+const RED_HOME_COL: [number, number][] = [
   [13, 7], [12, 7], [11, 7], [10, 7], [9, 7],
 ];
-const TOP_HOME_COL: [number, number][] = [
+const TOP_YELLOW_HOME_COL: [number, number][] = [
   [1, 7], [2, 7], [3, 7], [4, 7], [5, 7],
 ];
-const AMBER_HOME_COL_A: [number, number][] = [
+const GREEN_HOME_COL: [number, number][] = [
   [7, 1], [7, 2], [7, 3], [7, 4], [7, 5],
 ];
-const AMBER_HOME_COL_B: [number, number][] = [
+const BLUE_HOME_COL: [number, number][] = [
   [7, 13], [7, 12], [7, 11], [7, 10], [7, 9],
 ];
 
-// Yard slots
-const PURPLE_CASTLE_A_SLOTS: [number, number][] = [
+// Yard slots for all 4 distinct castles: Red (BL), Green (TL), Yellow (TR), Blue (BR)
+const RED_CASTLE_SLOTS: [number, number][] = [
   [10.8, 1.8], [10.8, 3.8], [12.8, 1.8], [12.8, 3.8],
 ];
-const TOP_RIGHT_CASTLE_SLOTS: [number, number][] = [
+const YELLOW_CASTLE_SLOTS: [number, number][] = [
   [1.8, 10.8], [1.8, 12.8], [3.8, 10.8], [3.8, 12.8],
 ];
-const AMBER_CASTLE_A_SLOTS: [number, number][] = [
+const GREEN_CASTLE_SLOTS: [number, number][] = [
   [1.8, 1.8], [1.8, 3.8], [3.8, 1.8], [3.8, 3.8],
 ];
-const AMBER_CASTLE_B_SLOTS: [number, number][] = [
+const BLUE_CASTLE_SLOTS: [number, number][] = [
   [10.8, 10.8], [10.8, 12.8], [12.8, 10.8], [12.8, 12.8],
 ];
+
+const CASTLE_THEMES = {
+  red: {
+    name: 'RED',
+    base: '#fee2e2',
+    border: '#dc2626',
+    slotBg: '#fecaca',
+    homeCol: '#fca5a5',
+    startTile: '#fecaca',
+    token: '#dc2626',
+    badge: '#991b1b',
+    label: '#991b1b',
+    text: '#ffffff',
+  },
+  green: {
+    name: 'GREEN',
+    base: '#dcfce7',
+    border: '#16a34a',
+    slotBg: '#bbf7d0',
+    homeCol: '#86efac',
+    startTile: '#bbf7d0',
+    token: '#16a34a',
+    badge: '#166534',
+    label: '#166534',
+    text: '#ffffff',
+  },
+  yellow: {
+    name: 'YELLOW',
+    base: '#fef9c3',
+    border: '#eab308',
+    slotBg: '#fef08a',
+    homeCol: '#fde047',
+    startTile: '#fef08a',
+    token: '#eab308',
+    badge: '#a16207',
+    label: '#854d0e',
+    text: '#111827',
+  },
+  blue: {
+    name: 'BLUE',
+    base: '#dbeafe',
+    border: '#2563eb',
+    slotBg: '#bfdbfe',
+    homeCol: '#93c5fd',
+    startTile: '#bfdbfe',
+    token: '#2563eb',
+    badge: '#1e40af',
+    label: '#1e40af',
+    text: '#ffffff',
+  },
+} as const;
+
+type CastleColorKey = keyof typeof CASTLE_THEMES;
+
+function getSeedCastleColor(
+  side: 'purple' | 'amber',
+  tokenIndex: number,
+  isTwoHouse: boolean
+): CastleColorKey {
+  if (side === 'purple') {
+    return isTwoHouse && tokenIndex >= 4 ? 'yellow' : 'red';
+  }
+  if (!isTwoHouse) return 'yellow';
+  return tokenIndex >= 4 ? 'blue' : 'green';
+}
 
 function getTokenCenter(
   step: number,
@@ -101,15 +166,15 @@ function getTokenCenter(
   if (!Number.isFinite(step) || step < 0) {
     const slots = !isTwoHouse
       ? isChallenger
-        ? PURPLE_CASTLE_A_SLOTS
-        : TOP_RIGHT_CASTLE_SLOTS
+        ? RED_CASTLE_SLOTS
+        : YELLOW_CASTLE_SLOTS
       : isChallenger
       ? isCastleB
-        ? TOP_RIGHT_CASTLE_SLOTS
-        : PURPLE_CASTLE_A_SLOTS
+        ? YELLOW_CASTLE_SLOTS
+        : RED_CASTLE_SLOTS
       : isCastleB
-      ? AMBER_CASTLE_B_SLOTS
-      : AMBER_CASTLE_A_SLOTS;
+      ? BLUE_CASTLE_SLOTS
+      : GREEN_CASTLE_SLOTS;
     const [r, c] = slots[localSlot] || slots[0];
     return { cx: (c + 0.5) * cellSize, cy: (r + 0.5) * cellSize };
   }
@@ -137,15 +202,15 @@ function getTokenCenter(
     const colIdx = Math.max(0, Math.min(4, step - 51));
     const homeArr = !isTwoHouse
       ? isChallenger
-        ? PURPLE_HOME_COL_A
-        : TOP_HOME_COL
+        ? RED_HOME_COL
+        : TOP_YELLOW_HOME_COL
       : isChallenger
       ? isCastleB
-        ? TOP_HOME_COL
-        : PURPLE_HOME_COL_A
+        ? TOP_YELLOW_HOME_COL
+        : RED_HOME_COL
       : isCastleB
-      ? AMBER_HOME_COL_B
-      : AMBER_HOME_COL_A;
+      ? BLUE_HOME_COL
+      : GREEN_HOME_COL;
     const [r, c] = homeArr[colIdx] || homeArr[0];
     return { cx: (c + 0.5) * cellSize, cy: (r + 0.5) * cellSize };
   }
@@ -459,8 +524,10 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
 
   // Compute coordinates + stack counts on outer track squares
   const { allSeedsWithCoords, stackBadges } = useMemo(() => {
+    const isTwoHouseBoard = challengerList.length > 4;
     const list: {
       side: 'purple' | 'amber';
+      colorKey: CastleColorKey;
       idx: number;
       step: number;
       cx: number;
@@ -469,16 +536,33 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
 
     challengerList.forEach((step, idx) => {
       const pos = getTokenCenter(step, idx, true, challengerList.length);
-      list.push({ side: 'purple', idx, step, cx: pos.cx, cy: pos.cy });
+      list.push({
+        side: 'purple',
+        colorKey: getSeedCastleColor('purple', idx, isTwoHouseBoard),
+        idx,
+        step,
+        cx: pos.cx,
+        cy: pos.cy,
+      });
     });
     opponentList.forEach((step, idx) => {
       const pos = getTokenCenter(step, idx, false, opponentList.length);
-      list.push({ side: 'amber', idx, step, cx: pos.cx, cy: pos.cy });
+      list.push({
+        side: 'amber',
+        colorKey: getSeedCastleColor('amber', idx, isTwoHouseBoard),
+        idx,
+        step,
+        cx: pos.cx,
+        cy: pos.cy,
+      });
     });
 
     // Bucket tokens sharing the exact same board pixel coordinates
     const buckets = new Map<string, number[]>();
-    const sideBuckets = new Map<string, { side: 'purple' | 'amber'; count: number; cx: number; cy: number }>();
+    const sideBuckets = new Map<
+      string,
+      { side: 'purple' | 'amber'; colorKey: CastleColorKey; count: number; cx: number; cy: number }
+    >();
 
     list.forEach((item, posIdx) => {
       if (item.step < 0 || isStepFinished(item.step)) return;
@@ -492,7 +576,13 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
       if (existing) {
         existing.count += 1;
       } else {
-        sideBuckets.set(sKey, { side: item.side, count: 1, cx: item.cx, cy: item.cy });
+        sideBuckets.set(sKey, {
+          side: item.side,
+          colorKey: item.colorKey,
+          count: 1,
+          cx: item.cx,
+          cy: item.cy,
+        });
       }
     });
 
@@ -537,8 +627,10 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
   }, [game.hasRolled, centerDicePair, remainingDice]);
 
   const activeTurnAccent = phonesMatch(game.currentTurnPhone, game.challengerPhone)
-    ? '#7c3aed'
-    : '#d97706';
+    ? '#dc2626'
+    : isTwoHouse
+    ? '#2563eb'
+    : '#eab308';
 
   const oppName = isChallenger
     ? game.opponentName || 'Opponent'
@@ -603,17 +695,18 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
     <div className={full ? 'p-4 sm:p-6 space-y-3.5 max-w-lg w-full mx-auto' : 'p-3 space-y-2.5'}>
       {/* Player Legend + Eat & Gate Badges */}
       <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-        <div className="px-2 py-1.5 rounded-lg bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/50 space-y-0.5">
+        <div className="px-2 py-1.5 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/50 space-y-0.5">
           <div className="flex items-center justify-between gap-1">
-            <span className="flex items-center gap-1.5 font-bold truncate text-purple-700 dark:text-purple-300">
-              <span className="w-2.5 h-2.5 rounded-full bg-purple-600 shrink-0" />
-              {game.challengerName}
+            <span className="flex items-center gap-1 font-bold truncate text-red-700 dark:text-red-300">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-600 shrink-0" />
+              {isTwoHouse && <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 ring-1 ring-yellow-600 shrink-0" />}
+              <span className="truncate">{game.challengerName}</span>
             </span>
-            <span className="font-mono tabular-nums font-black text-purple-600 shrink-0">
+            <span className="font-mono tabular-nums font-black text-red-600 dark:text-red-400 shrink-0">
               {purpleHomeCount}/{challengerList.length}
             </span>
           </div>
-          <div className="flex items-center justify-between text-[9px] text-purple-600/80 dark:text-purple-300/80 font-semibold">
+          <div className="flex items-center justify-between text-[9px] text-red-600/80 dark:text-red-300/80 font-semibold">
             <span className="inline-flex items-center gap-0.5">
               <Swords className="w-2.5 h-2.5" />
               <span>Eats: {purpleCaptures}</span>
@@ -627,17 +720,42 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
           </div>
         </div>
 
-        <div className="px-2 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 space-y-0.5">
+        <div
+          className={`px-2 py-1.5 rounded-lg space-y-0.5 border ${
+            isTwoHouse
+              ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/50'
+              : 'bg-yellow-50 dark:bg-yellow-950/30 border-yellow-200 dark:border-yellow-800/50'
+          }`}
+        >
           <div className="flex items-center justify-between gap-1">
-            <span className="flex items-center gap-1.5 font-bold truncate text-amber-700 dark:text-amber-300">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0" />
-              {game.opponentName || 'Opponent'}
+            <span
+              className={`flex items-center gap-1 font-bold truncate ${
+                isTwoHouse ? 'text-emerald-700 dark:text-emerald-300' : 'text-yellow-800 dark:text-yellow-300'
+              }`}
+            >
+              {isTwoHouse ? (
+                <>
+                  <span className="w-2.5 h-2.5 rounded-full bg-green-600 shrink-0" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0" />
+                </>
+              ) : (
+                <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 ring-1 ring-yellow-600 shrink-0" />
+              )}
+              <span className="truncate">{game.opponentName || 'Opponent'}</span>
             </span>
-            <span className="font-mono tabular-nums font-black text-amber-600 shrink-0">
+            <span
+              className={`font-mono tabular-nums font-black shrink-0 ${
+                isTwoHouse ? 'text-blue-600 dark:text-blue-400' : 'text-yellow-700 dark:text-yellow-400'
+              }`}
+            >
               {amberHomeCount}/{opponentList.length}
             </span>
           </div>
-          <div className="flex items-center justify-between text-[9px] text-amber-700/80 dark:text-amber-300/80 font-semibold">
+          <div
+            className={`flex items-center justify-between text-[9px] font-semibold ${
+              isTwoHouse ? 'text-emerald-700/80 dark:text-emerald-300/80' : 'text-yellow-800/80 dark:text-yellow-300/80'
+            }`}
+          >
             <span className="inline-flex items-center gap-0.5">
               <Swords className="w-2.5 h-2.5" />
               <span>Eats: {amberCaptures}</span>
@@ -652,19 +770,19 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
         </div>
       </div>
 
-      {/* 15x15 SVG Cross Board with Zero Safe Squares & Bold Center Graphic Dice */}
+      {/* 15x15 SVG Cross Board: 4 Distinct Castles (Red, Green, Yellow, Blue) + Center Graphic Dice */}
       <div className="relative rounded-xl overflow-hidden border border-slate-300 dark:border-neutral-700 bg-white shadow-sm">
         <svg viewBox="0 0 300 300" className="w-full h-auto block select-none">
           <rect x="0" y="0" width="300" height="300" fill="#f8fafc" />
 
-          {/* Top-Left Castle (Amber A in Two-House, neutral in 4-seed) */}
+          {/* Top-Left Castle: GREEN */}
           <rect
             x="0"
             y="0"
             width="120"
             height="120"
-            fill={isTwoHouse ? '#fef3c7' : '#f1f5f9'}
-            stroke={isTwoHouse ? '#f59e0b' : '#cbd5e1'}
+            fill={CASTLE_THEMES.green.base}
+            stroke={CASTLE_THEMES.green.border}
             strokeWidth="1.5"
           />
           <rect
@@ -674,22 +792,32 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
             height="84"
             rx="12"
             fill="#ffffff"
-            stroke={isTwoHouse ? '#f59e0b' : '#cbd5e1'}
+            stroke={CASTLE_THEMES.green.border}
           />
-          {isTwoHouse && (
-            <text x="10" y="13" fontSize="8" fontWeight="800" fill="#b45309">
-              AMBER A
-            </text>
-          )}
+          {GREEN_CASTLE_SLOTS.map(([r, c], i) => (
+            <circle
+              key={`gslot_${i}`}
+              cx={(c + 0.5) * 20}
+              cy={(r + 0.5) * 20}
+              r="8.2"
+              fill={CASTLE_THEMES.green.slotBg}
+              stroke={CASTLE_THEMES.green.border}
+              strokeWidth="1"
+              opacity="0.7"
+            />
+          ))}
+          <text x="10" y="13" fontSize="8" fontWeight="800" fill={CASTLE_THEMES.green.label}>
+            GREEN
+          </text>
 
-          {/* Top-Right Castle (Purple B in Two-House, Amber in 4-seed) */}
+          {/* Top-Right Castle: YELLOW */}
           <rect
             x="180"
             y="0"
             width="120"
             height="120"
-            fill={isTwoHouse ? '#ede9fe' : '#fef3c7'}
-            stroke={isTwoHouse ? '#7c3aed' : '#f59e0b'}
+            fill={CASTLE_THEMES.yellow.base}
+            stroke={CASTLE_THEMES.yellow.border}
             strokeWidth="1.5"
           />
           <rect
@@ -699,33 +827,67 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
             height="84"
             rx="12"
             fill="#ffffff"
-            stroke={isTwoHouse ? '#7c3aed' : '#f59e0b'}
+            stroke={CASTLE_THEMES.yellow.border}
           />
-          <text
-            x="248"
-            y="13"
-            fontSize="8"
-            fontWeight="800"
-            fill={isTwoHouse ? '#5b21b6' : '#b45309'}
-          >
-            {isTwoHouse ? 'PURPLE B' : 'AMBER'}
+          {YELLOW_CASTLE_SLOTS.map(([r, c], i) => (
+            <circle
+              key={`yslot_${i}`}
+              cx={(c + 0.5) * 20}
+              cy={(r + 0.5) * 20}
+              r="8.2"
+              fill={CASTLE_THEMES.yellow.slotBg}
+              stroke={CASTLE_THEMES.yellow.border}
+              strokeWidth="1"
+              opacity="0.8"
+            />
+          ))}
+          <text x="255" y="13" fontSize="8" fontWeight="800" fill={CASTLE_THEMES.yellow.label}>
+            YELLOW
           </text>
 
-          {/* Bottom-Left Castle (Purple A) */}
-          <rect x="0" y="180" width="120" height="120" fill="#ede9fe" stroke="#7c3aed" strokeWidth="1.5" />
-          <rect x="18" y="198" width="84" height="84" rx="12" fill="#ffffff" stroke="#7c3aed" />
-          <text x="10" y="294" fontSize="8" fontWeight="800" fill="#5b21b6">
-            {isTwoHouse ? 'PURPLE A' : 'PURPLE'}
+          {/* Bottom-Left Castle: RED */}
+          <rect
+            x="0"
+            y="180"
+            width="120"
+            height="120"
+            fill={CASTLE_THEMES.red.base}
+            stroke={CASTLE_THEMES.red.border}
+            strokeWidth="1.5"
+          />
+          <rect
+            x="18"
+            y="198"
+            width="84"
+            height="84"
+            rx="12"
+            fill="#ffffff"
+            stroke={CASTLE_THEMES.red.border}
+          />
+          {RED_CASTLE_SLOTS.map(([r, c], i) => (
+            <circle
+              key={`rslot_${i}`}
+              cx={(c + 0.5) * 20}
+              cy={(r + 0.5) * 20}
+              r="8.2"
+              fill={CASTLE_THEMES.red.slotBg}
+              stroke={CASTLE_THEMES.red.border}
+              strokeWidth="1"
+              opacity="0.7"
+            />
+          ))}
+          <text x="10" y="294" fontSize="8" fontWeight="800" fill={CASTLE_THEMES.red.label}>
+            RED
           </text>
 
-          {/* Bottom-Right Castle (Amber B in Two-House, neutral in 4-seed) */}
+          {/* Bottom-Right Castle: BLUE */}
           <rect
             x="180"
             y="180"
             width="120"
             height="120"
-            fill={isTwoHouse ? '#fef3c7' : '#f1f5f9'}
-            stroke={isTwoHouse ? '#f59e0b' : '#cbd5e1'}
+            fill={CASTLE_THEMES.blue.base}
+            stroke={CASTLE_THEMES.blue.border}
             strokeWidth="1.5"
           />
           <rect
@@ -735,23 +897,37 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
             height="84"
             rx="12"
             fill="#ffffff"
-            stroke={isTwoHouse ? '#f59e0b' : '#cbd5e1'}
+            stroke={CASTLE_THEMES.blue.border}
           />
-          {isTwoHouse && (
-            <text x="250" y="294" fontSize="8" fontWeight="800" fill="#b45309">
-              AMBER B
-            </text>
-          )}
+          {BLUE_CASTLE_SLOTS.map(([r, c], i) => (
+            <circle
+              key={`bslot_${i}`}
+              cx={(c + 0.5) * 20}
+              cy={(r + 0.5) * 20}
+              r="8.2"
+              fill={CASTLE_THEMES.blue.slotBg}
+              stroke={CASTLE_THEMES.blue.border}
+              strokeWidth="1"
+              opacity="0.7"
+            />
+          ))}
+          <text x="265" y="294" fontSize="8" fontWeight="800" fill={CASTLE_THEMES.blue.label}>
+            BLUE
+          </text>
 
-          {/* Main 52-cell Outer Track (ZERO safe squares! Only spawn entry markers) */}
+          {/* Main 52-cell Outer Track (ZERO safe squares! Only colored spawn entry markers) */}
           {LUDO_MAIN_TRACK.map(([r, c], idx) => {
-            const isPurpleStart = idx === 0 || (isTwoHouse && idx === 26);
-            const isAmberStart = (!isTwoHouse && idx === 26) || (isTwoHouse && (idx === 13 || idx === 39));
-            const fill = isPurpleStart
-              ? '#ddd6fe'
-              : isAmberStart
-              ? '#fde68a'
-              : '#ffffff';
+            const startTheme =
+              idx === 0
+                ? CASTLE_THEMES.red
+                : idx === 13
+                ? CASTLE_THEMES.green
+                : idx === 26
+                ? CASTLE_THEMES.yellow
+                : idx === 39
+                ? CASTLE_THEMES.blue
+                : null;
+            const fill = startTheme ? startTheme.startTile : '#ffffff';
             return (
               <g key={idx}>
                 <rect
@@ -763,85 +939,73 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
                   stroke="#cbd5e1"
                   strokeWidth="0.7"
                 />
-                {(isPurpleStart || isAmberStart) && (
+                {startTheme && (
                   <polygon
                     points={`${c * 20 + 10},${r * 20 + 5} ${c * 20 + 15},${r * 20 + 10} ${c * 20 + 10},${r * 20 + 15} ${c * 20 + 5},${r * 20 + 10}`}
-                    fill={isPurpleStart ? '#7c3aed' : '#d97706'}
-                    opacity="0.35"
+                    fill={startTheme.border}
+                    opacity="0.5"
                   />
                 )}
               </g>
             );
           })}
 
-          {/* 4 Home Columns (Private Safe Columns) */}
-          {PURPLE_HOME_COL_A.map(([r, c], i) => (
+          {/* 4 Distinct Colored Home Columns (Red, Yellow, Green, Blue) */}
+          {RED_HOME_COL.map(([r, c], i) => (
             <rect
-              key={`pha_${i}`}
+              key={`rhc_${i}`}
               x={c * 20}
               y={r * 20}
               width="20"
               height="20"
-              fill="#c4b5fd"
-              stroke="#7c3aed"
+              fill={CASTLE_THEMES.red.homeCol}
+              stroke={CASTLE_THEMES.red.border}
               strokeWidth="0.7"
             />
           ))}
-          {TOP_HOME_COL.map(([r, c], i) => (
+          {TOP_YELLOW_HOME_COL.map(([r, c], i) => (
             <rect
-              key={`thc_${i}`}
+              key={`yhc_${i}`}
               x={c * 20}
               y={r * 20}
               width="20"
               height="20"
-              fill={isTwoHouse ? '#c4b5fd' : '#fde68a'}
-              stroke={isTwoHouse ? '#7c3aed' : '#d97706'}
+              fill={CASTLE_THEMES.yellow.homeCol}
+              stroke={CASTLE_THEMES.yellow.border}
               strokeWidth="0.7"
             />
           ))}
-          {AMBER_HOME_COL_A.map(([r, c], i) => (
+          {GREEN_HOME_COL.map(([r, c], i) => (
             <rect
-              key={`aha_${i}`}
+              key={`ghc_${i}`}
               x={c * 20}
               y={r * 20}
               width="20"
               height="20"
-              fill={isTwoHouse ? '#fde68a' : '#e2e8f0'}
-              stroke={isTwoHouse ? '#d97706' : '#cbd5e1'}
+              fill={CASTLE_THEMES.green.homeCol}
+              stroke={CASTLE_THEMES.green.border}
               strokeWidth="0.7"
             />
           ))}
-          {AMBER_HOME_COL_B.map(([r, c], i) => (
+          {BLUE_HOME_COL.map(([r, c], i) => (
             <rect
-              key={`ahb_${i}`}
+              key={`bhc_${i}`}
               x={c * 20}
               y={r * 20}
               width="20"
               height="20"
-              fill={isTwoHouse ? '#fde68a' : '#e2e8f0'}
-              stroke={isTwoHouse ? '#d97706' : '#cbd5e1'}
+              fill={CASTLE_THEMES.blue.homeCol}
+              stroke={CASTLE_THEMES.blue.border}
               strokeWidth="0.7"
             />
           ))}
 
-          {/* Center Home Goal Triangles */}
+          {/* Center Home Goal Triangles (Red Bottom, Yellow Top, Green Left, Blue Right) */}
           <rect x="120" y="120" width="60" height="60" fill="#ffffff" stroke="#94a3b8" />
-          <polygon points="120,180 180,180 150,150" fill="#7c3aed" opacity="0.88" />
-          <polygon
-            points="120,120 180,120 150,150"
-            fill={isTwoHouse ? '#7c3aed' : '#f59e0b'}
-            opacity="0.88"
-          />
-          <polygon
-            points="120,120 120,180 150,150"
-            fill={isTwoHouse ? '#f59e0b' : '#cbd5e1'}
-            opacity="0.88"
-          />
-          <polygon
-            points="180,120 180,180 150,150"
-            fill={isTwoHouse ? '#f59e0b' : '#cbd5e1'}
-            opacity="0.88"
-          />
+          <polygon points="120,180 180,180 150,150" fill={CASTLE_THEMES.red.border} opacity="0.92" />
+          <polygon points="120,120 180,120 150,150" fill={CASTLE_THEMES.yellow.border} opacity="0.92" />
+          <polygon points="120,120 120,180 150,150" fill={CASTLE_THEMES.green.border} opacity="0.92" />
+          <polygon points="180,120 180,180 150,150" fill={CASTLE_THEMES.blue.border} opacity="0.92" />
 
           {/* Stack Assault Target Ring */}
           {pendingTargetCoord && (
@@ -870,7 +1034,7 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
               remainingDice.length > 0 &&
               isTokenPlayableWithChoice(seed.idx) &&
               !busy;
-            const isPurple = seed.side === 'purple';
+            const theme = CASTLE_THEMES[seed.colorKey];
 
             return (
               <g
@@ -884,7 +1048,7 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
                     cy={seed.cy}
                     r="10"
                     fill="none"
-                    stroke={isPurple ? '#7c3aed' : '#d97706'}
+                    stroke={theme.border}
                     strokeWidth="2.2"
                     strokeDasharray="3 2"
                   />
@@ -893,7 +1057,7 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
                   cx={seed.cx}
                   cy={seed.cy}
                   r="6.8"
-                  fill={isPurple ? '#7c3aed' : '#f59e0b'}
+                  fill={theme.token}
                   stroke="#ffffff"
                   strokeWidth="1.8"
                 />
@@ -903,7 +1067,7 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
                   textAnchor="middle"
                   fontSize="6.5"
                   fontWeight="900"
-                  fill={isPurple ? '#ffffff' : '#111827'}
+                  fill={theme.text}
                 >
                   {seed.idx + 1}
                 </text>
@@ -920,7 +1084,7 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
                 width="12"
                 height="9"
                 rx="3"
-                fill={sb.side === 'purple' ? '#4c1d95' : '#92400e'}
+                fill={CASTLE_THEMES[sb.colorKey].badge}
                 stroke="#ffffff"
                 strokeWidth="0.9"
               />

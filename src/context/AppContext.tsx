@@ -14919,7 +14919,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { error: blockedReason };
     }
 
-    const myName = isChallenger ? game.challengerName : game.opponentName || 'Amber Player';
+    const myName = isChallenger ? game.challengerName : game.opponentName || 'Green/Blue Player';
     const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
     const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
 
@@ -15191,7 +15191,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       gameType: 'ludo',
       challengerId: currentUser.id,
       challengerPhone: myPhone,
-      challengerName: currentUser.fullName || 'Purple Player',
+      challengerName: currentUser.fullName || 'Red Player',
       challengerAvatar: currentUser.avatarUrl,
       opponentPhone: opponentPhone || undefined,
       opponentName: isAiChat ? 'AgcBot (Hard AI)' : !targetChat?.isGroup ? targetChat?.name : undefined,
@@ -15215,7 +15215,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hasRolled: false,
       consecutiveSixes: 0,
       currentTurnPhone: myPhone,
-      currentTurnName: currentUser.fullName || 'Purple Player',
+      currentTurnName: currentUser.fullName || 'Red Player',
       lastActionNote: isAiChat
         ? `${seedCount} Seeds · Double-6 Bonus Only · Zero Safe Tiles! Roll vs AgcBot.`
         : undefined,
@@ -15249,7 +15249,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         gameType: 'ludo',
         role: 'challenger',
         playerPhone: myPhone,
-        playerName: currentUser.fullName || 'Purple Player',
+        playerName: currentUser.fullName || 'Red Player',
         opponentPhone: opponentPhone || undefined,
         opponentName: !targetChat?.isGroup ? targetChat?.name : undefined,
         betAmount: cleanBet,
@@ -15331,7 +15331,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const accepted: LudoGameState = {
       ...game,
       opponentPhone: myPhone,
-      opponentName: currentUser.fullName || game.opponentName || 'Amber Player',
+      opponentName: currentUser.fullName || game.opponentName || 'Green/Blue Player',
       opponentAvatar: currentUser.avatarUrl || game.opponentAvatar,
       status: 'active',
       moveCount: (game.moveCount || 0) + 1,
@@ -15344,7 +15344,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         gameType: 'ludo',
         role: 'opponent',
         playerPhone: myPhone,
-        playerName: currentUser.fullName || 'Amber Player',
+        playerName: currentUser.fullName || 'Green/Blue Player',
         opponentPhone: accepted.challengerPhone,
         opponentName: accepted.challengerName,
         betAmount: accepted.betAmount,
@@ -15396,7 +15396,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Cannot roll right now.' };
     }
     const isChallenger = phonesMatch(myPhone, game.challengerPhone);
-    const myName = isChallenger ? game.challengerName : game.opponentName || 'Amber Player';
+    const myName = isChallenger ? game.challengerName : game.opponentName || 'Green/Blue Player';
     const oppPhone = isChallenger ? game.opponentPhone || '' : game.challengerPhone;
     const oppName = isChallenger ? game.opponentName || 'Opponent' : game.challengerName;
 
@@ -15452,7 +15452,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isChallenger && !isOpp) {
       return { success: false, message: 'Only participants can forfeit.' };
     }
-    const myName = isChallenger ? game.challengerName : (game.opponentName || currentUser.fullName || 'Amber Player');
+    const myName = isChallenger ? game.challengerName : (game.opponentName || currentUser.fullName || 'Green/Blue Player');
     const winPhone = isChallenger ? (game.opponentPhone || AFRIBOT_PHONE) : game.challengerPhone;
     const winName = isChallenger ? (game.opponentName || 'Opponent') : game.challengerName;
     const nowIso = new Date().toISOString();
@@ -21707,6 +21707,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (checkIsAdminUrl()) {
         setIsAdminModalOpen(true);
       }
+
+      // Handle PWA manifest shortcuts (?tab=chats|status|calls|town|market|settings&sub=artisan)
+      try {
+        const sp = new URLSearchParams(window.location.search || '');
+        const tabParam = (sp.get('tab') || '').toLowerCase();
+        const subParam = (sp.get('sub') || '').toLowerCase();
+        if (
+          tabParam === 'chats' ||
+          tabParam === 'status' ||
+          tabParam === 'calls' ||
+          tabParam === 'town' ||
+          tabParam === 'market' ||
+          tabParam === 'settings'
+        ) {
+          setActiveTab(tabParam);
+          if (subParam === 'artisan') {
+            setIsServicesModalOpen(true);
+          }
+          window.history.replaceState(null, '', window.location.pathname || '/');
+        }
+      } catch (_) {}
 
       // Handle universal AGC QR contact link: ?contact=... or #contact=... or #addcontact
       if (search.includes('contact=') || search.includes('phone=') || hash.includes('contact=') || hash.includes('phone=') || hash.includes('addcontact')) {

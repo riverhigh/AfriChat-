@@ -11126,6 +11126,18 @@ async function startServer() {
       }
     })();
 
+    app.get('/sw.js', (_req: Request, res: Response) => {
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.send(
+        "self.addEventListener('install', () => self.skipWaiting());\n" +
+        "self.addEventListener('activate', (e) => e.waitUntil((async () => {\n" +
+        "  try { const keys = await caches.keys(); await Promise.all(keys.filter(k => k.startsWith('agc-cache-')).map(k => caches.delete(k))); } catch (_) {}\n" +
+        "  try { await self.registration.unregister(); } catch (_) {}\n" +
+        "})()));\n"
+      );
+    });
+
     app.use((req: Request, res: Response, next: any) => {
       if (
         req.method === 'GET' &&

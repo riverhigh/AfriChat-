@@ -11,19 +11,40 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png', 'agc-logo.png', 'sw-push.js'],
+        includeAssets: ['favicon.svg', 'icon-192.png', 'apple-touch-icon.png', 'manifest.json', 'sw-push.js'],
         manifest: false, // Served cleanly from /public/manifest.json linked in index.html
         workbox: {
           importScripts: ['/sw-push.js'],
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-          globIgnores: ['assets/aistudio/**'],
+          // Precache only the core shell so SW install is fast and never starves startup bandwidth
+          globPatterns: [
+            'index.html',
+            'assets/index-*.{js,css}',
+            'assets/vendor-*.js',
+            'assets/rolldown-runtime-*.js',
+            'assets/virtual_pwa-register-*.js',
+            'assets/workbox-window*.js',
+            'assets/Header-*.js',
+            'assets/BottomNav-*.js',
+            'assets/ChatList-*.js',
+            'assets/StatusView-*.js',
+            'assets/WhatsAppPhoneAuth-*.js',
+          ],
           maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api/, /^\/socket\.io/],
+          navigateFallbackDenylist: [/^\/api/, /^\/socket\.io/, /^\/@/, /^\/src\//, /^\/node_modules\//, /\/[^/?]+\.[^/?]+$/],
           cleanupOutdatedCaches: true,
           clientsClaim: true,
           skipWaiting: true,
           runtimeCaching: [
+            {
+              urlPattern: ({ url }) => url.origin === self.location.origin && url.pathname.startsWith('/assets/') && /\.(js|css)$/i.test(url.pathname),
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'agc-assets-cache',
+                expiration: { maxEntries: 160, maxAgeSeconds: 60 * 60 * 24 * 30 },
+                cacheableResponse: { statuses: [0, 200] },
+              },
+            },
             {
               urlPattern: ({ url }) => url.origin === 'https://fonts.googleapis.com' || url.origin === 'https://fonts.gstatic.com',
               handler: 'StaleWhileRevalidate',
@@ -55,7 +76,10 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: false,
+          enabled: true,
+          type: 'module',
+          navigateFallback: '/',
+          navigateFallbackAllowlist: [/^\/$/],
         },
       }),
     ],

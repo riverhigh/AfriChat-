@@ -37,11 +37,11 @@ export function getLudoRulesConfig(game?: Partial<LudoGameState> | null): LudoRu
 /**
  * Castle layout on the 52-cell outer loop:
  * - Two-House Mode (8 seeds):
- *   - Challenger (Purple): Castle A (0..3) at 0, Castle B (4..7) at 26
- *   - Opponent (Amber): Castle A (0..3) at 13, Castle B (4..7) at 39
+ *   - Challenger (Red + Yellow): Castle A Red (0..3) at 0, Castle B Yellow (4..7) at 26
+ *   - Opponent (Green + Blue): Castle A Green (0..3) at 13, Castle B Blue (4..7) at 39
  * - Single-House Mode (4 seeds):
- *   - Challenger (Purple): 0
- *   - Opponent (Amber): 26 (diagonally opposite)
+ *   - Challenger (Red): 0
+ *   - Opponent (Yellow): 26 (diagonally opposite)
  */
 export function getLudoSeedOffset(
   seedIndex: number,
