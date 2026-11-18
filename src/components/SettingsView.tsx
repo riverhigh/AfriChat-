@@ -1006,6 +1006,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           )}
 
+          {/* PWA App Download & Version Update Checker (Prominently at Hub Top) */}
+          <div className="px-4">
+            <PwaInstallCard />
+          </div>
+
           {/* Quick Hub App Preferences (Language, Currency, Low Data, Theme) */}
           <div className="divide-y divide-slate-100 dark:divide-neutral-800/80 bg-white dark:bg-[#18152e] border-y border-slate-100 dark:border-neutral-800">
 
@@ -1258,12 +1263,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* PWA App Download & Version Update Checker */}
-          <div className="px-4">
-            <PwaInstallCard />
-          </div>
-
-          {/* Escrow Orders History Section */}
+{/* Escrow Orders History Section */}
           {isFeatureEnabled('escrow') && (
           <div className="px-4">
             <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">

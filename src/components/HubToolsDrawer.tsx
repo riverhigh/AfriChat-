@@ -1,3 +1,4 @@
+import { PwaInstallCard } from './PwaInstallCard';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -1293,6 +1294,11 @@ export const HubToolsDrawer: React.FC<HubToolsDrawerProps> = ({
                       </div>
                     </div>
                   )}
+
+                  {/* App PWA Installation & Version Updates */}
+                  <div className="pt-2">
+                    <PwaInstallCard />
+                  </div>
                 </div>
               )}
 
