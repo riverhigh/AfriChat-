@@ -724,6 +724,7 @@ const ADMIN_SYS_PROFS_KEY = '__agc_sys_professionals__';
 const ADMIN_SYS_ESCROWS_KEY = '__agc_sys_escrows__';
 const ADMIN_SYS_WALLETS_KEY = '__agc_sys_wallets__';
 const ADMIN_SYS_GAME_ESCROWS_KEY = '__agc_sys_game_escrows__';
+const ADMIN_SYS_TASKS_KEY = '__agc_sys_task_bounties__';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function canonicalAdminPhoneKey(phoneOrId?: string): string {
@@ -843,6 +844,7 @@ let syncProfessionalsFromSupabaseHook: ((slice: any) => void) | null = null;
 let syncEscrowsFromSupabaseHook: ((slice: any) => void) | null = null;
 let syncWalletsFromSupabaseHook: ((slice: any) => void) | null = null;
 let syncGameEscrowsFromSupabaseHook: ((slice: any) => void) | null = null;
+let syncTasksFromSupabaseHook: ((slice: any) => void) | null = null;
 
 let initialSupabaseSyncDone = false;
 let initialSupabaseSyncPromise: Promise<void> | null = null;
@@ -852,7 +854,7 @@ async function syncAdminStateFromSupabase() {
     // Ensure registry users are populated before applying user overrides
     await syncUsersFromSupabase().catch(() => {});
 
-    const [cfgSlice, cmsSlice, usersSlice, storesSlice, aiSlice, profsSlice, escrowsSlice, walletsSlice, gameEscrowsSlice] = await Promise.all([
+    const [cfgSlice, cmsSlice, usersSlice, storesSlice, aiSlice, profsSlice, escrowsSlice, walletsSlice, gameEscrowsSlice, tasksSlice] = await Promise.all([
       fetchSupabaseAdminSlice(ADMIN_SYS_CONFIG_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_CMS_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_USERS_KEY),
@@ -862,6 +864,7 @@ async function syncAdminStateFromSupabase() {
       fetchSupabaseAdminSlice(ADMIN_SYS_ESCROWS_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_WALLETS_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_GAME_ESCROWS_KEY),
+      fetchSupabaseAdminSlice(ADMIN_SYS_TASKS_KEY),
     ]);
 
     if (cfgSlice) {
@@ -991,6 +994,9 @@ async function syncAdminStateFromSupabase() {
     }
     if (gameEscrowsSlice && syncGameEscrowsFromSupabaseHook) {
       syncGameEscrowsFromSupabaseHook(gameEscrowsSlice);
+    }
+    if (tasksSlice && syncTasksFromSupabaseHook) {
+      syncTasksFromSupabaseHook(tasksSlice);
     }
     initialSupabaseSyncDone = true;
   } catch (_) {}
@@ -2463,6 +2469,8 @@ interface ServerWalletTx {
     | 'health_consult'
     | 'outside_ticket'
     | 'outside_payout'
+    | 'task_stake'
+    | 'task_earn'
     | 'referral_bonus'
     | 'refund';
   title: string;
@@ -4739,6 +4747,753 @@ app.post('/api/professionals/errands/dispute', (req: Request, res: Response) => 
   pushProfessionalsToSupabase();
   broadcastProfessionalsUpdate();
   return res.json({ success: true, order });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TASK-TO-EARN BOUNTY CAMPAIGNS (70% WORKER POOL / 30% SYSTEM FEE + ADMIN VERIFY)
+// ═══════════════════════════════════════════════════════════════════════════════
+const TASKS_FILE = path.join(__dirname, 'data_task_bounties.json');
+
+interface ServerTaskSubmission {
+  id: string;
+  taskId: string;
+  workerId?: string;
+  workerName: string;
+  workerPhone: string;
+  workerAvatar?: string;
+  proofUsername: string;
+  proofScreenshot: string;
+  note?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  adminNote?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  payoutAmount: number;
+  payoutReference?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ServerTaskCampaign {
+  id: string;
+  title: string;
+  category: 'youtube' | 'instagram' | 'tiktok' | 'twitter' | 'music' | 'app' | 'other';
+  targetUrl?: string;
+  instructions: string;
+  platformHandleHint: string;
+  creatorId?: string;
+  creatorName: string;
+  creatorPhone: string;
+  creatorAvatar?: string;
+  totalStake: number;
+  systemFeePercent: number;
+  systemFeeAmount: number;
+  rewardPool: number;
+  rewardPerTask: number;
+  maxSlots: number;
+  approvedCount: number;
+  pendingCount: number;
+  rejectedCount: number;
+  remainingEscrow: number;
+  currency: 'NGN' | 'KES' | 'GHS' | 'ZAR';
+  status: 'active' | 'completed' | 'closed';
+  submissions: ServerTaskSubmission[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+const serverTaskBounties = new Map<string, ServerTaskCampaign>();
+let serverTasksUpdatedAt = '';
+
+try {
+  if (fs.existsSync(TASKS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
+    const list = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : [];
+    for (const t of list) {
+      if (t && t.id) serverTaskBounties.set(String(t.id), t);
+    }
+    if (raw?.updatedAt) serverTasksUpdatedAt = String(raw.updatedAt);
+  }
+} catch (e) {
+  console.warn('Notice loading data_task_bounties.json:', e);
+}
+
+function saveTaskBountiesFile(pushRemote: boolean = true) {
+  try {
+    serverTasksUpdatedAt = new Date().toISOString();
+    fs.writeFileSync(
+      TASKS_FILE,
+      JSON.stringify(
+        { tasks: Array.from(serverTaskBounties.values()), updatedAt: serverTasksUpdatedAt },
+        null,
+        2
+      )
+    );
+  } catch (e) {
+    console.warn('Notice saving data_task_bounties.json:', e);
+  }
+  if (pushRemote) {
+    pushTasksToSupabase();
+  }
+}
+
+let tasksPushTimer: ReturnType<typeof setTimeout> | null = null;
+function pushTasksToSupabase() {
+  if (tasksPushTimer) clearTimeout(tasksPushTimer);
+  tasksPushTimer = setTimeout(() => {
+    const sorted = Array.from(serverTaskBounties.values())
+      .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime())
+      .slice(0, 200);
+    upsertSupabaseAdminSlice(ADMIN_SYS_TASKS_KEY, 'AGC_TASK_BOUNTIES', {
+      tasks: sorted,
+      updatedAt: serverTasksUpdatedAt || new Date().toISOString(),
+    }).catch(() => {});
+  }, 250);
+}
+
+syncTasksFromSupabaseHook = (slice: any) => {
+  if (!slice || !Array.isArray(slice.tasks)) return;
+  let changed = false;
+  for (const t of slice.tasks) {
+    if (!t?.id) continue;
+    const cur = serverTaskBounties.get(t.id);
+    const remoteTs = new Date(t.updatedAt || t.createdAt || 0).getTime();
+    const localTs = new Date(cur?.updatedAt || cur?.createdAt || 0).getTime();
+    if (!cur || remoteTs > localTs) {
+      serverTaskBounties.set(t.id, t);
+      changed = true;
+    }
+  }
+  if (changed) {
+    serverTasksUpdatedAt = slice.updatedAt || slice._rowUpdatedAt || new Date().toISOString();
+    saveTaskBountiesFile(false);
+  }
+};
+
+function recomputeTaskCounts(task: ServerTaskCampaign) {
+  const subs = Array.isArray(task.submissions) ? task.submissions : [];
+  task.approvedCount = subs.filter((s) => s.status === 'approved').length;
+  task.pendingCount = subs.filter((s) => s.status === 'pending').length;
+  task.rejectedCount = subs.filter((s) => s.status === 'rejected').length;
+  if (task.status === 'active' && (task.approvedCount >= task.maxSlots || task.remainingEscrow < task.rewardPerTask)) {
+    task.status = 'completed';
+  }
+}
+
+function sanitizeTaskForViewer(task: ServerTaskCampaign, viewerPhone?: string, isAdminView = false) {
+  recomputeTaskCounts(task);
+  const subs = Array.isArray(task.submissions) ? task.submissions : [];
+  if (isAdminView) {
+    return { ...task, mySubmission: null };
+  }
+  const mySub = viewerPhone
+    ? subs.find((s) => phonesMatchServer(viewerPhone, s.workerPhone)) || null
+    : null;
+  const isCreator = Boolean(viewerPhone && phonesMatchServer(viewerPhone, task.creatorPhone));
+  const safeSubmissions = isCreator
+    ? subs.map((s) => ({
+        ...s,
+        workerPhone: '',
+        proofScreenshot: '',
+      }))
+    : [];
+  return {
+    ...task,
+    submissions: safeSubmissions,
+    mySubmission: mySub,
+  };
+}
+
+function broadcastTaskBountiesUpdated(taskId?: string) {
+  io.emit('task_bounties_updated', {
+    taskId: taskId || null,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+app.get('/api/tasks', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const viewerPhone = String(req.query.viewerPhone || '').trim();
+    const isAdminView = String(req.query.admin || '') === 'true';
+    const list = Array.from(serverTaskBounties.values())
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .map((t) => sanitizeTaskForViewer(t, viewerPhone, isAdminView));
+
+    const summary = {
+      totalTasks: list.length,
+      activeTasks: list.filter((t) => t.status === 'active').length,
+      pendingSubmissions: Array.from(serverTaskBounties.values()).reduce(
+        (acc, t) => acc + (t.submissions || []).filter((s) => s.status === 'pending').length,
+        0
+      ),
+      totalStaked: list.reduce((acc, t) => acc + Number(t.totalStake || 0), 0),
+      totalSystemFees: list.reduce((acc, t) => acc + Number(t.systemFeeAmount || 0), 0),
+      totalReleased: list.reduce(
+        (acc, t) => acc + Number(t.approvedCount || 0) * Number(t.rewardPerTask || 0),
+        0
+      ),
+    };
+
+    return res.json({ success: true, tasks: list, summary });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to load task bounties' });
+  }
+});
+
+app.post('/api/tasks/create', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const body = req.body || {};
+    const {
+      title,
+      category = 'youtube',
+      targetUrl,
+      instructions,
+      platformHandleHint,
+      creatorPhone,
+      creatorName,
+      creatorAvatar,
+      totalStake,
+      rewardPerTask: reqRewardPerTask,
+      maxSlots: reqMaxSlots,
+      currency = 'NGN',
+    } = body;
+
+    const cleanTitle = String(title || '').trim();
+    const cleanInstructions = String(instructions || '').trim();
+    const cleanPhone = String(creatorPhone || '').trim();
+    const stake = Math.round(Number(totalStake) || 0);
+
+    if (!cleanTitle || !cleanInstructions || !cleanPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Task title, clear instructions, and creator phone are required.',
+      });
+    }
+    if (!Number.isFinite(stake) || stake < 500) {
+      return res.status(400).json({
+        success: false,
+        message: 'Minimum task campaign stake is ₦500.',
+      });
+    }
+
+    const systemFeePercent = 30;
+    const systemFeeAmount = Math.round(stake * 0.3);
+    const rewardPool = Math.max(0, stake - systemFeeAmount);
+
+    let rewardPerTask = Math.round(Number(reqRewardPerTask) || 0);
+    let maxSlots = Math.round(Number(reqMaxSlots) || 0);
+
+    if (rewardPerTask >= 50 && maxSlots <= 0) {
+      maxSlots = Math.floor(rewardPool / rewardPerTask);
+    } else if (maxSlots >= 1 && rewardPerTask <= 0) {
+      rewardPerTask = Math.floor(rewardPool / maxSlots);
+    } else if (rewardPerTask <= 0 && maxSlots <= 0) {
+      maxSlots = Math.min(100, Math.max(1, Math.floor(rewardPool / 100)));
+      rewardPerTask = Math.floor(rewardPool / maxSlots);
+    }
+
+    if (rewardPerTask < 50) {
+      return res.status(400).json({
+        success: false,
+        message: 'Minimum payout per person is ₦50. Increase total stake or reduce participant count.',
+      });
+    }
+    if (maxSlots < 1 || rewardPerTask * maxSlots > rewardPool) {
+      return res.status(400).json({
+        success: false,
+        message: `70% worker pool (₦${rewardPool.toLocaleString()}) cannot cover ${maxSlots} × ₦${rewardPerTask.toLocaleString()}.`,
+      });
+    }
+
+    const allocatedPool = rewardPerTask * maxSlots;
+    const finalSystemFee = stake - allocatedPool;
+
+    let match = findUserEntry(cleanPhone);
+    let wallet = getOrCreateServerWallet(cleanPhone);
+    if (wallet.availableBalance < stake) {
+      await syncAdminStateFromSupabase().catch(() => {});
+      match = findUserEntry(cleanPhone) || match;
+      wallet = getOrCreateServerWallet(cleanPhone);
+    }
+
+    if (wallet.availableBalance < stake) {
+      return res.status(400).json({
+        success: false,
+        insufficientFunds: true,
+        availableBalance: wallet.availableBalance,
+        message: `Insufficient wallet balance (₦${wallet.availableBalance.toLocaleString()} available; need ₦${stake.toLocaleString()}).`,
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const refId = `TASK_${taskId}`;
+
+    wallet.availableBalance = Math.max(0, Number(wallet.availableBalance || 0) - stake);
+    wallet.escrowLockedBalance = Math.max(0, Number(wallet.escrowLockedBalance || 0) + allocatedPool);
+    wallet.updatedAt = nowIso;
+
+    const stakeTx: ServerWalletTx = {
+      id: `tx_task_stake_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
+      userId: match?.user.id,
+      userPhone: match?.user.phoneNumber || wallet.phoneNumber || cleanPhone,
+      userName: match?.user.fullName || String(creatorName || 'Creator'),
+      type: 'task_stake',
+      title: `Task Bounty Stake: ${cleanTitle.slice(0, 42)}`,
+      description: `70% Worker Pool (₦${allocatedPool.toLocaleString()}) + 30% System Fee (₦${finalSystemFee.toLocaleString()})`,
+      amount: stake,
+      fee: finalSystemFee,
+      balanceAfter: wallet.availableBalance,
+      currency: (currency || wallet.currency || 'NGN') as any,
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: refId,
+      referenceId: taskId,
+      channel: 'wallet',
+      metadata: {
+        taskId,
+        systemFeeAmount: finalSystemFee,
+        rewardPool: allocatedPool,
+        rewardPerTask,
+        maxSlots,
+      },
+    };
+
+    wallet.transactions = [stakeTx, ...wallet.transactions].slice(0, 100);
+    serverWallets.set(wallet.phoneKey, wallet);
+    saveWalletsFile();
+    appendUnifiedLedgerTx(stakeTx);
+
+    if (match) {
+      match.user.walletBalanceNgn = wallet.availableBalance;
+      (match.user as any).updatedAt = nowIso;
+      usersByPhone.set(match.key, match.user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(match.user);
+    }
+
+    const allowedCategories: ServerTaskCampaign['category'][] = [
+      'youtube',
+      'instagram',
+      'tiktok',
+      'twitter',
+      'music',
+      'app',
+      'other',
+    ];
+    const validCat = allowedCategories.includes(category) ? category : 'other';
+
+    const campaign: ServerTaskCampaign = {
+      id: taskId,
+      title: cleanTitle,
+      category: validCat,
+      targetUrl: targetUrl ? String(targetUrl).trim() : undefined,
+      instructions: cleanInstructions,
+      platformHandleHint: String(platformHandleHint || 'Platform Username / Handle').trim(),
+      creatorId: match?.user.id,
+      creatorName: String(creatorName || match?.user.fullName || 'AGC Creator').trim(),
+      creatorPhone: match?.user.phoneNumber || cleanPhone,
+      creatorAvatar: creatorAvatar || match?.user.avatarUrl,
+      totalStake: stake,
+      systemFeePercent,
+      systemFeeAmount: finalSystemFee,
+      rewardPool: allocatedPool,
+      rewardPerTask,
+      maxSlots,
+      approvedCount: 0,
+      pendingCount: 0,
+      rejectedCount: 0,
+      remainingEscrow: allocatedPool,
+      currency: (currency || 'NGN') as any,
+      status: 'active',
+      submissions: [],
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    serverTaskBounties.set(campaign.id, campaign);
+    saveTaskBountiesFile();
+    emitWalletUpdateToPhone(cleanPhone, wallet, stakeTx.title, refId);
+    broadcastTaskBountiesUpdated(campaign.id);
+
+    appendAuditEntry({
+      refId: campaign.id,
+      actor: campaign.creatorName,
+      actorRole: 'Creator',
+      action: 'Task Bounty Staked',
+      target: `${campaign.title} (${maxSlots} × ₦${rewardPerTask.toLocaleString()})`,
+      details: `Staked ₦${stake.toLocaleString()} · 30% System Fee ₦${finalSystemFee.toLocaleString()} · 70% Escrow Pool ₦${allocatedPool.toLocaleString()}`,
+    });
+
+    return res.json({
+      success: true,
+      task: sanitizeTaskForViewer(campaign, cleanPhone, false),
+      wallet: {
+        availableBalance: wallet.availableBalance,
+        escrowLockedBalance: wallet.escrowLockedBalance,
+        currency: wallet.currency,
+        transactions: wallet.transactions,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to create task campaign' });
+  }
+});
+
+app.post('/api/tasks/:taskId/submit', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const taskId = String(req.params.taskId || '').trim();
+    const task = serverTaskBounties.get(taskId);
+    if (!task) {
+      return res.status(404).json({ success: false, message: 'Task campaign not found.' });
+    }
+    if (task.status !== 'active') {
+      return res.status(400).json({ success: false, message: `This task campaign is ${task.status}.` });
+    }
+
+    const { workerPhone, workerName, workerAvatar, proofUsername, proofScreenshot, note } = req.body || {};
+    const cleanPhone = String(workerPhone || '').trim();
+    const cleanUsername = String(proofUsername || '').trim();
+    const cleanShot = String(proofScreenshot || '').trim();
+
+    if (!cleanPhone) {
+      return res.status(400).json({ success: false, message: 'Sign in with your phone number to submit proof.' });
+    }
+    if (phonesMatchServer(cleanPhone, task.creatorPhone)) {
+      return res.status(400).json({ success: false, message: 'Campaign creators cannot submit proof to their own task.' });
+    }
+    if (!cleanUsername || cleanUsername.length < 2) {
+      return res.status(400).json({ success: false, message: `Enter your ${task.platformHandleHint || 'username'} used on the task.` });
+    }
+    if (!cleanShot || (!cleanShot.startsWith('data:image/') && !cleanShot.startsWith('http'))) {
+      return res.status(400).json({ success: false, message: 'Please attach a proof screenshot image.' });
+    }
+
+    recomputeTaskCounts(task);
+    const activeSubs = task.submissions.filter(
+      (s) => phonesMatchServer(cleanPhone, s.workerPhone) && s.status !== 'rejected'
+    );
+    if (activeSubs.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          activeSubs[0].status === 'approved'
+            ? 'You have already completed and been paid for this task.'
+            : 'Your proof is already awaiting admin verification.',
+      });
+    }
+
+    if (task.approvedCount + task.pendingCount >= task.maxSlots) {
+      return res.status(400).json({
+        success: false,
+        message: 'All micro-task slots for this campaign are currently claimed or pending verification.',
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const workerMatch = findUserEntry(cleanPhone);
+    const sub: ServerTaskSubmission = {
+      id: `tsub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      taskId: task.id,
+      workerId: workerMatch?.user.id,
+      workerName: String(workerName || workerMatch?.user.fullName || 'AGC Earner').trim(),
+      workerPhone: workerMatch?.user.phoneNumber || cleanPhone,
+      workerAvatar: workerAvatar || workerMatch?.user.avatarUrl,
+      proofUsername: cleanUsername,
+      proofScreenshot: cleanShot,
+      note: note ? String(note).trim() : undefined,
+      status: 'pending',
+      payoutAmount: task.rewardPerTask,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    // Replace any previous rejected submission from same user or prepend
+    task.submissions = [
+      sub,
+      ...task.submissions.filter((s) => !phonesMatchServer(cleanPhone, s.workerPhone)),
+    ];
+    task.updatedAt = nowIso;
+    recomputeTaskCounts(task);
+    serverTaskBounties.set(task.id, task);
+    saveTaskBountiesFile();
+    broadcastTaskBountiesUpdated(task.id);
+
+    return res.json({
+      success: true,
+      submission: sub,
+      task: sanitizeTaskForViewer(task, cleanPhone, false),
+      message: `Proof submitted! Admin will verify @${cleanUsername.replace(/^@/, '')} and release ₦${task.rewardPerTask.toLocaleString()}.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to submit proof' });
+  }
+});
+
+app.post('/api/admin/tasks/review', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { taskId, submissionId, decision, adminNote, adminName } = req.body || {};
+    if (!taskId || !submissionId || !['approve', 'reject'].includes(String(decision))) {
+      return res.status(400).json({
+        success: false,
+        message: 'taskId, submissionId, and decision (approve|reject) are required.',
+      });
+    }
+
+    const task = serverTaskBounties.get(String(taskId));
+    if (!task) {
+      return res.status(404).json({ success: false, message: 'Task campaign not found.' });
+    }
+    const sub = task.submissions.find((s) => s.id === String(submissionId));
+    if (!sub) {
+      return res.status(404).json({ success: false, message: 'Submission not found.' });
+    }
+
+    if (sub.status === 'approved') {
+      return res.json({
+        success: true,
+        alreadyReviewed: true,
+        task,
+        message: 'This submission was already verified and paid out.',
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const reviewer = String(adminName || 'Super Admin').trim();
+
+    if (decision === 'reject') {
+      sub.status = 'rejected';
+      sub.adminNote = String(adminNote || 'Proof did not match task instructions.').trim();
+      sub.reviewedBy = reviewer;
+      sub.reviewedAt = nowIso;
+      sub.updatedAt = nowIso;
+      if (task.status === 'completed' && task.remainingEscrow >= task.rewardPerTask) {
+        task.status = 'active';
+      }
+      recomputeTaskCounts(task);
+      task.updatedAt = nowIso;
+      serverTaskBounties.set(task.id, task);
+      saveTaskBountiesFile();
+      broadcastTaskBountiesUpdated(task.id);
+
+      appendAuditEntry({
+        refId: sub.id,
+        actor: reviewer,
+        actorRole: 'Super Admin',
+        action: 'Task Proof Rejected',
+        target: `${task.title} (@${sub.proofUsername.replace(/^@/, '')})`,
+        details: sub.adminNote,
+      });
+
+      return res.json({
+        success: true,
+        task,
+        submission: sub,
+        message: `Rejected submission from ${sub.workerName}. Slot returned to active pool.`,
+      });
+    }
+
+    // Approve & Release Funds from Creator's Task Escrow -> Worker's Available Balance
+    const payout = Math.round(Number(sub.payoutAmount || task.rewardPerTask) || 0);
+    if (task.remainingEscrow < payout) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient remaining campaign escrow (₦${task.remainingEscrow.toLocaleString()} left; payout requires ₦${payout.toLocaleString()}).`,
+      });
+    }
+
+    const creatorWallet = getOrCreateServerWallet(task.creatorPhone);
+    creatorWallet.escrowLockedBalance = Math.max(0, Number(creatorWallet.escrowLockedBalance || 0) - payout);
+    creatorWallet.updatedAt = nowIso;
+    serverWallets.set(creatorWallet.phoneKey, creatorWallet);
+
+    const workerWallet = getOrCreateServerWallet(sub.workerPhone);
+    const workerMatch = findUserEntry(sub.workerPhone);
+    workerWallet.availableBalance = Math.max(0, Number(workerWallet.availableBalance || 0) + payout);
+    workerWallet.updatedAt = nowIso;
+
+    const refId = `TASKPAY_${sub.id}`;
+    const earnTx: ServerWalletTx = {
+      id: `tx_task_earn_${sub.id}`,
+      userId: workerMatch?.user.id || sub.workerId,
+      userPhone: workerMatch?.user.phoneNumber || workerWallet.phoneNumber || sub.workerPhone,
+      userName: workerMatch?.user.fullName || sub.workerName,
+      type: 'task_earn',
+      title: `Task Payout: ${task.title.slice(0, 42)}`,
+      description: `Admin verified @${sub.proofUsername.replace(/^@/, '')} · Released by ${reviewer}`,
+      amount: payout,
+      fee: 0,
+      balanceAfter: workerWallet.availableBalance,
+      currency: task.currency || 'NGN',
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: refId,
+      referenceId: task.id,
+      channel: 'wallet',
+      metadata: {
+        taskId: task.id,
+        submissionId: sub.id,
+        proofUsername: sub.proofUsername,
+        verifiedBy: reviewer,
+      },
+    };
+
+    workerWallet.transactions = [earnTx, ...workerWallet.transactions.filter((t) => t.id !== earnTx.id)].slice(0, 100);
+    serverWallets.set(workerWallet.phoneKey, workerWallet);
+    saveWalletsFile();
+    appendUnifiedLedgerTx(earnTx);
+
+    if (workerMatch) {
+      workerMatch.user.walletBalanceNgn = workerWallet.availableBalance;
+      (workerMatch.user as any).updatedAt = nowIso;
+      usersByPhone.set(workerMatch.key, workerMatch.user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(workerMatch.user);
+    }
+
+    sub.status = 'approved';
+    sub.adminNote = adminNote ? String(adminNote).trim() : 'Verified & funds released';
+    sub.reviewedBy = reviewer;
+    sub.reviewedAt = nowIso;
+    sub.payoutReference = refId;
+    sub.updatedAt = nowIso;
+
+    task.remainingEscrow = Math.max(0, Number(task.remainingEscrow || 0) - payout);
+    task.updatedAt = nowIso;
+    recomputeTaskCounts(task);
+    serverTaskBounties.set(task.id, task);
+    saveTaskBountiesFile();
+
+    emitWalletUpdateToPhone(sub.workerPhone, workerWallet, earnTx.title, refId);
+    emitWalletUpdateToPhone(task.creatorPhone, creatorWallet, `Task payout released (${sub.workerName})`, refId);
+    for (const v of getPhoneVariants(sub.workerPhone)) {
+      io.to(`phone:${v}`).emit('task_payout_released', {
+        taskId: task.id,
+        taskTitle: task.title,
+        submissionId: sub.id,
+        amount: payout,
+        currency: task.currency || 'NGN',
+        newBalance: workerWallet.availableBalance,
+        reference: refId,
+      });
+    }
+    broadcastTaskBountiesUpdated(task.id);
+
+    appendAuditEntry({
+      refId,
+      actor: reviewer,
+      actorRole: 'Super Admin',
+      action: 'Task Proof Verified & Paid',
+      target: `${sub.workerName} (@${sub.proofUsername.replace(/^@/, '')})`,
+      details: `Released ₦${payout.toLocaleString()} for "${task.title}"`,
+    });
+
+    return res.json({
+      success: true,
+      task,
+      submission: sub,
+      message: `Verified! Released ₦${payout.toLocaleString()} to ${sub.workerName}.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to review task submission' });
+  }
+});
+
+app.post('/api/tasks/:taskId/close', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const taskId = String(req.params.taskId || '').trim();
+    const { actorPhone, isAdmin } = req.body || {};
+    const task = serverTaskBounties.get(taskId);
+    if (!task) {
+      return res.status(404).json({ success: false, message: 'Task campaign not found.' });
+    }
+    if (!isAdmin && (!actorPhone || !phonesMatchServer(actorPhone, task.creatorPhone))) {
+      return res.status(403).json({ success: false, message: 'Only the campaign creator or Admin can close this task.' });
+    }
+    if (task.status === 'closed') {
+      return res.json({ success: true, task, message: 'Campaign is already closed.' });
+    }
+
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const refundAmt = Math.max(0, Math.round(Number(task.remainingEscrow) || 0));
+
+    let creatorWallet = getOrCreateServerWallet(task.creatorPhone);
+    if (refundAmt > 0) {
+      const creatorMatch = findUserEntry(task.creatorPhone);
+      creatorWallet.escrowLockedBalance = Math.max(0, Number(creatorWallet.escrowLockedBalance || 0) - refundAmt);
+      creatorWallet.availableBalance = Math.max(0, Number(creatorWallet.availableBalance || 0) + refundAmt);
+      creatorWallet.updatedAt = nowIso;
+
+      const refId = `TASKREF_${task.id}`;
+      const refundTx: ServerWalletTx = {
+        id: `tx_task_ref_${task.id}`,
+        userId: creatorMatch?.user.id,
+        userPhone: creatorMatch?.user.phoneNumber || task.creatorPhone,
+        userName: creatorMatch?.user.fullName || task.creatorName,
+        type: 'refund',
+        title: `Task Escrow Refund: ${task.title.slice(0, 40)}`,
+        description: 'Unclaimed micro-task reward pool refunded on campaign close',
+        amount: refundAmt,
+        fee: 0,
+        balanceAfter: creatorWallet.availableBalance,
+        currency: task.currency || 'NGN',
+        timestamp: nowStr,
+        createdAt: nowIso,
+        status: 'completed',
+        reference: refId,
+        referenceId: task.id,
+        channel: 'wallet',
+        metadata: { taskId: task.id, closedBy: isAdmin ? 'admin' : 'creator' },
+      };
+      creatorWallet.transactions = [refundTx, ...creatorWallet.transactions].slice(0, 100);
+      serverWallets.set(creatorWallet.phoneKey, creatorWallet);
+      saveWalletsFile();
+      appendUnifiedLedgerTx(refundTx);
+      if (creatorMatch) {
+        creatorMatch.user.walletBalanceNgn = creatorWallet.availableBalance;
+        (creatorMatch.user as any).updatedAt = nowIso;
+        usersByPhone.set(creatorMatch.key, creatorMatch.user);
+        saveUsersFile();
+        pushAdminUserOverrideToSupabase(creatorMatch.user);
+      }
+      emitWalletUpdateToPhone(task.creatorPhone, creatorWallet, refundTx.title, refId);
+    }
+
+    task.remainingEscrow = 0;
+    task.status = 'closed';
+    task.updatedAt = nowIso;
+    serverTaskBounties.set(task.id, task);
+    saveTaskBountiesFile();
+    broadcastTaskBountiesUpdated(task.id);
+
+    return res.json({
+      success: true,
+      task,
+      refundAmount: refundAmt,
+      wallet: {
+        availableBalance: creatorWallet.availableBalance,
+        escrowLockedBalance: creatorWallet.escrowLockedBalance,
+        currency: creatorWallet.currency,
+        transactions: creatorWallet.transactions,
+      },
+      message:
+        refundAmt > 0
+          ? `Campaign closed. Refunded ₦${refundAmt.toLocaleString()} unspent escrow to creator wallet.`
+          : 'Campaign closed.',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Failed to close campaign' });
+  }
 });
 
 app.post('/api/admin/professionals/review', (req: Request, res: Response) => {

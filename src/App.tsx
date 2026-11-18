@@ -37,6 +37,7 @@ import { AuthModal } from './components/AuthModal';
 import { ContactsModal } from './components/ContactsModal';
 import { DispatchModal } from './components/DispatchModal';
 import { JobBoardModal } from './components/JobBoardModal';
+import { TaskToEarnModal } from './components/TaskToEarnModal';
 import { SecurityModal } from './components/SecurityModal';
 import { ServicesBookingModal } from './components/ServicesBookingModal';
 import { SendBillModal } from './components/SendBillModal';
@@ -320,6 +321,7 @@ const AppContent: React.FC = () => {
         {isFeatureEnabled('dispatch') && <DispatchModal />}
         {isFeatureEnabled('errands') && <ErrandsModal />}
         {isFeatureEnabled('jobs') && <JobBoardModal />}
+        {isFeatureEnabled('wallet') && <TaskToEarnModal />}
         {isFeatureEnabled('securityPin') && <SecurityModal />}
 
         {/* Services Booking, Send My Bill & Payroll Auto-Debit */}

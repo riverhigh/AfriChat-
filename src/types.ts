@@ -83,6 +83,8 @@ export type WalletTransactionType =
   | 'course_enroll'
   | 'legal_consult'
   | 'health_consult'
+  | 'task_stake'
+  | 'task_earn'
   | 'referral_bonus'
   | 'refund';
 
@@ -1642,6 +1644,7 @@ export interface FeatureFlags {
   voiceNotes?: boolean;
   ajo: boolean;             // requires wallet
   payroll: boolean;         // requires wallet
+  tasks?: boolean;          // requires wallet
 }
 
 export interface CmsAnnouncement {
@@ -1818,4 +1821,66 @@ export interface OutsideRsvp {
   checkedInAt?: string;
   createdAt: string;
 }
+
+// 33. Task-to-Earn Micro-Task Bounty Campaigns (70% Worker Pool / 30% Platform Fee)
+export type TaskBountyCategory =
+  | 'youtube'
+  | 'instagram'
+  | 'tiktok'
+  | 'twitter'
+  | 'music'
+  | 'app'
+  | 'other';
+
+export type TaskBountySubmissionStatus = 'pending' | 'approved' | 'rejected';
+
+export interface TaskBountySubmission {
+  id: string;
+  taskId: string;
+  workerId?: string;
+  workerName: string;
+  workerPhone: string;
+  workerAvatar?: string;
+  proofUsername: string;
+  proofScreenshot: string;
+  note?: string;
+  status: TaskBountySubmissionStatus;
+  adminNote?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  payoutAmount: number;
+  payoutReference?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskBountyCampaign {
+  id: string;
+  title: string;
+  category: TaskBountyCategory;
+  targetUrl?: string;
+  instructions: string;
+  platformHandleHint: string;
+  creatorId?: string;
+  creatorName: string;
+  creatorPhone: string;
+  creatorAvatar?: string;
+  totalStake: number;
+  systemFeePercent: number;
+  systemFeeAmount: number;
+  rewardPool: number;
+  rewardPerTask: number;
+  maxSlots: number;
+  approvedCount: number;
+  pendingCount: number;
+  rejectedCount: number;
+  remainingEscrow: number;
+  currency: CurrencyCode;
+  status: 'active' | 'completed' | 'closed';
+  submissions: TaskBountySubmission[];
+  mySubmission?: TaskBountySubmission | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 

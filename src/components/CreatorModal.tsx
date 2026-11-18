@@ -79,6 +79,7 @@ export const CreatorModal: React.FC = () => {
   const {
     isCreatorModalOpen,
     setIsCreatorModalOpen,
+    setIsTaskEarnModalOpen,
     creators,
     creatorShows,
     creatorSongs,
@@ -575,6 +576,18 @@ export const CreatorModal: React.FC = () => {
               >
                 <User className="w-4 h-4" />
                 <span>My Creator Studio</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreatorModalOpen(false);
+                  setIsTaskEarnModalOpen(true);
+                }}
+                className="w-full flex items-center gap-3.5 px-4 py-3 rounded-2xl text-xs font-bold transition-all text-emerald-300 hover:bg-emerald-500/10"
+              >
+                <Coins className="w-4 h-4" />
+                <span>Task to Earn Bounties</span>
               </button>
             </nav>
 

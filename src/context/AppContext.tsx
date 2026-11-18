@@ -1306,6 +1306,9 @@ interface AppContextType {
     job: Omit<JobPosting, 'id' | 'postedAt' | 'isPaid'>
   ) => { success: boolean; job?: JobPosting; message?: string };
   applyForJob: (job: JobPosting) => { success: boolean; message: string };
+  // 12b. Task-to-Earn Micro-Task Bounty Campaigns
+  isTaskEarnModalOpen: boolean;
+  setIsTaskEarnModalOpen: (val: boolean) => void;
   // 13. Security Settings (Payment PIN & Security Questions)
   securitySettings: SecuritySettings;
   setPaymentPin: (pin: string) => void;
@@ -6335,6 +6338,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [isJobBoardModalOpen, setIsJobBoardModalOpen] = useState(false);
   const [isPostJobModalOpen, setIsPostJobModalOpen] = useState(false);
+  const [isTaskEarnModalOpen, setIsTaskEarnModalOpen] = useState(false);
 
   // 13. Security Settings (Payment PIN & Security Questions — NO default PIN)
   const getSecurityStorageKey = (phone?: string) =>
@@ -20694,6 +20698,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (Array.isArray(payload.errandOrders)) setErrandOrders(payload.errandOrders);
     };
 
+    const onTaskPayoutReleased = (payload: any) => {
+      if (!payload) return;
+      const amt = Number(payload.amount || 0);
+      if (amt > 0) {
+        triggerCreditAlert({
+          id: payload.reference || `taskpay_${payload.submissionId || Date.now()}`,
+          amount: amt,
+          currency: payload.currency || 'NGN',
+          newBalance: Number(payload.newBalance || walletRef.current?.availableBalance || 0),
+          category: 'payout',
+          categoryLabel: 'Task Reward Released',
+          title: payload.taskTitle || 'Micro-Task Verified & Paid',
+          subtitle: 'Admin verified your proof and released escrow funds',
+        });
+      }
+      refreshWalletFromServer().catch(() => {});
+    };
+
     socket.on('admin_config_updated', onConfig);
     socket.on('admin_features_updated', onFeatures);
     socket.on('admin_cms_updated', onCms);
@@ -20703,6 +20725,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socket.on('user_registered', onUserRegistered);
     socket.on('user_updated', onUserUpdated);
     socket.on('wallet_updated', onWalletUpdatedEvent);
+    socket.on('task_payout_released', onTaskPayoutReleased);
     socket.on('escrow_order_updated', onEscrowOrderUpdated);
     socket.on('professionals_updated', onProfessionalsUpdated);
     socket.on('force_logout', onKickEvent);
@@ -20819,6 +20842,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('user_registered', onUserRegistered);
       socket.off('user_updated', onUserUpdated);
       socket.off('wallet_updated', onWalletUpdatedEvent);
+      socket.off('task_payout_released', onTaskPayoutReleased);
       socket.off('escrow_order_updated', onEscrowOrderUpdated);
       socket.off('professionals_updated', onProfessionalsUpdated);
       socket.off('force_logout', onKickEvent);
@@ -22222,6 +22246,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsPostJobModalOpen,
         postNewJob,
         applyForJob,
+        // 12b. Task-to-Earn Micro-Task Bounty Campaigns
+        isTaskEarnModalOpen,
+        setIsTaskEarnModalOpen,
         // 13. Security Settings (Payment PIN & Security Questions)
         securitySettings,
         setPaymentPin,

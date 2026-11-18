@@ -61,6 +61,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
     setIsScamCheckerOpen,
     setIsDispatchModalOpen,
     setIsJobBoardModalOpen,
+    setIsTaskEarnModalOpen,
     setIsContactsModalOpen,
     setIsAuthModalOpen,
     setIsServicesModalOpen,
@@ -198,6 +199,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLanguageModal }) => {
                   {(() => {
                     const allTools: { label: string; sub: string; icon: React.ElementType; action: () => void; cat: 'finance' | 'services' | 'tools'; featureKey?: string }[] = [
                       { label: 'Wallet', sub: 'Paystack & Escrow', icon: Wallet, action: () => setIsWalletModalOpen(true), cat: 'finance', featureKey: 'wallet' },
+                      { label: 'Task to Earn', sub: 'Micro-Tasks · 70% Pool', icon: Coins, action: () => setIsTaskEarnModalOpen(true), cat: 'finance', featureKey: 'wallet' },
                       { label: 'Send My Bill', sub: 'AGC Features Only', icon: Receipt, action: () => setIsSendBillModalOpen(true), cat: 'finance', featureKey: 'wallet' },
                       { label: 'Artisan Hub', sub: '₦5k · Book Skill', icon: Wrench, action: () => setIsServicesModalOpen(true), cat: 'services', featureKey: 'artisan' },
                       { label: 'Errands', sub: 'Runners & Market', icon: ShoppingBag, action: () => setIsErrandsModalOpen(true), cat: 'services', featureKey: 'errands' },

@@ -30,6 +30,7 @@ export const JobBoardModal: React.FC = () => {
   const {
     isJobBoardModalOpen,
     setIsJobBoardModalOpen,
+    setIsTaskEarnModalOpen,
     jobPostings,
     postNewJob,
     applyForJob,
@@ -296,6 +297,18 @@ export const JobBoardModal: React.FC = () => {
               <span>Post a Gig</span>
             </button>
           </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsJobBoardModalOpen(false);
+              setIsTaskEarnModalOpen(true);
+            }}
+            className="w-full py-2 px-3 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center justify-between transition-colors"
+          >
+            <span>Task to Earn · Micro-Tasks &amp; Artist Bounties</span>
+            <span className="text-[11px] font-mono">Earn ₦ →</span>
+          </button>
 
           {/* Search Bar */}
           <div className="relative flex items-center">

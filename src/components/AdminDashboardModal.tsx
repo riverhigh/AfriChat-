@@ -52,9 +52,12 @@ import {
   Edit3,
   Gavel,
   Stethoscope,
+  Coins,
+  ZoomIn,
+  XCircle,
 } from 'lucide-react';
 import { useApp, phonesMatch } from '../context/AppContext';
-import { FeatureFlags, CmsAnnouncement, CmsFaqItem, EscrowOrder, SponsoredStatusAd, AiKnowledgeEntry } from '../types';
+import { FeatureFlags, CmsAnnouncement, CmsFaqItem, EscrowOrder, SponsoredStatusAd, AiKnowledgeEntry, TaskBountyCampaign, TaskBountySubmission } from '../types';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { getSocket } from '../services/socket';
 import { AdminAuditDrawer, AdminAuditEntry, AdminWebhookLog } from './admin/AdminAuditDrawer';
@@ -71,7 +74,7 @@ import {
 import { isSyntheticTestUser } from '../utils/testAccountFilter';
 
 type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'professionals' | 'comms' | 'ads' | 'ai_datacenter' | 'security';
-type FinanceSubTab = 'escrows' | 'ledger' | 'disputes' | 'dispatch' | 'webhooks' | 'payouts';
+type FinanceSubTab = 'escrows' | 'tasks' | 'ledger' | 'disputes' | 'dispatch' | 'webhooks' | 'payouts';
 type UsersSubTab = 'directory' | 'kyc' | 'artisans';
 type CommsSubTab = 'nodes' | 'broadcast' | 'cms';
 type SecuritySubTab = 'waf' | 'audit' | 'features' | 'config' | 'rbac';
@@ -355,6 +358,22 @@ export const AdminDashboardModal: React.FC = () => {
   const [ledgerTypeFilter, setLedgerTypeFilter] = useState('all');
   const [ledgerLoading, setLedgerLoading] = useState(false);
 
+  // Task-to-Earn Admin Verification Queue state
+  const [adminTasks, setAdminTasks] = useState<TaskBountyCampaign[]>([]);
+  const [adminTaskSummary, setAdminTaskSummary] = useState({
+    totalTasks: 0,
+    activeTasks: 0,
+    pendingSubmissions: 0,
+    totalStaked: 0,
+    totalSystemFees: 0,
+    totalReleased: 0,
+  });
+  const [adminTasksLoading, setAdminTasksLoading] = useState(false);
+  const [taskQueueFilter, setTaskQueueFilter] = useState<'pending' | 'approved' | 'rejected' | 'campaigns'>('pending');
+  const [taskReviewBusyId, setTaskReviewBusyId] = useState<string | null>(null);
+  const [taskRejectDrafts, setTaskRejectDrafts] = useState<Record<string, string>>({});
+  const [taskLightboxUrl, setTaskLightboxUrl] = useState<string | null>(null);
+
   // CMS form state
   const [cmsNewAnnTitle, setCmsNewAnnTitle] = useState('');
   const [cmsNewAnnMsg, setCmsNewAnnMsg] = useState('');
@@ -601,6 +620,21 @@ export const AdminDashboardModal: React.FC = () => {
     }
   };
 
+  const fetchAdminTasks = async () => {
+    setAdminTasksLoading(true);
+    try {
+      const res = await fetch('/api/tasks?admin=true');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.tasks)) setAdminTasks(data.tasks);
+        if (data?.summary) setAdminTaskSummary(data.summary);
+      }
+    } catch (_) {
+    } finally {
+      setAdminTasksLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (isAdminModalOpen) {
       fetchLedgerTransactions(ledgerSearch, ledgerTypeFilter);
@@ -615,6 +649,7 @@ export const AdminDashboardModal: React.FC = () => {
         if (Array.isArray(data?.orders)) setServerEscrows(data.orders);
       })
       .catch(() => {});
+    fetchAdminTasks();
     refreshProfessionals?.();
   }, [isAdminModalOpen]);
 
@@ -678,12 +713,16 @@ export const AdminDashboardModal: React.FC = () => {
     const onStoreOrArtisanUpdated = () => {
       fetchLiveMetrics();
     };
+    const onTaskBountiesUpdated = () => {
+      fetchAdminTasks();
+    };
 
     if (sock) {
       sock.on('admin_audit_appended', onAuditAppended);
       sock.on('admin_security_updated', onSecurityUpdated);
       sock.on('admin_store_updated', onStoreOrArtisanUpdated);
       sock.on('admin_artisan_updated', onStoreOrArtisanUpdated);
+      sock.on('task_bounties_updated', onTaskBountiesUpdated);
     }
 
     const interval = autoRefresh
@@ -701,6 +740,7 @@ export const AdminDashboardModal: React.FC = () => {
         sock.off('admin_security_updated', onSecurityUpdated);
         sock.off('admin_store_updated', onStoreOrArtisanUpdated);
         sock.off('admin_artisan_updated', onStoreOrArtisanUpdated);
+        sock.off('task_bounties_updated', onTaskBountiesUpdated);
       }
     };
   }, [isAdminModalOpen, autoRefresh]);
@@ -1846,7 +1886,10 @@ export const AdminDashboardModal: React.FC = () => {
       id: 'finance',
       label: 'Escrow & Finance',
       icon: Scale,
-      badge: mergedEscrowOrders.filter((o) => o.status === 'escrow_secured' || o.status === 'release_approved' || o.status === 'disputed').length || null,
+      badge:
+        mergedEscrowOrders.filter((o) => o.status === 'escrow_secured' || o.status === 'release_approved' || o.status === 'disputed').length +
+          (adminTaskSummary.pendingSubmissions || 0) ||
+        null,
     },
     { id: 'stores', label: 'Vendors & Stores', icon: Store, badge: mergedStores.length || null },
     { id: 'users', label: 'Users & Artisans', icon: Users, badge: mergedUsers.length || null },
@@ -2436,6 +2479,10 @@ export const AdminDashboardModal: React.FC = () => {
                 <div className="flex items-center gap-1.5 overflow-x-auto">
                   {([
                     { id: 'escrows', label: 'Active Escrows' },
+                    {
+                      id: 'tasks',
+                      label: `Tasks & Bounties${adminTaskSummary.pendingSubmissions > 0 ? ` (${adminTaskSummary.pendingSubmissions})` : ''}`,
+                    },
                     { id: 'ledger', label: 'Transaction Ledger' },
                     { id: 'disputes', label: 'Dispute Resolution' },
                     { id: 'dispatch', label: 'Dispatch (5%)' },
@@ -2630,6 +2677,8 @@ export const AdminDashboardModal: React.FC = () => {
                         <option value="errand_release">Errand Payout</option>
                         <option value="game_bet">Game Wager / Bet</option>
                         <option value="game_win">Game Payout / Win</option>
+                        <option value="task_stake">Task Bounty Stake</option>
+                        <option value="task_earn">Task Bounty Payout</option>
                         <option value="bill_paid">Bill Paid</option>
                         <option value="bill_received">Bill Collected</option>
                         <option value="payroll_debit">Payroll Disbursement</option>
@@ -2675,7 +2724,7 @@ export const AdminDashboardModal: React.FC = () => {
                           </tr>
                         ) : (
                           ledgerTxs.map((tx: any, idx: number) => {
-                            const isIncoming = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release', 'errand_release', 'referral_bonus', 'bill_received'].includes(tx.type);
+                            const isIncoming = ['topup', 'deposit', 'received', 'game_win', 'task_earn', 'refund', 'escrow_release', 'errand_release', 'referral_bonus', 'bill_received'].includes(tx.type);
                             const isEscrow = tx.type === 'escrow_lock' || tx.type === 'errand_escrow';
                             return (
                               <tr key={tx.id || idx} className="hover:bg-zinc-900/70 transition-colors">
@@ -3026,6 +3075,372 @@ export const AdminDashboardModal: React.FC = () => {
                     </button>
                   </div>
                 </form>
+              )}
+
+              {/* 2F. Task-to-Earn Micro-Task Verification & Escrow Release */}
+              {financeTab === 'tasks' && (
+                <div className="space-y-4">
+                  {/* KPI Strip */}
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                    <div className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                      <div className="text-[11px] text-zinc-400">Active Campaigns</div>
+                      <div className="text-lg font-bold font-mono tabular-nums text-white mt-0.5">
+                        {adminTaskSummary.activeTasks} / {adminTaskSummary.totalTasks}
+                      </div>
+                    </div>
+                    <div className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                      <div className="text-[11px] text-zinc-400">Pending Proofs</div>
+                      <div className="text-lg font-bold font-mono tabular-nums text-amber-400 mt-0.5">
+                        {adminTaskSummary.pendingSubmissions}
+                      </div>
+                    </div>
+                    <div className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                      <div className="text-[11px] text-zinc-400">Total Staked</div>
+                      <div className="text-lg font-bold font-mono tabular-nums text-white mt-0.5">
+                        ₦{Number(adminTaskSummary.totalStaked || 0).toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                      <div className="text-[11px] text-zinc-400">Platform Fee (30%)</div>
+                      <div className="text-lg font-bold font-mono tabular-nums text-violet-400 mt-0.5">
+                        ₦{Number(adminTaskSummary.totalSystemFees || 0).toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                      <div className="text-[11px] text-zinc-400">Released to Earners</div>
+                      <div className="text-lg font-bold font-mono tabular-nums text-emerald-400 mt-0.5">
+                        ₦{Number(adminTaskSummary.totalReleased || 0).toLocaleString()}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Queue Controls */}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {([
+                        { id: 'pending', label: 'Pending Proofs' },
+                        { id: 'approved', label: 'Verified & Paid' },
+                        { id: 'rejected', label: 'Rejected' },
+                        { id: 'campaigns', label: 'All Campaigns' },
+                      ] as const).map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setTaskQueueFilter(tab.id)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap ${
+                            taskQueueFilter === tab.id
+                              ? 'bg-violet-600/20 text-violet-300 border border-violet-500/40'
+                              : 'bg-zinc-900/60 text-zinc-400 hover:text-white border border-zinc-800'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={fetchAdminTasks}
+                      className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs text-zinc-200 flex items-center gap-1.5"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 text-violet-400 ${adminTasksLoading ? 'animate-spin' : ''}`} />
+                      <span>Refresh Queue</span>
+                    </button>
+                  </div>
+
+                  {taskQueueFilter !== 'campaigns' ? (
+                    (() => {
+                      const items: Array<{ task: TaskBountyCampaign; sub: TaskBountySubmission }> = [];
+                      adminTasks.forEach((task) => {
+                        (task.submissions || []).forEach((sub) => {
+                          if (sub.status === taskQueueFilter) {
+                            items.push({ task, sub });
+                          }
+                        });
+                      });
+                      items.sort(
+                        (a, b) => new Date(b.sub.createdAt).getTime() - new Date(a.sub.createdAt).getTime()
+                      );
+
+                      if (items.length === 0) {
+                        return (
+                          <div className="p-8 rounded-2xl bg-zinc-900/50 border border-zinc-800 text-center text-xs text-zinc-400">
+                            No {taskQueueFilter} task submissions in queue.
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="space-y-3">
+                          {items.map(({ task, sub }) => {
+                            const busy = taskReviewBusyId === sub.id;
+                            const rejectReason = taskRejectDrafts[sub.id] || '';
+                            const safeLink =
+                              task.targetUrl && /^https?:\/\//i.test(task.targetUrl)
+                                ? task.targetUrl
+                                : null;
+
+                            return (
+                              <div
+                                key={sub.id}
+                                className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800/90 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                              >
+                                <div className="flex items-start gap-3.5 min-w-0 flex-1">
+                                  {/* Click-to-zoom Proof Screenshot */}
+                                  <button
+                                    type="button"
+                                    onClick={() => setTaskLightboxUrl(sub.proofScreenshot)}
+                                    className="relative group shrink-0 w-24 h-24 rounded-xl overflow-hidden border border-zinc-700 bg-zinc-950"
+                                    title="Click to inspect full proof screenshot"
+                                  >
+                                    <img
+                                      src={sub.proofScreenshot}
+                                      alt={`Proof by ${sub.workerName}`}
+                                      className="w-full h-full object-cover"
+                                    />
+                                    <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                                      <ZoomIn className="w-5 h-5" />
+                                    </div>
+                                  </button>
+
+                                  <div className="min-w-0 space-y-1.5 flex-1">
+                                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                                      <span className="font-bold text-white">{task.title}</span>
+                                      <span className="text-zinc-500">·</span>
+                                      <span className="font-mono text-emerald-400 font-bold tabular-nums">
+                                        ₦{Number(sub.payoutAmount || task.rewardPerTask).toLocaleString()}
+                                      </span>
+                                      <span className="text-zinc-500">·</span>
+                                      <span className="uppercase text-[11px] text-zinc-400">{task.category}</span>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-300">
+                                      <span>
+                                        Earner: <strong>{sub.workerName}</strong> ({sub.workerPhone})
+                                      </span>
+                                      <span>
+                                        Submitted Handle:{' '}
+                                        <strong className="font-mono text-violet-300">
+                                          @{sub.proofUsername.replace(/^@/, '')}
+                                        </strong>
+                                      </span>
+                                    </div>
+
+                                    {sub.note && (
+                                      <div className="text-xs text-zinc-400">
+                                        Note: &ldquo;{sub.note}&rdquo;
+                                      </div>
+                                    )}
+
+                                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-zinc-500 font-mono">
+                                      <span>Submitted {new Date(sub.createdAt).toLocaleString()}</span>
+                                      {safeLink && (
+                                        <a
+                                          href={safeLink}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-1 text-violet-400 hover:underline"
+                                        >
+                                          <ExternalLink className="w-3 h-3" />
+                                          <span>Verify Target Link</span>
+                                        </a>
+                                      )}
+                                      {sub.status !== 'pending' && sub.adminNote && (
+                                        <span className="text-zinc-300">Admin note: {sub.adminNote}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {sub.status === 'pending' && (
+                                  <div className="flex flex-col sm:flex-row lg:flex-col gap-2 shrink-0 lg:w-64">
+                                    <input
+                                      type="text"
+                                      value={rejectReason}
+                                      onChange={(e) =>
+                                        setTaskRejectDrafts((prev) => ({
+                                          ...prev,
+                                          [sub.id]: e.target.value,
+                                        }))
+                                      }
+                                      placeholder="Optional rejection/approval note..."
+                                      className="px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-white placeholder-zinc-500"
+                                    />
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={async () => {
+                                          setTaskReviewBusyId(sub.id);
+                                          try {
+                                            const res = await fetch('/api/admin/tasks/review', {
+                                              method: 'POST',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({
+                                                taskId: task.id,
+                                                submissionId: sub.id,
+                                                decision: 'reject',
+                                                adminNote: rejectReason.trim() || undefined,
+                                                adminName: currentUser?.fullName || 'Super Admin',
+                                              }),
+                                            });
+                                            const data = await res.json();
+                                            if (res.ok && data?.success) {
+                                              notify(data.message || 'Submission rejected');
+                                              await fetchAdminTasks();
+                                            } else {
+                                              notify(data?.message || 'Failed to reject submission', 'err');
+                                            }
+                                          } catch (_) {
+                                            notify('Network error rejecting submission', 'err');
+                                          } finally {
+                                            setTaskReviewBusyId(null);
+                                          }
+                                        }}
+                                        className="flex-1 px-3 py-2 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/30 text-rose-300 text-xs font-semibold flex items-center justify-center gap-1 whitespace-nowrap disabled:opacity-50"
+                                      >
+                                        <XCircle className="w-3.5 h-3.5" />
+                                        <span>Reject</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={async () => {
+                                          setTaskReviewBusyId(sub.id);
+                                          try {
+                                            const res = await fetch('/api/admin/tasks/review', {
+                                              method: 'POST',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({
+                                                taskId: task.id,
+                                                submissionId: sub.id,
+                                                decision: 'approve',
+                                                adminNote: rejectReason.trim() || undefined,
+                                                adminName: currentUser?.fullName || 'Super Admin',
+                                              }),
+                                            });
+                                            const data = await res.json();
+                                            if (res.ok && data?.success) {
+                                              notify(data.message || 'Verified & payout released!');
+                                              await Promise.all([
+                                                fetchAdminTasks(),
+                                                fetchLedgerTransactions(ledgerSearch, ledgerTypeFilter),
+                                              ]);
+                                            } else {
+                                              notify(data?.message || 'Failed to approve submission', 'err');
+                                            }
+                                          } catch (_) {
+                                            notify('Network error verifying submission', 'err');
+                                          } finally {
+                                            setTaskReviewBusyId(null);
+                                          }
+                                        }}
+                                        className="flex-1 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1 whitespace-nowrap disabled:opacity-50"
+                                      >
+                                        <CheckCircle2 className="w-3.5 h-3.5" />
+                                        <span>{busy ? 'Releasing...' : 'Verify & Release'}</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <div className="rounded-2xl bg-zinc-900/50 border border-zinc-800/90 overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-zinc-800 text-zinc-400 bg-zinc-950/60">
+                            <th className="py-3 px-4">Campaign</th>
+                            <th className="py-3 px-4">Creator</th>
+                            <th className="py-3 px-4 text-right">Stake / Fee (30%)</th>
+                            <th className="py-3 px-4 text-right">Worker Pool (70%)</th>
+                            <th className="py-3 px-4 text-right">Slots</th>
+                            <th className="py-3 px-4">Status</th>
+                            <th className="py-3 px-4 text-right">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-800/70">
+                          {adminTasks.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="py-10 text-center text-zinc-500">
+                                No Task-to-Earn bounty campaigns created yet.
+                              </td>
+                            </tr>
+                          ) : (
+                            adminTasks.map((c) => (
+                              <tr key={c.id} className="hover:bg-zinc-900/70">
+                                <td className="py-3 px-4">
+                                  <div className="font-semibold text-white">{c.title}</div>
+                                  <div className="text-[11px] text-zinc-500 uppercase font-mono">
+                                    {c.category} · ₦{c.rewardPerTask.toLocaleString()}/task
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <div className="text-zinc-200">{c.creatorName}</div>
+                                  <div className="text-[11px] font-mono text-zinc-500">{c.creatorPhone}</div>
+                                </td>
+                                <td className="py-3 px-4 text-right font-mono tabular-nums">
+                                  <div className="text-white">₦{c.totalStake.toLocaleString()}</div>
+                                  <div className="text-[11px] text-violet-400">Fee ₦{c.systemFeeAmount.toLocaleString()}</div>
+                                </td>
+                                <td className="py-3 px-4 text-right font-mono tabular-nums">
+                                  <div className="text-emerald-400">₦{c.rewardPool.toLocaleString()}</div>
+                                  <div className="text-[11px] text-zinc-400">Left ₦{c.remainingEscrow.toLocaleString()}</div>
+                                </td>
+                                <td className="py-3 px-4 text-right font-mono tabular-nums text-zinc-200">
+                                  {c.approvedCount}/{c.maxSlots}
+                                  {c.pendingCount > 0 && (
+                                    <span className="text-amber-400 block text-[11px]">{c.pendingCount} pending</span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-4 font-mono uppercase text-[11px] text-zinc-300">
+                                  {c.status}
+                                </td>
+                                <td className="py-3 px-4 text-right">
+                                  {c.status !== 'closed' && c.remainingEscrow > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        try {
+                                          const res = await fetch(`/api/tasks/${encodeURIComponent(c.id)}/close`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                              isAdmin: true,
+                                              actorPhone: currentUser?.phoneNumber,
+                                            }),
+                                          });
+                                          const data = await res.json();
+                                          if (res.ok && data?.success) {
+                                            notify(data.message || 'Campaign closed & escrow refunded');
+                                            await fetchAdminTasks();
+                                          } else {
+                                            notify(data?.message || 'Failed to close campaign', 'err');
+                                          }
+                                        } catch (_) {
+                                          notify('Network error closing campaign', 'err');
+                                        }
+                                      }}
+                                      className="px-2.5 py-1 rounded-md bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/30 text-rose-300 text-[11px] font-medium whitespace-nowrap"
+                                    >
+                                      Close &amp; Refund
+                                    </button>
+                                  ) : (
+                                    <span className="text-zinc-500 text-[11px]">Settled</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -5764,6 +6179,32 @@ export const AdminDashboardModal: React.FC = () => {
         auditEntries={auditTrail}
         webhookLogs={webhookLogs}
       />
+
+      {taskLightboxUrl && (
+        <div
+          onClick={() => setTaskLightboxUrl(null)}
+          className="fixed inset-0 z-[120] bg-black/90 flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative max-w-3xl max-h-[90vh] bg-zinc-950 rounded-2xl border border-zinc-800 p-2 shadow-2xl"
+          >
+            <button
+              type="button"
+              onClick={() => setTaskLightboxUrl(null)}
+              className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-zinc-900 border border-zinc-700 text-white flex items-center justify-center hover:bg-zinc-800"
+              aria-label="Close proof image"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <img
+              src={taskLightboxUrl}
+              alt="Task proof screenshot full view"
+              className="max-h-[84vh] w-auto object-contain rounded-xl"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
