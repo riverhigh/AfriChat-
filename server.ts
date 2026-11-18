@@ -108,7 +108,7 @@ interface AuditEntry {
 }
 interface SecurityEvent {
   id: string;
-  type: 'waf_block' | 'rate_limit' | 'bot_block' | 'banned_attempt' | 'ip_blocked' | 'webhook_mismatch';
+  type: 'waf_block' | 'rate_limit' | 'bot_block' | 'banned_attempt' | 'ip_blocked' | 'webhook_mismatch' | 'unauthorized_admin_access';
   severity: 'low' | 'medium' | 'high' | 'critical';
   ip: string;
   path: string;
@@ -542,6 +542,7 @@ function getPhoneVariants(rawPhone?: string): string[] {
 // ── Persistent User Registry ────────────────────────────────────────────────
 interface RegisteredUser {
   id: string;
+  sessionToken?: string;
   fullName: string;
   phoneNumber: string;
   cleanPhone: string;
@@ -790,6 +791,9 @@ const ADMIN_SYS_WALLETS_KEY = '__agc_sys_wallets__';
 const ADMIN_SYS_GAME_ESCROWS_KEY = '__agc_sys_game_escrows__';
 const ADMIN_SYS_TASKS_KEY = '__agc_sys_task_bounties__';
 const ADMIN_SYS_LEDGER_KEY = '__agc_sys_ledger__';
+const ADMIN_SYS_PETS_KEY = '__agc_sys_pets__';
+const ADMIN_SYS_AFRIBOOKS_KEY = '__agc_sys_afribooks__';
+const ADMIN_SYS_COURSES_KEY = '__agc_sys_courses__';
 const USER_LEDGER_SLICE_PREFIX = '__agc_sys_ledger_';
 const USER_CHAT_BACKUP_PREFIX = '__agc_sys_chats_';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -2118,7 +2122,7 @@ app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
       expiresInSeconds: 300,
       expiresAt,
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error('Error in /api/auth/send-otp:', err);
     return res.status(500).json({ success: false, error: 'Internal server error sending OTP.' });
   }
@@ -2179,7 +2183,7 @@ app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
       success: true,
       message: 'Phone number verified successfully.',
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error('Error in /api/auth/verify-otp:', err);
     return res.status(500).json({ success: false, error: 'Internal server error verifying OTP.' });
   }
@@ -2664,19 +2668,25 @@ interface ServerWalletTx {
     | 'task_stake'
     | 'task_earn'
     | 'referral_bonus'
-    | 'refund';
+    | 'refund'
+    | 'ajo_contribution'
+    | 'job_posting'
+    | 'job_application'
+    | 'creator_purchase'
+    | 'payroll_disbursement'
+    | (string & {});
   title: string;
   description?: string;
   amount: number;
   fee?: number;
   balanceAfter?: number;
-  currency: 'NGN' | 'KES' | 'GHS' | 'ZAR';
+  currency: 'NGN' | 'KES' | 'GHS' | 'ZAR' | (string & {});
   timestamp: string;
   createdAt?: string;
-  status: 'completed' | 'pending' | 'failed';
+  status: 'completed' | 'pending' | 'failed' | (string & {});
   reference: string;
   referenceId?: string;
-  channel: 'paystack' | 'wallet' | 'bank_transfer';
+  channel?: 'paystack' | 'wallet' | 'bank_transfer' | (string & {});
   metadata?: Record<string, any>;
 }
 interface ServerWalletRecord {
@@ -6956,7 +6966,7 @@ try {
       if (parsed.updatedAt) aiDataCenterUpdatedAt = String(parsed.updatedAt);
     }
   }
-} catch (err) {
+} catch (err: any) {
   console.warn('Failed loading data_ai_datacenter.json:', err);
 }
 
@@ -6968,7 +6978,7 @@ function saveAiDataCenterFile() {
       JSON.stringify({ entries: aiKnowledgeEntries, updatedAt: aiDataCenterUpdatedAt }, null, 2),
       'utf8'
     );
-  } catch (err) {
+  } catch (err: any) {
     console.warn('Failed saving data_ai_datacenter.json:', err);
   }
 }
@@ -7118,7 +7128,7 @@ app.post('/api/ajo/contribute', async (req: Request, res: Response) => {
         transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
       },
     });
-  } catch (err) {
+  } catch (err: any) {
     return res.status(500).json({ success: false, message: err?.message || 'Ajo contribution failed.' });
   }
 });
@@ -7176,7 +7186,7 @@ app.post('/api/jobs/post', async (req: Request, res: Response) => {
         transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
       },
     });
-  } catch (err) {
+  } catch (err: any) {
     return res.status(500).json({ success: false, message: err?.message || 'Job post failed.' });
   }
 });
@@ -7234,7 +7244,7 @@ app.post('/api/jobs/apply', async (req: Request, res: Response) => {
         transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
       },
     });
-  } catch (err) {
+  } catch (err: any) {
     return res.status(500).json({ success: false, message: err?.message || 'Job application failed.' });
   }
 });
@@ -7293,7 +7303,7 @@ app.post('/api/creator/purchase', async (req: Request, res: Response) => {
         transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
       },
     });
-  } catch (err) {
+  } catch (err: any) {
     return res.status(500).json({ success: false, message: err?.message || 'Creator purchase failed.' });
   }
 });
@@ -7357,7 +7367,7 @@ app.post('/api/service-booking/create', async (req: Request, res: Response) => {
         transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
       },
     });
-  } catch (err) {
+  } catch (err: any) {
     return res.status(500).json({ success: false, message: err?.message || 'Service booking failed.' });
   }
 });
@@ -7418,7 +7428,7 @@ app.post('/api/payroll/disburse', async (req: Request, res: Response) => {
         transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
       },
     });
-  } catch (err) {
+  } catch (err: any) {
     return res.status(500).json({ success: false, message: err?.message || 'Payroll disbursement failed.' });
   }
 });
@@ -10602,6 +10612,9 @@ interface ServerOutsideRsvp {
 
 const OUTSIDE_PARTIES_FILE = path.join(__dirname, 'data_outside_parties.json');
 const OUTSIDE_RSVPS_FILE = path.join(__dirname, 'data_outside_rsvps.json');
+const PETS_FILE = path.join(__dirname, 'data_pets.json');
+const AFRIBOOKS_FILE = path.join(__dirname, 'data_afribooks.json');
+const COURSES_FILE = path.join(__dirname, 'data_courses.json');
 
 function buildStarterOutsideParties(): ServerOutsideParty[] {
   const now = Date.now();
@@ -10692,7 +10705,7 @@ try {
     outsidePartiesList = buildStarterOutsideParties();
     fs.writeFileSync(OUTSIDE_PARTIES_FILE, JSON.stringify(outsidePartiesList, null, 2));
   }
-} catch (err) {
+} catch (err: any) {
   console.warn('Notice loading outside parties file:', err);
   outsidePartiesList = buildStarterOutsideParties();
 }
@@ -10704,14 +10717,14 @@ try {
       outsideRsvpsList = raw;
     }
   }
-} catch (err) {
+} catch (err: any) {
   console.warn('Notice loading outside RSVPs file:', err);
 }
 
 function saveOutsidePartiesFile() {
   try {
     fs.writeFileSync(OUTSIDE_PARTIES_FILE, JSON.stringify(outsidePartiesList, null, 2));
-  } catch (err) {
+  } catch (err: any) {
     console.warn('Failed saving outside parties file:', err);
   }
 }
@@ -10719,7 +10732,7 @@ function saveOutsidePartiesFile() {
 function saveOutsideRsvpsFile() {
   try {
     fs.writeFileSync(OUTSIDE_RSVPS_FILE, JSON.stringify(outsideRsvpsList, null, 2));
-  } catch (err) {
+  } catch (err: any) {
     console.warn('Failed saving outside RSVPs file:', err);
   }
 }
@@ -11134,6 +11147,909 @@ app.post('/api/outside/verify-ticket', (req: Request, res: Response) => {
 });
 
 // Create raw HTTP server to handle both Express REST and WebSocket upgrades
+
+// ============================================================================
+// MILESTONE 1: COMMUNITY HUBS (PET SHOP, AFRIBOOKS, TUTOR COURSES)
+// ============================================================================
+
+// --- PET SHOP & FORUM STATE ---
+interface ServerPetListing {
+  id: string;
+  title: string;
+  price: number;
+  location: string;
+  breed: string;
+  age: string;
+  category: string;
+  description: string;
+  sellerName: string;
+  sellerPhone: string;
+  photoBase64: string;
+  rating: number;
+  createdAt: string;
+}
+
+interface ServerPetForumPost {
+  id: string;
+  authorName: string;
+  authorAvatar: string;
+  authorPhone?: string;
+  timeAgo: string;
+  createdAt: string;
+  text: string;
+  imageBase64?: string;
+  category: string;
+  likeCount: number;
+  commentCount: number;
+  likedByPhones: string[];
+}
+
+const serverPetListings = new Map<string, ServerPetListing>();
+const serverPetForumPosts = new Map<string, ServerPetForumPost>();
+
+const DEFAULT_PET_LISTINGS: ServerPetListing[] = [
+  {
+    id: 'pet_seed_1',
+    title: 'Pure Breed Boerboel Puppy (Male, 8 Weeks)',
+    price: 180000,
+    location: 'Lekki Phase 1, Lagos',
+    breed: 'South African Boerboel',
+    age: '8 weeks',
+    category: 'Dogs',
+    description: 'Heavy bone structure, vaccinated with initial DHLPP shots, dewormed. Microchipped and ready for loving home.',
+    sellerName: 'Lekki K9 Breeders',
+    sellerPhone: '+2348011223344',
+    photoBase64: '',
+    rating: 5.0,
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'pet_seed_2',
+    title: 'African Grey Parrot (Young & Vocal)',
+    price: 95000,
+    location: 'Gwarinpa, Abuja',
+    breed: 'Congo African Grey',
+    age: '4 months',
+    category: 'Birds',
+    description: 'Hand-reared, super friendly, whistle and sound mimic trained. Closed metal leg band.',
+    sellerName: 'Abuja Aviary Exotic',
+    sellerPhone: '+2348022334455',
+    photoBase64: '',
+    rating: 4.9,
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'pet_seed_3',
+    title: 'Comprehensive Mobile Vet Check & Deworming',
+    price: 15000,
+    location: 'Victoria Island / Ikoyi, Lagos',
+    breed: 'All Breeds',
+    age: 'All Ages',
+    category: 'Vet Services',
+    description: 'Licensed veterinarian house-call visit, clinical examination, routine parasite protection, and vaccination booklet update.',
+    sellerName: 'Dr. Tunde Alabi (DVM)',
+    sellerPhone: '+2348033445566',
+    photoBase64: '',
+    rating: 5.0,
+    createdAt: new Date().toISOString(),
+  },
+];
+
+const DEFAULT_PET_POSTS: ServerPetForumPost[] = [
+  {
+    id: 'post_seed_1',
+    authorName: 'Dr. Tunde Alabi',
+    authorAvatar: '🩺',
+    authorPhone: '+2348033445566',
+    timeAgo: '2 hours ago',
+    createdAt: new Date().toISOString(),
+    text: '🚨 Rainy Season Warning for Dog Owners in West Africa: Tick fever and canine parvovirus cases spike during wet months. Ensure your puppies complete their full parvovirus booster schedule and keep yards trimmed.',
+    category: 'Dogs',
+    likeCount: 24,
+    commentCount: 6,
+    likedByPhones: [],
+  },
+  {
+    id: 'post_seed_2',
+    authorName: 'Amaka Eze',
+    authorAvatar: '🦜',
+    authorPhone: '+2348044556677',
+    timeAgo: '5 hours ago',
+    createdAt: new Date().toISOString(),
+    text: 'What are your favorite fresh local fruits to feed African Grey parrots? Mine loves pawpaw and carrots, but avoids mango skin.',
+    category: 'Birds',
+    likeCount: 15,
+    commentCount: 9,
+    likedByPhones: [],
+  },
+];
+
+try {
+  if (fs.existsSync(PETS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(PETS_FILE, 'utf8'));
+    (raw.listings || []).forEach((l: ServerPetListing) => serverPetListings.set(l.id, l));
+    (raw.posts || []).forEach((p: ServerPetForumPost) => serverPetForumPosts.set(p.id, p));
+  } else {
+    DEFAULT_PET_LISTINGS.forEach((l) => serverPetListings.set(l.id, l));
+    DEFAULT_PET_POSTS.forEach((p) => serverPetForumPosts.set(p.id, p));
+    savePetsFile(false);
+  }
+} catch (e) {
+  console.warn('Notice loading data_pets.json:', e);
+}
+
+function savePetsFile(pushRemote: boolean = true) {
+  try {
+    fs.writeFileSync(
+      PETS_FILE,
+      JSON.stringify(
+        {
+          listings: Array.from(serverPetListings.values()),
+          posts: Array.from(serverPetForumPosts.values()),
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      )
+    );
+  } catch (e) {
+    console.warn('Error saving data_pets.json:', e);
+  }
+  if (pushRemote) {
+    upsertSupabaseAdminSlice(ADMIN_SYS_PETS_KEY, 'AGC_PETS', {
+      listings: Array.from(serverPetListings.values()).slice(0, 100),
+      posts: Array.from(serverPetForumPosts.values()).slice(0, 100),
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+}
+
+// --- AFRIBOOKS & WRITERS GUILD STATE ---
+interface ServerAfriBook {
+  id: string;
+  title: string;
+  authorId: string;
+  authorName: string;
+  authorAvatar: string;
+  authorBio?: string;
+  coverUrl: string;
+  genre: string;
+  synopsis: string;
+  isHumanWrittenCertified: boolean;
+  pricingType: 'free' | 'paid';
+  price: number;
+  currency: string;
+  chapters: any[];
+  totalReads: number;
+  tipsReceivedCount: number;
+  tipsTotalAmount: number;
+  purchasedByPhones: string[];
+  publishedAt: string;
+}
+
+interface ServerGroupReadSession {
+  id: string;
+  bookId: string;
+  bookTitle: string;
+  bookCover: string;
+  hostUserId: string;
+  hostUserName: string;
+  buddyUserId: string;
+  buddyUserName: string;
+  buddyAvatar: string;
+  currentChapter: number;
+  currentPage: number;
+  isPaidByOne: boolean;
+  messages: any[];
+  updatedAt: string;
+}
+
+const serverAfriBooks = new Map<string, ServerAfriBook>();
+const serverGroupReads = new Map<string, ServerGroupReadSession>();
+
+const DEFAULT_AFRIBOOKS: ServerAfriBook[] = [
+  {
+    id: 'book_seed_1',
+    title: 'The Lagos Cyberpunk Chronicle: Silicon Mainland 2055',
+    authorId: 'auth_adebayo',
+    authorName: 'Adebayo Vance',
+    authorAvatar: '⚡',
+    authorBio: 'Speculative fiction author exploring African tech horizons.',
+    coverUrl: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&auto=format&fit=crop&q=80',
+    genre: 'Afro-Futurism & Mystery',
+    synopsis: 'In a neon-drenched futuristic Lagos powered by solar megatowers and street bio-grids, an artisanal hacker uncovers an underground syndicate trying to monopolize the Niger River data conduit.',
+    isHumanWrittenCertified: true,
+    pricingType: 'paid',
+    price: 1500,
+    currency: 'NGN',
+    totalReads: 342,
+    tipsReceivedCount: 18,
+    tipsTotalAmount: 27000,
+    purchasedByPhones: [],
+    publishedAt: '2 days ago',
+    chapters: [
+      {
+        id: 'ch_1',
+        title: 'Chapter 1: Neon on the Third Mainland Bridge',
+        content: 'The solar speedway hummed beneath Kenechi\'s hover-okada as dusk fell over the lagoon. From Victoria Island to Oworonshoki, the bioluminescent billboards flickered in Pidgin and Yoruba, flashing rates for decentralized cowrie credits...',
+        likesCount: 56,
+        comments: [
+          { id: 'c1', authorName: 'Kemi_Dev', text: 'Incredible atmosphere! Love the imagery.', timestamp: '1 hour ago' }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'book_seed_2',
+    title: 'Market Queens of Onitsha: Secrets of the Ancient Merchant Guilds',
+    authorId: 'auth_ngozi',
+    authorName: 'Ngozi Eze',
+    authorAvatar: '👑',
+    authorBio: 'Historian and commercial researcher in Eastern Nigeria.',
+    coverUrl: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=600&auto=format&fit=crop&q=80',
+    genre: 'Drama & African Commerce',
+    synopsis: 'A gripping saga following three generations of women who commanded the largest open-air market in West Africa, navigating trade embargoes, civil upheavals, and currency revolutions.',
+    isHumanWrittenCertified: true,
+    pricingType: 'free',
+    price: 0,
+    currency: 'NGN',
+    totalReads: 1205,
+    tipsReceivedCount: 42,
+    tipsTotalAmount: 64000,
+    purchasedByPhones: [],
+    publishedAt: '1 week ago',
+    chapters: [
+      {
+        id: 'ch_1',
+        title: 'Chapter 1: The First Cloth Bale',
+        content: 'Before dawn cracked over the River Niger, Mama Nkechi\'s warehouse was already alive with the rustle of Dutch wax prints and hand-woven Akwete fabric. Trust was the true currency here...',
+        likesCount: 112,
+        comments: []
+      }
+    ]
+  }
+];
+
+try {
+  if (fs.existsSync(AFRIBOOKS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(AFRIBOOKS_FILE, 'utf8'));
+    (raw.books || []).forEach((b: ServerAfriBook) => serverAfriBooks.set(b.id, b));
+    (raw.groupReads || []).forEach((g: ServerGroupReadSession) => serverGroupReads.set(g.id, g));
+  } else {
+    DEFAULT_AFRIBOOKS.forEach((b) => serverAfriBooks.set(b.id, b));
+    saveAfriBooksFile(false);
+  }
+} catch (e) {
+  console.warn('Notice loading data_afribooks.json:', e);
+}
+
+function saveAfriBooksFile(pushRemote: boolean = true) {
+  try {
+    fs.writeFileSync(
+      AFRIBOOKS_FILE,
+      JSON.stringify(
+        {
+          books: Array.from(serverAfriBooks.values()),
+          groupReads: Array.from(serverGroupReads.values()),
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      )
+    );
+  } catch (e) {
+    console.warn('Error saving data_afribooks.json:', e);
+  }
+  if (pushRemote) {
+    upsertSupabaseAdminSlice(ADMIN_SYS_AFRIBOOKS_KEY, 'AGC_AFRIBOOKS', {
+      books: Array.from(serverAfriBooks.values()).slice(0, 100),
+      groupReads: Array.from(serverGroupReads.values()).slice(0, 100),
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+}
+
+// --- AFRICAN TUTORS & COURSES STATE ---
+interface ServerCourseLesson {
+  id: string;
+  title: string;
+  durationMinutes: number;
+  videoUrl?: string;
+  videoType?: 'upload' | 'embed' | 'url';
+  notes?: string;
+  pdfUrl?: string;
+  pdfName?: string;
+  fileUrl?: string;
+  fileName?: string;
+  isPreview?: boolean;
+}
+
+interface ServerCourse {
+  id: string;
+  tutorId: string;
+  tutorPhone?: string;
+  tutorName: string;
+  tutorAvatar: string;
+  tutorIsBlueVerified: boolean;
+  title: string;
+  description: string;
+  category: string;
+  price: number;
+  currency: string;
+  thumbnailUrl: string;
+  lessonsCount: number;
+  totalDurationHours: number;
+  enrolledStudentsCount: number;
+  rating: number;
+  reviewsCount: number;
+  lessons: ServerCourseLesson[];
+  enrolledPhones: string[];
+  createdAt: string;
+}
+
+interface ServerTutorProfile {
+  phone: string;
+  isRegisteredTutor: boolean;
+  tutorName: string;
+  bio: string;
+  category: string;
+  hasBlueCheck: boolean;
+  tier: 'starter_10' | 'unlimited_pro';
+  coursesLimit: number;
+  activeCoursesCount: number;
+  totalEarnings: number;
+  registeredAt: string;
+}
+
+const serverCourses = new Map<string, ServerCourse>();
+const serverTutorProfiles = new Map<string, ServerTutorProfile>();
+
+const DEFAULT_COURSES: ServerCourse[] = [
+  {
+    id: 'course_seed_1',
+    tutorId: 'tutor_emeka',
+    tutorPhone: '+2348055667788',
+    tutorName: 'Dev Emeka Okon',
+    tutorAvatar: '💻',
+    tutorIsBlueVerified: true,
+    title: 'Fullstack React & Node.js Masterclass (Taught in Pidgin & English)',
+    description: 'Learn modern web engineering from zero to production. Build high-concurrency fintech and chat apps optimized for African connectivity.',
+    category: 'tech_coding',
+    price: 15000,
+    currency: 'NGN',
+    thumbnailUrl: 'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=600&auto=format&fit=crop&q=80',
+    lessonsCount: 14,
+    totalDurationHours: 18,
+    enrolledStudentsCount: 78,
+    rating: 4.9,
+    reviewsCount: 31,
+    enrolledPhones: [],
+    createdAt: new Date().toISOString(),
+    lessons: [
+      { id: 'l1', title: 'Intro to High-Speed Web & PWA Architecture in West Africa', durationMinutes: 45, isPreview: true },
+      { id: 'l2', title: 'State Management & Real-time WebSockets', durationMinutes: 60, isPreview: false }
+    ]
+  },
+  {
+    id: 'course_seed_2',
+    tutorId: 'tutor_haruna',
+    tutorPhone: '+2348066778899',
+    tutorName: 'Alhaji Haruna Bello',
+    tutorAvatar: '🌾',
+    tutorIsBlueVerified: true,
+    title: 'Agribusiness Sourcing & Export Blueprint (Sesame, Ginger, Cashew)',
+    description: 'Comprehensive guide to commodity aggregation in Northern Nigeria, export documentation (NXP, NEPC), and international letter of credit clearance.',
+    category: 'business_finance',
+    price: 25000,
+    currency: 'NGN',
+    thumbnailUrl: 'https://images.unsplash.com/photo-1586771107445-d3ca888129ff?w=600&auto=format&fit=crop&q=80',
+    lessonsCount: 10,
+    totalDurationHours: 12,
+    enrolledStudentsCount: 45,
+    rating: 5.0,
+    reviewsCount: 19,
+    enrolledPhones: [],
+    createdAt: new Date().toISOString(),
+    lessons: [
+      { id: 'l1', title: 'Commodity Aggregation Centers & Farmgate Pricing', durationMinutes: 50, isPreview: true },
+      { id: 'l2', title: 'Export Documentation & NXP Processing', durationMinutes: 70, isPreview: false }
+    ]
+  }
+];
+
+try {
+  if (fs.existsSync(COURSES_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(COURSES_FILE, 'utf8'));
+    (raw.courses || []).forEach((c: ServerCourse) => serverCourses.set(c.id, c));
+    (raw.tutors || []).forEach((t: ServerTutorProfile) => serverTutorProfiles.set(t.phone, t));
+  } else {
+    DEFAULT_COURSES.forEach((c) => serverCourses.set(c.id, c));
+    saveCoursesFile(false);
+  }
+} catch (e) {
+  console.warn('Notice loading data_courses.json:', e);
+}
+
+function saveCoursesFile(pushRemote: boolean = true) {
+  try {
+    fs.writeFileSync(
+      COURSES_FILE,
+      JSON.stringify(
+        {
+          courses: Array.from(serverCourses.values()),
+          tutors: Array.from(serverTutorProfiles.values()),
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      )
+    );
+  } catch (e) {
+    console.warn('Error saving data_courses.json:', e);
+  }
+  if (pushRemote) {
+    upsertSupabaseAdminSlice(ADMIN_SYS_COURSES_KEY, 'AGC_COURSES', {
+      courses: Array.from(serverCourses.values()).slice(0, 100),
+      tutors: Array.from(serverTutorProfiles.values()).slice(0, 100),
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+}
+
+// --- PET SHOP & FORUM ROUTES ---
+app.get('/api/pets/listings', (_req: Request, res: Response) => {
+  const listings = Array.from(serverPetListings.values()).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+  res.json({ success: true, listings });
+});
+
+app.post('/api/pets/listings', (req: Request, res: Response) => {
+  const { title, price, location, breed, age, category, description, sellerName, sellerPhone, photoBase64 } = req.body || {};
+  if (!title || price === undefined || !location) {
+    return res.status(400).json({ success: false, error: 'Title, price, and location are required.' });
+  }
+
+  const newListing: ServerPetListing = {
+    id: `pet_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    title: String(title).trim(),
+    price: Number(price) || 0,
+    location: String(location).trim(),
+    breed: String(breed || 'Standard').trim(),
+    age: String(age || 'Young').trim(),
+    category: String(category || 'Dogs').trim(),
+    description: String(description || '').trim(),
+    sellerName: String(sellerName || 'Verified Seller').trim(),
+    sellerPhone: String(sellerPhone || '').trim(),
+    photoBase64: String(photoBase64 || ''),
+    rating: 5.0,
+    createdAt: new Date().toISOString(),
+  };
+
+  serverPetListings.set(newListing.id, newListing);
+  savePetsFile();
+  io.emit('pet_listing_created', newListing);
+  res.json({ success: true, listing: newListing });
+});
+
+app.get('/api/pets/forum', (_req: Request, res: Response) => {
+  const posts = Array.from(serverPetForumPosts.values()).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+  res.json({ success: true, posts });
+});
+
+app.post('/api/pets/forum', (req: Request, res: Response) => {
+  const { authorName, authorAvatar, authorPhone, text, imageBase64, category } = req.body || {};
+  if (!text || !text.trim()) {
+    return res.status(400).json({ success: false, error: 'Post text cannot be empty.' });
+  }
+
+  const newPost: ServerPetForumPost = {
+    id: `post_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    authorName: String(authorName || 'Pet Community Member').trim(),
+    authorAvatar: String(authorAvatar || '🐾').trim(),
+    authorPhone: authorPhone ? String(authorPhone).trim() : undefined,
+    timeAgo: 'Just now',
+    createdAt: new Date().toISOString(),
+    text: String(text).trim(),
+    imageBase64: imageBase64 ? String(imageBase64) : undefined,
+    category: String(category || 'All').trim(),
+    likeCount: 0,
+    commentCount: 0,
+    likedByPhones: [],
+  };
+
+  serverPetForumPosts.set(newPost.id, newPost);
+  savePetsFile();
+  io.emit('pet_forum_post_created', newPost);
+  res.json({ success: true, post: newPost });
+});
+
+app.post('/api/pets/forum/:id/like', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { phone } = req.body || {};
+  const post = serverPetForumPosts.get(id);
+  if (!post) {
+    return res.status(404).json({ success: false, error: 'Post not found.' });
+  }
+
+  const cleanPhone = phone ? String(phone).trim() : 'anonymous';
+  const alreadyLiked = post.likedByPhones.includes(cleanPhone);
+
+  if (alreadyLiked) {
+    post.likedByPhones = post.likedByPhones.filter((p) => p !== cleanPhone);
+    post.likeCount = Math.max(0, post.likeCount - 1);
+  } else {
+    post.likedByPhones.push(cleanPhone);
+    post.likeCount += 1;
+  }
+
+  savePetsFile();
+  io.emit('pet_forum_post_liked', { id: post.id, likeCount: post.likeCount, liked: !alreadyLiked });
+  res.json({ success: true, likeCount: post.likeCount, liked: !alreadyLiked });
+});
+
+// --- AFRIBOOKS & WRITERS GUILD ROUTES ---
+app.get('/api/books', (req: Request, res: Response) => {
+  const callerPhone = req.query.phone ? String(req.query.phone).trim() : '';
+  const books = Array.from(serverAfriBooks.values()).map((b) => ({
+    ...b,
+    isPurchasedByMe: b.pricingType === 'free' || (callerPhone && b.purchasedByPhones.includes(callerPhone)),
+  }));
+  res.json({ success: true, books });
+});
+
+app.post('/api/books', (req: Request, res: Response) => {
+  const { title, authorId, authorName, authorAvatar, authorBio, coverUrl, genre, synopsis, pricingType, price, chapters, authorPhone } = req.body || {};
+  if (!title || !authorName) {
+    return res.status(400).json({ success: false, error: 'Title and authorName are required.' });
+  }
+
+  const newBook: ServerAfriBook = {
+    id: `book_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    title: String(title).trim(),
+    authorId: String(authorId || authorPhone || 'author_anon').trim(),
+    authorName: String(authorName).trim(),
+    authorAvatar: String(authorAvatar || '✍️').trim(),
+    authorBio: authorBio ? String(authorBio).trim() : undefined,
+    coverUrl: String(coverUrl || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&auto=format&fit=crop&q=80'),
+    genre: String(genre || 'African Fiction').trim(),
+    synopsis: String(synopsis || '').trim(),
+    isHumanWrittenCertified: true,
+    pricingType: pricingType === 'free' ? 'free' : 'paid',
+    price: pricingType === 'free' ? 0 : Number(price) || 1500,
+    currency: 'NGN',
+    chapters: Array.isArray(chapters) && chapters.length > 0 ? chapters : [
+      { id: 'ch_1', title: 'Chapter 1: The Beginning', content: 'The story begins here...', likesCount: 0, comments: [] }
+    ],
+    totalReads: 1,
+    tipsReceivedCount: 0,
+    tipsTotalAmount: 0,
+    purchasedByPhones: authorPhone ? [String(authorPhone).trim()] : [],
+    publishedAt: 'Just now',
+  };
+
+  serverAfriBooks.set(newBook.id, newBook);
+  saveAfriBooksFile();
+  io.emit('book_published', newBook);
+  res.json({ success: true, book: newBook });
+});
+
+app.post('/api/books/:id/chapters', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { title, content } = req.body || {};
+  const book = serverAfriBooks.get(id);
+  if (!book) return res.status(404).json({ success: false, error: 'Book not found.' });
+
+  const newChapter = {
+    id: `ch_${book.chapters.length + 1}_${Date.now()}`,
+    title: String(title || `Chapter ${book.chapters.length + 1}`).trim(),
+    content: String(content || '').trim(),
+    likesCount: 0,
+    comments: [],
+  };
+
+  book.chapters.push(newChapter);
+  saveAfriBooksFile();
+  res.json({ success: true, chapter: newChapter, book });
+});
+
+app.post('/api/books/:id/comment', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { chapterId, authorName, text } = req.body || {};
+  const book = serverAfriBooks.get(id);
+  if (!book) return res.status(404).json({ success: false, error: 'Book not found.' });
+
+  const chapter = book.chapters.find((c: any) => c.id === chapterId);
+  if (!chapter) return res.status(404).json({ success: false, error: 'Chapter not found.' });
+
+  const comment = {
+    id: `cm_${Date.now()}`,
+    authorName: String(authorName || 'Reader').trim(),
+    text: String(text || '').trim(),
+    timestamp: 'Just now',
+  };
+
+  chapter.comments.push(comment);
+  saveAfriBooksFile();
+  res.json({ success: true, comment, book });
+});
+
+app.post('/api/books/:id/tip', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { tipperPhone, amount } = req.body || {};
+  const book = serverAfriBooks.get(id);
+  if (!book) return res.status(404).json({ success: false, error: 'Book not found.' });
+
+  const cleanAmount = Number(amount);
+  if (!cleanAmount || cleanAmount <= 0) {
+    return res.status(400).json({ success: false, error: 'Valid tip amount required.' });
+  }
+
+  const tipperKey = String(tipperPhone || '').trim();
+  if (tipperKey) {
+    const tipperWallet = getOrCreateServerWallet(tipperKey);
+    if (tipperWallet.availableBalance < cleanAmount) {
+      return res.status(400).json({ success: false, error: 'Insufficient wallet balance to send tip.' });
+    }
+    tipperWallet.availableBalance -= cleanAmount;
+    tipperWallet.updatedAt = new Date().toISOString();
+    serverWallets.set(tipperWallet.phoneKey, tipperWallet);
+    saveWalletsFile();
+    emitWalletUpdateToPhone(tipperKey, tipperWallet, `Tipped author of ${book.title}`);
+  }
+
+  // Credit author wallet if phone known
+  if (book.authorId && book.authorId.startsWith('+')) {
+    const authorWallet = getOrCreateServerWallet(book.authorId);
+    authorWallet.availableBalance += cleanAmount;
+    authorWallet.updatedAt = new Date().toISOString();
+    serverWallets.set(authorWallet.phoneKey, authorWallet);
+    saveWalletsFile();
+    emitWalletUpdateToPhone(book.authorId, authorWallet, `Received tip for book ${book.title}`);
+  }
+
+  book.tipsReceivedCount += 1;
+  book.tipsTotalAmount += cleanAmount;
+  saveAfriBooksFile();
+  res.json({ success: true, book, message: `Successfully tipped ₦${cleanAmount.toLocaleString()} to ${book.authorName}!` });
+});
+
+app.post('/api/books/:id/buy', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { buyerPhone } = req.body || {};
+  const book = serverAfriBooks.get(id);
+  if (!book) return res.status(404).json({ success: false, error: 'Book not found.' });
+
+  const cleanPhone = String(buyerPhone || '').trim();
+  if (!cleanPhone) {
+    return res.status(400).json({ success: false, error: 'Buyer phone is required.' });
+  }
+
+  if (book.purchasedByPhones.includes(cleanPhone)) {
+    return res.json({ success: true, message: 'Book already unlocked for your account.', book });
+  }
+
+  if (book.pricingType === 'paid' && book.price > 0) {
+    const buyerWallet = getOrCreateServerWallet(cleanPhone);
+    if (buyerWallet.availableBalance < book.price) {
+      return res.status(400).json({ success: false, error: `Insufficient balance for ₦${book.price.toLocaleString()}.` });
+    }
+    buyerWallet.availableBalance -= book.price;
+    buyerWallet.updatedAt = new Date().toISOString();
+    serverWallets.set(buyerWallet.phoneKey, buyerWallet);
+    saveWalletsFile();
+    emitWalletUpdateToPhone(cleanPhone, buyerWallet, `Purchased book: ${book.title}`);
+
+    // Credit author
+    if (book.authorId && book.authorId.startsWith('+')) {
+      const authorWallet = getOrCreateServerWallet(book.authorId);
+      authorWallet.availableBalance += book.price;
+      authorWallet.updatedAt = new Date().toISOString();
+      serverWallets.set(authorWallet.phoneKey, authorWallet);
+      saveWalletsFile();
+      emitWalletUpdateToPhone(book.authorId, authorWallet, `Royalties from ${book.title}`);
+    }
+  }
+
+  book.purchasedByPhones.push(cleanPhone);
+  book.totalReads += 1;
+  saveAfriBooksFile();
+  res.json({ success: true, message: `📖 "${book.title}" purchased and unlocked successfully!`, book });
+});
+
+app.get('/api/books/group-reads', (_req: Request, res: Response) => {
+  const sessions = Array.from(serverGroupReads.values());
+  res.json({ success: true, sessions });
+});
+
+app.post('/api/books/group-reads', (req: Request, res: Response) => {
+  const { bookId, bookTitle, bookCover, hostUserId, hostUserName, buddyUserId, buddyUserName, buddyAvatar } = req.body || {};
+  if (!bookId || !hostUserName || !buddyUserName) {
+    return res.status(400).json({ success: false, error: 'Missing required group read session data.' });
+  }
+
+  const newSession: ServerGroupReadSession = {
+    id: `gr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    bookId: String(bookId),
+    bookTitle: String(bookTitle || 'Untitled Book'),
+    bookCover: String(bookCover || ''),
+    hostUserId: String(hostUserId || 'host'),
+    hostUserName: String(hostUserName),
+    buddyUserId: String(buddyUserId || 'buddy'),
+    buddyUserName: String(buddyUserName),
+    buddyAvatar: String(buddyAvatar || '📖'),
+    currentChapter: 0,
+    currentPage: 1,
+    isPaidByOne: true,
+    messages: [],
+    updatedAt: new Date().toISOString(),
+  };
+
+  serverGroupReads.set(newSession.id, newSession);
+  saveAfriBooksFile();
+  io.emit('group_read_started', newSession);
+  res.json({ success: true, session: newSession });
+});
+
+app.post('/api/books/group-reads/:id/messages', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { senderName, text } = req.body || {};
+  const session = serverGroupReads.get(id);
+  if (!session) return res.status(404).json({ success: false, error: 'Group read session not found.' });
+
+  const msg = {
+    id: `grm_${Date.now()}`,
+    senderName: String(senderName || 'Member').trim(),
+    text: String(text || '').trim(),
+    timestamp: 'Just now',
+  };
+
+  session.messages.push(msg);
+  session.updatedAt = new Date().toISOString();
+  saveAfriBooksFile();
+  io.emit('group_read_message', { sessionId: session.id, message: msg });
+  res.json({ success: true, message: msg, session });
+});
+
+// --- AFRICAN TUTORS & COURSES ROUTES ---
+app.get('/api/courses', (req: Request, res: Response) => {
+  const callerPhone = req.query.phone ? String(req.query.phone).trim() : '';
+  const coursesList = Array.from(serverCourses.values()).map((c) => ({
+    ...c,
+    isEnrolledByMe: callerPhone ? c.enrolledPhones.includes(callerPhone) || (c.tutorPhone && phonesMatchServer(c.tutorPhone, callerPhone)) : false,
+  }));
+  res.json({ success: true, courses: coursesList });
+});
+
+app.post('/api/courses', (req: Request, res: Response) => {
+  const { tutorId, tutorPhone, tutorName, tutorAvatar, title, description, category, price, thumbnailUrl, lessons } = req.body || {};
+  if (!title || !tutorName) {
+    return res.status(400).json({ success: false, error: 'Title and tutorName are required.' });
+  }
+
+  const newCourse: ServerCourse = {
+    id: `crs_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    tutorId: String(tutorId || tutorPhone || 'tutor_anon'),
+    tutorPhone: tutorPhone ? String(tutorPhone).trim() : undefined,
+    tutorName: String(tutorName).trim(),
+    tutorAvatar: String(tutorAvatar || '🎓'),
+    tutorIsBlueVerified: true,
+    title: String(title).trim(),
+    description: String(description || '').trim(),
+    category: String(category || 'tech_coding'),
+    price: Number(price) || 0,
+    currency: 'NGN',
+    thumbnailUrl: String(thumbnailUrl || 'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=600&auto=format&fit=crop&q=80'),
+    lessonsCount: Array.isArray(lessons) ? lessons.length : 1,
+    totalDurationHours: Math.max(1, Math.round(((lessons || []).reduce((acc: number, l: any) => acc + (l.durationMinutes || 30), 0)) / 60)),
+    enrolledStudentsCount: 0,
+    rating: 5.0,
+    reviewsCount: 1,
+    lessons: Array.isArray(lessons) && lessons.length > 0 ? lessons : [
+      { id: 'l1', title: 'Lesson 1: Introduction & Foundation', durationMinutes: 45, isPreview: true }
+    ],
+    enrolledPhones: tutorPhone ? [String(tutorPhone).trim()] : [],
+    createdAt: new Date().toISOString(),
+  };
+
+  serverCourses.set(newCourse.id, newCourse);
+  saveCoursesFile();
+  io.emit('course_published', newCourse);
+  res.json({ success: true, course: newCourse });
+});
+
+app.post('/api/courses/:id/enroll', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { studentPhone } = req.body || {};
+  const course = serverCourses.get(id);
+  if (!course) return res.status(404).json({ success: false, error: 'Course not found.' });
+
+  const cleanPhone = String(studentPhone || '').trim();
+  if (!cleanPhone) {
+    return res.status(400).json({ success: false, error: 'Student phone is required to enroll.' });
+  }
+
+  if (course.enrolledPhones.includes(cleanPhone)) {
+    return res.json({ success: true, message: 'You are already enrolled in this course!', course });
+  }
+
+  if (course.price > 0) {
+    const studentWallet = getOrCreateServerWallet(cleanPhone);
+    if (studentWallet.availableBalance < course.price) {
+      return res.status(400).json({ success: false, error: `Insufficient wallet balance to enroll (₦${course.price.toLocaleString()}).` });
+    }
+
+    studentWallet.availableBalance -= course.price;
+    studentWallet.updatedAt = new Date().toISOString();
+    serverWallets.set(studentWallet.phoneKey, studentWallet);
+    saveWalletsFile();
+    emitWalletUpdateToPhone(cleanPhone, studentWallet, `Enrolled in course: ${course.title}`);
+
+    // Credit tutor
+    if (course.tutorPhone) {
+      const tutorWallet = getOrCreateServerWallet(course.tutorPhone);
+      tutorWallet.availableBalance += course.price;
+      tutorWallet.updatedAt = new Date().toISOString();
+      serverWallets.set(tutorWallet.phoneKey, tutorWallet);
+      saveWalletsFile();
+      emitWalletUpdateToPhone(course.tutorPhone, tutorWallet, `Student enrollment in ${course.title}`);
+    }
+  }
+
+  course.enrolledPhones.push(cleanPhone);
+  course.enrolledStudentsCount += 1;
+  saveCoursesFile();
+  io.emit('course_enrolled', { courseId: course.id, enrolledStudentsCount: course.enrolledStudentsCount });
+  res.json({ success: true, message: `🎓 Enrolled in "${course.title}"! Lessons unlocked with Learner Escrow guarantee.`, course });
+});
+
+app.get('/api/courses/tutors/:phone', (req: Request, res: Response) => {
+  const { phone } = req.params;
+  const profile = serverTutorProfiles.get(phone) || {
+    phone,
+    isRegisteredTutor: false,
+    tutorName: '',
+    bio: '',
+    category: '',
+    hasBlueCheck: false,
+    tier: 'starter_10',
+    coursesLimit: 0,
+    activeCoursesCount: 0,
+    totalEarnings: 0,
+    registeredAt: '',
+  };
+  res.json({ success: true, profile });
+});
+
+app.post('/api/courses/tutors', (req: Request, res: Response) => {
+  const { phone, tutorName, bio, category, tier } = req.body || {};
+  if (!phone || !tutorName) {
+    return res.status(400).json({ success: false, error: 'Phone and tutorName are required.' });
+  }
+
+  const cleanPhone = String(phone).trim();
+  const existing = serverTutorProfiles.get(cleanPhone);
+  const updated: ServerTutorProfile = {
+    phone: cleanPhone,
+    isRegisteredTutor: true,
+    tutorName: String(tutorName).trim(),
+    bio: String(bio || '').trim(),
+    category: String(category || 'tech_coding').trim(),
+    hasBlueCheck: true,
+    tier: tier === 'unlimited_pro' ? 'unlimited_pro' : (existing?.tier || 'starter_10'),
+    coursesLimit: tier === 'unlimited_pro' ? 999999 : 10,
+    activeCoursesCount: existing?.activeCoursesCount || 0,
+    totalEarnings: existing?.totalEarnings || 0,
+    registeredAt: existing?.registeredAt || new Date().toISOString(),
+  };
+
+  serverTutorProfiles.set(cleanPhone, updated);
+  saveCoursesFile();
+  res.json({ success: true, profile: updated });
+});
+
 const httpServer = createServer(app);
 
 // Initialize Socket.io instance with permissive cross-origin policies

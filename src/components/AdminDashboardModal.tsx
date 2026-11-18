@@ -167,6 +167,8 @@ interface LiveAdminMetrics {
   blockedIps?: BlockedIpItem[];
   auditTrail?: AdminAuditEntry[];
   webhookLogs?: AdminWebhookLog[];
+  outsidePartiesCount?: number;
+  outsideRsvpsCount?: number;
   systemStatus: string;
 }
 
