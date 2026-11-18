@@ -9,17 +9,16 @@
     "escrowCommissionPercent": 1.5,
     "artisanCommissionPercent": 2,
     "creatorCommissionPercent": 5,
+    "sponsoredAdFeeNgn": 1000,
+    "lowBandwidthDefault": false,
+    "supportContactPhone": "+234800000000",
     "minTransferAmountNgn": 100,
     "maxDailyTransferNgn": 5000000,
-    "delayedSendHoldDurationMins": 15,
-    "lowBandwidthDefault": false,
-    "supportContactPhone": "+234800000000"
+    "delayedSendHoldDurationMins": 15
   },
   "featureFlags": {
     "wallet": true,
-    "p2pTransfers": true,
     "escrow": true,
-    "delayedSend": true,
     "securityPin": true,
     "dispatch": true,
     "artisan": true,
@@ -42,7 +41,10 @@
     "calls": true,
     "voiceNotes": true,
     "ajo": true,
-    "payroll": true
+    "payroll": true,
+    "p2pTransfers": true,
+    "delayedSend": true
   },
-  "activeBroadcast": null
+  "activeBroadcast": null,
+  "updatedAt": "2026-11-18T19:55:42.524Z"
 }

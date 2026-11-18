@@ -446,6 +446,7 @@ app.use('/api/users/check-username', authRateLimiter);
 app.use('/api/users', botMitigation);
 app.use('/api/wallet/ledger', botMitigation);
 app.use('/api/wallet/pay-bill', botMitigation);
+app.use('/api/wallet/transfer', botMitigation);
 
 // Basic health check route
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -2432,6 +2433,37 @@ const WALLETS_FILE = path.join(__dirname, 'data_wallets.json');
 const WALLET_LEDGER_FILE = path.join(__dirname, 'data_wallet_transactions.json');
 const GAME_ESCROWS_FILE = path.join(__dirname, 'data_game_escrows.json');
 
+const WALLETS_BACKUP_DIR = path.join(__dirname, 'wallets_backup');
+const WALLETS_SAFE_SNAPSHOT = path.join(__dirname, 'data_wallets.safe_snapshot.json');
+const WALLET_LEDGER_SAFE_SNAPSHOT = path.join(__dirname, 'data_wallet_transactions.safe_snapshot.json');
+const GAME_ESCROWS_SAFE_SNAPSHOT = path.join(__dirname, 'data_game_escrows.safe_snapshot.json');
+
+try {
+  if (!fs.existsSync(WALLETS_BACKUP_DIR)) {
+    fs.mkdirSync(WALLETS_BACKUP_DIR, { recursive: true });
+  }
+} catch (_) {}
+
+function createWalletsBackupSnapshot(prefix: string, content: string) {
+  try {
+    if (!fs.existsSync(WALLETS_BACKUP_DIR)) {
+      fs.mkdirSync(WALLETS_BACKUP_DIR, { recursive: true });
+    }
+    const filename = `${prefix}_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    fs.writeFileSync(path.join(WALLETS_BACKUP_DIR, filename), content);
+    const files = fs
+      .readdirSync(WALLETS_BACKUP_DIR)
+      .filter((f) => f.startsWith(prefix))
+      .sort()
+      .reverse();
+    if (files.length > 20) {
+      for (const oldFile of files.slice(20)) {
+        try { fs.unlinkSync(path.join(WALLETS_BACKUP_DIR, oldFile)); } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+
 interface ServerGameEscrow {
   gameId: string;
   gameType: 'xo' | 'whot' | 'ludo' | 'poker';
@@ -2470,12 +2502,30 @@ try {
   console.warn('Notice loading server game escrows:', e);
 }
 
+// Restore & heal from game escrows safe snapshot if exists
+try {
+  if (fs.existsSync(GAME_ESCROWS_SAFE_SNAPSHOT)) {
+    const rawSnapEscrows = JSON.parse(fs.readFileSync(GAME_ESCROWS_SAFE_SNAPSHOT, 'utf8'));
+    if (rawSnapEscrows && typeof rawSnapEscrows === 'object') {
+      for (const [gid, rec] of Object.entries<any>(rawSnapEscrows)) {
+        if (rec && typeof rec === 'object' && rec.gameId && !serverGameEscrows.has(gid)) {
+          serverGameEscrows.set(gid, rec as ServerGameEscrow);
+        }
+      }
+    }
+  }
+} catch (e) {
+  console.warn('Notice recovering from game escrows safe snapshot:', e);
+}
+
 function saveGameEscrowsFile(pushRemote: boolean = true) {
   try {
-    fs.writeFileSync(
-      GAME_ESCROWS_FILE,
-      JSON.stringify(Object.fromEntries(serverGameEscrows.entries()), null, 2)
-    );
+    const content = JSON.stringify(Object.fromEntries(serverGameEscrows.entries()), null, 2);
+    fs.writeFileSync(GAME_ESCROWS_FILE, content);
+    if (serverGameEscrows.size > 0) {
+      fs.writeFileSync(GAME_ESCROWS_SAFE_SNAPSHOT, content);
+      createWalletsBackupSnapshot('game_escrows', content);
+    }
   } catch (e) {
     console.warn('Notice saving server game escrows:', e);
   }
@@ -2617,6 +2667,46 @@ try {
   console.warn('Notice loading server wallet ledger:', e);
 }
 
+// Restore & heal from wallet safe snapshot if exists
+try {
+  if (fs.existsSync(WALLETS_SAFE_SNAPSHOT)) {
+    const rawSnap = JSON.parse(fs.readFileSync(WALLETS_SAFE_SNAPSHOT, 'utf8'));
+    if (rawSnap && typeof rawSnap === 'object' && rawSnap.wallets && typeof rawSnap.wallets === 'object') {
+      for (const [k, w] of Object.entries<any>(rawSnap.wallets)) {
+        if (!w || typeof w !== 'object' || isSyntheticTestAccount(w)) continue;
+        const existing = serverWallets.get(k);
+        const snapBal = Math.max(0, Number(w.availableBalance) || 0);
+        const snapLocked = Math.max(0, Number(w.escrowLockedBalance) || 0);
+        const snapTxs = Array.isArray(w.transactions) ? w.transactions : [];
+        if (!existing) {
+          serverWallets.set(k, {
+            phoneKey: k,
+            phoneNumber: w.phoneNumber || `+${k}`,
+            availableBalance: snapBal,
+            escrowLockedBalance: snapLocked,
+            currency: w.currency || 'NGN',
+            transactions: snapTxs,
+            updatedAt: w.updatedAt || new Date().toISOString(),
+          });
+        } else {
+          if (existing.availableBalance === 0 && snapBal > 0) {
+            existing.availableBalance = snapBal;
+          }
+          if (existing.escrowLockedBalance === 0 && snapLocked > 0) {
+            existing.escrowLockedBalance = snapLocked;
+          }
+          if (snapTxs.length > 0) {
+            existing.transactions = sortAndDedupeLedger([...existing.transactions, ...snapTxs], 250);
+          }
+          serverWallets.set(k, existing);
+        }
+      }
+    }
+  }
+} catch (e) {
+  console.warn('Notice recovering from wallet safe snapshot:', e);
+}
+
 function extractTxTimestampMs(tx: Partial<ServerWalletTx>): number {
   if (tx?.createdAt) {
     const parsed = Date.parse(String(tx.createdAt));
@@ -2728,6 +2818,18 @@ try {
   console.warn('Notice loading unified wallet ledger:', e);
 }
 
+// Restore & heal from ledger safe snapshot if exists
+try {
+  if (fs.existsSync(WALLET_LEDGER_SAFE_SNAPSHOT)) {
+    const rawSnapLedger = JSON.parse(fs.readFileSync(WALLET_LEDGER_SAFE_SNAPSHOT, 'utf8'));
+    if (Array.isArray(rawSnapLedger) && rawSnapLedger.length > 0) {
+      unifiedLedger = sortAndDedupeLedger([...unifiedLedger, ...rawSnapLedger], 10000);
+    }
+  }
+} catch (e) {
+  console.warn('Notice recovering from ledger safe snapshot:', e);
+}
+
 // Backfill any historical transactions stored inside serverWallets into unifiedLedger
 try {
   const extraTxs: ServerWalletTx[] = [];
@@ -2741,14 +2843,19 @@ try {
     const prevCount = unifiedLedger.length;
     unifiedLedger = sortAndDedupeLedger([...unifiedLedger, ...extraTxs], 10000);
     if (unifiedLedger.length !== prevCount) {
-      fs.writeFileSync(WALLET_LEDGER_FILE, JSON.stringify(unifiedLedger, null, 2));
+      saveUnifiedLedgerFile();
     }
   }
 } catch (_) {}
 
 function saveUnifiedLedgerFile() {
   try {
-    fs.writeFileSync(WALLET_LEDGER_FILE, JSON.stringify(unifiedLedger.slice(0, 10000), null, 2));
+    const content = JSON.stringify(unifiedLedger.slice(0, 10000), null, 2);
+    fs.writeFileSync(WALLET_LEDGER_FILE, content);
+    if (unifiedLedger.length > 0) {
+      fs.writeFileSync(WALLET_LEDGER_SAFE_SNAPSHOT, content);
+      createWalletsBackupSnapshot('unified_ledger', content);
+    }
   } catch (e) {
     console.warn('Notice saving unified wallet ledger:', e);
   }
@@ -3119,18 +3226,20 @@ function saveWalletsFile(pushRemote: boolean = true) {
     for (const [k, w] of serverWallets.entries()) {
       walletsObj[k] = w;
     }
-    fs.writeFileSync(
-      WALLETS_FILE,
-      JSON.stringify(
-        {
-          wallets: walletsObj,
-          usedReferences: Array.from(processedPaymentRefs).slice(-5000),
-          updatedAt: new Date().toISOString(),
-        },
-        null,
-        2
-      )
+    const payload = JSON.stringify(
+      {
+        wallets: walletsObj,
+        usedReferences: Array.from(processedPaymentRefs).slice(-5000),
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2
     );
+    fs.writeFileSync(WALLETS_FILE, payload);
+    if (serverWallets.size > 0) {
+      fs.writeFileSync(WALLETS_SAFE_SNAPSHOT, payload);
+      createWalletsBackupSnapshot('wallets', payload);
+    }
   } catch (e) {
     console.warn('Notice saving server wallet ledger:', e);
   }
@@ -3849,6 +3958,138 @@ app.post('/api/wallet/withdraw', async (req: Request, res: Response) => {
   });
 });
 
+// REST: Server-authoritative Peer-to-Peer Transfer (Send money directly to user/phone)
+app.post('/api/wallet/transfer', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { senderPhone, recipientPhone, amount, note, title } = req.body || {};
+    const cleanSender = String(senderPhone || '').trim();
+    const cleanRecipient = String(recipientPhone || '').trim();
+    const numericAmt = Math.round(Number(amount) || 0);
+
+    if (!cleanSender || !cleanRecipient || numericAmt <= 0) {
+      return res.status(400).json({ success: false, message: 'Sender phone, recipient phone, and positive transfer amount required.' });
+    }
+
+    const senderWallet = getOrCreateServerWallet(cleanSender);
+    const recipientWallet = getOrCreateServerWallet(cleanRecipient);
+
+    if (senderWallet.phoneKey === recipientWallet.phoneKey) {
+      return res.status(400).json({ success: false, message: 'Sender and recipient cannot be the same account.' });
+    }
+
+    if (senderWallet.availableBalance < numericAmt) {
+      return res.status(400).json({
+        success: false,
+        insufficientFunds: true,
+        availableBalance: senderWallet.availableBalance,
+        message: `Insufficient wallet balance (₦${senderWallet.availableBalance.toLocaleString()} available; need ₦${numericAmt.toLocaleString()}).`,
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const ref = `TRF_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const senderMatch = findUserEntry(cleanSender);
+    const recipientMatch = findUserEntry(cleanRecipient);
+    const senderName = senderMatch?.user.fullName || 'AGC User';
+    const recipientName = recipientMatch?.user.fullName || cleanRecipient;
+
+    // Atomically debit sender
+    senderWallet.availableBalance = Math.max(0, senderWallet.availableBalance - numericAmt);
+    senderWallet.updatedAt = nowIso;
+
+    // Atomically credit recipient
+    recipientWallet.availableBalance = Math.max(0, recipientWallet.availableBalance + numericAmt);
+    recipientWallet.updatedAt = nowIso;
+
+    const outTx: ServerWalletTx = {
+      id: `tx_${Date.now()}_out`,
+      userId: senderMatch?.user.id,
+      userPhone: senderMatch?.user.phoneNumber || senderWallet.phoneNumber || cleanSender,
+      userName: senderName,
+      type: 'transfer_out',
+      title: title || `Transfer to ${recipientName}`,
+      description: note || `Transfer to ${recipientName} (${cleanRecipient})`,
+      amount: numericAmt,
+      fee: 0,
+      balanceAfter: senderWallet.availableBalance,
+      currency: senderWallet.currency,
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: ref,
+      referenceId: ref,
+      channel: 'wallet',
+      metadata: { recipientPhone: cleanRecipient, recipientName, note },
+    };
+
+    const inTx: ServerWalletTx = {
+      id: `tx_${Date.now()}_in`,
+      userId: recipientMatch?.user.id,
+      userPhone: recipientMatch?.user.phoneNumber || recipientWallet.phoneNumber || cleanRecipient,
+      userName: recipientName,
+      type: 'transfer_in',
+      title: title || `Received from ${senderName}`,
+      description: note || `Transfer received from ${senderName} (${cleanSender})`,
+      amount: numericAmt,
+      fee: 0,
+      balanceAfter: recipientWallet.availableBalance,
+      currency: recipientWallet.currency,
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: ref,
+      referenceId: ref,
+      channel: 'wallet',
+      metadata: { senderPhone: cleanSender, senderName, note },
+    };
+
+    senderWallet.transactions = sortAndDedupeLedger([outTx, ...senderWallet.transactions], 250);
+    recipientWallet.transactions = sortAndDedupeLedger([inTx, ...recipientWallet.transactions], 250);
+
+    serverWallets.set(senderWallet.phoneKey, senderWallet);
+    serverWallets.set(recipientWallet.phoneKey, recipientWallet);
+
+    saveWalletsFile();
+    appendUnifiedLedgerTx(outTx);
+    appendUnifiedLedgerTx(inTx);
+
+    if (senderMatch) {
+      senderMatch.user.walletBalanceNgn = senderWallet.availableBalance;
+      (senderMatch.user as any).updatedAt = nowIso;
+      usersByPhone.set(senderMatch.key, senderMatch.user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(senderMatch.user);
+    }
+    if (recipientMatch) {
+      recipientMatch.user.walletBalanceNgn = recipientWallet.availableBalance;
+      (recipientMatch.user as any).updatedAt = nowIso;
+      usersByPhone.set(recipientMatch.key, recipientMatch.user);
+      saveUsersFile();
+      pushAdminUserOverrideToSupabase(recipientMatch.user);
+    }
+
+    emitWalletUpdateToPhone(cleanSender, senderWallet, outTx.title, ref);
+    emitWalletUpdateToPhone(cleanRecipient, recipientWallet, inTx.title, ref);
+
+    return res.json({
+      success: true,
+      reference: ref,
+      wallet: {
+        availableBalance: senderWallet.availableBalance,
+        escrowLockedBalance: senderWallet.escrowLockedBalance,
+        currency: senderWallet.currency,
+        transactions: getUserMergedTransactions(cleanSender, undefined, 1000),
+      },
+      message: `Successfully transferred ₦${numericAmt.toLocaleString()} to ${recipientName}.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Transfer failed.' });
+  }
+});
+
 // REST: Unified Transaction Ledger endpoints (User + Admin Super-View)
 app.get('/api/wallet/transactions', async (req: Request, res: Response) => {
   await ensureInitialSupabaseSync();
@@ -3897,27 +4138,14 @@ app.post('/api/wallet/ledger', async (req: Request, res: Response) => {
       metadata: body.metadata || {},
     };
     const saved = appendUnifiedLedgerTx(tx);
-    const isProtectedGameTx =
-      tx.type === 'game_wager' ||
-      tx.type === 'game_win' ||
-      Boolean(tx.metadata?.gameBetEscrow);
-    // Keep wallet transaction history complete for all recorded events; guard authoritative balance writes on protected game txs
+    // Strictly audit/record the transaction without trusting or allowing client-controlled balance mutations!
     if (phoneStr) {
       const w = getOrCreateServerWallet(phoneStr);
+      // Stamp the ledger entry with the authoritative server balance
+      saved.balanceAfter = w.availableBalance;
       w.transactions = sortAndDedupeLedger([saved, ...w.transactions], 250);
-      if (!isProtectedGameTx && typeof body.balanceAfter === 'number') {
-        w.availableBalance = Math.max(0, Number(body.balanceAfter));
-        w.updatedAt = new Date().toISOString();
-      }
       serverWallets.set(w.phoneKey, w);
-      saveWalletsFile();
-      if (!isProtectedGameTx && typeof body.balanceAfter === 'number' && match) {
-        match.user.walletBalanceNgn = w.availableBalance;
-        (match.user as any).updatedAt = w.updatedAt;
-        usersByPhone.set(match.key, match.user);
-        saveUsersFile();
-        pushAdminUserOverrideToSupabase(match.user);
-      }
+      saveWalletsFile(false);
     }
     res.json({
       success: true,
@@ -6744,6 +6972,369 @@ function stripHtmlToText(html: string): { title: string; text: string } {
   return { title, text: cleaned.slice(0, 6000) };
 }
 
+// ============================================================
+// STRICT SERVER-AUTHORITATIVE MICRO-TRANSACTION ENDPOINTS
+// ============================================================
+
+// Ajo / Esusu Group Savings Contribution
+app.post('/api/ajo/contribute', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, ajoId, amount, roundNum } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    const contributionAmount = Number(amount) || 0;
+    if (!cleanPhone || !ajoId || contributionAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'Phone, ajoId, and positive amount required.' });
+    }
+    const wallet = getOrCreateServerWallet(cleanPhone);
+    if (wallet.availableBalance < contributionAmount) {
+      return res.status(400).json({ success: false, insufficientFunds: true, message: `Insufficient balance for Ajo contribution (₦${contributionAmount.toLocaleString()}). Please top up.` });
+    }
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const ref = `AJO_${ajoId}_${Date.now()}`;
+    const match = findUserEntry(cleanPhone);
+    wallet.availableBalance = Math.max(0, wallet.availableBalance - contributionAmount);
+    wallet.updatedAt = nowIso;
+    const tx = {
+      id: `tx_${Date.now()}_ajo`,
+      userId: match?.user.id,
+      userPhone: match?.user.phoneNumber || cleanPhone,
+      userName: match?.user.fullName || 'AGC User',
+      type: 'transfer_out',
+      title: `Ajo Contribution Round ${roundNum || 1}`,
+      description: `Ajo / Esusu savings contribution Round ${roundNum || 1}`,
+      amount: contributionAmount,
+      fee: 0,
+      balanceAfter: wallet.availableBalance,
+      currency: wallet.currency || 'NGN',
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: ref,
+      referenceId: ref,
+      channel: 'wallet',
+      metadata: { ajoId, roundNum },
+    };
+    wallet.transactions = sortAndDedupeLedger([tx, ...wallet.transactions], 250);
+    serverWallets.set(wallet.phoneKey, wallet);
+    saveWalletsFile();
+    appendUnifiedLedgerTx(tx);
+    emitWalletUpdateToPhone(cleanPhone, wallet, tx.title, ref);
+    return res.json({
+      success: true,
+      wallet: {
+        availableBalance: wallet.availableBalance,
+        escrowLockedBalance: wallet.escrowLockedBalance,
+        currency: wallet.currency,
+        transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err?.message || 'Ajo contribution failed.' });
+  }
+});
+
+// Job Board - Post a Job (₦400 fee)
+app.post('/api/jobs/post', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, jobData, fee } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    const postFee = Number(fee) || 400;
+    if (!cleanPhone || !jobData) {
+      return res.status(400).json({ success: false, message: 'Phone and jobData required.' });
+    }
+    const wallet = getOrCreateServerWallet(cleanPhone);
+    if (wallet.availableBalance < postFee) {
+      return res.status(400).json({ success: false, insufficientFunds: true, message: `Insufficient balance to post job (₦${postFee}). Please top up.` });
+    }
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const ref = `JOB_${Date.now()}`;
+    const match = findUserEntry(cleanPhone);
+    wallet.availableBalance = Math.max(0, wallet.availableBalance - postFee);
+    wallet.updatedAt = nowIso;
+    const tx = {
+      id: `tx_${Date.now()}_job_post`,
+      userId: match?.user.id,
+      userPhone: cleanPhone,
+      userName: match?.user.fullName || 'AGC User',
+      type: 'service_booking',
+      title: `Job Posting: ${String(jobData?.title || 'Job').slice(0, 40)}`,
+      description: 'AGC Opportunities Board job posting fee',
+      amount: postFee,
+      fee: 0,
+      balanceAfter: wallet.availableBalance,
+      currency: wallet.currency || 'NGN',
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: ref,
+      referenceId: ref,
+      channel: 'wallet',
+    };
+    wallet.transactions = sortAndDedupeLedger([tx, ...wallet.transactions], 250);
+    serverWallets.set(wallet.phoneKey, wallet);
+    saveWalletsFile();
+    appendUnifiedLedgerTx(tx);
+    emitWalletUpdateToPhone(cleanPhone, wallet, tx.title, ref);
+    return res.json({
+      success: true,
+      wallet: {
+        availableBalance: wallet.availableBalance,
+        escrowLockedBalance: wallet.escrowLockedBalance,
+        currency: wallet.currency,
+        transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err?.message || 'Job post failed.' });
+  }
+});
+
+// Job Board - Apply for a Job (₦50 fee)
+app.post('/api/jobs/apply', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, jobId, jobTitle, fee } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    const applyFee = Number(fee) || 50;
+    if (!cleanPhone || !jobId) {
+      return res.status(400).json({ success: false, message: 'Phone and jobId required.' });
+    }
+    const wallet = getOrCreateServerWallet(cleanPhone);
+    if (wallet.availableBalance < applyFee) {
+      return res.status(400).json({ success: false, insufficientFunds: true, message: `Insufficient balance for application fee (₦${applyFee}). Please top up.` });
+    }
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const ref = `JOB_APP_${jobId}_${Date.now()}`;
+    const match = findUserEntry(cleanPhone);
+    wallet.availableBalance = Math.max(0, wallet.availableBalance - applyFee);
+    wallet.updatedAt = nowIso;
+    const tx = {
+      id: `tx_${Date.now()}_job_apply`,
+      userId: match?.user.id,
+      userPhone: cleanPhone,
+      userName: match?.user.fullName || 'AGC User',
+      type: 'service_booking',
+      title: `Job Application: ${String(jobTitle || jobId).slice(0, 40)}`,
+      description: 'Verified job application fee',
+      amount: applyFee,
+      fee: 0,
+      balanceAfter: wallet.availableBalance,
+      currency: wallet.currency || 'NGN',
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: ref,
+      referenceId: ref,
+      channel: 'wallet',
+    };
+    wallet.transactions = sortAndDedupeLedger([tx, ...wallet.transactions], 250);
+    serverWallets.set(wallet.phoneKey, wallet);
+    saveWalletsFile();
+    appendUnifiedLedgerTx(tx);
+    emitWalletUpdateToPhone(cleanPhone, wallet, tx.title, ref);
+    return res.json({
+      success: true,
+      wallet: {
+        availableBalance: wallet.availableBalance,
+        escrowLockedBalance: wallet.escrowLockedBalance,
+        currency: wallet.currency,
+        transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err?.message || 'Job application failed.' });
+  }
+});
+
+// Creator Economy - Purchase digital file / book / VIP session
+app.post('/api/creator/purchase', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, itemId, itemType, title, amount, currency } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    const purchaseAmount = Number(amount) || 0;
+    if (!cleanPhone || !itemId || purchaseAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'Phone, itemId, and positive amount required.' });
+    }
+    const wallet = getOrCreateServerWallet(cleanPhone);
+    if (wallet.availableBalance < purchaseAmount) {
+      return res.status(400).json({ success: false, insufficientFunds: true, message: `Insufficient balance for purchase (₦${purchaseAmount.toLocaleString()}). Please top up.` });
+    }
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const ref = `CREATOR_${String(itemType || 'purchase').toUpperCase()}_${itemId}_${Date.now()}`;
+    const match = findUserEntry(cleanPhone);
+    wallet.availableBalance = Math.max(0, wallet.availableBalance - purchaseAmount);
+    wallet.updatedAt = nowIso;
+    const tx = {
+      id: `tx_${Date.now()}_creator`,
+      userId: match?.user.id,
+      userPhone: cleanPhone,
+      userName: match?.user.fullName || 'AGC User',
+      type: 'store_purchase',
+      title: String(title || `Creator ${itemType || 'Purchase'}`).slice(0, 60),
+      description: `Creator economy purchase (${itemType || 'item'}): ${String(title || itemId).slice(0, 60)}`,
+      amount: purchaseAmount,
+      fee: 0,
+      balanceAfter: wallet.availableBalance,
+      currency: currency || wallet.currency || 'NGN',
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: ref,
+      referenceId: ref,
+      channel: 'wallet',
+      metadata: { itemId, itemType },
+    };
+    wallet.transactions = sortAndDedupeLedger([tx, ...wallet.transactions], 250);
+    serverWallets.set(wallet.phoneKey, wallet);
+    saveWalletsFile();
+    appendUnifiedLedgerTx(tx);
+    emitWalletUpdateToPhone(cleanPhone, wallet, tx.title, ref);
+    return res.json({
+      success: true,
+      wallet: {
+        availableBalance: wallet.availableBalance,
+        escrowLockedBalance: wallet.escrowLockedBalance,
+        currency: wallet.currency,
+        transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err?.message || 'Creator purchase failed.' });
+  }
+});
+
+// Service Booking - Lock escrow / deduct for artisan/service booking
+app.post('/api/service-booking/create', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, bookingId, serviceTitle, providerName, amount, currency, paymentMode } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    const bookingAmount = Number(amount) || 0;
+    if (!cleanPhone || !bookingId || bookingAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'Phone, bookingId, and positive amount required.' });
+    }
+    const wallet = getOrCreateServerWallet(cleanPhone);
+    if (wallet.availableBalance < bookingAmount) {
+      return res.status(400).json({ success: false, insufficientFunds: true, message: `Insufficient balance for service booking (₦${bookingAmount.toLocaleString()}). Please top up.` });
+    }
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const ref = `SRV_ESC_${bookingId}`;
+    const match = findUserEntry(cleanPhone);
+    // For escrow mode, move funds from available to locked
+    wallet.availableBalance = Math.max(0, wallet.availableBalance - bookingAmount);
+    if (paymentMode === 'escrow') {
+      wallet.escrowLockedBalance = (wallet.escrowLockedBalance || 0) + bookingAmount;
+    }
+    wallet.updatedAt = nowIso;
+    const txType = paymentMode === 'escrow' ? 'escrow_lock' : 'service_booking';
+    const tx = {
+      id: `tx_${Date.now()}_svc_book`,
+      userId: match?.user.id,
+      userPhone: cleanPhone,
+      userName: match?.user.fullName || 'AGC User',
+      type: txType,
+      title: `Service ${paymentMode === 'escrow' ? 'Escrow' : 'Booking'}: ${String(serviceTitle || 'Service').slice(0, 40)} with ${String(providerName || '').slice(0, 30)}`,
+      description: `Artisan service ${paymentMode === 'escrow' ? 'escrow lock' : 'booking'}: ${String(serviceTitle || 'Service')}`,
+      amount: bookingAmount,
+      fee: 0,
+      balanceAfter: wallet.availableBalance,
+      currency: currency || wallet.currency || 'NGN',
+      timestamp: nowStr,
+      createdAt: nowIso,
+      status: 'completed',
+      reference: ref,
+      referenceId: ref,
+      channel: 'wallet',
+      metadata: { bookingId, serviceTitle, providerName, paymentMode },
+    };
+    wallet.transactions = sortAndDedupeLedger([tx, ...wallet.transactions], 250);
+    serverWallets.set(wallet.phoneKey, wallet);
+    saveWalletsFile();
+    appendUnifiedLedgerTx(tx);
+    emitWalletUpdateToPhone(cleanPhone, wallet, tx.title, ref);
+    return res.json({
+      success: true,
+      wallet: {
+        availableBalance: wallet.availableBalance,
+        escrowLockedBalance: wallet.escrowLockedBalance,
+        currency: wallet.currency,
+        transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err?.message || 'Service booking failed.' });
+  }
+});
+
+// Payroll Disbursement - Server-authoritative bulk debit
+app.post('/api/payroll/disburse', async (req: Request, res: Response) => {
+  try {
+    await ensureInitialSupabaseSync();
+    const { phoneNumber, employees, totalAmount } = req.body || {};
+    const cleanPhone = String(phoneNumber || '').trim();
+    const totalNeeded = Number(totalAmount) || 0;
+    if (!cleanPhone || !Array.isArray(employees) || employees.length === 0 || totalNeeded <= 0) {
+      return res.status(400).json({ success: false, message: 'Phone, employees array, and positive totalAmount required.' });
+    }
+    const wallet = getOrCreateServerWallet(cleanPhone);
+    if (wallet.availableBalance < totalNeeded) {
+      return res.status(400).json({ success: false, insufficientFunds: true, message: `Insufficient balance for payroll (₦${totalNeeded.toLocaleString()}). Please top up.` });
+    }
+    const nowIso = new Date().toISOString();
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const match = findUserEntry(cleanPhone);
+    wallet.availableBalance = Math.max(0, wallet.availableBalance - totalNeeded);
+    wallet.updatedAt = nowIso;
+    const txList = employees.map((e, idx) => {
+      const ref = `PAYROLL_${Date.now()}_${idx}`;
+      return {
+        id: `tx_${Date.now()}_payroll_${idx}`,
+        userId: match?.user.id,
+        userPhone: cleanPhone,
+        userName: match?.user.fullName || 'AGC Business',
+        type: 'payroll_debit',
+        title: `Payroll: ${String(e.fullName || e.name || 'Employee').slice(0, 40)} (${String(e.role || '').slice(0, 20)})`,
+        description: `Payroll disbursement to ${String(e.fullName || e.name || 'Employee')} (${String(e.role || '')})`,
+        amount: Number(e.salary) || 0,
+        fee: 0,
+        balanceAfter: wallet.availableBalance,
+        currency: e.currency || wallet.currency || 'NGN',
+        timestamp: nowStr,
+        createdAt: nowIso,
+        status: 'completed',
+        reference: ref,
+        referenceId: ref,
+        channel: 'wallet',
+        metadata: { employeeId: e.id, employeeName: e.fullName || e.name, role: e.role },
+      };
+    });
+    wallet.transactions = sortAndDedupeLedger([...txList, ...wallet.transactions], 250);
+    serverWallets.set(wallet.phoneKey, wallet);
+    saveWalletsFile();
+    txList.forEach(appendUnifiedLedgerTx);
+    emitWalletUpdateToPhone(cleanPhone, wallet, `Payroll: ${employees.length} employees`, `PAYROLL_${Date.now()}`);
+    return res.json({
+      success: true,
+      wallet: {
+        availableBalance: wallet.availableBalance,
+        escrowLockedBalance: wallet.escrowLockedBalance,
+        currency: wallet.currency,
+        transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err?.message || 'Payroll disbursement failed.' });
+  }
+});
+
 app.get('/api/ai/datacenter', async (_req: Request, res: Response) => {
   if (!aiDataCenterUpdatedAt) {
     const aiSlice = await fetchSupabaseAdminSlice(ADMIN_SYS_AI_KEY);
@@ -8840,24 +9431,78 @@ app.post('/api/webhooks/paystack', (req: Request, res: Response) => {
   res.json({ success: true, webhookLog: wh });
 });
 
-// Store & Artisan Registration + Admin Approval Mutations
-app.post('/api/stores/register', (req: Request, res: Response) => {
+// Store & Artisan Registration + Admin Approval Mutations (Server-Authoritative)
+app.post('/api/stores/register', async (req: Request, res: Response) => {
   try {
+    await ensureInitialSupabaseSync();
     const body = req.body || {};
     const id = String(body.id || `store_${Date.now()}`);
+    const tier = body.tier === 'pro_100' ? 'pro_100' : 'starter_30';
+    const fee = tier === 'pro_100' ? 7000 : 3000;
+    const paymentMethod = body.paymentMethod === 'paystack' ? 'paystack' : 'wallet';
+    const ownerPhone = String(body.ownerPhone || '').trim();
+
+    let walletRecord: ServerWalletRecord | null = null;
+    if (paymentMethod === 'wallet' && ownerPhone) {
+      const wal = getOrCreateServerWallet(ownerPhone);
+      if (wal.availableBalance < fee) {
+        return res.status(400).json({
+          success: false,
+          insufficientFunds: true,
+          message: `Insufficient wallet balance (₦${wal.availableBalance.toLocaleString()} available; need ₦${fee.toLocaleString()} for store tier).`,
+        });
+      }
+      wal.availableBalance -= fee;
+      wal.updatedAt = new Date().toISOString();
+      const match = findUserEntry(ownerPhone);
+      const tx: ServerWalletTx = {
+        id: `tx_store_reg_${Date.now()}`,
+        userId: match?.user.id,
+        userPhone: match?.user.phoneNumber || wal.phoneNumber || ownerPhone,
+        userName: match?.user.fullName || String(body.ownerName || 'Merchant'),
+        type: 'store_subscription',
+        title: `Store Subscription (${tier === 'pro_100' ? 'Pro 100-Items' : 'Starter 30-Items'})`,
+        description: `Merchant store registration: ${body.storeName || 'Merchant Store'}`,
+        amount: fee,
+        fee: 0,
+        balanceAfter: wal.availableBalance,
+        currency: 'NGN',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        createdAt: wal.updatedAt,
+        status: 'completed',
+        reference: `STORE_SUB_${id}`,
+        referenceId: `STORE_SUB_${id}`,
+        channel: 'wallet',
+        metadata: { storeId: id, tier, fee },
+      };
+      wal.transactions = sortAndDedupeLedger([tx, ...wal.transactions], 250);
+      serverWallets.set(wal.phoneKey, wal);
+      saveWalletsFile();
+      appendUnifiedLedgerTx(tx);
+      if (match) {
+        match.user.walletBalanceNgn = wal.availableBalance;
+        (match.user as any).updatedAt = wal.updatedAt;
+        usersByPhone.set(match.key, match.user);
+        saveUsersFile();
+        pushAdminUserOverrideToSupabase(match.user);
+      }
+      emitWalletUpdateToPhone(ownerPhone, wal, tx.title, tx.reference);
+      walletRecord = wal;
+    }
+
     const entry = {
       id,
       storeName: body.storeName || 'Merchant Store',
       description: body.description || '',
       category: body.category || 'General Trade',
-      tier: body.tier || 'starter_30',
-      itemsLimit: body.itemsLimit ?? (body.tier === 'pro_100' ? 100 : 30),
+      tier,
+      itemsLimit: body.itemsLimit ?? (tier === 'pro_100' ? 100 : 30),
       itemsCount: body.itemsCount ?? 0,
       ownerName: body.ownerName || 'Merchant Owner',
-      ownerPhone: body.ownerPhone || '',
+      ownerPhone,
       status: 'pending',
       verified: false,
-      paymentMethod: body.paymentMethod || 'wallet',
+      paymentMethod,
       createdAt: new Date().toISOString(),
     };
     storeOverridesMap.set(id, entry);
@@ -8872,16 +9517,80 @@ app.post('/api/stores/register', (req: Request, res: Response) => {
       details: `Tier: ${entry.tier} · Awaiting admin approval`,
     });
     io.emit('admin_store_updated', entry);
-    res.json({ success: true, store: entry });
+    res.json({
+      success: true,
+      store: entry,
+      wallet: walletRecord
+        ? {
+            availableBalance: walletRecord.availableBalance,
+            escrowLockedBalance: walletRecord.escrowLockedBalance,
+            currency: walletRecord.currency,
+            transactions: getUserMergedTransactions(ownerPhone, undefined, 1000),
+          }
+        : undefined,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to submit store' });
   }
 });
 
-app.post('/api/artisans/register', (req: Request, res: Response) => {
+app.post('/api/artisans/register', async (req: Request, res: Response) => {
   try {
+    await ensureInitialSupabaseSync();
     const body = req.body || {};
     const id = String(body.id || `art_${Date.now()}`);
+    const fee = 5000;
+    const paymentMethod = body.paymentMethod === 'paystack' ? 'paystack' : 'wallet';
+    const ownerPhone = String(body.ownerPhone || '').trim();
+
+    let walletRecord: ServerWalletRecord | null = null;
+    if (paymentMethod === 'wallet' && ownerPhone && body.registrationFeePaid !== false) {
+      const wal = getOrCreateServerWallet(ownerPhone);
+      if (wal.availableBalance < fee) {
+        return res.status(400).json({
+          success: false,
+          insufficientFunds: true,
+          message: `Insufficient wallet balance (₦${wal.availableBalance.toLocaleString()} available; need ₦${fee.toLocaleString()} for artisan station registration).`,
+        });
+      }
+      wal.availableBalance -= fee;
+      wal.updatedAt = new Date().toISOString();
+      const match = findUserEntry(ownerPhone);
+      const tx: ServerWalletTx = {
+        id: `tx_artisan_reg_${Date.now()}`,
+        userId: match?.user.id,
+        userPhone: match?.user.phoneNumber || wal.phoneNumber || ownerPhone,
+        userName: match?.user.fullName || String(body.ownerName || 'Artisan'),
+        type: 'artisan_reg',
+        title: 'Artisan Station Registration Fee (₦5,000)',
+        description: `Artisan station registration: ${body.stationName || 'Master Station'}`,
+        amount: fee,
+        fee: 0,
+        balanceAfter: wal.availableBalance,
+        currency: 'NGN',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        createdAt: wal.updatedAt,
+        status: 'completed',
+        reference: `ART_REG_${id}`,
+        referenceId: `ART_REG_${id}`,
+        channel: 'wallet',
+        metadata: { stationId: id, fee },
+      };
+      wal.transactions = sortAndDedupeLedger([tx, ...wal.transactions], 250);
+      serverWallets.set(wal.phoneKey, wal);
+      saveWalletsFile();
+      appendUnifiedLedgerTx(tx);
+      if (match) {
+        match.user.walletBalanceNgn = wal.availableBalance;
+        (match.user as any).updatedAt = wal.updatedAt;
+        usersByPhone.set(match.key, match.user);
+        saveUsersFile();
+        pushAdminUserOverrideToSupabase(match.user);
+      }
+      emitWalletUpdateToPhone(ownerPhone, wal, tx.title, tx.reference);
+      walletRecord = wal;
+    }
+
     const entry = {
       id,
       stationName: body.stationName || 'Artisan Hub',
@@ -8889,10 +9598,11 @@ app.post('/api/artisans/register', (req: Request, res: Response) => {
       location: body.location || 'Lagos, Nigeria',
       workshopAddress: body.workshopAddress || '',
       ownerName: body.ownerName || 'Master Artisan',
-      ownerPhone: body.ownerPhone || '',
+      ownerPhone,
       isApproved: false,
       approvalStatus: 'pending',
       registrationFeePaid: Boolean(body.registrationFeePaid ?? true),
+      paymentMethod,
       createdAt: new Date().toISOString(),
     };
     artisanOverridesMap.set(id, entry);
@@ -8907,7 +9617,18 @@ app.post('/api/artisans/register', (req: Request, res: Response) => {
       details: `Category: ${entry.category} · Awaiting admin approval`,
     });
     io.emit('admin_artisan_updated', entry);
-    res.json({ success: true, artisan: entry });
+    res.json({
+      success: true,
+      artisan: entry,
+      wallet: walletRecord
+        ? {
+            availableBalance: walletRecord.availableBalance,
+            escrowLockedBalance: walletRecord.escrowLockedBalance,
+            currency: walletRecord.currency,
+            transactions: getUserMergedTransactions(ownerPhone, undefined, 1000),
+          }
+        : undefined,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to submit artisan' });
   }

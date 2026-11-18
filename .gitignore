@@ -9,3 +9,22 @@ coverage/
 
 scratch/
 brain/
+
+# Runtime database and ledger files (prevent git pull clobbering)
+data_wallets.json
+data_wallet_transactions.json
+data_game_escrows.json
+data_outside_parties.json
+data_outside_rsvps.json
+data_statuses.json
+data_users.json
+data_messages.json
+data_admin_audit.json
+data_ai_datacenter.json
+
+# Local backup and snapshot stores
+wallets_backup/
+data_backups/
+*.safe_snapshot.json
+*.bak
+

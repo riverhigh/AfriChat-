@@ -1,44 +1,22 @@
 {
   "announcements": [],
   "marqueeBanner": {
-    "enabled": true,
-    "text": "⚡ Welcome to AfriChat! Zero-fee transfers, instant dispatch deliveries, and escrow protection live across Africa.",
+    "enabled": false,
+    "text": "",
     "speed": "normal",
     "backgroundColor": "#7c3aed",
     "textColor": "#ffffff"
   },
-  "faqArticles": [
-    {
-      "id": "faq_escrow",
-      "answer": "When you purchase goods or book an artisan, your payment is held securely in an encrypted vault until you confirm satisfactory delivery.",
-      "category": "escrow",
-      "question": "How does Balogun Escrow Protection work?",
-      "published": true
-    },
-    {
-      "id": "faq_dispatch",
-      "answer": "Our dispatch system matches nearby verified riders. A 5% platform fee guarantees insurance and GPS parcel tracking.",
-      "category": "dispatch",
-      "question": "How do PickkR and Gokada dispatch deliveries work?",
-      "published": true
-    },
-    {
-      "id": "faq_safety",
-      "answer": "Use the Scam Shield tool in the 3-dot menu before sending funds. Never release escrow funds until you inspect items physically.",
-      "category": "security",
-      "question": "How do I avoid scammers on P2P payments?",
-      "published": true
-    }
-  ],
-  "communityGuidelines": "1. Treat all community members with respect.\n2. No fraudulent listings, phishing links, or unauthorized transactions.\n3. Verified badges are subject to continuous compliance with AfriChat terms.",
-  "termsOfService": "AfriChat provides communication, marketplace escrow mediation, and logistical dispatch coordination across African regions.",
+  "faqArticles": [],
+  "communityGuidelines": "1. Treat all community members with respect.\n2. No fraudulent listings, phishing links, or unauthorized transactions.",
+  "termsOfService": "AGC provides communication, marketplace escrow mediation, and logistical dispatch coordination across African regions.",
   "sponsorSpotlight": {
     "enabled": false,
-    "brandName": "Kente Pay Africa",
-    "tagline": "Zero-Fee African Merchant Remittances",
-    "bannerUrl": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
+    "brandName": "",
+    "tagline": "",
+    "bannerUrl": "",
     "linkUrl": ""
   },
   "sponsoredStatuses": [],
-  "updatedAt": "2026-11-15T20:02:32.064Z"
+  "updatedAt": "2026-11-18T19:55:42.526Z"
 }

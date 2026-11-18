@@ -1127,6 +1127,12 @@ interface AppContextType {
     accountName: string,
     bankCode?: string
   ) => Promise<{ success: boolean; message: string }>;
+  transferWallet: (
+    recipientPhone: string,
+    amount: number,
+    note?: string,
+    title?: string
+  ) => Promise<{ success: boolean; message: string; reference?: string }>;
   fetchLiveBanks: () => Promise<{ success: boolean; count: number; source: string; banks: Array<{ name: string; code: string }> }>;
   resolveBankAccount: (
     accountNumber: string,
@@ -2271,7 +2277,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newOrder),
-    }).catch(() => {});
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.wallet) {
+          applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+        }
+      })
+      .catch(() => {});
 
     return newOrder;
   };
@@ -2306,7 +2319,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ orderId, code: code.trim() }),
-    }).catch(() => {});
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.wallet) {
+          applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+        }
+      })
+      .catch(() => {});
 
     return true;
   };
@@ -4204,31 +4224,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    let newTx: WalletTransaction | null = null;
-    if (paymentMethod === 'wallet') {
-      newTx = {
-        id: `tx_artisan_reg_${Date.now()}`,
-        type: 'artisan_reg',
-        title: 'Artisan Station Registration Fee (₦5,000)',
-        description: `Artisan station registration: ${stationData.stationName || 'Master Station'}`,
-        amount: regFee,
-        fee: 0,
-        balanceAfter: wallet.availableBalance - regFee,
-        currency: 'NGN',
-        timestamp: 'Just now',
-        createdAt: new Date().toISOString(),
-        status: 'completed',
-        reference: `ART_${Date.now()}`,
-        referenceId: `ART_${Date.now()}`,
-        channel: 'wallet',
-      };
-      setWallet((prev) => ({
-        ...prev,
-        availableBalance: prev.availableBalance - regFee,
-        transactions: [newTx!, ...prev.transactions],
-      }));
-    }
-
     const newStation: ArtisanStation = {
       id: `station_${Date.now()}`,
       ownerId: currentUser.id,
@@ -4271,21 +4266,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setArtisanStation(newStation);
     localStorage.setItem('AGC_artisan_station', JSON.stringify(newStation));
 
-    if (newTx) {
-      recordLedgerTransaction({
-        id: newTx.id,
-        type: newTx.type,
-        title: newTx.title,
-        description: newTx.description || newTx.title,
-        amount: newTx.amount,
-        fee: newTx.fee || 0,
-        balanceAfter: newTx.balanceAfter,
-        currency: newTx.currency,
-        referenceId: newTx.referenceId || newTx.reference,
-        channel: newTx.channel || 'wallet',
-      });
-    }
-
     fetch('/api/artisans/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -4298,8 +4278,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ownerName: newStation.ownerName,
         ownerPhone: newStation.ownerPhone,
         registrationFeePaid: true,
+        paymentMethod,
       }),
-    }).catch(() => {});
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.wallet) {
+          applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+        }
+      })
+      .catch(() => {});
 
     //  LIVE SYSTEM: Publish Artisan Station to Supabase (pending approval)
     if (isSupabaseConfigured) {
@@ -7290,6 +7278,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     } catch (err: any) {
       return { success: false, message: err?.message || 'Network error verifying withdrawal with server.' };
+    }
+  };
+
+  // Peer-to-Peer Wallet Transfer (Authoritative Server Transfer)
+  const transferWallet = async (
+    recipientPhone: string,
+    amount: number,
+    note?: string,
+    title?: string
+  ): Promise<{ success: boolean; message: string; reference?: string }> => {
+    const senderPhone = currentUserRef.current?.phoneNumber;
+    if (!senderPhone) {
+      return { success: false, message: 'Sign in required to transfer funds.' };
+    }
+    try {
+      const resp = await fetch('/api/wallet/transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ senderPhone, recipientPhone, amount, note, title }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.success) {
+        await refreshWalletFromServer();
+        return { success: false, message: data?.message || 'Transfer could not be processed.' };
+      }
+      if (data.wallet) {
+        applyAuthoritativeServerWallet(data.wallet, senderPhone);
+      }
+      return {
+        success: true,
+        reference: data.reference,
+        message: data.message || `Transferred ${CURRENCY_SYMBOLS.NGN}${amount.toLocaleString()} successfully.`,
+      };
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Network error verifying transfer with server.' };
     }
   };
 
@@ -16848,24 +16871,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const roundNum = activeAjoGroup?.currentRound || 1;
 
-    // Deduct contribution and log transaction
-    const ajoTx = recordLedgerTransaction({
-      id: `tx_${Date.now()}`,
-      type: 'transfer_out',
-      title: `Ajo Contribution Round ${roundNum}`,
-      description: `Ajo / Esusu savings contribution Round ${roundNum}`,
-      amount,
-      fee: 0,
-      balanceAfter: Math.max(0, wallet.availableBalance - amount),
-      currency: 'NGN',
-      referenceId: `AJO_${ajoId}_${Date.now()}`,
-      channel: 'wallet',
-    });
+    // Server-authoritative deduction — backend verifies balance & records ledger
+    if (currentUser.phoneNumber) {
+      fetch('/api/ajo/contribute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: currentUser.phoneNumber, ajoId, amount, roundNum }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.success && data?.wallet) {
+            applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+          } else {
+            // Fallback: record locally if server unreachable
+            recordLedgerTransaction({
+              id: `tx_${Date.now()}`,
+              type: 'transfer_out',
+              title: `Ajo Contribution Round ${roundNum}`,
+              description: `Ajo / Esusu savings contribution Round ${roundNum}`,
+              amount,
+              fee: 0,
+              balanceAfter: Math.max(0, walletRef.current.availableBalance - amount),
+              currency: 'NGN',
+              referenceId: `AJO_${ajoId}_${Date.now()}`,
+              channel: 'wallet',
+            });
+          }
+        })
+        .catch(() => {
+          recordLedgerTransaction({
+            id: `tx_${Date.now()}`,
+            type: 'transfer_out',
+            title: `Ajo Contribution Round ${roundNum}`,
+            description: `Ajo / Esusu savings contribution Round ${roundNum}`,
+            amount,
+            fee: 0,
+            balanceAfter: Math.max(0, walletRef.current.availableBalance - amount),
+            currency: 'NGN',
+            referenceId: `AJO_${ajoId}_${Date.now()}`,
+            channel: 'wallet',
+          });
+        });
+    }
 
+    // Optimistic UI update — server will reconcile on next sync
     setWallet((prev) => ({
       ...prev,
-      availableBalance: prev.availableBalance - amount,
-      transactions: [ajoTx, ...prev.transactions],
+      availableBalance: Math.max(0, prev.availableBalance - amount),
     }));
 
     if (activeAjoGroup) {
@@ -16935,30 +16987,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    const newTx: WalletTransaction = {
-      id: `tx_${Date.now()}`,
-      type: 'transfer_out',
-      title: badgeTitle,
-      description: `Verification badge upgrade (${badge})`,
-      amount: cost,
-      fee: 0,
-      balanceAfter: Math.max(0, wallet.availableBalance - cost),
-      currency: 'NGN',
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      createdAt: new Date().toISOString(),
-      status: 'completed',
-      reference: `VERIFY_${badge.toUpperCase()}_${Date.now()}`,
-      referenceId: `VERIFY_${badge.toUpperCase()}_${Date.now()}`,
-      channel: 'wallet',
-    };
-
-    setWallet((prev) => ({
-      ...prev,
-      availableBalance: prev.availableBalance - cost,
-      transactions: mergeWalletTransactions([newTx], prev.transactions),
-    }));
-
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    // Optimistic UI: show badge immediately, server will reconcile wallet
     const updatedUser: UserProfile = {
       ...currentUser,
       verificationBadge: badge,
@@ -16967,8 +16997,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setCurrentUser(updatedUser);
     persistPartitionedUserProfile(updatedUser);
+    // Optimistic balance deduct for immediate UI feedback
+    setWallet((prev) => ({ ...prev, availableBalance: Math.max(0, prev.availableBalance - cost) }));
 
-    // Sync badge upgrade + wallet debit authoritatively with server (fall back to ledger sync if server endpoint fails)
+    // Server-authoritative: deducts balance & records ledger entry
     if (currentUser.phoneNumber) {
       fetch('/api/wallet/upgrade-badge', {
         method: 'POST',
@@ -16978,33 +17010,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .then((r) => r.json())
         .then((data) => {
           if (data?.success && data?.wallet) {
+            // Server wins — apply authoritative balance + full transaction history
             applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
           } else {
+            // Server rejected or offline — record ledger fallback
             recordLedgerTransaction({
-              id: newTx.id,
-              type: newTx.type,
-              title: newTx.title,
-              description: newTx.description,
-              amount: newTx.amount,
+              id: `tx_${Date.now()}_badge`,
+              type: 'transfer_out',
+              title: badgeTitle,
+              description: `Verification badge upgrade (${badge})`,
+              amount: cost,
               fee: 0,
-              balanceAfter: newTx.balanceAfter,
+              balanceAfter: Math.max(0, walletRef.current.availableBalance),
               currency: 'NGN',
-              referenceId: newTx.referenceId,
+              referenceId: `VERIFY_${badge.toUpperCase()}_${Date.now()}`,
               channel: 'wallet',
             });
           }
         })
         .catch(() => {
           recordLedgerTransaction({
-            id: newTx.id,
-            type: newTx.type,
-            title: newTx.title,
-            description: newTx.description,
-            amount: newTx.amount,
+            id: `tx_${Date.now()}_badge`,
+            type: 'transfer_out',
+            title: badgeTitle,
+            description: `Verification badge upgrade (${badge})`,
+            amount: cost,
             fee: 0,
-            balanceAfter: newTx.balanceAfter,
+            balanceAfter: Math.max(0, walletRef.current.availableBalance),
             currency: 'NGN',
-            referenceId: newTx.referenceId,
+            referenceId: `VERIFY_${badge.toUpperCase()}_${Date.now()}`,
             channel: 'wallet',
           });
         });
@@ -18384,24 +18418,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    const newTx = recordLedgerTransaction({
-      id: `tx_${Date.now()}`,
-      type: 'service_booking',
-      title: `Job Board Posting: ${jobData.title.slice(0, 25)}`,
-      description: `Featured job board posting fee: ${jobData.title}`,
-      amount: postFee,
-      fee: 0,
-      balanceAfter: wallet.availableBalance - postFee,
-      currency: 'NGN',
-      referenceId: `JOB_${Date.now()}`,
-      channel: 'wallet',
-    });
-
-    setWallet((prev) => ({
-      ...prev,
-      availableBalance: prev.availableBalance - postFee,
-      transactions: [newTx, ...prev.transactions],
-    }));
+    // Server-authoritative fee deduction for job posting
+    if (currentUser.phoneNumber) {
+      fetch('/api/jobs/post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: currentUser.phoneNumber, jobData, fee: postFee }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.success && data?.wallet) {
+            applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+          } else {
+            recordLedgerTransaction({
+              id: `tx_${Date.now()}`,
+              type: 'service_booking',
+              title: `Job Board Posting: ${jobData.title.slice(0, 25)}`,
+              description: `Featured job board posting fee: ${jobData.title}`,
+              amount: postFee,
+              fee: 0,
+              balanceAfter: Math.max(0, walletRef.current.availableBalance),
+              currency: 'NGN',
+              referenceId: `JOB_${Date.now()}`,
+              channel: 'wallet',
+            });
+          }
+        })
+        .catch(() => {
+          recordLedgerTransaction({
+            id: `tx_${Date.now()}`,
+            type: 'service_booking',
+            title: `Job Board Posting: ${jobData.title.slice(0, 25)}`,
+            description: `Featured job board posting fee: ${jobData.title}`,
+            amount: postFee,
+            fee: 0,
+            balanceAfter: Math.max(0, walletRef.current.availableBalance),
+            currency: 'NGN',
+            referenceId: `JOB_${Date.now()}`,
+            channel: 'wallet',
+          });
+        });
+    }
+    // Optimistic UI deduct
+    setWallet((prev) => ({ ...prev, availableBalance: Math.max(0, prev.availableBalance - postFee) }));
 
     const newJob: JobPosting = {
       ...jobData,
@@ -18465,11 +18524,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       channel: 'wallet',
     });
 
-    setWallet((prev) => ({
-      ...prev,
-      availableBalance: prev.availableBalance - applyFee,
-      transactions: [newTx, ...prev.transactions],
-    }));
+    // Server-authoritative fee deduction for job application
+    if (currentUser.phoneNumber) {
+      fetch('/api/jobs/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: currentUser.phoneNumber, jobId: job.id, jobTitle: job.title, fee: applyFee }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.success && data?.wallet) {
+            applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+          }
+        })
+        .catch(() => {});
+    }
+    // Optimistic UI deduct
+    setWallet((prev) => ({ ...prev, availableBalance: Math.max(0, prev.availableBalance - applyFee) }));
 
     // Inject application notification message directly into chat with employer
     const employerChat = chats.find((c) => c.phone === job.contactPhone || c.name.toLowerCase().includes(job.company.toLowerCase())) || chats[0];
@@ -18702,23 +18773,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // If payment mode is escrow or wallet, log and deduct if sufficient
     if (booking.paymentMode === 'escrow') {
-      const tx = recordLedgerTransaction({
-        type: 'escrow_lock',
-        title: `Service Escrow: ${booking.serviceTitle} with ${booking.providerName}`,
-        description: `Artisan service escrow lock: ${booking.serviceTitle}`,
-        amount: booking.totalPrice,
-        fee: 0,
-        balanceAfter: Math.max(0, wallet.availableBalance - booking.totalPrice),
-        currency: booking.currency,
-        referenceId: `SRV_ESC_${newBooking.id}`,
-        channel: 'wallet',
-      });
-
+      // Server-authoritative escrow lock
+      if (currentUser.phoneNumber) {
+        fetch('/api/service-booking/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phoneNumber: currentUser.phoneNumber,
+            bookingId: newBooking.id,
+            serviceTitle: booking.serviceTitle,
+            providerName: booking.providerName,
+            amount: booking.totalPrice,
+            currency: booking.currency,
+            paymentMode: booking.paymentMode,
+          }),
+        })
+          .then((r) => r.json())
+          .then((data) => {
+            if (data?.success && data?.wallet) {
+              applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+            } else {
+              recordLedgerTransaction({
+                type: 'escrow_lock',
+                title: `Service Escrow: ${booking.serviceTitle} with ${booking.providerName}`,
+                description: `Artisan service escrow lock: ${booking.serviceTitle}`,
+                amount: booking.totalPrice,
+                fee: 0,
+                balanceAfter: Math.max(0, walletRef.current.availableBalance - booking.totalPrice),
+                currency: booking.currency,
+                referenceId: `SRV_ESC_${newBooking.id}`,
+                channel: 'wallet',
+              });
+            }
+          })
+          .catch(() => {
+            recordLedgerTransaction({
+              type: 'escrow_lock',
+              title: `Service Escrow: ${booking.serviceTitle} with ${booking.providerName}`,
+              description: `Artisan service escrow lock: ${booking.serviceTitle}`,
+              amount: booking.totalPrice,
+              fee: 0,
+              balanceAfter: Math.max(0, walletRef.current.availableBalance - booking.totalPrice),
+              currency: booking.currency,
+              referenceId: `SRV_ESC_${newBooking.id}`,
+              channel: 'wallet',
+            });
+          });
+      }
+      // Optimistic UI update
       setWallet((prev) => ({
         ...prev,
         availableBalance: Math.max(0, prev.availableBalance - booking.totalPrice),
         escrowLockedBalance: prev.escrowLockedBalance + booking.totalPrice,
-        transactions: [tx, ...prev.transactions],
       }));
     }
 
@@ -18913,9 +19019,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
     });
 
+    // Server-authoritative payroll deduction
+    if (currentUser.phoneNumber) {
+      fetch('/api/payroll/disburse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: currentUser.phoneNumber,
+          employees: targets,
+          totalAmount: totalNeeded,
+        }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.success && data?.wallet) {
+            applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+          }
+        })
+        .catch(() => {});
+    }
+    // Optimistic UI deduct
     setWallet((prev) => ({
       ...prev,
-      availableBalance: prev.availableBalance - totalNeeded,
+      availableBalance: Math.max(0, prev.availableBalance - totalNeeded),
       transactions: [...newTxList, ...prev.transactions],
     }));
 
@@ -19140,26 +19266,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    if (paymentMethod === 'wallet') {
-      const newTx = recordLedgerTransaction({
-        id: `tx_store_reg_${Date.now()}`,
-        type: 'store_subscription',
-        title: `Store Registration (${tier === 'starter_30' ? 'Starter 30-Items' : 'Pro 100-Items'})`,
-        description: `Merchant store subscription: ${storeName || 'AGC Store'} (${tier})`,
-        amount: fee,
-        fee: 0,
-        balanceAfter: wallet.availableBalance - fee,
-        currency: 'NGN',
-        referenceId: `STORE_SUB_${Date.now()}`,
-        channel: 'wallet',
-      });
-      setWallet((prev) => ({
-        ...prev,
-        availableBalance: prev.availableBalance - fee,
-        transactions: [newTx, ...prev.transactions],
-      }));
-    }
-
     const currentCount = myStoreProducts.length || storeSubscription?.itemsCount || 0;
     const storeId = `store_${Date.now()}`;
     const updatedSub: StoreSubscription = {
@@ -19197,7 +19303,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ownerPhone: currentUser.phoneNumber,
         paymentMethod: updatedSub.paymentMethod,
       }),
-    }).catch(() => {});
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.wallet) {
+          applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+        }
+      })
+      .catch(() => {});
 
     //  LIVE SYSTEM: Publish Store Subscription to Supabase (pending admin approval)
     if (isSupabaseConfigured) {
@@ -19271,6 +19384,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       transactions: [newTx, ...prev.transactions],
     }));
 
+    // Server-authoritative deduction for digital file purchase
+    if (currentUser.phoneNumber) {
+      fetch('/api/creator/purchase', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: currentUser.phoneNumber,
+          itemId: fileId,
+          itemType: 'digital_file',
+          title: file.title,
+          amount: file.price,
+          currency: file.currency,
+        }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.success && data?.wallet) {
+            applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+          }
+        })
+        .catch(() => {});
+    }
+
     const updatedFile: CreatorDigitalFile = {
       ...file,
       isPurchasedByMe: true,
@@ -19342,11 +19478,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       channel: 'wallet',
     });
 
-    setWallet((prev) => ({
-      ...prev,
-      availableBalance: prev.availableBalance - price,
-      transactions: [newTx, ...prev.transactions],
-    }));
+    // Server-authoritative deduction for VIP session
+    if (currentUser.phoneNumber) {
+      fetch('/api/creator/purchase', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: currentUser.phoneNumber,
+          itemId: `VIP_${creatorId}_${type}`,
+          itemType: 'vip_session',
+          title: `VIP 1-on-1 ${type} with ${creator.name} (${durationMinutes}m)`,
+          amount: price,
+          currency: 'NGN',
+        }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.success && data?.wallet) {
+            applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+          }
+        })
+        .catch(() => {});
+    }
+    // Optimistic UI deduct
+    setWallet((prev) => ({ ...prev, availableBalance: Math.max(0, prev.availableBalance - price) }));
 
     // Credit creator directly
     setCreators((prev) =>
@@ -19523,6 +19678,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       transactions: [newTx, ...prev.transactions],
     }));
 
+    // Server-authoritative tip payment
+    if (currentUser.phoneNumber) {
+      fetch('/api/creator/purchase', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: currentUser.phoneNumber,
+          itemId: `TIP_${bookId}`,
+          itemType: 'book_tip',
+          title: `Reader Tip to ${book.authorName} for "${book.title}"`,
+          amount,
+          currency: 'NGN',
+        }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.success && data?.wallet) {
+            applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+          }
+        })
+        .catch(() => {});
+    }
+
     setAfriBooks((prev) => {
       const updated = prev.map((b) =>
         b.id === bookId
@@ -19579,11 +19757,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       channel: 'wallet',
     });
 
-    setWallet((prev) => ({
-      ...prev,
-      availableBalance: prev.availableBalance - book.price,
-      transactions: [newTx, ...prev.transactions],
-    }));
+    // Server-authoritative deduction for book purchase
+    if (currentUser.phoneNumber) {
+      fetch('/api/creator/purchase', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: currentUser.phoneNumber,
+          itemId: bookId,
+          itemType: 'book',
+          title: book.title,
+          amount: book.price,
+          currency: book.currency,
+        }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.success && data?.wallet) {
+            applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+          }
+        })
+        .catch(() => {});
+    }
+    // Optimistic UI deduct
+    setWallet((prev) => ({ ...prev, availableBalance: Math.max(0, prev.availableBalance - book.price) }));
 
     setAfriBooks((prev) => {
       const updated = prev.map((b) => (b.id === bookId ? { ...b, isPurchasedByMe: true, totalReads: b.totalReads + 1 } : b));
@@ -23124,6 +23321,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshWalletFromServer,
         topUpWallet,
         withdrawWallet,
+        transferWallet,
         fetchLiveBanks,
         resolveBankAccount,
         updateUsername,
