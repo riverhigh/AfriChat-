@@ -46,7 +46,7 @@ const CATEGORY_META: Record<
   other: { label: 'Other Task', defaultHint: 'Platform Username' },
 };
 
-const QUICK_STAKES = [5000, 10000, 50000, 100000];
+const QUICK_STAKES = [500, 1000, 5000, 10000, 50000, 100000];
 
 const getSafeExternalUrl = (url?: string): string | null => {
   if (!url) return null;
@@ -109,10 +109,10 @@ export const TaskToEarnModal: React.FC = () => {
   const [createTargetUrl, setCreateTargetUrl] = useState('');
   const [createHandleHint, setCreateHandleHint] = useState(CATEGORY_META.youtube.defaultHint);
   const [createInstructions, setCreateInstructions] = useState('');
-  const [createStake, setCreateStake] = useState<string>('100000');
+  const [createStake, setCreateStake] = useState<string>('1000');
   const [splitMode, setSplitMode] = useState<SplitMode>('by_payout');
   const [payoutInput, setPayoutInput] = useState<string>('100');
-  const [peopleInput, setPeopleInput] = useState<string>('100');
+  const [peopleInput, setPeopleInput] = useState<string>('10');
   const [creatingCampaign, setCreatingCampaign] = useState(false);
 
   // Close & refund confirmation state
@@ -146,6 +146,7 @@ export const TaskToEarnModal: React.FC = () => {
   useEffect(() => {
     if (!isTaskEarnModalOpen) return;
     fetchTasks();
+    void refreshWalletFromServer();
     const socket = getSocket();
     const onUpdated = () => {
       fetchTasks();
@@ -187,11 +188,19 @@ export const TaskToEarnModal: React.FC = () => {
 
     const allocatedPool = rewardPerTask * maxSlots;
     const effectiveSystemFee = Math.max(0, totalStake - allocatedPool);
-    const isValid =
-      totalStake >= 500 &&
-      rewardPerTask >= 50 &&
-      maxSlots >= 1 &&
-      allocatedPool <= rewardPool70;
+
+    let validationError: string | null = null;
+    if (totalStake < 500) {
+      validationError = 'Minimum campaign stake is ₦500.';
+    } else if (rewardPerTask < 50) {
+      validationError = `Payout per person (₦${rewardPerTask.toLocaleString()}) must be at least ₦50. Increase stake or reduce people count.`;
+    } else if (maxSlots < 1) {
+      validationError = 'At least 1 participant slot is required.';
+    } else if (allocatedPool > rewardPool70) {
+      validationError = `Allocated pool (₦${allocatedPool.toLocaleString()}) exceeds 70% worker pool (₦${rewardPool70.toLocaleString()}).`;
+    }
+
+    const isValid = validationError === null;
 
     return {
       totalStake,
@@ -201,6 +210,7 @@ export const TaskToEarnModal: React.FC = () => {
       maxSlots,
       allocatedPool,
       effectiveSystemFee,
+      validationError,
       isValid,
     };
   }, [createStake, splitMode, payoutInput, peopleInput]);
@@ -314,7 +324,8 @@ export const TaskToEarnModal: React.FC = () => {
 
   const handleCreateCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser?.phoneNumber) {
+    const creatorPhone = currentUser?.phoneNumber || currentUser?.id;
+    if (!creatorPhone) {
       showNotice('Sign in with your phone number to stake a campaign.', 'err');
       return;
     }
@@ -324,7 +335,8 @@ export const TaskToEarnModal: React.FC = () => {
     }
     if (!stakeEconomics.isValid) {
       showNotice(
-        'Check stake & split: minimum stake ₦500, minimum payout ₦50/person, and payouts must fit inside the 70% worker pool.',
+        stakeEconomics.validationError ||
+          'Check stake & split: minimum stake ₦500, minimum payout ₦50/person, and payouts must fit inside the 70% worker pool.',
         'err'
       );
       return;
@@ -348,7 +360,7 @@ export const TaskToEarnModal: React.FC = () => {
           targetUrl: createTargetUrl.trim() || undefined,
           instructions: createInstructions.trim(),
           platformHandleHint: createHandleHint.trim() || CATEGORY_META[createCategory].defaultHint,
-          creatorPhone: currentUser.phoneNumber,
+          creatorPhone,
           creatorName: currentUser.fullName || 'Creator',
           creatorAvatar: currentUser.avatarUrl,
           totalStake: stakeEconomics.totalStake,
@@ -357,9 +369,9 @@ export const TaskToEarnModal: React.FC = () => {
           currency: wallet?.currency || 'NGN',
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.success) {
-        showNotice(data?.message || 'Failed to launch task campaign.', 'err');
+        showNotice(data?.message || data?.error || 'Failed to launch task campaign.', 'err');
         return;
       }
 
@@ -535,15 +547,25 @@ export const TaskToEarnModal: React.FC = () => {
             <div className="space-y-4">
               {/* Search & Category Controls */}
               <div className="space-y-2.5">
-                <div className="relative">
-                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search campaigns, artists, YouTube, IG, TikTok..."
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl text-xs bg-slate-100 dark:bg-purple-950/30 border border-slate-200 dark:border-purple-900/40 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
-                  />
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search campaigns, artists, YouTube, IG, TikTok..."
+                      className="w-full pl-9 pr-3 py-2.5 rounded-xl text-xs bg-slate-100 dark:bg-purple-950/30 border border-slate-200 dark:border-purple-900/40 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('create')}
+                    className="inline-flex items-center gap-1 px-3 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold whitespace-nowrap shrink-0 transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Post Task</span>
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
@@ -848,7 +870,7 @@ export const TaskToEarnModal: React.FC = () => {
 
           {/* ==================== TAB 2: CREATE TASK ==================== */}
           {activeTab === 'create' && (
-            <form onSubmit={handleCreateCampaign} className="space-y-4">
+            <form noValidate onSubmit={handleCreateCampaign} className="space-y-4">
               <div className="p-3.5 rounded-2xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/40 text-xs text-slate-700 dark:text-purple-100 leading-relaxed">
                 Stake your campaign budget from your AGC Wallet. The platform retains{' '}
                 <strong className="font-mono">30%</strong> service fee and locks{' '}
@@ -862,7 +884,6 @@ export const TaskToEarnModal: React.FC = () => {
                   </label>
                   <input
                     type="text"
-                    required
                     value={createTitle}
                     onChange={(e) => setCreateTitle(e.target.value)}
                     placeholder="e.g. Comment on Davido's new YouTube music video"
@@ -918,7 +939,6 @@ export const TaskToEarnModal: React.FC = () => {
                     Step-by-Step Instructions *
                   </label>
                   <textarea
-                    required
                     rows={3}
                     value={createInstructions}
                     onChange={(e) => setCreateInstructions(e.target.value)}
@@ -959,7 +979,7 @@ export const TaskToEarnModal: React.FC = () => {
                 <input
                   type="number"
                   min={500}
-                  step={100}
+                  step="any"
                   value={createStake}
                   onChange={(e) => setCreateStake(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl text-sm font-mono font-bold tabular-nums bg-white dark:bg-purple-950/40 border border-slate-200 dark:border-purple-800/50 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500/40"
@@ -1000,7 +1020,7 @@ export const TaskToEarnModal: React.FC = () => {
                         <input
                           type="number"
                           min={50}
-                          step={50}
+                          step="any"
                           value={payoutInput}
                           onChange={(e) => setPayoutInput(e.target.value)}
                           className="w-full px-3 py-2 rounded-xl text-xs font-mono font-bold tabular-nums bg-white dark:bg-purple-950/40 border border-slate-200 dark:border-purple-800/50 text-slate-900 dark:text-white"
@@ -1055,10 +1075,17 @@ export const TaskToEarnModal: React.FC = () => {
                 </div>
               </div>
 
-              {insufficientForStake ? (
+              {stakeEconomics.validationError && (
+                <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300 font-semibold">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{stakeEconomics.validationError}</span>
+                </div>
+              )}
+
+              {insufficientForStake && (
                 <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex flex-wrap items-center justify-between gap-3 text-xs">
                   <span className="text-rose-700 dark:text-rose-300 font-semibold">
-                    Insufficient balance for ₦{stakeEconomics.totalStake.toLocaleString()} stake.
+                    Need ₦{stakeEconomics.totalStake.toLocaleString()} (Available: ₦{availableBal.toLocaleString()}). Select a lower stake like ₦500 or top up.
                   </span>
                   <button
                     type="button"
@@ -1071,20 +1098,20 @@ export const TaskToEarnModal: React.FC = () => {
                     Top Up Wallet
                   </button>
                 </div>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={creatingCampaign || !stakeEconomics.isValid}
-                  className="w-full py-3.5 px-4 rounded-2xl bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-bold transition-colors flex items-center justify-center gap-2 whitespace-nowrap shrink-0"
-                >
-                  <ShieldCheck className="w-4 h-4" />
-                  <span>
-                    {creatingCampaign
-                      ? 'Locking Escrow & Launching...'
-                      : `Stake ₦${stakeEconomics.totalStake.toLocaleString()} & Launch (${stakeEconomics.maxSlots.toLocaleString()} Tasks)`}
-                  </span>
-                </button>
               )}
+
+              <button
+                type="submit"
+                disabled={creatingCampaign}
+                className="w-full py-3.5 px-4 rounded-2xl bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-bold transition-colors flex items-center justify-center gap-2 whitespace-nowrap shrink-0"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>
+                  {creatingCampaign
+                    ? 'Locking Escrow & Launching...'
+                    : `Stake ₦${stakeEconomics.totalStake.toLocaleString()} & Launch (${stakeEconomics.maxSlots.toLocaleString()} Tasks)`}
+                </span>
+              </button>
             </form>
           )}
 

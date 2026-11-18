@@ -77,13 +77,16 @@ app.use(
 );
 
 // ── CUSTOM APPLICATION FIREWALL (WAF) & THREAT INSPECTION ──────────────────
-const SQLI_REGEX = /(union\s+select|select\s+.*\s+from|insert\s+into|drop\s+table|update\s+.*\s+set|delete\s+from|sleep\(\d+\)|benchmark\(|waitfor\s+delay|;\s*--|\/\*|\*\/|;\s*drop|'\s*or\s*['\d]=['\d])/i;
+const SQLI_REGEX = /(union\s+select\b|select\s+(?:\*|distinct\s+|[a-z0-9_."`,]+\s+)from\s+[a-z0-9_."`]+|insert\s+into\s+[a-z0-9_."`]+|drop\s+table\b|update\s+[a-z0-9_."`]+\s+set\s+[a-z0-9_."`]+=|delete\s+from\s+[a-z0-9_."`]+|sleep\(\d+\)|benchmark\(|waitfor\s+delay|;\s*--|\/\*|\*\/|;\s*drop\b|'\s*or\s*['\d]=['\d])/i;
 const XSS_REGEX = /(<script.*?>|javascript:|onload\s*=|onerror\s*=|onmouseover\s*=|eval\(|<iframe|<svg.*?onload)/i;
 const PATH_TRAVERSAL_REGEX = /(\.\.[\/\\]|%2e%2e%2f|%2e%2e\/|\.\.%2f|\/etc\/passwd|win\.ini)/i;
 
 function inspectPayloadForThreats(target: any): string | null {
   if (!target) return null;
-  const str = typeof target === 'string' ? target : JSON.stringify(target);
+  let str = typeof target === 'string' ? target : JSON.stringify(target);
+  if (str.includes('data:image/')) {
+    str = str.replace(/data:image\/[a-zA-Z0-9+.-]+;base64,[A-Za-z0-9+/=]+/g, '[image_data]');
+  }
   if (SQLI_REGEX.test(str)) return 'SQL Injection attempt detected';
   if (XSS_REGEX.test(str)) return 'XSS payload detected';
   if (PATH_TRAVERSAL_REGEX.test(str)) return 'Path traversal attempt detected';
@@ -9262,8 +9265,8 @@ app.post('/api/outside/parties', (req: Request, res: Response) => {
     city,
     venueName: venueName.slice(0, 120),
     address: address.slice(0, 220),
-    lat: typeof body.lat === 'number' && Number.isFinite(body.lat) ? body.lat : null,
-    lng: typeof body.lng === 'number' && Number.isFinite(body.lng) ? body.lng : null,
+    lat: body.lat !== null && body.lat !== undefined && body.lat !== '' && Number.isFinite(Number(body.lat)) ? Number(body.lat) : null,
+    lng: body.lng !== null && body.lng !== undefined && body.lng !== '' && Number.isFinite(Number(body.lng)) ? Number(body.lng) : null,
     isPaid,
     ticketPrice,
     currency: (['NGN', 'KES', 'GHS', 'ZAR'].includes(String(body.currency)) ? String(body.currency) : 'NGN') as ServerOutsideParty['currency'],

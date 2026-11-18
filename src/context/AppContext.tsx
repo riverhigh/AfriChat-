@@ -13235,16 +13235,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const platformFee = mode === 'bet' ? Math.round(totalPot * 0.01) : 0;
     const winnerPayout = totalPot - platformFee;
 
+    const aiStartsFirst = isAiChat && Math.random() < 0.8;
+    const myDisplayName = currentUser.fullName || 'AGC Player';
+    const aiDisplayName = 'AgcBot (Hard AI)';
+
     const newGame: TicTacToeGameState = {
       id: gameId,
       chatId,
       gameType: 'xo',
       challengerId: currentUser.id,
       challengerPhone: myPhone,
-      challengerName: currentUser.fullName || 'AGC Player',
+      challengerName: myDisplayName,
       challengerAvatar: currentUser.avatarUrl,
       opponentPhone: opponentPhone || undefined,
-      opponentName: isAiChat ? 'AgcBot (Hard AI)' : !targetChat?.isGroup ? targetChat?.name : undefined,
+      opponentName: isAiChat ? aiDisplayName : !targetChat?.isGroup ? targetChat?.name : undefined,
       opponentAvatar: isAiChat ? AFRIBOT_AVATAR : !targetChat?.isGroup ? targetChat?.avatar : undefined,
       isAiOpponent: isAiChat,
       aiDifficulty: isAiChat ? 'hard' : undefined,
@@ -13252,10 +13256,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       betAmount: cleanBet,
       currency: currency || 'NGN',
       board: Array(9).fill(null),
-      xPlayerPhone: myPhone,
-      xPlayerName: currentUser.fullName || 'AGC Player',
-      oPlayerPhone: isAiChat ? AFRIBOT_PHONE : undefined,
-      oPlayerName: isAiChat ? 'AgcBot (Hard AI)' : undefined,
+      xPlayerPhone: aiStartsFirst ? AFRIBOT_PHONE : myPhone,
+      xPlayerName: aiStartsFirst ? aiDisplayName : myDisplayName,
+      oPlayerPhone: isAiChat ? (aiStartsFirst ? myPhone : AFRIBOT_PHONE) : undefined,
+      oPlayerName: isAiChat ? (aiStartsFirst ? myDisplayName : aiDisplayName) : undefined,
       currentTurn: 'X',
       status: isAiChat ? 'active' : 'pending',
       totalPot,
@@ -15895,21 +15899,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!Array.isArray(list)) continue;
       for (const msg of list) {
         if (!msg || typeof msg !== 'object') continue;
-        // 1. X/O Hard AI Turn
+        // 1. X/O Hard AI Turn (supports AI as either X first-mover or O second-mover)
         if (msg.type === 'game_xo' && msg.xoGame) {
           const g = msg.xoGame;
           const board = Array.isArray(g.board) && g.board.length === 9 ? g.board : Array(9).fill(null);
-          const isAiGame = Boolean(g.isAiOpponent || phonesMatch(g.oPlayerPhone, AFRIBOT_PHONE) || g.chatId === AFRIBOT_ID);
-          if (isAiGame && g.status === 'active' && g.currentTurn === 'O') {
+          const aiIsX = Boolean(g.xPlayerPhone && phonesMatch(g.xPlayerPhone, AFRIBOT_PHONE));
+          const aiIsO = Boolean(g.oPlayerPhone && phonesMatch(g.oPlayerPhone, AFRIBOT_PHONE));
+          const isAiGame = Boolean(g.isAiOpponent || aiIsX || aiIsO || g.chatId === AFRIBOT_ID);
+          const aiSymbol: 'X' | 'O' = aiIsX ? 'X' : 'O';
+          const humanSymbol: 'X' | 'O' = aiSymbol === 'X' ? 'O' : 'X';
+          if (isAiGame && g.status === 'active' && g.currentTurn === aiSymbol) {
             const movesPlayed = board.filter((c) => c !== null).length;
             const key = `xo:${g.id}:${movesPlayed}:${g.currentTurn}`;
             if (!scheduledAiTurnKeysRef.current.has(key)) {
               scheduledAiTurnKeysRef.current.add(key);
               setTimeout(() => {
-                const cellIdx = pickHardXoMove(board, 'O');
+                const cellIdx = pickHardXoMove(board, aiSymbol);
                 if (cellIdx < 0 || board[cellIdx] !== null) return;
                 const nextBoard = [...board];
-                nextBoard[cellIdx] = 'O';
+                nextBoard[cellIdx] = aiSymbol;
                 const nowIso = new Date().toISOString();
                 let winningLine: number[] | undefined;
                 for (const line of XO_WIN_LINES_CLIENT) {
@@ -15924,7 +15932,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                       ...g,
                       board: nextBoard,
                       status: 'won',
-                      winnerSymbol: 'O',
+                      winnerSymbol: aiSymbol,
                       winnerPhone: AFRIBOT_PHONE,
                       winnerName: aiName,
                       winningLine,
@@ -15942,11 +15950,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   : {
                       ...g,
                       board: nextBoard,
-                      currentTurn: 'X',
+                      currentTurn: humanSymbol,
                       updatedAt: nowIso,
                     };
                 applyXoGameUpdate(nextGame);
-              }, 550);
+              }, 480);
             }
           }
         }

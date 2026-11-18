@@ -39,6 +39,9 @@ import {
   createOutsideRsvpInDb,
   isSupabaseConfigured,
 } from '../services/supabase';
+import rooftopFlyerImg from '../assets/images/outside_lagos_rooftop_1794936815220.jpg';
+import concertFlyerImg from '../assets/images/outside_abuja_concert_1794936814833.jpg';
+import raveFlyerImg from '../assets/images/outside_underground_rave_1794936815211.jpg';
 
 interface OutsideModalProps {
   isOpen: boolean;
@@ -79,17 +82,17 @@ const PRESET_FLYERS: { id: string; label: string; url: string }[] = [
   {
     id: 'rooftop',
     label: 'Lagos Rooftop',
-    url: '/src/assets/images/outside_lagos_rooftop_1794936815220.jpg',
+    url: rooftopFlyerImg,
   },
   {
     id: 'concert',
     label: 'Abuja Concert',
-    url: '/src/assets/images/outside_abuja_concert_1794936814833.jpg',
+    url: concertFlyerImg,
   },
   {
     id: 'rave',
     label: 'Warehouse Rave',
-    url: '/src/assets/images/outside_underground_rave_1794936815211.jpg',
+    url: raveFlyerImg,
   },
 ];
 
@@ -172,6 +175,7 @@ export const OutsideModal: React.FC<OutsideModalProps> = ({ isOpen, onClose }) =
     currentUser.phoneNumber === '+2340000000000';
 
   const [activeTab, setActiveTab] = useState<OutsideTab>('discover');
+  const [hostSubView, setHostSubView] = useState<'create' | 'scan'>('create');
   const [selectedCity, setSelectedCity] = useState<string>('All Cities');
   const [selectedCategory, setSelectedCategory] = useState<OutsideCategory | 'all'>('all');
   const [pricingFilter, setPricingFilter] = useState<PricingFilter>('all');
@@ -566,21 +570,40 @@ export const OutsideModal: React.FC<OutsideModalProps> = ({ isOpen, onClose }) =
   const handleCreateParty = async (e: React.FormEvent) => {
     e.preventDefault();
     setActionError(null);
-    if (!formTitle.trim() || !formVenue.trim() || !formAddress.trim() || !formDateTime) {
-      setActionError('Fill in event title, venue name, street address, and date/time.');
+    if (!formTitle.trim()) {
+      setActionError('Please enter an event title.');
+      return;
+    }
+    if (!formVenue.trim()) {
+      setActionError('Please enter the venue name.');
+      return;
+    }
+    if (!formAddress.trim()) {
+      setActionError('Please enter the street address or area.');
+      return;
+    }
+    const parsedDate = formDateTime ? new Date(formDateTime) : new Date(Date.now() + 48 * 3_600_000);
+    if (Number.isNaN(parsedDate.getTime())) {
+      setActionError('Please pick a valid event date and time.');
+      return;
+    }
+    const eventIso = parsedDate.toISOString();
+
+    const rawPrice = Number(formPrice);
+    if (formIsPaid && (!Number.isFinite(rawPrice) || rawPrice < 100)) {
+      setActionError('Paid ticket price must be at least ₦100 (or switch Entry Type to Free RSVP).');
       return;
     }
 
     const parsedLat = parseFloat(formLat);
     const parsedLng = parseFloat(formLng);
-    const parsedPrice = formIsPaid ? Math.max(100, Number(formPrice) || 0) : 0;
-    const parsedCap = formCapacity.trim() ? Math.max(1, Number(formCapacity) || 0) : null;
-    const eventIso = new Date(formDateTime).toISOString();
+    const parsedPrice = formIsPaid ? Math.round(rawPrice) : 0;
+    const parsedCap = formCapacity.trim() ? Math.max(1, Math.round(Number(formCapacity) || 0)) : null;
 
     setIsCreating(true);
     try {
       const payload = {
-        organizerId: currentUser.id,
+        organizerId: currentUser.id || `host_${Date.now()}`,
         organizerName: currentUser.fullName || 'AGC Host',
         organizerPhone: currentUser.phoneNumber,
         organizerAvatar: currentUser.avatarUrl,
@@ -608,9 +631,9 @@ export const OutsideModal: React.FC<OutsideModalProps> = ({ isOpen, onClose }) =
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.success || !data?.party) {
-        setActionError(data?.error || 'Could not publish event.');
+        setActionError(data?.error || data?.message || 'Could not publish event.');
         return;
       }
 
@@ -646,16 +669,18 @@ export const OutsideModal: React.FC<OutsideModalProps> = ({ isOpen, onClose }) =
       }
 
       if (formShareToStory) {
-        const priceLabel = created.isPaid
-          ? `₦${created.ticketPrice.toLocaleString()} tickets`
-          : 'Free RSVP';
-        addDeviceMediaStatus(
-          `OUTSIDE (${created.city}): ${created.title} @ ${created.venueName} · ${formatEventDate(
-            created.eventDate
-          )} · ${priceLabel}. Grab your pass in Updates → Outside!`,
-          created.flyerUrl,
-          'image'
-        );
+        try {
+          const priceLabel = created.isPaid
+            ? `₦${created.ticketPrice.toLocaleString()} tickets`
+            : 'Free RSVP';
+          addDeviceMediaStatus(
+            `OUTSIDE (${created.city}): ${created.title} @ ${created.venueName} · ${formatEventDate(
+              created.eventDate
+            )} · ${priceLabel}. Grab your pass in Updates → Outside!`,
+            created.flyerUrl,
+            'image'
+          );
+        } catch (_) {}
       }
 
       setFormTitle('');
@@ -841,7 +866,7 @@ export const OutsideModal: React.FC<OutsideModalProps> = ({ isOpen, onClose }) =
                 { id: 'discover', label: 'Discover', icon: Sparkles },
                 { id: 'map', label: 'Map Pins', icon: MapPin },
                 { id: 'passes', label: `Passes (${myRsvps.length})`, icon: QrCode },
-                { id: 'host', label: 'Host / Scan', icon: Plus },
+                { id: 'host', label: 'Post Event', icon: Plus },
               ] as { id: OutsideTab; label: string; icon: React.ComponentType<{ className?: string }> }[]
             ).map((tab) => {
               const Icon = tab.icon;
@@ -852,6 +877,7 @@ export const OutsideModal: React.FC<OutsideModalProps> = ({ isOpen, onClose }) =
                   type="button"
                   onClick={() => {
                     setActionError(null);
+                    if (tab.id === 'host') setHostSubView('create');
                     setActiveTab(tab.id);
                   }}
                   className={`min-h-[40px] flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl text-xs font-bold transition-colors border ${
@@ -904,7 +930,7 @@ export const OutsideModal: React.FC<OutsideModalProps> = ({ isOpen, onClose }) =
           {/* ─── TAB 1: DISCOVER FEED ─────────────────────────────────────── */}
           {activeTab === 'discover' && (
             <>
-              {/* Search + Pricing Segmented Control */}
+              {/* Search + Pricing Segmented Control + Quick Post CTA */}
               <div className="flex flex-col sm:flex-row gap-2">
                 <div className="relative flex-1">
                   <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -916,27 +942,41 @@ export const OutsideModal: React.FC<OutsideModalProps> = ({ isOpen, onClose }) =
                     className="w-full min-h-[42px] pl-9 pr-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-violet-500"
                   />
                 </div>
-                <div className="grid grid-cols-3 bg-zinc-900 border border-zinc-800 rounded-xl p-1 shrink-0">
-                  {(
-                    [
-                      { id: 'all', label: 'All' },
-                      { id: 'free', label: 'Free RSVP' },
-                      { id: 'paid', label: 'Paid' },
-                    ] as { id: PricingFilter; label: string }[]
-                  ).map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setPricingFilter(opt.id)}
-                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${
-                        pricingFilter === opt.id
-                          ? 'bg-violet-600 text-white'
-                          : 'text-zinc-400 hover:text-white'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="grid grid-cols-3 bg-zinc-900 border border-zinc-800 rounded-xl p-1 shrink-0">
+                    {(
+                      [
+                        { id: 'all', label: 'All' },
+                        { id: 'free', label: 'Free' },
+                        { id: 'paid', label: 'Paid' },
+                      ] as { id: PricingFilter; label: string }[]
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setPricingFilter(opt.id)}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${
+                          pricingFilter === opt.id
+                            ? 'bg-violet-600 text-white'
+                            : 'text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActionError(null);
+                      setHostSubView('create');
+                      setActiveTab('host');
+                    }}
+                    className="min-h-[40px] px-3 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-extrabold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Post Event</span>
+                  </button>
                 </div>
               </div>
 
@@ -1285,10 +1325,284 @@ export const OutsideModal: React.FC<OutsideModalProps> = ({ isOpen, onClose }) =
             </div>
           )}
 
-          {/* ─── TAB 4: HOST EVENT + GATE SCANNER CHECK-IN ────────────────── */}
+          {/* ─── TAB 4: POST NEW EVENT + GATE SCANNER CHECK-IN ────────────── */}
           {activeTab === 'host' && (
-            <div className="space-y-5">
+            <div className="space-y-4">
+              {/* Sub-view switcher defaulting to Post New Event */}
+              <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-zinc-900 border border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setHostSubView('create')}
+                  className={`min-h-[38px] rounded-lg text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors ${
+                    hostSubView === 'create'
+                      ? 'bg-violet-600 text-white'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Post New Event</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHostSubView('scan')}
+                  className={`min-h-[38px] rounded-lg text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors ${
+                    hostSubView === 'scan'
+                      ? 'bg-violet-600 text-white'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  <ScanLine className="w-3.5 h-3.5" />
+                  <span>Gate QR Scanner</span>
+                </button>
+              </div>
+
+              {/* Host / Create New Outside Event Form */}
+              {hostSubView === 'create' && (
+              <form
+                noValidate
+                onSubmit={handleCreateParty}
+                className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-extrabold text-white">Post a New Event to Outside</h3>
+                    <p className="text-[11px] text-zinc-400">
+                      Open to all AGC members — verified accounts carry a host verification badge.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-zinc-400">Event Title *</label>
+                  <input
+                    type="text"
+                    value={formTitle}
+                    onChange={(e) => setFormTitle(e.target.value)}
+                    placeholder="e.g. Lekki Rooftop Sundown & Amapiano"
+                    className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400">Vibe / Category</label>
+                    <select
+                      value={formCategory}
+                      onChange={(e) => setFormCategory(e.target.value as OutsideCategory)}
+                      className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
+                    >
+                      {CATEGORY_OPTIONS.filter((c) => c.id !== 'all').map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400">City</label>
+                    <select
+                      value={formCity}
+                      onChange={(e) => handleCitySelectInForm(e.target.value)}
+                      className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
+                    >
+                      {CITY_OPTIONS.map((c) => (
+                        <option key={c.label} value={c.label}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400">Venue Name *</label>
+                    <input
+                      type="text"
+                      value={formVenue}
+                      onChange={(e) => setFormVenue(e.target.value)}
+                      placeholder="e.g. Moist Beach Club"
+                      className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400">Date &amp; Time *</label>
+                    <input
+                      type="datetime-local"
+                      value={formDateTime}
+                      onChange={(e) => setFormDateTime(e.target.value)}
+                      className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-zinc-400">Street Address *</label>
+                  <input
+                    type="text"
+                    value={formAddress}
+                    onChange={(e) => setFormAddress(e.target.value)}
+                    placeholder="e.g. Ligali Ayorinde St, Victoria Island"
+                    className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 items-end">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400">Lat</label>
+                    <input
+                      type="text"
+                      value={formLat}
+                      onChange={(e) => setFormLat(e.target.value)}
+                      className="w-full min-h-[40px] px-2.5 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-white"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400">Lng</label>
+                    <input
+                      type="text"
+                      value={formLng}
+                      onChange={(e) => setFormLng(e.target.value)}
+                      className="w-full min-h-[40px] px-2.5 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-white"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDetectHostGps}
+                    disabled={isLocatingHost}
+                    className="min-h-[40px] px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-200 inline-flex items-center justify-center gap-1"
+                  >
+                    <Crosshair className="w-3.5 h-3.5 text-violet-400" />
+                    <span>{isLocatingHost ? 'Locating' : 'Use GPS'}</span>
+                  </button>
+                </div>
+
+                {/* Paid vs Free Toggle + Capacity */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400">Entry Type</label>
+                    <div className="grid grid-cols-2 bg-zinc-950 border border-zinc-800 rounded-xl p-1">
+                      <button
+                        type="button"
+                        onClick={() => setFormIsPaid(false)}
+                        className={`py-1.5 rounded-lg text-[11px] font-bold ${
+                          !formIsPaid ? 'bg-emerald-600 text-white' : 'text-zinc-400'
+                        }`}
+                      >
+                        Free RSVP
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormIsPaid(true)}
+                        className={`py-1.5 rounded-lg text-[11px] font-bold ${
+                          formIsPaid ? 'bg-amber-500 text-zinc-950' : 'text-zinc-400'
+                        }`}
+                      >
+                        Paid
+                      </button>
+                    </div>
+                  </div>
+                  {formIsPaid && (
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold text-zinc-400">Ticket Price (₦)</label>
+                      <input
+                        type="number"
+                        min={100}
+                        step="any"
+                        value={formPrice}
+                        onChange={(e) => setFormPrice(e.target.value)}
+                        className="w-full min-h-[40px] px-3 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs tabular-nums text-white"
+                      />
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400">Max Capacity</label>
+                    <input
+                      type="number"
+                      min={1}
+                      step="any"
+                      value={formCapacity}
+                      onChange={(e) => setFormCapacity(e.target.value)}
+                      placeholder="200"
+                      className="w-full min-h-[40px] px-3 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs tabular-nums text-white"
+                    />
+                  </div>
+                </div>
+
+                {/* Flyer Presets or Device Upload */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-semibold text-zinc-400">Event Flyer</label>
+                    <label className="text-[11px] font-bold text-violet-400 hover:text-violet-300 cursor-pointer inline-flex items-center gap-1">
+                      <Upload className="w-3 h-3" />
+                      <span>Upload Custom Flyer</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleFlyerUpload}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {PRESET_FLYERS.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => setFormFlyerUrl(preset.url)}
+                        className={`relative rounded-xl overflow-hidden border aspect-[4/3] ${
+                          formFlyerUrl === preset.url ? 'border-violet-500 ring-2 ring-violet-500/40' : 'border-zinc-800'
+                        }`}
+                      >
+                        <img src={preset.url} alt={preset.label} className="w-full h-full object-cover" />
+                        <span className="absolute inset-x-0 bottom-0 bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white truncate">
+                          {preset.label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-zinc-400">Lineup / Dress Code / Notes</label>
+                  <textarea
+                    rows={2}
+                    value={formDescription}
+                    onChange={(e) => setFormDescription(e.target.value)}
+                    placeholder="DJ lineup, door rules, table info..."
+                    className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
+                  />
+                </div>
+
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formShareToStory}
+                    onChange={(e) => setFormShareToStory(e.target.checked)}
+                    className="rounded border-zinc-700 bg-zinc-950 text-violet-600 focus:ring-violet-500"
+                  />
+                  <span>Also drop event flyer teaser to my 24h Updates Story</span>
+                </label>
+
+                {actionError && (
+                  <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-200 text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                    <span>{actionError}</span>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isCreating}
+                  className="w-full min-h-[46px] py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-sm font-extrabold text-white transition-colors"
+                >
+                  {isCreating ? 'Publishing Event...' : 'Publish to Outside'}
+                </button>
+              </form>
+              )}
+
               {/* Gate Scanner Section (for hosts & admins) */}
+              {hostSubView === 'scan' && (
               <section className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <div>
@@ -1363,244 +1677,7 @@ export const OutsideModal: React.FC<OutsideModalProps> = ({ isOpen, onClose }) =
                   </div>
                 )}
               </section>
-
-              {/* Host / Create New Outside Event Form */}
-              <form
-                onSubmit={handleCreateParty}
-                className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-3"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-sm font-extrabold text-white">Post a New Event to Outside</h3>
-                    <p className="text-[11px] text-zinc-400">
-                      Open to all AGC members — verified accounts carry a host verification badge.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-zinc-400">Event Title</label>
-                  <input
-                    type="text"
-                    required
-                    value={formTitle}
-                    onChange={(e) => setFormTitle(e.target.value)}
-                    placeholder="e.g. Lekki Rooftop Sundown & Amapiano"
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-zinc-400">Vibe / Category</label>
-                    <select
-                      value={formCategory}
-                      onChange={(e) => setFormCategory(e.target.value as OutsideCategory)}
-                      className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
-                    >
-                      {CATEGORY_OPTIONS.filter((c) => c.id !== 'all').map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-zinc-400">City</label>
-                    <select
-                      value={formCity}
-                      onChange={(e) => handleCitySelectInForm(e.target.value)}
-                      className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
-                    >
-                      {CITY_OPTIONS.map((c) => (
-                        <option key={c.label} value={c.label}>
-                          {c.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-zinc-400">Venue Name</label>
-                    <input
-                      type="text"
-                      required
-                      value={formVenue}
-                      onChange={(e) => setFormVenue(e.target.value)}
-                      placeholder="e.g. Moist Beach Club"
-                      className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-zinc-400">Date &amp; Time</label>
-                    <input
-                      type="datetime-local"
-                      required
-                      value={formDateTime}
-                      onChange={(e) => setFormDateTime(e.target.value)}
-                      className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-zinc-400">Street Address</label>
-                  <input
-                    type="text"
-                    required
-                    value={formAddress}
-                    onChange={(e) => setFormAddress(e.target.value)}
-                    placeholder="e.g. Ligali Ayorinde St, Victoria Island"
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-3 gap-2 items-end">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-zinc-400">Lat</label>
-                    <input
-                      type="text"
-                      value={formLat}
-                      onChange={(e) => setFormLat(e.target.value)}
-                      className="w-full min-h-[40px] px-2.5 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-white"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-zinc-400">Lng</label>
-                    <input
-                      type="text"
-                      value={formLng}
-                      onChange={(e) => setFormLng(e.target.value)}
-                      className="w-full min-h-[40px] px-2.5 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-white"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleDetectHostGps}
-                    disabled={isLocatingHost}
-                    className="min-h-[40px] px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-200 inline-flex items-center justify-center gap-1"
-                  >
-                    <Crosshair className="w-3.5 h-3.5 text-violet-400" />
-                    <span>{isLocatingHost ? 'Locating' : 'Use GPS'}</span>
-                  </button>
-                </div>
-
-                {/* Paid vs Free Toggle + Capacity */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-zinc-400">Entry Type</label>
-                    <div className="grid grid-cols-2 bg-zinc-950 border border-zinc-800 rounded-xl p-1">
-                      <button
-                        type="button"
-                        onClick={() => setFormIsPaid(false)}
-                        className={`py-1.5 rounded-lg text-[11px] font-bold ${
-                          !formIsPaid ? 'bg-emerald-600 text-white' : 'text-zinc-400'
-                        }`}
-                      >
-                        Free RSVP
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setFormIsPaid(true)}
-                        className={`py-1.5 rounded-lg text-[11px] font-bold ${
-                          formIsPaid ? 'bg-amber-500 text-zinc-950' : 'text-zinc-400'
-                        }`}
-                      >
-                        Paid
-                      </button>
-                    </div>
-                  </div>
-                  {formIsPaid && (
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-semibold text-zinc-400">Ticket Price (₦)</label>
-                      <input
-                        type="number"
-                        min={100}
-                        step={100}
-                        value={formPrice}
-                        onChange={(e) => setFormPrice(e.target.value)}
-                        className="w-full min-h-[40px] px-3 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs tabular-nums text-white"
-                      />
-                    </div>
-                  )}
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-zinc-400">Max Capacity</label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={formCapacity}
-                      onChange={(e) => setFormCapacity(e.target.value)}
-                      placeholder="200"
-                      className="w-full min-h-[40px] px-3 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs tabular-nums text-white"
-                    />
-                  </div>
-                </div>
-
-                {/* Flyer Presets or Device Upload */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[11px] font-semibold text-zinc-400">Event Flyer</label>
-                    <label className="text-[11px] font-bold text-violet-400 hover:text-violet-300 cursor-pointer inline-flex items-center gap-1">
-                      <Upload className="w-3 h-3" />
-                      <span>Upload Custom Flyer</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleFlyerUpload}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {PRESET_FLYERS.map((preset) => (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        onClick={() => setFormFlyerUrl(preset.url)}
-                        className={`relative rounded-xl overflow-hidden border aspect-[4/3] ${
-                          formFlyerUrl === preset.url ? 'border-violet-500 ring-2 ring-violet-500/40' : 'border-zinc-800'
-                        }`}
-                      >
-                        <img src={preset.url} alt={preset.label} className="w-full h-full object-cover" />
-                        <span className="absolute inset-x-0 bottom-0 bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white truncate">
-                          {preset.label}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-zinc-400">Lineup / Dress Code / Notes</label>
-                  <textarea
-                    rows={2}
-                    value={formDescription}
-                    onChange={(e) => setFormDescription(e.target.value)}
-                    placeholder="DJ lineup, door rules, table info..."
-                    className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-violet-500"
-                  />
-                </div>
-
-                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formShareToStory}
-                    onChange={(e) => setFormShareToStory(e.target.checked)}
-                    className="rounded border-zinc-700 bg-zinc-950 text-violet-600 focus:ring-violet-500"
-                  />
-                  <span>Also drop event flyer teaser to my 24h Updates Story</span>
-                </label>
-
-                <button
-                  type="submit"
-                  disabled={isCreating}
-                  className="w-full min-h-[46px] py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-sm font-extrabold text-white transition-colors"
-                >
-                  {isCreating ? 'Publishing Event...' : 'Publish to Outside'}
-                </button>
-              </form>
+              )}
             </div>
           )}
         </div>

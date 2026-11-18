@@ -37,7 +37,7 @@ const GAME_OPTIONS: {
     id: 'xo',
     label: 'X / O',
     tagline: 'Tic-Tac-Toe',
-    desc: 'Classic 3x3 Tic-Tac-Toe live in chat. You play as X (first move) and your opponent plays as O.',
+    desc: 'Classic 3x3 Tic-Tac-Toe live in chat. X plays first and O plays second (AgcBot plays at Hard AI level).',
     icon: Grid3X3,
     accent: 'text-purple-500',
   },

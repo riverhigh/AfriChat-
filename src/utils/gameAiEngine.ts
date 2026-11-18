@@ -87,28 +87,97 @@ function minimaxXo(
   }
 }
 
+function countXoSubtreeOutcomes(
+  board: TicTacToeCell[],
+  isAiTurn: boolean,
+  aiSymbol: 'X' | 'O'
+): { wins: number; draws: number; losses: number } {
+  const result = evaluateXoBoard(board, aiSymbol);
+  if (result === 'ai') return { wins: 1, draws: 0, losses: 0 };
+  if (result === 'draw') return { wins: 0, draws: 1, losses: 0 };
+  if (result === 'human') return { wins: 0, draws: 0, losses: 1 };
+
+  const humanSymbol = aiSymbol === 'O' ? 'X' : 'O';
+  const mover = isAiTurn ? aiSymbol : humanSymbol;
+  let wins = 0;
+  let draws = 0;
+  let losses = 0;
+
+  for (let i = 0; i < 9; i++) {
+    if (board[i] === null) {
+      board[i] = mover;
+      const sub = countXoSubtreeOutcomes(board, !isAiTurn, aiSymbol);
+      board[i] = null;
+      wins += sub.wins;
+      draws += sub.draws;
+      losses += sub.losses;
+    }
+  }
+  return { wins, draws, losses };
+}
+
+function countImmediateXoThreats(board: TicTacToeCell[], symbol: 'X' | 'O'): number {
+  let threats = 0;
+  for (const [a, b, c] of XO_WIN_LINES) {
+    const vals = [board[a], board[b], board[c]];
+    const symCount = vals.filter((v) => v === symbol).length;
+    const emptyCount = vals.filter((v) => v === null).length;
+    if (symCount === 2 && emptyCount === 1) threats++;
+  }
+  return threats;
+}
+
 export function pickHardXoMove(board: TicTacToeCell[], aiSymbol: 'X' | 'O' = 'O'): number {
   const copy = [...board];
   const emptyCount = copy.filter((c) => c === null).length;
-  if (emptyCount === 9) return 4;
+
+  // Empty board (AI starts first as X): corner openings create the sharpest fork traps
+  if (emptyCount === 9) {
+    const corners = [0, 2, 6, 8];
+    return corners[Math.floor(Math.random() * corners.length)];
+  }
   if (emptyCount === 8 && copy[4] === null) return 4;
 
+  // Immediate 1-move win check first
+  for (let i = 0; i < 9; i++) {
+    if (copy[i] !== null) continue;
+    copy[i] = aiSymbol;
+    const isWin = evaluateXoBoard(copy, aiSymbol) === 'ai';
+    copy[i] = null;
+    if (isWin) return i;
+  }
+
   const preferredOrder = [4, 0, 2, 6, 8, 1, 3, 5, 7];
-  let bestMove = -1;
-  let bestScore = -Infinity;
+  const scoredCandidates: {
+    idx: number;
+    score: number;
+    trapScore: number;
+  }[] = [];
 
   for (const idx of preferredOrder) {
     if (copy[idx] !== null) continue;
     copy[idx] = aiSymbol;
     const score = minimaxXo(copy, 0, false, aiSymbol, -Infinity, Infinity);
+    const outcomes = countXoSubtreeOutcomes(copy, false, aiSymbol);
+    const threats = countImmediateXoThreats(copy, aiSymbol);
+    // Prioritize moves that never lose, create immediate double-threats/forks, and yield maximum win branches vs draws
+    const totalLeaves = Math.max(1, outcomes.wins + outcomes.draws + outcomes.losses);
+    const winRatio = (outcomes.wins - outcomes.losses * 4) / totalLeaves;
+    const trapScore = winRatio * 100 + threats * 15 + outcomes.wins * 0.05;
     copy[idx] = null;
-    if (score > bestScore) {
-      bestScore = score;
-      bestMove = idx;
-    }
+    scoredCandidates.push({ idx, score, trapScore });
   }
 
-  return bestMove >= 0 ? bestMove : copy.findIndex((c) => c === null);
+  if (scoredCandidates.length === 0) {
+    return copy.findIndex((c) => c === null);
+  }
+
+  const maxScore = Math.max(...scoredCandidates.map((c) => c.score));
+  const topCandidates = scoredCandidates
+    .filter((c) => c.score === maxScore)
+    .sort((a, b) => b.trapScore - a.trapScore);
+
+  return topCandidates[0].idx;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
