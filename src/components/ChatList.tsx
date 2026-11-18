@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, Suspense } from 'react';
 import {
   Search,
   CheckCheck,
@@ -27,8 +27,13 @@ import {
 } from 'lucide-react';
 import { useApp, isStatusExpiredClient, phonesMatch } from '../context/AppContext';
 import { ChatThread } from '../types';
-import { ContactProfileModal } from './ContactProfileModal';
-import { HubToolsDrawer } from './HubToolsDrawer';
+
+const ContactProfileModal = React.lazy(() =>
+  import('./ContactProfileModal').then((m) => ({ default: m.ContactProfileModal }))
+);
+const HubToolsDrawer = React.lazy(() =>
+  import('./HubToolsDrawer').then((m) => ({ default: m.HubToolsDrawer }))
+);
 
 export const ChatList: React.FC = () => {
   const {
@@ -753,7 +758,9 @@ export const ChatList: React.FC = () => {
 
       {/* Floating Tools + AI Chatbot + New Chat Rounded FAB Stack (positioned clearly above BottomNav) */}
       <div className="fixed bottom-28 right-4 z-30 flex flex-col items-center gap-3.5">
-        <HubToolsDrawer stacked />
+        <Suspense fallback={null}>
+          <HubToolsDrawer stacked />
+        </Suspense>
 
         <button
           type="button"
@@ -963,15 +970,19 @@ export const ChatList: React.FC = () => {
         </div>
       )}
 
-      <ContactProfileModal
-        chat={
-          selectedProfileChat
-            ? chats.find((c) => c.id === selectedProfileChat.id) || selectedProfileChat
-            : null
-        }
-        isOpen={Boolean(selectedProfileChat)}
-        onClose={() => setSelectedProfileChat(null)}
-      />
+      {Boolean(selectedProfileChat) && (
+        <Suspense fallback={null}>
+          <ContactProfileModal
+            chat={
+              selectedProfileChat
+                ? chats.find((c) => c.id === selectedProfileChat.id) || selectedProfileChat
+                : null
+            }
+            isOpen={Boolean(selectedProfileChat)}
+            onClose={() => setSelectedProfileChat(null)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

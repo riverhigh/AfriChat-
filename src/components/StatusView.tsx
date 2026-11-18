@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, Suspense } from 'react';
 import {
   Plus,
   Eye,
@@ -21,7 +21,10 @@ import {
 import { useApp, phonesMatch, isStatusExpiredClient } from '../context/AppContext';
 import { UserStatus } from '../types';
 import { compressChatMediaImage } from '../utils/imageUtils';
-import { OutsideModal } from './OutsideModal';
+
+const OutsideModal = React.lazy(() =>
+  import('./OutsideModal').then((m) => ({ default: m.OutsideModal }))
+);
 
 const THOUGHT_THEMES = [
   { name: 'Indigo Dusk', bg: 'from-indigo-600 via-purple-600 to-pink-600' },
@@ -1473,10 +1476,14 @@ export const StatusView: React.FC = () => {
           </div>
         </div>
       )}
-      <OutsideModal
-        isOpen={showOutsideModal}
-        onClose={() => setShowOutsideModal(false)}
-      />
+      {showOutsideModal && (
+        <Suspense fallback={null}>
+          <OutsideModal
+            isOpen={showOutsideModal}
+            onClose={() => setShowOutsideModal(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

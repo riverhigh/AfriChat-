@@ -1,72 +1,158 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, Suspense } from 'react';
 import { ShieldCheck, AlertTriangle, LogIn } from 'lucide-react';
-import { SplashScreen } from './components/SplashScreen';
 import { AppProvider, useApp } from './context/AppContext';
-import { Header } from './components/Header';
-import { BottomNav } from './components/BottomNav';
-import { ChatList } from './components/ChatList';
-import { ActiveChat } from './components/ActiveChat';
-import { StatusView } from './components/StatusView';
-import { StatusViewerModal } from './components/StatusViewerModal';
-import { MarketplaceView } from './components/MarketplaceView';
-import { CallsView } from './components/CallsView';
-import { ActiveCallModal } from './components/ActiveCallModal';
-import { IncomingCallModal } from './components/IncomingCallModal';
-import { IncomingContactRequestModal } from './components/IncomingContactRequestModal';
-import { IncomingGroupInviteModal } from './components/IncomingGroupInviteModal';
-import { SettingsView } from './components/SettingsView';
-import { TownView } from './components/TownView';
-import { CheckoutDrawer } from './components/CheckoutDrawer';
-import { EscrowModal } from './components/EscrowModal';
-import { VoiceRecorderModal } from './components/VoiceRecorderModal';
-import { LanguageSelectorModal } from './components/LanguageSelectorModal';
-import { WalletModal } from './components/WalletModal';
-import { CreditCelebrationModal } from './components/CreditCelebrationModal';
-import { MemeStickerStudioModal } from './components/MemeStickerStudioModal';
-import { AudioSpaceModal } from './components/AudioSpaceModal';
-import { AudioSpaceBar } from './components/AudioSpaceBar';
-import { SpacesDashboard } from './components/SpacesDashboard';
-import { ScamReputationModal } from './components/ScamReputationModal';
-import { InvoiceGeneratorModal } from './components/InvoiceGeneratorModal';
-import { InvoiceViewerModal } from './components/InvoiceViewerModal';
-import { FinancialPollModal } from './components/FinancialPollModal';
-import { GameXoChallengeModal } from './components/GameXoChallengeModal';
-import { ShareLocationModal } from './components/ShareLocationModal';
-import { AjoLedgerModal } from './components/AjoLedgerModal';
-import { AuthModal } from './components/AuthModal';
-import { ContactsModal } from './components/ContactsModal';
-import { DispatchModal } from './components/DispatchModal';
-import { JobBoardModal } from './components/JobBoardModal';
-import { TaskToEarnModal } from './components/TaskToEarnModal';
-import { SecurityModal } from './components/SecurityModal';
-import { ServicesBookingModal } from './components/ServicesBookingModal';
-import { SendBillModal } from './components/SendBillModal';
-import { PayrollModal } from './components/PayrollModal';
-import { ScanQrModal } from './components/ScanQrModal';
-import { HealthcareModal } from './components/HealthcareModal';
-import { LegalModal } from './components/LegalModal';
-import { DisplayWallpaperModal } from './components/DisplayWallpaperModal';
-import { CreatorModal } from './components/CreatorModal';
-import { ReferralModal } from './components/ReferralModal';
-import { CelebrityVerificationModal } from './components/CelebrityVerificationModal';
-import { StoreRegistrationModal } from './components/StoreRegistrationModal';
-import { WritersGuildModal } from './components/WritersGuildModal';
-import { AdminDashboardModal } from './components/AdminDashboardModal';
-import { TutorCoursesModal } from './components/TutorCoursesModal';
-import { PetShopModal } from './components/PetShopModal';
-import { WhatsAppPhoneAuth } from './components/WhatsAppPhoneAuth';
-import { PhoneSignUpBanner } from './components/PhoneSignUpBanner';
-import { ErrandsModal } from './components/ErrandsModal';
 import { CallErrorBoundary } from './components/CallErrorBoundary';
 import { ChatErrorBoundary } from './components/ChatErrorBoundary';
 import { RootErrorBoundary } from './components/RootErrorBoundary';
 import { OfflineIndicator } from './components/OfflineIndicator';
-import { QuickPollModal } from './components/QuickPollModal';
+import { PhoneSignUpBanner } from './components/PhoneSignUpBanner';
 import { safeLocalStorage, safeSessionStorage } from './utils/safeStorage';
 
+const lazyNamed = <T extends React.ComponentType<any>>(
+  loader: () => Promise<Record<string, any>>,
+  exportName: string
+) =>
+  React.lazy(() =>
+    loader().then((mod) => ({
+      default: (mod[exportName] || mod.default) as T,
+    }))
+  );
+
+// Core views loaded on demand (auth vs authenticated main shell)
+const WhatsAppPhoneAuth = lazyNamed(() => import('./components/WhatsAppPhoneAuth'), 'WhatsAppPhoneAuth');
+const Header = lazyNamed(() => import('./components/Header'), 'Header');
+const BottomNav = lazyNamed(() => import('./components/BottomNav'), 'BottomNav');
+const ChatList = lazyNamed(() => import('./components/ChatList'), 'ChatList');
+const ActiveChat = lazyNamed(() => import('./components/ActiveChat'), 'ActiveChat');
+const StatusView = lazyNamed(() => import('./components/StatusView'), 'StatusView');
+const MarketplaceView = lazyNamed(() => import('./components/MarketplaceView'), 'MarketplaceView');
+const CallsView = lazyNamed(() => import('./components/CallsView'), 'CallsView');
+const SettingsView = lazyNamed(() => import('./components/SettingsView'), 'SettingsView');
+const TownView = lazyNamed(() => import('./components/TownView'), 'TownView');
+
+// On-demand modals & overlays (only downloaded when opened/triggered)
+const StatusViewerModal = lazyNamed(() => import('./components/StatusViewerModal'), 'StatusViewerModal');
+const ActiveCallModal = lazyNamed(() => import('./components/ActiveCallModal'), 'ActiveCallModal');
+const IncomingCallModal = lazyNamed(() => import('./components/IncomingCallModal'), 'IncomingCallModal');
+const IncomingContactRequestModal = lazyNamed(() => import('./components/IncomingContactRequestModal'), 'IncomingContactRequestModal');
+const IncomingGroupInviteModal = lazyNamed(() => import('./components/IncomingGroupInviteModal'), 'IncomingGroupInviteModal');
+const CheckoutDrawer = lazyNamed(() => import('./components/CheckoutDrawer'), 'CheckoutDrawer');
+const EscrowModal = lazyNamed(() => import('./components/EscrowModal'), 'EscrowModal');
+const VoiceRecorderModal = lazyNamed(() => import('./components/VoiceRecorderModal'), 'VoiceRecorderModal');
+const LanguageSelectorModal = lazyNamed(() => import('./components/LanguageSelectorModal'), 'LanguageSelectorModal');
+const WalletModal = lazyNamed(() => import('./components/WalletModal'), 'WalletModal');
+const CreditCelebrationModal = lazyNamed(() => import('./components/CreditCelebrationModal'), 'CreditCelebrationModal');
+const MemeStickerStudioModal = lazyNamed(() => import('./components/MemeStickerStudioModal'), 'MemeStickerStudioModal');
+const AudioSpaceModal = lazyNamed(() => import('./components/AudioSpaceModal'), 'AudioSpaceModal');
+const AudioSpaceBar = lazyNamed(() => import('./components/AudioSpaceBar'), 'AudioSpaceBar');
+const SpacesDashboard = lazyNamed(() => import('./components/SpacesDashboard'), 'SpacesDashboard');
+const ScamReputationModal = lazyNamed(() => import('./components/ScamReputationModal'), 'ScamReputationModal');
+const InvoiceGeneratorModal = lazyNamed(() => import('./components/InvoiceGeneratorModal'), 'InvoiceGeneratorModal');
+const InvoiceViewerModal = lazyNamed(() => import('./components/InvoiceViewerModal'), 'InvoiceViewerModal');
+const FinancialPollModal = lazyNamed(() => import('./components/FinancialPollModal'), 'FinancialPollModal');
+const QuickPollModal = lazyNamed(() => import('./components/QuickPollModal'), 'QuickPollModal');
+const GameXoChallengeModal = lazyNamed(() => import('./components/GameXoChallengeModal'), 'GameXoChallengeModal');
+const ShareLocationModal = lazyNamed(() => import('./components/ShareLocationModal'), 'ShareLocationModal');
+const AjoLedgerModal = lazyNamed(() => import('./components/AjoLedgerModal'), 'AjoLedgerModal');
+const AuthModal = lazyNamed(() => import('./components/AuthModal'), 'AuthModal');
+const ContactsModal = lazyNamed(() => import('./components/ContactsModal'), 'ContactsModal');
+const DispatchModal = lazyNamed(() => import('./components/DispatchModal'), 'DispatchModal');
+const ErrandsModal = lazyNamed(() => import('./components/ErrandsModal'), 'ErrandsModal');
+const JobBoardModal = lazyNamed(() => import('./components/JobBoardModal'), 'JobBoardModal');
+const TaskToEarnModal = lazyNamed(() => import('./components/TaskToEarnModal'), 'TaskToEarnModal');
+const SecurityModal = lazyNamed(() => import('./components/SecurityModal'), 'SecurityModal');
+const ServicesBookingModal = lazyNamed(() => import('./components/ServicesBookingModal'), 'ServicesBookingModal');
+const SendBillModal = lazyNamed(() => import('./components/SendBillModal'), 'SendBillModal');
+const PayrollModal = lazyNamed(() => import('./components/PayrollModal'), 'PayrollModal');
+const ScanQrModal = lazyNamed(() => import('./components/ScanQrModal'), 'ScanQrModal');
+const HealthcareModal = lazyNamed(() => import('./components/HealthcareModal'), 'HealthcareModal');
+const LegalModal = lazyNamed(() => import('./components/LegalModal'), 'LegalModal');
+const DisplayWallpaperModal = lazyNamed(() => import('./components/DisplayWallpaperModal'), 'DisplayWallpaperModal');
+const CreatorModal = lazyNamed(() => import('./components/CreatorModal'), 'CreatorModal');
+const ReferralModal = lazyNamed(() => import('./components/ReferralModal'), 'ReferralModal');
+const CelebrityVerificationModal = lazyNamed(() => import('./components/CelebrityVerificationModal'), 'CelebrityVerificationModal');
+const StoreRegistrationModal = lazyNamed(() => import('./components/StoreRegistrationModal'), 'StoreRegistrationModal');
+const WritersGuildModal = lazyNamed(() => import('./components/WritersGuildModal'), 'WritersGuildModal');
+const AdminDashboardModal = lazyNamed(() => import('./components/AdminDashboardModal'), 'AdminDashboardModal');
+const TutorCoursesModal = lazyNamed(() => import('./components/TutorCoursesModal'), 'TutorCoursesModal');
+const PetShopModal = lazyNamed(() => import('./components/PetShopModal'), 'PetShopModal');
+
+const ShellFallback: React.FC = () => (
+  <div className="min-h-screen w-full flex items-center justify-center bg-[#06020d]">
+    <div className="w-7 h-7 rounded-full border-2 border-purple-500/30 border-t-purple-500 animate-spin" />
+  </div>
+);
+
+const TabFallback: React.FC = () => (
+  <div className="flex-1 h-full min-h-[200px] flex items-center justify-center">
+    <div className="w-6 h-6 rounded-full border-2 border-purple-500/30 border-t-purple-500 animate-spin" />
+  </div>
+);
+
 const AppContent: React.FC = () => {
-  const { activeChatId, setActiveChatId, activeTab, setActiveTab, isAuthenticated, isKickedOut, endCall, declineIncomingCall, isPetShopModalOpen, setIsPetShopModalOpen, isFeatureEnabled, isBanned, banInfo, systemConfig, currentUser, isAdminModalOpen, setIsAdminModalOpen, isSpacesDashboardOpen, setIsSpacesDashboardOpen } = useApp();
-  const [showSplash, setShowSplash] = useState(() => !safeSessionStorage.getItem('agc_splash_shown'));
+  const {
+    activeChatId,
+    setActiveChatId,
+    activeTab,
+    setActiveTab,
+    isAuthenticated,
+    isKickedOut,
+    endCall,
+    declineIncomingCall,
+    isFeatureEnabled,
+    isBanned,
+    banInfo,
+    systemConfig,
+    currentUser,
+    // Modal open flags so lazy chunks only download when opened
+    activeViewingStatus,
+    activeCall,
+    incomingCall,
+    activeContactRequestPopup,
+    activeGroupInvitePopup,
+    activeCheckoutProduct,
+    activeEscrowModalOrder,
+    activeCreditAlert,
+    activeAudioSpace,
+    isAudioSpaceMinimized,
+    spaceEndedSummary,
+    isWalletModalOpen,
+    isMemeStudioOpen,
+    isSpacesDashboardOpen,
+    setIsSpacesDashboardOpen,
+    isScamCheckerModalOpen,
+    isInvoiceGeneratorOpen,
+    viewingInvoice,
+    isFinancialPollModalOpen,
+    isQuickPollModalOpen,
+    isGameXoModalOpen,
+    isShareLocationModalOpen,
+    isAjoModalOpen,
+    isAuthModalOpen,
+    isContactsModalOpen,
+    isDispatchModalOpen,
+    isErrandsModalOpen,
+    isJobBoardModalOpen,
+    isTaskEarnModalOpen,
+    isSecurityModalOpen,
+    isServicesModalOpen,
+    isSendBillModalOpen,
+    isPayrollModalOpen,
+    isScanQrModalOpen,
+    isHealthModalOpen,
+    isLegalModalOpen,
+    isCreatorModalOpen,
+    isReferralModalOpen,
+    isCelebrityModalOpen,
+    isStoreRegModalOpen,
+    isWritersModalOpen,
+    isAdminModalOpen,
+    setIsAdminModalOpen,
+    isTutorModalOpen,
+    isPetShopModalOpen,
+    setIsPetShopModalOpen,
+  } = useApp();
+
   const maintenanceTapRef = React.useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
   const handleMaintenanceLogoTap = () => {
     const now = Date.now();
@@ -81,10 +167,7 @@ const AppContent: React.FC = () => {
       setIsAdminModalOpen(true);
     }
   };
-  const handleSplashDone = useCallback(() => {
-    safeSessionStorage.setItem('agc_splash_shown', 'true');
-    setShowSplash(false);
-  }, []);
+
   const [isVoiceRecorderOpen, setIsVoiceRecorderOpen] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
@@ -108,11 +191,6 @@ const AppContent: React.FC = () => {
       setActiveTab('chats');
     }
   }, [activeTab, isFeatureEnabled, setActiveTab]);
-
-  // Render SplashScreen overlay before anything else (shows once per session)
-  if (showSplash) {
-    return <SplashScreen onDone={handleSplashDone} />;
-  }
 
   // ── Global Maintenance Mode Lockout (Live Admin System Config) ──
   if (systemConfig?.maintenanceMode && currentUser?.role !== 'admin') {
@@ -150,7 +228,11 @@ const AppContent: React.FC = () => {
             )}
           </div>
         </div>
-        {isAdminModalOpen && <AdminDashboardModal />}
+        {isAdminModalOpen && (
+          <Suspense fallback={null}>
+            <AdminDashboardModal />
+          </Suspense>
+        )}
       </>
     );
   }
@@ -197,8 +279,14 @@ const AppContent: React.FC = () => {
       <>
         <OfflineIndicator />
         <PhoneSignUpBanner />
-        <WhatsAppPhoneAuth />
-        {isAdminModalOpen && <AdminDashboardModal />}
+        <Suspense fallback={<ShellFallback />}>
+          <WhatsAppPhoneAuth />
+        </Suspense>
+        {isAdminModalOpen && (
+          <Suspense fallback={null}>
+            <AdminDashboardModal />
+          </Suspense>
+        )}
       </>
     );
   }
@@ -208,25 +296,37 @@ const AppContent: React.FC = () => {
       <OfflineIndicator />
       <div className="w-full max-w-md md:max-w-5xl lg:max-w-6xl xl:max-w-7xl h-full md:h-[95vh] md:my-auto md:rounded-3xl bg-white dark:bg-black shadow-2xl flex flex-col relative overflow-hidden border-x md:border border-slate-200/50 dark:border-neutral-800">
         {/* Floating Street Radio bar when active in background */}
-        <AudioSpaceBar />
+        {activeAudioSpace && isAudioSpaceMinimized && (
+          <Suspense fallback={null}>
+            <AudioSpaceBar />
+          </Suspense>
+        )}
 
         {/* Master-Detail Split on Tablet & Wide Displays for Chats */}
         {isTablet && activeTab === 'chats' ? (
           <div className="flex flex-row w-full h-full overflow-hidden">
             {/* Master: Left Chat List pane */}
             <div className="w-80 lg:w-96 shrink-0 h-full flex flex-col border-r border-slate-200/80 dark:border-neutral-800 bg-white dark:bg-black overflow-hidden relative">
-              <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
+              <Suspense fallback={null}>
+                <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
+              </Suspense>
               <div className="flex-1 overflow-y-auto overflow-x-hidden">
-                <ChatList />
+                <Suspense fallback={<TabFallback />}>
+                  <ChatList />
+                </Suspense>
               </div>
-              <BottomNav />
+              <Suspense fallback={null}>
+                <BottomNav />
+              </Suspense>
             </div>
 
             {/* Detail: Right Active Chat pane */}
             <div className="flex-1 h-full flex flex-col bg-slate-50 dark:bg-neutral-950 overflow-hidden relative">
               {activeChatId ? (
                 <ChatErrorBoundary onReset={() => setActiveChatId(null)}>
-                  <ActiveChat onOpenVoiceRecorder={() => setIsVoiceRecorderOpen(true)} />
+                  <Suspense fallback={<TabFallback />}>
+                    <ActiveChat onOpenVoiceRecorder={() => setIsVoiceRecorderOpen(true)} />
+                  </Suspense>
                 </ChatErrorBoundary>
               ) : (
                 <div className="flex-1 flex flex-col items-center justify-center p-8 text-center select-none">
@@ -250,127 +350,146 @@ const AppContent: React.FC = () => {
           /* Single Column Mobile / Smartwatch View or Non-Chat Tabs */
           activeChatId ? (
             <ChatErrorBoundary onReset={() => setActiveChatId(null)}>
-              <ActiveChat onOpenVoiceRecorder={() => setIsVoiceRecorderOpen(true)} />
+              <Suspense fallback={<TabFallback />}>
+                <ActiveChat onOpenVoiceRecorder={() => setIsVoiceRecorderOpen(true)} />
+              </Suspense>
             </ChatErrorBoundary>
           ) : (
             <div className="flex flex-col flex-1 h-full overflow-hidden">
-              <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
+              <Suspense fallback={null}>
+                <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
+              </Suspense>
 
               <main className="flex-1 overflow-y-auto overflow-x-hidden">
-                {activeTab === 'status' && isFeatureEnabled('status') && <StatusView />}
-                {activeTab === 'calls' && isFeatureEnabled('calls') && <CallsView />}
-                {activeTab === 'town' && isFeatureEnabled('town') && <TownView />}
-                {activeTab === 'chats' && <ChatList />}
-                {activeTab === 'settings' && (
-                  <SettingsView
-                    onOpenLanguageModal={() => setIsLanguageModalOpen(true)}
-                    onOpenDisplayModal={() => setIsDisplayModalOpen(true)}
-                  />
-                )}
-                {activeTab === 'market' && isFeatureEnabled('market') && <MarketplaceView />}
+                <Suspense fallback={<TabFallback />}>
+                  {activeTab === 'status' && isFeatureEnabled('status') && <StatusView />}
+                  {activeTab === 'calls' && isFeatureEnabled('calls') && <CallsView />}
+                  {activeTab === 'town' && isFeatureEnabled('town') && <TownView />}
+                  {activeTab === 'chats' && <ChatList />}
+                  {activeTab === 'settings' && (
+                    <SettingsView
+                      onOpenLanguageModal={() => setIsLanguageModalOpen(true)}
+                      onOpenDisplayModal={() => setIsDisplayModalOpen(true)}
+                    />
+                  )}
+                  {activeTab === 'market' && isFeatureEnabled('market') && <MarketplaceView />}
+                </Suspense>
               </main>
 
-              <BottomNav />
+              <Suspense fallback={null}>
+                <BottomNav />
+              </Suspense>
             </div>
           )
         )}
 
-        {/* Global Modals & Interactive Overlays */}
-        <StatusViewerModal />
-        <CallErrorBoundary onReset={endCall}>
-          <ActiveCallModal />
-        </CallErrorBoundary>
-        <CallErrorBoundary onReset={declineIncomingCall}>
-          <IncomingCallModal />
-        </CallErrorBoundary>
-        <IncomingContactRequestModal />
-        <IncomingGroupInviteModal />
-        <CheckoutDrawer />
-        {isFeatureEnabled('escrow') && <EscrowModal />}
-        {isFeatureEnabled('voiceNotes') && (
-          <VoiceRecorderModal
-            isOpen={isVoiceRecorderOpen}
-            onClose={() => setIsVoiceRecorderOpen(false)}
-          />
-        )}
-        <LanguageSelectorModal
-          isOpen={isLanguageModalOpen}
-          onClose={() => setIsLanguageModalOpen(false)}
-        />
-        {isFeatureEnabled('wallet') && <WalletModal />}
-        <CreditCelebrationModal />
+        {/* Global Modals & Interactive Overlays (lazy-loaded only when opened) */}
+        <Suspense fallback={null}>
+          {activeViewingStatus && <StatusViewerModal />}
+          {activeCall && (
+            <CallErrorBoundary onReset={endCall}>
+              <ActiveCallModal />
+            </CallErrorBoundary>
+          )}
+          {incomingCall && (
+            <CallErrorBoundary onReset={declineIncomingCall}>
+              <IncomingCallModal />
+            </CallErrorBoundary>
+          )}
+          {activeContactRequestPopup && <IncomingContactRequestModal />}
+          {activeGroupInvitePopup && <IncomingGroupInviteModal />}
+          {activeCheckoutProduct && <CheckoutDrawer />}
+          {isFeatureEnabled('escrow') && activeEscrowModalOrder && <EscrowModal />}
+          {isFeatureEnabled('voiceNotes') && isVoiceRecorderOpen && (
+            <VoiceRecorderModal
+              isOpen={isVoiceRecorderOpen}
+              onClose={() => setIsVoiceRecorderOpen(false)}
+            />
+          )}
+          {isLanguageModalOpen && (
+            <LanguageSelectorModal
+              isOpen={isLanguageModalOpen}
+              onClose={() => setIsLanguageModalOpen(false)}
+            />
+          )}
+          {isFeatureEnabled('wallet') && isWalletModalOpen && <WalletModal />}
+          {activeCreditAlert && <CreditCelebrationModal />}
 
-        {/* African Super-App Features - Disappear completely when toggled off */}
-        {isFeatureEnabled('memeStudio') && <MemeStickerStudioModal />}
-        {isFeatureEnabled('audioSpaces') && isSpacesDashboardOpen && (
-          <SpacesDashboard isModal onBack={() => setIsSpacesDashboardOpen(false)} />
-        )}
-        {isFeatureEnabled('audioSpaces') && <AudioSpaceModal />}
-        {isFeatureEnabled('scamChecker') && <ScamReputationModal />}
-        {isFeatureEnabled('wallet') && <InvoiceGeneratorModal />}
-        {isFeatureEnabled('wallet') && <InvoiceViewerModal />}
-        {isFeatureEnabled('wallet') && <FinancialPollModal />}
-        <QuickPollModal />
-        <GameXoChallengeModal />
-        <ShareLocationModal />
-        {isFeatureEnabled('ajo') && <AjoLedgerModal />}
+          {/* African Super-App Features - Disappear completely when toggled off */}
+          {isFeatureEnabled('memeStudio') && isMemeStudioOpen && <MemeStickerStudioModal />}
+          {isFeatureEnabled('audioSpaces') && isSpacesDashboardOpen && (
+            <SpacesDashboard isModal onBack={() => setIsSpacesDashboardOpen(false)} />
+          )}
+          {isFeatureEnabled('audioSpaces') && (activeAudioSpace || spaceEndedSummary) && <AudioSpaceModal />}
+          {isFeatureEnabled('scamChecker') && isScamCheckerModalOpen && <ScamReputationModal />}
+          {isFeatureEnabled('wallet') && isInvoiceGeneratorOpen && <InvoiceGeneratorModal />}
+          {isFeatureEnabled('wallet') && viewingInvoice && <InvoiceViewerModal />}
+          {isFeatureEnabled('wallet') && isFinancialPollModalOpen && <FinancialPollModal />}
+          {isQuickPollModalOpen && <QuickPollModal />}
+          {isGameXoModalOpen && <GameXoChallengeModal />}
+          {isShareLocationModalOpen && <ShareLocationModal />}
+          {isFeatureEnabled('ajo') && isAjoModalOpen && <AjoLedgerModal />}
 
-        {/* AGC Carrier Phone Auth, Contacts Discovery & Super-App Extensions */}
-        <AuthModal />
-        <ContactsModal />
-        {isFeatureEnabled('dispatch') && <DispatchModal />}
-        {isFeatureEnabled('errands') && <ErrandsModal />}
-        {isFeatureEnabled('jobs') && <JobBoardModal />}
-        {isFeatureEnabled('wallet') && <TaskToEarnModal />}
-        {isFeatureEnabled('securityPin') && <SecurityModal />}
+          {/* AGC Carrier Phone Auth, Contacts Discovery & Super-App Extensions */}
+          {isAuthModalOpen && <AuthModal />}
+          {isContactsModalOpen && <ContactsModal />}
+          {isFeatureEnabled('dispatch') && isDispatchModalOpen && <DispatchModal />}
+          {isFeatureEnabled('errands') && isErrandsModalOpen && <ErrandsModal />}
+          {isFeatureEnabled('jobs') && isJobBoardModalOpen && <JobBoardModal />}
+          {isFeatureEnabled('wallet') && isTaskEarnModalOpen && <TaskToEarnModal />}
+          {isFeatureEnabled('securityPin') && isSecurityModalOpen && <SecurityModal />}
 
-        {/* Services Booking, Send My Bill & Payroll Auto-Debit */}
-        {isFeatureEnabled('artisan') && <ServicesBookingModal />}
-        {isFeatureEnabled('wallet') && <SendBillModal />}
-        {isFeatureEnabled('payroll') && <PayrollModal />}
+          {/* Services Booking, Send My Bill & Payroll Auto-Debit */}
+          {isFeatureEnabled('artisan') && isServicesModalOpen && <ServicesBookingModal />}
+          {isFeatureEnabled('wallet') && isSendBillModalOpen && <SendBillModal />}
+          {isFeatureEnabled('payroll') && isPayrollModalOpen && <PayrollModal />}
 
-        {/* Scan QR & Unique UID Modal */}
-        <ScanQrModal />
+          {/* Scan QR & Unique UID Modal */}
+          {isScanQrModalOpen && <ScanQrModal />}
 
-        {/* AfriHealth: Hospital Queuing, Telehealth & EHR Vault */}
-        {isFeatureEnabled('healthcare') && <HealthcareModal />}
+          {/* AfriHealth: Hospital Queuing, Telehealth & EHR Vault */}
+          {isFeatureEnabled('healthcare') && isHealthModalOpen && <HealthcareModal />}
 
-        {/* AfriLaw: Smart Contracts, Legal SOS & CAC Tracker */}
-        {isFeatureEnabled('legal') && <LegalModal />}
+          {/* AfriLaw: Smart Contracts, Legal SOS & CAC Tracker */}
+          {isFeatureEnabled('legal') && isLegalModalOpen && <LegalModal />}
 
-        {/* Text Size Scale & Device Background Upload Modal */}
-        <DisplayWallpaperModal
-          isOpen={isDisplayModalOpen}
-          onClose={() => setIsDisplayModalOpen(false)}
-        />
+          {/* Text Size Scale & Device Background Upload Modal */}
+          {isDisplayModalOpen && (
+            <DisplayWallpaperModal
+              isOpen={isDisplayModalOpen}
+              onClose={() => setIsDisplayModalOpen(false)}
+            />
+          )}
 
-        {/* AfriCreator: Subscriptions, Show Tickets & Direct Music Drops */}
-        {isFeatureEnabled('creator') && <CreatorModal />}
+          {/* AfriCreator: Subscriptions, Show Tickets & Direct Music Drops */}
+          {isFeatureEnabled('creator') && isCreatorModalOpen && <CreatorModal />}
 
-        {/* Anti-Ghost Referral & Invite System */}
-        {isFeatureEnabled('referral') && <ReferralModal />}
+          {/* Anti-Ghost Referral & Invite System */}
+          {isFeatureEnabled('referral') && isReferralModalOpen && <ReferralModal />}
 
-        {/* Celebrity Identity Verification Badge Modal */}
-        <CelebrityVerificationModal />
+          {/* Celebrity Identity Verification Badge Modal */}
+          {isCelebrityModalOpen && <CelebrityVerificationModal />}
 
-        {/* Merchant Store Registration & Tiers */}
-        {isFeatureEnabled('storeTiers') && <StoreRegistrationModal />}
+          {/* Merchant Store Registration & Tiers */}
+          {isFeatureEnabled('storeTiers') && isStoreRegModalOpen && <StoreRegistrationModal />}
 
-        {/* African Writers Guild (Chapters, Buddy Read, Anti-AI Guarantee) */}
-        {isFeatureEnabled('writers') && <WritersGuildModal />}
+          {/* African Writers Guild (Chapters, Buddy Read, Anti-AI Guarantee) */}
+          {isFeatureEnabled('writers') && isWritersModalOpen && <WritersGuildModal />}
 
-        {/* Super Admin Console & Moderation Desk (Always Available to Admin) */}
-        <AdminDashboardModal />
+          {/* Super Admin Console & Moderation Desk (Always Available to Admin) */}
+          {isAdminModalOpen && <AdminDashboardModal />}
 
-        {isFeatureEnabled('tutor') && <TutorCoursesModal />}
+          {isFeatureEnabled('tutor') && isTutorModalOpen && <TutorCoursesModal />}
 
-        {/* African Pets Forum & Pet Shop Marketplace */}
-        {isFeatureEnabled('petShop') && (
-          <PetShopModal
-            isOpen={isPetShopModalOpen}
-            onClose={() => setIsPetShopModalOpen(false)}
-          />
-        )}
+          {/* African Pets Forum & Pet Shop Marketplace */}
+          {isFeatureEnabled('petShop') && isPetShopModalOpen && (
+            <PetShopModal
+              isOpen={isPetShopModalOpen}
+              onClose={() => setIsPetShopModalOpen(false)}
+            />
+          )}
+        </Suspense>
+
         {/* Permanent Ban Lockdown Screen */}
         {isBanned && (
           <div className="fixed inset-0 z-[9999] bg-slate-950/98 backdrop-blur-xl text-white flex flex-col items-center justify-center p-6 text-center select-none font-sans animate-in fade-in zoom-in-95 duration-200">

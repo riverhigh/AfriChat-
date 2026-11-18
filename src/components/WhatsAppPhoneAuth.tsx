@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import {
   Smartphone,
   Mail,
@@ -17,10 +17,13 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
-import { LegalComplianceModal } from './LegalComplianceModal';
 import { requestBackendOtp, verifyBackendOtp } from '../services/kudisms';
 import { compressAvatarImage, isPlaceholderAvatar } from '../utils/imageUtils';
 import { safeLocalStorage } from '../utils/safeStorage';
+
+const LegalComplianceModal = React.lazy(() =>
+  import('./LegalComplianceModal').then((m) => ({ default: m.LegalComplianceModal }))
+);
 
 interface CountryCode {
   name: string;
@@ -1608,10 +1611,14 @@ export const WhatsAppPhoneAuth: React.FC = () => {
         </footer>
       </div>
 
-      <LegalComplianceModal
-        isOpen={showLegalModal}
-        onClose={() => setShowLegalModal(false)}
-      />
+      {showLegalModal && (
+        <Suspense fallback={null}>
+          <LegalComplianceModal
+            isOpen={showLegalModal}
+            onClose={() => setShowLegalModal(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

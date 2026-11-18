@@ -15,8 +15,9 @@ export default defineConfig(() => {
         manifest: false, // Served cleanly from /public/manifest.json linked in index.html
         workbox: {
           importScripts: ['/sw-push.js'],
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,jpeg,jpg,woff2}'],
-          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+          globIgnores: ['assets/aistudio/**'],
+          maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
           navigateFallback: '/index.html',
           navigateFallbackDenylist: [/^\/api/, /^\/socket\.io/],
           cleanupOutdatedCaches: true,
@@ -54,11 +55,24 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
-          type: 'module',
+          enabled: false,
         },
       }),
     ],
+    build: {
+      rolldownOptions: {
+        output: {
+          manualChunks(id: string) {
+            if (id.includes('node_modules')) {
+              if (id.includes('react-dom') || id.includes('/react/')) return 'vendor-react';
+              if (id.includes('@supabase/')) return 'vendor-supabase';
+              if (id.includes('lucide-react')) return 'vendor-icons';
+              if (id.includes('socket.io') || id.includes('engine.io')) return 'vendor-realtime';
+            }
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname || '.', '.'),
