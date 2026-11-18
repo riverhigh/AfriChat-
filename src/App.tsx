@@ -8,6 +8,11 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { PhoneSignUpBanner } from './components/PhoneSignUpBanner';
 import { safeLocalStorage, safeSessionStorage } from './utils/safeStorage';
 
+import { WhatsAppPhoneAuth } from './components/WhatsAppPhoneAuth';
+import { Header } from './components/Header';
+import { BottomNav } from './components/BottomNav';
+import { ChatList } from './components/ChatList';
+
 const lazyNamed = <T extends React.ComponentType<any>>(
   loader: () => Promise<Record<string, any>>,
   exportName: string
@@ -18,11 +23,7 @@ const lazyNamed = <T extends React.ComponentType<any>>(
     }))
   );
 
-// Core views loaded on demand (auth vs authenticated main shell)
-const WhatsAppPhoneAuth = lazyNamed(() => import('./components/WhatsAppPhoneAuth'), 'WhatsAppPhoneAuth');
-const Header = lazyNamed(() => import('./components/Header'), 'Header');
-const BottomNav = lazyNamed(() => import('./components/BottomNav'), 'BottomNav');
-const ChatList = lazyNamed(() => import('./components/ChatList'), 'ChatList');
+// Secondary views loaded on demand
 const ActiveChat = lazyNamed(() => import('./components/ActiveChat'), 'ActiveChat');
 const StatusView = lazyNamed(() => import('./components/StatusView'), 'StatusView');
 const MarketplaceView = lazyNamed(() => import('./components/MarketplaceView'), 'MarketplaceView');
@@ -77,15 +78,10 @@ const AdminDashboardModal = lazyNamed(() => import('./components/AdminDashboardM
 const TutorCoursesModal = lazyNamed(() => import('./components/TutorCoursesModal'), 'TutorCoursesModal');
 const PetShopModal = lazyNamed(() => import('./components/PetShopModal'), 'PetShopModal');
 
-const ShellFallback: React.FC = () => (
-  <div className="min-h-screen w-full flex items-center justify-center bg-[#06020d]">
-    <div className="w-7 h-7 rounded-full border-2 border-purple-500/30 border-t-purple-500 animate-spin" />
-  </div>
-);
-
 const TabFallback: React.FC = () => (
-  <div className="flex-1 h-full min-h-[200px] flex items-center justify-center">
-    <div className="w-6 h-6 rounded-full border-2 border-purple-500/30 border-t-purple-500 animate-spin" />
+  <div className="flex-1 h-full min-h-[240px] flex flex-col items-center justify-center gap-3 bg-white dark:bg-[#090414] text-slate-600 dark:text-purple-200">
+    <div className="w-7 h-7 rounded-full border-2 border-purple-500/30 border-t-purple-500 animate-spin" />
+    <span className="text-xs font-medium tracking-wide opacity-80">Loading view…</span>
   </div>
 );
 
@@ -279,9 +275,7 @@ const AppContent: React.FC = () => {
       <>
         <OfflineIndicator />
         <PhoneSignUpBanner />
-        <Suspense fallback={<ShellFallback />}>
-          <WhatsAppPhoneAuth />
-        </Suspense>
+        <WhatsAppPhoneAuth />
         {isAdminModalOpen && (
           <Suspense fallback={null}>
             <AdminDashboardModal />
@@ -307,17 +301,11 @@ const AppContent: React.FC = () => {
           <div className="flex flex-row w-full h-full overflow-hidden">
             {/* Master: Left Chat List pane */}
             <div className="w-80 lg:w-96 shrink-0 h-full flex flex-col border-r border-slate-200/80 dark:border-neutral-800 bg-white dark:bg-black overflow-hidden relative">
-              <Suspense fallback={null}>
-                <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
-              </Suspense>
+              <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
               <div className="flex-1 overflow-y-auto overflow-x-hidden">
-                <Suspense fallback={<TabFallback />}>
-                  <ChatList />
-                </Suspense>
+                <ChatList />
               </div>
-              <Suspense fallback={null}>
-                <BottomNav />
-              </Suspense>
+              <BottomNav />
             </div>
 
             {/* Detail: Right Active Chat pane */}
@@ -356,29 +344,30 @@ const AppContent: React.FC = () => {
             </ChatErrorBoundary>
           ) : (
             <div className="flex flex-col flex-1 h-full overflow-hidden">
-              <Suspense fallback={null}>
-                <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
-              </Suspense>
+              <Header onOpenLanguageModal={() => setIsLanguageModalOpen(true)} />
 
               <main className="flex-1 overflow-y-auto overflow-x-hidden">
-                <Suspense fallback={<TabFallback />}>
-                  {activeTab === 'status' && isFeatureEnabled('status') && <StatusView />}
-                  {activeTab === 'calls' && isFeatureEnabled('calls') && <CallsView />}
-                  {activeTab === 'town' && isFeatureEnabled('town') && <TownView />}
-                  {activeTab === 'chats' && <ChatList />}
-                  {activeTab === 'settings' && (
-                    <SettingsView
-                      onOpenLanguageModal={() => setIsLanguageModalOpen(true)}
-                      onOpenDisplayModal={() => setIsDisplayModalOpen(true)}
-                    />
-                  )}
-                  {activeTab === 'market' && isFeatureEnabled('market') && <MarketplaceView />}
-                </Suspense>
+                {activeTab === 'chats' ? (
+                  <ChatList />
+                ) : (
+                  <ChatErrorBoundary onReset={() => setActiveTab('chats')}>
+                    <Suspense fallback={<TabFallback />}>
+                      {activeTab === 'status' && isFeatureEnabled('status') && <StatusView />}
+                      {activeTab === 'calls' && isFeatureEnabled('calls') && <CallsView />}
+                      {activeTab === 'town' && isFeatureEnabled('town') && <TownView />}
+                      {activeTab === 'settings' && (
+                        <SettingsView
+                          onOpenLanguageModal={() => setIsLanguageModalOpen(true)}
+                          onOpenDisplayModal={() => setIsDisplayModalOpen(true)}
+                        />
+                      )}
+                      {activeTab === 'market' && isFeatureEnabled('market') && <MarketplaceView />}
+                    </Suspense>
+                  </ChatErrorBoundary>
+                )}
               </main>
 
-              <Suspense fallback={null}>
-                <BottomNav />
-              </Suspense>
+              <BottomNav />
             </div>
           )
         )}

@@ -261,6 +261,9 @@ export const WalletModal: React.FC = () => {
               onClick={() => {
                 setFeedback(null);
                 setWalletTab(tab.id);
+                if (tab.id === 'history') {
+                  void refreshWalletFromServer();
+                }
               }}
               className={`py-2 rounded-xl text-xs font-semibold transition-colors ${
                 walletTab === tab.id
@@ -364,7 +367,10 @@ export const WalletModal: React.FC = () => {
                   <span>Recent Activity</span>
                   <button
                     type="button"
-                    onClick={() => setWalletTab('history')}
+                    onClick={() => {
+                      setWalletTab('history');
+                      void refreshWalletFromServer();
+                    }}
                     className="font-mono text-[11px] normal-case text-indigo-600 dark:text-indigo-400 font-bold hover:underline"
                   >
                     Full Payment History →
@@ -378,8 +384,8 @@ export const WalletModal: React.FC = () => {
                     </div>
                   ) : (
                     wallet.transactions.slice(0, 5).map((tx) => {
-                      const isIncoming = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release', 'bill_received'].includes(tx.type);
-                      const isEscrow = tx.type === 'escrow_lock';
+                      const isIncoming = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release', 'bill_received', 'task_earn', 'outside_payout', 'errand_release', 'referral_bonus', 'transfer_in'].includes(tx.type);
+                      const isEscrow = ['escrow_lock', 'errand_escrow'].includes(tx.type);
                       return (
                         <div key={tx.id} className="p-3 flex items-center justify-between text-xs">
                           <div className="flex items-center gap-3 min-w-0">
@@ -444,7 +450,7 @@ export const WalletModal: React.FC = () => {
                     Payment &amp; Activity History
                   </h4>
                   <p className="text-[11px] text-slate-400">
-                    Unified immutable ledger across Paystack, escrow, bills &amp; stores
+                    Unified immutable ledger across Paystack, escrow, bills, games &amp; stores ({wallet.transactions.length})
                   </p>
                 </div>
                 <button
@@ -480,8 +486,8 @@ export const WalletModal: React.FC = () => {
               </div>
 
               {(() => {
-                const incomingTypes = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release', 'bill_received'];
-                const escrowTypes = ['escrow_lock'];
+                const incomingTypes = ['topup', 'deposit', 'received', 'game_win', 'refund', 'escrow_release', 'bill_received', 'task_earn', 'outside_payout', 'errand_release', 'referral_bonus', 'transfer_in'];
+                const escrowTypes = ['escrow_lock', 'errand_escrow'];
                 const filteredTxs = wallet.transactions.filter((tx) => {
                   if (txFilter === 'incoming') return incomingTypes.includes(tx.type);
                   if (txFilter === 'escrow') return escrowTypes.includes(tx.type);

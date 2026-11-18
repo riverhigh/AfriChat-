@@ -30,8 +30,8 @@
     "status": "active",
     "verificationBadge": "admin",
     "walletBalanceNgn": 61000,
-    "isOnline": true,
-    "lastSeen": "online",
+    "isOnline": false,
+    "lastSeen": "2026-11-18T13:31:54.454Z",
     "updatedAt": "2026-11-17T22:06:22.176Z",
     "adminWalletAdjustedAt": "2026-11-15T19:16:47.452Z"
   },

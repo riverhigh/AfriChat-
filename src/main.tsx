@@ -3,7 +3,25 @@ import App from './App.tsx';
 import './index.css';
 
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-  const registerCurrentSW = () => {
+  if (import.meta.env.DEV) {
+    // In dev/preview mode, unregister any lingering SW (/sw.js or /dev-sw.js) and purge stale SW caches
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => Promise.all(regs.map((r) => r.unregister())))
+      .catch(() => {});
+    if ('caches' in window) {
+      caches
+        .keys()
+        .then((keys) =>
+          Promise.all(
+            keys
+              .filter((k) => k.startsWith('workbox-') || k.startsWith('vite-pwa') || k.startsWith('agc-'))
+              .map((k) => caches.delete(k))
+          )
+        )
+        .catch(() => {});
+    }
+  } else {
     import('virtual:pwa-register')
       .then(({ registerSW }) => {
         const updateSW = registerSW({
@@ -18,24 +36,10 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
         (window as any).__agcUpdateSW = updateSW;
       })
       .catch(() => {});
-  };
-
-  if (import.meta.env.DEV) {
-    // In dev mode, clean up any legacy /sw.js registration before activating VitePWA dev-sw
-    navigator.serviceWorker
-      .getRegistrations()
-      .then((regs) =>
-        Promise.all(
-          regs
-            .filter((r) => (r.active?.scriptURL || r.installing?.scriptURL || r.waiting?.scriptURL || '').endsWith('/sw.js'))
-            .map((r) => r.unregister())
-        )
-      )
-      .catch(() => {})
-      .finally(registerCurrentSW);
-  } else {
-    registerCurrentSW();
   }
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+const rootEl = document.getElementById('root');
+if (rootEl) {
+  createRoot(rootEl).render(<App />);
+}

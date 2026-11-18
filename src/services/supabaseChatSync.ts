@@ -178,7 +178,14 @@ export async function saveUserChatsBackupToSupabase(
   const nowIso = new Date().toISOString();
   const cleanAccount: AccountBackupSnapshot | undefined = accountSnapshot
     ? {
-        wallet: accountSnapshot.wallet,
+        wallet: accountSnapshot.wallet
+          ? {
+              ...accountSnapshot.wallet,
+              transactions: Array.isArray(accountSnapshot.wallet.transactions)
+                ? accountSnapshot.wallet.transactions.slice(0, 250)
+                : [],
+            }
+          : undefined,
         userProfile: sanitizeProfileForBackup(accountSnapshot.userProfile),
         updatedAt: accountSnapshot.updatedAt || nowIso,
       }

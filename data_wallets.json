@@ -1,5 +1,14 @@
 {
   "wallets": {
+    "114247388": {
+      "phoneKey": "114247388",
+      "phoneNumber": "+2348114247388",
+      "availableBalance": 3300,
+      "escrowLockedBalance": 0,
+      "currency": "NGN",
+      "transactions": [],
+      "updatedAt": "2026-11-15T22:21:45.823Z"
+    },
     "032044777": {
       "phoneKey": "032044777",
       "phoneNumber": "+2347032044777",
@@ -118,17 +127,8 @@
       "currency": "NGN",
       "transactions": [],
       "updatedAt": "1970-01-01T00:00:00.000Z"
-    },
-    "000000000": {
-      "phoneKey": "000000000",
-      "phoneNumber": "+2348000000000",
-      "availableBalance": 0,
-      "escrowLockedBalance": 0,
-      "currency": "NGN",
-      "transactions": [],
-      "updatedAt": "1970-01-01T00:00:00.000Z"
     }
   },
   "usedReferences": [],
-  "updatedAt": "2026-11-18T09:14:12.776Z"
+  "updatedAt": "2026-11-18T13:24:09.512Z"
 }

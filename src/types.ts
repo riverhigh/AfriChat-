@@ -83,6 +83,8 @@ export type WalletTransactionType =
   | 'course_enroll'
   | 'legal_consult'
   | 'health_consult'
+  | 'outside_ticket'
+  | 'outside_payout'
   | 'task_stake'
   | 'task_earn'
   | 'referral_bonus'

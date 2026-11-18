@@ -729,7 +729,14 @@ const ADMIN_SYS_ESCROWS_KEY = '__agc_sys_escrows__';
 const ADMIN_SYS_WALLETS_KEY = '__agc_sys_wallets__';
 const ADMIN_SYS_GAME_ESCROWS_KEY = '__agc_sys_game_escrows__';
 const ADMIN_SYS_TASKS_KEY = '__agc_sys_task_bounties__';
+const ADMIN_SYS_LEDGER_KEY = '__agc_sys_ledger__';
+const USER_LEDGER_SLICE_PREFIX = '__agc_sys_ledger_';
+const USER_CHAT_BACKUP_PREFIX = '__agc_sys_chats_';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function getUserLedgerSliceKey(phoneKey: string): string {
+  return `${USER_LEDGER_SLICE_PREFIX}${phoneKey}`;
+}
 
 function canonicalAdminPhoneKey(phoneOrId?: string): string {
   if (!phoneOrId) return '';
@@ -849,6 +856,7 @@ let syncEscrowsFromSupabaseHook: ((slice: any) => void) | null = null;
 let syncWalletsFromSupabaseHook: ((slice: any) => void) | null = null;
 let syncGameEscrowsFromSupabaseHook: ((slice: any) => void) | null = null;
 let syncTasksFromSupabaseHook: ((slice: any) => void) | null = null;
+let syncLedgerFromSupabaseHook: ((slice: any) => void) | null = null;
 
 let initialSupabaseSyncDone = false;
 let initialSupabaseSyncPromise: Promise<void> | null = null;
@@ -858,7 +866,7 @@ async function syncAdminStateFromSupabase() {
     // Ensure registry users are populated before applying user overrides
     await syncUsersFromSupabase().catch(() => {});
 
-    const [cfgSlice, cmsSlice, usersSlice, storesSlice, aiSlice, profsSlice, escrowsSlice, walletsSlice, gameEscrowsSlice, tasksSlice] = await Promise.all([
+    const [cfgSlice, cmsSlice, usersSlice, storesSlice, aiSlice, profsSlice, escrowsSlice, walletsSlice, gameEscrowsSlice, tasksSlice, ledgerSlice] = await Promise.all([
       fetchSupabaseAdminSlice(ADMIN_SYS_CONFIG_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_CMS_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_USERS_KEY),
@@ -869,6 +877,7 @@ async function syncAdminStateFromSupabase() {
       fetchSupabaseAdminSlice(ADMIN_SYS_WALLETS_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_GAME_ESCROWS_KEY),
       fetchSupabaseAdminSlice(ADMIN_SYS_TASKS_KEY),
+      fetchSupabaseAdminSlice(ADMIN_SYS_LEDGER_KEY),
     ]);
 
     if (cfgSlice) {
@@ -1001,6 +1010,9 @@ async function syncAdminStateFromSupabase() {
     }
     if (tasksSlice && syncTasksFromSupabaseHook) {
       syncTasksFromSupabaseHook(tasksSlice);
+    }
+    if (ledgerSlice && syncLedgerFromSupabaseHook) {
+      syncLedgerFromSupabaseHook(ledgerSlice);
     }
     initialSupabaseSyncDone = true;
   } catch (_) {}
@@ -2605,13 +2617,111 @@ try {
   console.warn('Notice loading server wallet ledger:', e);
 }
 
+function extractTxTimestampMs(tx: Partial<ServerWalletTx>): number {
+  if (tx?.createdAt) {
+    const parsed = Date.parse(String(tx.createdAt));
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const idMatch = String(tx?.id || tx?.reference || '').match(/\b(1\d{12})\b/);
+  if (idMatch) {
+    const num = Number(idMatch[1]);
+    if (Number.isFinite(num) && num > 0) return num;
+  }
+  return 0;
+}
+
+function isSyntheticLedgerTx(tx: any): boolean {
+  if (!tx || typeof tx !== 'object') return true;
+  if (isSyntheticTestAccount(tx)) return true;
+  const ref = String(tx.referenceId || tx.reference || '');
+  if (ref.startsWith('TEST_')) return true;
+  return false;
+}
+
+function normalizeServerWalletTx(raw: any, fallbackPhone?: string, fallbackUserId?: string): ServerWalletTx | null {
+  if (!raw || typeof raw !== 'object' || !raw.id || isSyntheticLedgerTx(raw)) return null;
+  const createdMs = extractTxTimestampMs(raw);
+  const createdAt = raw.createdAt || (createdMs > 0 ? new Date(createdMs).toISOString() : new Date().toISOString());
+  return {
+    ...raw,
+    id: String(raw.id),
+    userId: raw.userId || fallbackUserId,
+    userPhone: raw.userPhone || fallbackPhone || '',
+    userName: raw.userName || 'AGC User',
+    type: raw.type || 'transfer_out',
+    title: String(raw.title || raw.description || raw.type || 'Transaction'),
+    description: String(raw.description || raw.title || raw.type || 'Transaction'),
+    amount: Math.abs(Number(raw.amount) || 0),
+    fee: Number(raw.fee ?? 0),
+    balanceAfter: raw.balanceAfter !== undefined && raw.balanceAfter !== null ? Number(raw.balanceAfter) : undefined,
+    currency: raw.currency || 'NGN',
+    timestamp:
+      raw.timestamp ||
+      new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    createdAt,
+    status: raw.status || 'completed',
+    reference: String(raw.reference || raw.referenceId || raw.id),
+    referenceId: String(raw.referenceId || raw.reference || raw.id),
+    channel: raw.channel || 'wallet',
+    metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
+  };
+}
+
+function sortAndDedupeLedger(txs: ServerWalletTx[], maxLen = 10000): ServerWalletTx[] {
+  const map = new Map<string, ServerWalletTx>();
+  for (const raw of txs || []) {
+    const item = normalizeServerWalletTx(raw);
+    if (!item) continue;
+    const prev = map.get(item.id);
+    if (!prev) {
+      map.set(item.id, item);
+    } else {
+      map.set(item.id, {
+        ...prev,
+        ...item,
+        userId: item.userId || prev.userId,
+        userPhone: item.userPhone || prev.userPhone,
+        userName: item.userName && item.userName !== 'AGC User' ? item.userName : prev.userName,
+        description: item.description || prev.description,
+        balanceAfter: item.balanceAfter !== undefined ? item.balanceAfter : prev.balanceAfter,
+        createdAt:
+          extractTxTimestampMs(item) >= extractTxTimestampMs(prev)
+            ? item.createdAt
+            : prev.createdAt,
+        metadata: { ...(prev.metadata || {}), ...(item.metadata || {}) },
+      });
+    }
+  }
+  return Array.from(map.values())
+    .sort((a, b) => extractTxTimestampMs(b) - extractTxTimestampMs(a))
+    .slice(0, maxLen);
+}
+
+function txBelongsToUser(tx: Partial<ServerWalletTx>, phoneKey: string, userId?: string): boolean {
+  if (!tx) return false;
+  if (userId && tx.userId && tx.userId === userId) return true;
+  if (phoneKey) {
+    if (tx.userPhone && canonicalAdminPhoneKey(tx.userPhone) === phoneKey) return true;
+    const metaKey = canonicalAdminPhoneKey(tx.metadata?.phoneKey || tx.metadata?.userPhone);
+    if (metaKey && metaKey === phoneKey) return true;
+  }
+  return false;
+}
+
+function getUserMergedTransactions(phoneOrId: string, userId?: string, limit = 1000): ServerWalletTx[] {
+  const match = phoneOrId ? findUserEntry(phoneOrId) : null;
+  const resolvedUserId = userId || match?.user.id;
+  const phoneKey = canonicalAdminPhoneKey(match?.user.phoneNumber || phoneOrId) || String(phoneOrId || '').replace(/\D/g, '');
+  const fromLedger = unifiedLedger.filter((tx) => txBelongsToUser(tx, phoneKey, resolvedUserId));
+  const walTxs = phoneKey ? (serverWallets.get(phoneKey)?.transactions || []) : [];
+  return sortAndDedupeLedger([...fromLedger, ...walTxs], limit);
+}
+
 try {
   if (fs.existsSync(WALLET_LEDGER_FILE)) {
     const rawLedger = JSON.parse(fs.readFileSync(WALLET_LEDGER_FILE, 'utf8'));
     if (Array.isArray(rawLedger)) {
-      unifiedLedger = rawLedger
-        .filter((tx: any) => !isSyntheticTestAccount(tx) && !String(tx?.referenceId || '').startsWith('TEST_'))
-        .slice(0, 5000);
+      unifiedLedger = sortAndDedupeLedger(rawLedger, 10000);
     }
   }
 } catch (e) {
@@ -2620,55 +2730,290 @@ try {
 
 // Backfill any historical transactions stored inside serverWallets into unifiedLedger
 try {
-  const seenLedgerIds = new Set(unifiedLedger.map((t) => t.id));
-  let backfilled = false;
+  const extraTxs: ServerWalletTx[] = [];
   for (const w of serverWallets.values()) {
     for (const tx of w.transactions || []) {
-      if (tx?.id && !seenLedgerIds.has(tx.id)) {
-        seenLedgerIds.add(tx.id);
-        unifiedLedger.push({
-          ...tx,
-          userPhone: tx.userPhone || w.phoneNumber,
-          createdAt: tx.createdAt || w.updatedAt || new Date().toISOString(),
-          referenceId: tx.referenceId || tx.reference,
-        });
-        backfilled = true;
-      }
+      const normTx = normalizeServerWalletTx(tx, w.phoneNumber);
+      if (normTx) extraTxs.push(normTx);
     }
   }
-  if (backfilled) {
-    unifiedLedger.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-    unifiedLedger = unifiedLedger.slice(0, 5000);
-    fs.writeFileSync(WALLET_LEDGER_FILE, JSON.stringify(unifiedLedger, null, 2));
+  if (extraTxs.length > 0) {
+    const prevCount = unifiedLedger.length;
+    unifiedLedger = sortAndDedupeLedger([...unifiedLedger, ...extraTxs], 10000);
+    if (unifiedLedger.length !== prevCount) {
+      fs.writeFileSync(WALLET_LEDGER_FILE, JSON.stringify(unifiedLedger, null, 2));
+    }
   }
 } catch (_) {}
 
 function saveUnifiedLedgerFile() {
   try {
-    fs.writeFileSync(WALLET_LEDGER_FILE, JSON.stringify(unifiedLedger.slice(0, 5000), null, 2));
+    fs.writeFileSync(WALLET_LEDGER_FILE, JSON.stringify(unifiedLedger.slice(0, 10000), null, 2));
   } catch (e) {
     console.warn('Notice saving unified wallet ledger:', e);
   }
 }
 
+const pendingLedgerPushPhoneKeys = new Set<string>();
+let ledgerPushTimer: ReturnType<typeof setTimeout> | null = null;
+let ledgerPushInFlight = false;
+
+async function flushSupabaseLedgerPush(): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    pendingLedgerPushPhoneKeys.clear();
+    return;
+  }
+  if (ledgerPushInFlight) return;
+  ledgerPushInFlight = true;
+  try {
+    const keysToPush = Array.from(pendingLedgerPushPhoneKeys);
+    pendingLedgerPushPhoneKeys.clear();
+
+    // 1. Push per-user ledger slices (fetch-merge-upsert so concurrent/historical entries are never overwritten)
+    for (const phoneKey of keysToPush) {
+      if (!phoneKey) continue;
+      const sliceKey = getUserLedgerSliceKey(phoneKey);
+      const localUserTxs = getUserMergedTransactions(phoneKey, undefined, 2000);
+      const remoteSlice = await fetchSupabaseAdminSlice(sliceKey).catch(() => null);
+      const remoteUserTxs = Array.isArray(remoteSlice?.transactions) ? remoteSlice.transactions : [];
+      const mergedUserTxs = sortAndDedupeLedger([...localUserTxs, ...remoteUserTxs], 2000);
+
+      if (mergedUserTxs.length > localUserTxs.length) {
+        unifiedLedger = sortAndDedupeLedger([...unifiedLedger, ...mergedUserTxs], 10000);
+        saveUnifiedLedgerFile();
+        const w = serverWallets.get(phoneKey);
+        if (w) {
+          w.transactions = sortAndDedupeLedger([...w.transactions, ...mergedUserTxs], 250);
+          serverWallets.set(phoneKey, w);
+          saveWalletsFile(false);
+        }
+      }
+
+      await upsertSupabaseAdminSlice(sliceKey, 'AGC_USER_LEDGER', {
+        phoneKey,
+        transactions: mergedUserTxs,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    // 2. Push global super-view ledger slice
+    const remoteGlobal = await fetchSupabaseAdminSlice(ADMIN_SYS_LEDGER_KEY).catch(() => null);
+    const remoteGlobalTxs = Array.isArray(remoteGlobal?.transactions) ? remoteGlobal.transactions : [];
+    const mergedGlobal = sortAndDedupeLedger([...unifiedLedger, ...remoteGlobalTxs], 1500);
+    if (mergedGlobal.length > 0) {
+      await upsertSupabaseAdminSlice(ADMIN_SYS_LEDGER_KEY, 'AGC_ADMIN_LEDGER', {
+        transactions: mergedGlobal,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  } catch (_) {
+  } finally {
+    ledgerPushInFlight = false;
+    if (pendingLedgerPushPhoneKeys.size > 0) {
+      scheduleSupabaseLedgerPush();
+    }
+  }
+}
+
+function scheduleSupabaseLedgerPush(phoneKey?: string) {
+  if (phoneKey) pendingLedgerPushPhoneKeys.add(phoneKey);
+  if (ledgerPushTimer) clearTimeout(ledgerPushTimer);
+  ledgerPushTimer = setTimeout(() => {
+    void flushSupabaseLedgerPush();
+  }, 250);
+}
+
+const hydratedUserLedgerAt = new Map<string, number>();
+const inFlightUserLedgerHydration = new Map<string, Promise<void>>();
+
+async function hydrateUserLedgerFromSupabase(phoneOrId: string, userId?: string, force = false): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+  const match = phoneOrId ? findUserEntry(phoneOrId) : null;
+  const phoneKey = canonicalAdminPhoneKey(match?.user.phoneNumber || phoneOrId);
+  if (!phoneKey) return;
+
+  const existingInFlight = inFlightUserLedgerHydration.get(phoneKey);
+  if (existingInFlight) return existingInFlight;
+
+  const lastAt = hydratedUserLedgerAt.get(phoneKey) || 0;
+  const localMatches = getUserMergedTransactions(phoneKey, userId || match?.user.id, 50);
+  if (!force && localMatches.length > 0 && Date.now() - lastAt < 10_000) {
+    return;
+  }
+
+  const job = (async () => {
+    try {
+      const sliceKey = getUserLedgerSliceKey(phoneKey);
+      const chatBackupKey = `${USER_CHAT_BACKUP_PREFIX}${phoneKey}`;
+      const [userLedgerSlice, chatBackupSlice] = await Promise.all([
+        fetchSupabaseAdminSlice(sliceKey).catch(() => null),
+        fetchSupabaseAdminSlice(chatBackupKey).catch(() => null),
+      ]);
+
+      const recovered: ServerWalletTx[] = [];
+      const fallbackPhone = match?.user.phoneNumber || (phoneKey.length >= 9 ? `+234${phoneKey}` : phoneOrId);
+      const fallbackUserId = userId || match?.user.id;
+
+      const ledgerSliceTxs = Array.isArray(userLedgerSlice?.transactions) ? userLedgerSlice.transactions : [];
+      for (const raw of ledgerSliceTxs) {
+        const n = normalizeServerWalletTx(raw, fallbackPhone, fallbackUserId);
+        if (n) recovered.push(n);
+      }
+
+      const chatSnapTxs = Array.isArray(chatBackupSlice?.accountSnapshot?.wallet?.transactions)
+        ? chatBackupSlice.accountSnapshot.wallet.transactions
+        : [];
+      for (const raw of chatSnapTxs) {
+        const n = normalizeServerWalletTx(raw, fallbackPhone, fallbackUserId);
+        if (n) recovered.push(n);
+      }
+
+      if (SUPABASE_SERVICE_ROLE_KEY) {
+        try {
+          const orFilters: string[] = [];
+          if (fallbackUserId) orFilters.push(`user_id.eq.${encodeURIComponent(fallbackUserId)}`);
+          if (phoneKey.length >= 7) orFilters.push(`user_phone.ilike.*${encodeURIComponent(phoneKey)}`);
+          if (orFilters.length > 0) {
+            const sbRes = await fetch(
+              `${SUPABASE_URL}/rest/v1/wallet_transactions?or=(${orFilters.join(',')})&order=created_at.desc&limit=500`,
+              {
+                headers: {
+                  apikey: SUPABASE_SERVICE_ROLE_KEY,
+                  Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                },
+                signal: AbortSignal.timeout(4000),
+              }
+            );
+            if (sbRes.ok) {
+              const sbRows = await sbRes.json();
+              if (Array.isArray(sbRows)) {
+                for (const row of sbRows) {
+                  const n = normalizeServerWalletTx(
+                    {
+                      id: row.id,
+                      userId: row.user_id,
+                      userPhone: row.user_phone,
+                      userName: row.user_name,
+                      type: row.type,
+                      title: row.title,
+                      description: row.description,
+                      amount: row.amount,
+                      fee: row.fee,
+                      balanceAfter: row.balance_after,
+                      currency: row.currency,
+                      createdAt: row.created_at,
+                      status: row.status,
+                      reference: row.reference,
+                      referenceId: row.reference_id,
+                      channel: row.channel,
+                      metadata: row.metadata,
+                    },
+                    fallbackPhone,
+                    fallbackUserId
+                  );
+                  if (n) recovered.push(n);
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (recovered.length > 0) {
+        const prevLedgerIds = new Set(unifiedLedger.map((t) => t.id));
+        const hasNewForLocal = recovered.some((t) => !prevLedgerIds.has(t.id));
+        unifiedLedger = sortAndDedupeLedger([...unifiedLedger, ...recovered], 10000);
+        if (hasNewForLocal) {
+          saveUnifiedLedgerFile();
+        }
+
+        const existingWal = serverWallets.get(phoneKey);
+        if (existingWal) {
+          const prevWalIds = new Set(existingWal.transactions.map((t) => t.id));
+          const mergedWalTxs = sortAndDedupeLedger([...existingWal.transactions, ...recovered], 250);
+          if (mergedWalTxs.some((t) => !prevWalIds.has(t.id))) {
+            existingWal.transactions = mergedWalTxs;
+            serverWallets.set(phoneKey, existingWal);
+            saveWalletsFile(false);
+          }
+        }
+
+        // Backfill recovered transactions into __agc_sys_ledger_<key> if any came from chatBackup or local wallet
+        const sliceIds = new Set(ledgerSliceTxs.map((t: any) => String(t?.id || '')));
+        if (recovered.some((t) => !sliceIds.has(t.id)) || localMatches.some((t) => !sliceIds.has(t.id))) {
+          scheduleSupabaseLedgerPush(phoneKey);
+        }
+      } else if (localMatches.length > 0 && !userLedgerSlice) {
+        scheduleSupabaseLedgerPush(phoneKey);
+      }
+
+      hydratedUserLedgerAt.set(phoneKey, Date.now());
+    } catch (_) {
+    } finally {
+      inFlightUserLedgerHydration.delete(phoneKey);
+    }
+  })();
+
+  inFlightUserLedgerHydration.set(phoneKey, job);
+  return job;
+}
+
+syncLedgerFromSupabaseHook = (slice: any) => {
+  if (!slice || !Array.isArray(slice.transactions)) return;
+  const normalizedList: ServerWalletTx[] = [];
+  for (const raw of slice.transactions) {
+    const n = normalizeServerWalletTx(raw);
+    if (n) normalizedList.push(n);
+  }
+  if (normalizedList.length === 0) return;
+  const prevLen = unifiedLedger.length;
+  const prevIds = new Set(unifiedLedger.map((t) => t.id));
+  unifiedLedger = sortAndDedupeLedger([...unifiedLedger, ...normalizedList], 10000);
+  if (unifiedLedger.length !== prevLen || normalizedList.some((t) => !prevIds.has(t.id))) {
+    saveUnifiedLedgerFile();
+  }
+  let walletsChanged = false;
+  for (const tx of normalizedList) {
+    const pk = canonicalAdminPhoneKey(tx.userPhone);
+    if (!pk) continue;
+    const wal = serverWallets.get(pk);
+    if (wal && !wal.transactions.some((t) => t.id === tx.id)) {
+      wal.transactions = sortAndDedupeLedger([tx, ...wal.transactions], 250);
+      serverWallets.set(pk, wal);
+      walletsChanged = true;
+    }
+  }
+  if (walletsChanged) saveWalletsFile(false);
+};
+
 function appendUnifiedLedgerTx(entry: ServerWalletTx) {
-  const normalized: ServerWalletTx = {
+  const normalized = normalizeServerWalletTx(entry) || {
     ...entry,
     createdAt: entry.createdAt || new Date().toISOString(),
     referenceId: entry.referenceId || entry.reference,
     description: entry.description || entry.title,
     fee: Number(entry.fee ?? 0),
   };
-  unifiedLedger = [normalized, ...unifiedLedger.filter((t) => t.id !== normalized.id)].slice(0, 5000);
+  unifiedLedger = sortAndDedupeLedger([normalized, ...unifiedLedger], 10000);
   saveUnifiedLedgerFile();
 
-  const sbKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
-  if (SUPABASE_URL && sbKey) {
+  const phoneKey = canonicalAdminPhoneKey(normalized.userPhone || (normalized.metadata?.phoneKey as string));
+  if (phoneKey) {
+    const existingWal = serverWallets.get(phoneKey);
+    if (existingWal) {
+      existingWal.transactions = sortAndDedupeLedger([normalized, ...existingWal.transactions], 250);
+      serverWallets.set(phoneKey, existingWal);
+    }
+  }
+
+  scheduleSupabaseLedgerPush(phoneKey || undefined);
+
+  if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
     fetch(`${SUPABASE_URL}/rest/v1/wallet_transactions`, {
       method: 'POST',
       headers: {
-        apikey: sbKey,
-        Authorization: `Bearer ${sbKey}`,
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
         'Content-Type': 'application/json',
         Prefer: 'resolution=merge-duplicates',
       },
@@ -2704,7 +3049,7 @@ function pushWalletsToSupabase() {
     for (const [k, w] of serverWallets.entries()) {
       walletsObj[k] = {
         ...w,
-        transactions: Array.isArray(w.transactions) ? w.transactions.slice(0, 35) : [],
+        transactions: sortAndDedupeLedger(w.transactions || [], 120),
       };
     }
     upsertSupabaseAdminSlice(ADMIN_SYS_WALLETS_KEY, 'AGC_SERVER_WALLETS', {
@@ -2718,6 +3063,7 @@ function pushWalletsToSupabase() {
 syncWalletsFromSupabaseHook = (slice: any) => {
   if (!slice || typeof slice !== 'object') return;
   let changed = false;
+  let ledgerBackfilled = false;
   if (Array.isArray(slice.usedReferences)) {
     slice.usedReferences.forEach((r: string) => r && processedPaymentRefs.add(String(r)));
   }
@@ -2731,6 +3077,20 @@ syncWalletsFromSupabaseHook = (slice: any) => {
       const remoteTs = new Date(w.updatedAt || 0).getTime();
       const localTs = new Date(cur?.updatedAt || 0).getTime();
       const curIsColdPlaceholder = Boolean(cur && cur.availableBalance === 0 && cur.escrowLockedBalance === 0 && cur.transactions.length === 0);
+      const remoteTxs = Array.isArray(w.transactions) ? w.transactions : [];
+      const mergedTxs = sortAndDedupeLedger([...(cur?.transactions || []), ...remoteTxs], 250);
+
+      if (remoteTxs.length > 0) {
+        const beforeIds = new Set(unifiedLedger.map((t) => t.id));
+        const normalizedRemote = remoteTxs
+          .map((tx: any) => normalizeServerWalletTx(tx, w.phoneNumber || cur?.phoneNumber || `+${key}`))
+          .filter(Boolean) as ServerWalletTx[];
+        if (normalizedRemote.some((t) => !beforeIds.has(t.id))) {
+          unifiedLedger = sortAndDedupeLedger([...unifiedLedger, ...normalizedRemote], 10000);
+          ledgerBackfilled = true;
+        }
+      }
+
       if (!cur || (curIsColdPlaceholder && Number(w.availableBalance || 0) > 0) || remoteTs > localTs) {
         serverWallets.set(key, {
           phoneKey: key,
@@ -2738,13 +3098,18 @@ syncWalletsFromSupabaseHook = (slice: any) => {
           availableBalance: Math.max(0, Number(w.availableBalance) || 0),
           escrowLockedBalance: Math.max(0, Number(w.escrowLockedBalance) || 0),
           currency: w.currency || cur?.currency || 'NGN',
-          transactions: Array.isArray(w.transactions) && w.transactions.length > 0 ? w.transactions.slice(0, 100) : (cur?.transactions || []),
+          transactions: mergedTxs,
           updatedAt: w.updatedAt || new Date().toISOString(),
         });
+        changed = true;
+      } else if (cur && mergedTxs.length > cur.transactions.length) {
+        cur.transactions = mergedTxs;
+        serverWallets.set(key, cur);
         changed = true;
       }
     }
   }
+  if (ledgerBackfilled) saveUnifiedLedgerFile();
   if (changed) saveWalletsFile(false);
 };
 
@@ -2872,12 +3237,13 @@ function emitWalletUpdateToPhone(
     getPhoneVariants(wallet.phoneKey).forEach((v) => variants.add(v));
   }
   const sentSockets = new Set<string>();
+  const mergedTxs = getUserMergedTransactions(wallet.phoneNumber || wallet.phoneKey || phoneOrId, undefined, 500);
   const payload = {
     balance: wallet.availableBalance,
     availableBalance: wallet.availableBalance,
     escrowLockedBalance: wallet.escrowLockedBalance,
     currency: wallet.currency,
-    transactions: wallet.transactions,
+    transactions: mergedTxs,
     note,
     reference,
   };
@@ -2961,14 +3327,16 @@ app.get('/api/wallet/:phone', async (req: Request, res: Response, next: NextFunc
   if (rawPhone === 'banks' || rawPhone === 'transactions') return next();
   if (!rawPhone) return res.status(400).json({ error: 'Phone number required' });
   await ensureInitialSupabaseSync();
+  await hydrateUserLedgerFromSupabase(rawPhone);
   const wallet = getOrCreateServerWallet(rawPhone);
+  const mergedTransactions = getUserMergedTransactions(rawPhone, undefined, 1000);
   return res.json({
     success: true,
     wallet: {
       availableBalance: wallet.availableBalance,
       escrowLockedBalance: wallet.escrowLockedBalance,
       currency: wallet.currency,
-      transactions: wallet.transactions,
+      transactions: mergedTransactions,
     },
     source: 'server_authoritative',
   });
@@ -2977,6 +3345,7 @@ app.get('/api/wallet/:phone', async (req: Request, res: Response, next: NextFunc
 // REST: Verify Paystack checkout server-side via Paystack API or prior signed webhook (NEVER trusts client amount)
 app.post('/api/wallet/verify-paystack', async (req: Request, res: Response) => {
   try {
+    await ensureInitialSupabaseSync();
     const { phoneNumber, reference } = req.body || {};
     if (!phoneNumber || !reference || String(reference).trim().length < 4) {
       return res.status(400).json({ success: false, error: 'Phone number and valid Paystack reference required' });
@@ -2994,7 +3363,7 @@ app.post('/api/wallet/verify-paystack', async (req: Request, res: Response) => {
           availableBalance: wallet.availableBalance,
           escrowLockedBalance: wallet.escrowLockedBalance,
           currency: wallet.currency,
-          transactions: wallet.transactions,
+          transactions: getUserMergedTransactions(String(phoneNumber), undefined, 1000),
         },
       });
     }
@@ -3066,7 +3435,7 @@ app.post('/api/wallet/verify-paystack', async (req: Request, res: Response) => {
         availableBalance: result.wallet.availableBalance,
         escrowLockedBalance: result.wallet.escrowLockedBalance,
         currency: result.wallet.currency,
-        transactions: result.wallet.transactions,
+        transactions: getUserMergedTransactions(String(phoneNumber), undefined, 1000),
       },
     });
   } catch (err: any) {
@@ -3376,6 +3745,7 @@ app.post('/api/wallet/resolve-account', async (req: Request, res: Response) => {
 
 // REST: Server-validated withdrawal (never trusts browser balance state)
 app.post('/api/wallet/withdraw', async (req: Request, res: Response) => {
+  await ensureInitialSupabaseSync();
   const { phoneNumber, amount, bankName, bankCode, accountNumber, accountName } = req.body || {};
   const numericAmt = Number(amount);
   const cleanAccount = String(accountNumber || '').replace(/\D/g, '');
@@ -3453,7 +3823,7 @@ app.post('/api/wallet/withdraw', async (req: Request, res: Response) => {
       accountName: verifiedAccountName,
     },
   };
-  wallet.transactions = [tx, ...wallet.transactions].slice(0, 100);
+  wallet.transactions = sortAndDedupeLedger([tx, ...wallet.transactions], 250);
   serverWallets.set(wallet.phoneKey, wallet);
   saveWalletsFile();
   appendUnifiedLedgerTx(tx);
@@ -3474,26 +3844,28 @@ app.post('/api/wallet/withdraw', async (req: Request, res: Response) => {
       availableBalance: wallet.availableBalance,
       escrowLockedBalance: wallet.escrowLockedBalance,
       currency: wallet.currency,
-      transactions: wallet.transactions,
+      transactions: getUserMergedTransactions(String(phoneNumber), undefined, 1000),
     },
   });
 });
 
 // REST: Unified Transaction Ledger endpoints (User + Admin Super-View)
-app.get('/api/wallet/transactions', (req: Request, res: Response) => {
+app.get('/api/wallet/transactions', async (req: Request, res: Response) => {
+  await ensureInitialSupabaseSync();
   const phone = String(req.query.phone || '').trim();
   const userId = String(req.query.userId || '').trim();
-  const cleanDigits = phone.replace(/\D/g, '').slice(-9);
-  const filtered = unifiedLedger.filter((tx) => {
-    if (userId && tx.userId && tx.userId === userId) return true;
-    if (cleanDigits && tx.userPhone && tx.userPhone.replace(/\D/g, '').slice(-9) === cleanDigits) return true;
-    return false;
-  });
-  res.json({ success: true, transactions: filtered.slice(0, 300) });
+  if (phone || userId) {
+    await hydrateUserLedgerFromSupabase(phone || userId, userId || undefined);
+  }
+  const merged = phone || userId
+    ? getUserMergedTransactions(phone || userId, userId || undefined, 2000)
+    : [];
+  res.json({ success: true, transactions: merged });
 });
 
-app.post('/api/wallet/ledger', (req: Request, res: Response) => {
+app.post('/api/wallet/ledger', async (req: Request, res: Response) => {
   try {
+    await ensureInitialSupabaseSync();
     const body = req.body || {};
     if (!body.type || body.amount === undefined) {
       return res.status(400).json({ error: 'Transaction type and amount required' });
@@ -3501,19 +3873,20 @@ app.post('/api/wallet/ledger', (req: Request, res: Response) => {
     if (isSyntheticTestAccount(body) || String(body.referenceId || body.reference || '').startsWith('TEST_')) {
       return res.status(403).json({ error: 'Synthetic test ledger entries are prohibited.' });
     }
-    const phoneStr = String(body.userPhone || '');
+    const phoneStr = String(body.userPhone || '').trim();
     const match = phoneStr ? findUserEntry(phoneStr) : undefined;
+    const txId = String(body.id || `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`);
     const tx: ServerWalletTx = {
-      id: String(body.id || `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`),
+      id: txId,
       userId: body.userId || match?.user.id,
-      userPhone: body.userPhone || match?.user.phoneNumber || '',
+      userPhone: phoneStr || match?.user.phoneNumber || '',
       userName: body.userName || match?.user.fullName || 'AGC User',
       type: body.type,
       title: String(body.title || body.description || body.type),
       description: String(body.description || body.title || body.type),
       amount: Math.abs(Number(body.amount) || 0),
       fee: Number(body.fee || 0),
-      balanceAfter: body.balanceAfter !== undefined ? Number(body.balanceAfter) : undefined,
+      balanceAfter: body.balanceAfter !== undefined && body.balanceAfter !== null ? Number(body.balanceAfter) : undefined,
       currency: body.currency || 'NGN',
       timestamp: body.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       createdAt: body.createdAt || new Date().toISOString(),
@@ -3528,22 +3901,29 @@ app.post('/api/wallet/ledger', (req: Request, res: Response) => {
       tx.type === 'game_wager' ||
       tx.type === 'game_win' ||
       Boolean(tx.metadata?.gameBetEscrow);
-    // Keep server wallet balance snapshot aligned on recorded non-game client debits/credits when user matches
-    if (!isProtectedGameTx && phoneStr && typeof body.balanceAfter === 'number') {
+    // Keep wallet transaction history complete for all recorded events; guard authoritative balance writes on protected game txs
+    if (phoneStr) {
       const w = getOrCreateServerWallet(phoneStr);
-      w.availableBalance = Math.max(0, Number(body.balanceAfter));
-      w.transactions = [saved, ...w.transactions.filter((t) => t.id !== saved.id)].slice(0, 100);
-      w.updatedAt = new Date().toISOString();
+      w.transactions = sortAndDedupeLedger([saved, ...w.transactions], 250);
+      if (!isProtectedGameTx && typeof body.balanceAfter === 'number') {
+        w.availableBalance = Math.max(0, Number(body.balanceAfter));
+        w.updatedAt = new Date().toISOString();
+      }
       serverWallets.set(w.phoneKey, w);
       saveWalletsFile();
-      if (match) {
+      if (!isProtectedGameTx && typeof body.balanceAfter === 'number' && match) {
         match.user.walletBalanceNgn = w.availableBalance;
         (match.user as any).updatedAt = w.updatedAt;
         usersByPhone.set(match.key, match.user);
         saveUsersFile();
+        pushAdminUserOverrideToSupabase(match.user);
       }
     }
-    res.json({ success: true, transaction: saved });
+    res.json({
+      success: true,
+      transaction: saved,
+      transactions: phoneStr ? getUserMergedTransactions(phoneStr, saved.userId, 500) : undefined,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to append ledger entry' });
   }
@@ -3572,8 +3952,9 @@ function hasActiveVerifiedBadgeServer(user?: RegisteredUser | null): boolean {
 }
 
 // REST: Atomic Verification Badge Upgrade (₦4,000/mo Blue Verified -> 50k Game Bet Limit)
-app.post('/api/wallet/upgrade-badge', (req: Request, res: Response) => {
+app.post('/api/wallet/upgrade-badge', async (req: Request, res: Response) => {
   try {
+    await ensureInitialSupabaseSync();
     const { phoneNumber, badge } = req.body || {};
     const cleanPhone = String(phoneNumber || '').trim();
     const targetBadge: 'blue' | 'gold' | 'creator_plus' =
@@ -3631,7 +4012,7 @@ app.post('/api/wallet/upgrade-badge', (req: Request, res: Response) => {
       metadata: { verificationBadge: targetBadge, expiresAt },
     };
 
-    wallet.transactions = [tx, ...wallet.transactions].slice(0, 100);
+    wallet.transactions = sortAndDedupeLedger([tx, ...wallet.transactions], 250);
     serverWallets.set(wallet.phoneKey, wallet);
     saveWalletsFile();
     appendUnifiedLedgerTx(tx);
@@ -3658,7 +4039,7 @@ app.post('/api/wallet/upgrade-badge', (req: Request, res: Response) => {
         availableBalance: wallet.availableBalance,
         escrowLockedBalance: wallet.escrowLockedBalance,
         currency: wallet.currency,
-        transactions: wallet.transactions,
+        transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
       },
     });
   } catch (err: any) {
@@ -3750,7 +4131,7 @@ app.post('/api/games/bet/lock', async (req: Request, res: Response) => {
             availableBalance: wallet.availableBalance,
             escrowLockedBalance: wallet.escrowLockedBalance,
             currency: wallet.currency,
-            transactions: wallet.transactions,
+            transactions: getUserMergedTransactions(cleanPlayer, undefined, 1000),
           },
         });
       }
@@ -3863,7 +4244,7 @@ app.post('/api/games/bet/lock', async (req: Request, res: Response) => {
         availableBalance: wallet.availableBalance,
         escrowLockedBalance: wallet.escrowLockedBalance,
         currency: wallet.currency,
-        transactions: wallet.transactions,
+        transactions: getUserMergedTransactions(cleanPlayer, undefined, 1000),
       },
     });
   } catch (err: any) {
@@ -3921,7 +4302,7 @@ app.post('/api/games/bet/settle', async (req: Request, res: Response) => {
               availableBalance: reqWallet.availableBalance,
               escrowLockedBalance: reqWallet.escrowLockedBalance,
               currency: reqWallet.currency,
-              transactions: reqWallet.transactions,
+              transactions: getUserMergedTransactions(reqPhoneStr, undefined, 1000),
             }
           : undefined,
       });
@@ -4167,7 +4548,11 @@ app.post('/api/games/bet/settle', async (req: Request, res: Response) => {
             availableBalance: reqWallet.availableBalance,
             escrowLockedBalance: reqWallet.escrowLockedBalance,
             currency: reqWallet.currency,
-            transactions: reqWallet.transactions,
+            transactions: getUserMergedTransactions(
+              reqPhoneStr || reqWallet.phoneNumber || reqWallet.phoneKey,
+              undefined,
+              1000
+            ),
           }
         : undefined,
     });
@@ -4177,10 +4562,18 @@ app.post('/api/games/bet/settle', async (req: Request, res: Response) => {
 });
 
 app.get('/api/admin/wallet-transactions', async (req: Request, res: Response) => {
+  await ensureInitialSupabaseSync();
   const q = String(req.query.q || '').trim().toLowerCase();
   const typeFilter = String(req.query.type || '').trim();
 
-  // Merge any persisted Supabase wallet_transactions so cold container restarts don't hide money trail
+  // Merge persisted Supabase ledger slice + wallet_transactions so cold container restarts never hide money trail
+  try {
+    const sbLedger = await fetchSupabaseAdminSlice(ADMIN_SYS_LEDGER_KEY).catch(() => null);
+    if (sbLedger && syncLedgerFromSupabaseHook) {
+      syncLedgerFromSupabaseHook(sbLedger);
+    }
+  } catch (_) {}
+
   const sbKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
   if (SUPABASE_URL && sbKey) {
     try {
@@ -4194,38 +4587,31 @@ app.get('/api/admin/wallet-transactions', async (req: Request, res: Response) =>
       if (sbRes.ok) {
         const sbRows = await sbRes.json();
         if (Array.isArray(sbRows) && sbRows.length > 0) {
-          const existingIds = new Set(unifiedLedger.map((t) => t.id));
-          let added = false;
+          const recovered: ServerWalletTx[] = [];
           for (const row of sbRows) {
-            if (!row?.id || existingIds.has(row.id)) continue;
-            existingIds.add(row.id);
-            unifiedLedger.push({
-              id: String(row.id),
-              userId: row.user_id || undefined,
-              userPhone: row.user_phone || undefined,
-              userName: row.user_name || undefined,
+            const n = normalizeServerWalletTx({
+              id: row.id,
+              userId: row.user_id,
+              userPhone: row.user_phone,
+              userName: row.user_name,
               type: row.type,
-              title: row.title || row.description || row.type,
-              description: row.description || row.title || row.type,
-              amount: Number(row.amount || 0),
-              fee: Number(row.fee || 0),
-              balanceAfter: row.balance_after !== null && row.balance_after !== undefined ? Number(row.balance_after) : undefined,
-              currency: row.currency || 'NGN',
-              timestamp: row.created_at
-                ? new Date(row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : '',
-              createdAt: row.created_at || new Date().toISOString(),
-              status: row.status || 'completed',
-              reference: row.reference || row.reference_id || row.id,
-              referenceId: row.reference_id || row.reference || row.id,
-              channel: row.channel || 'wallet',
-              metadata: row.metadata || {},
+              title: row.title,
+              description: row.description,
+              amount: row.amount,
+              fee: row.fee,
+              balanceAfter: row.balance_after,
+              currency: row.currency,
+              createdAt: row.created_at,
+              status: row.status,
+              reference: row.reference,
+              referenceId: row.reference_id,
+              channel: row.channel,
+              metadata: row.metadata,
             });
-            added = true;
+            if (n) recovered.push(n);
           }
-          if (added) {
-            unifiedLedger.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-            unifiedLedger = unifiedLedger.slice(0, 5000);
+          if (recovered.length > 0) {
+            unifiedLedger = sortAndDedupeLedger([...unifiedLedger, ...recovered], 10000);
             saveUnifiedLedgerFile();
           }
         }
@@ -4244,7 +4630,7 @@ app.get('/api/admin/wallet-transactions', async (req: Request, res: Response) =>
       (tx.type || '').toLowerCase().includes(q)
     );
   });
-  res.json({ success: true, transactions: rows.slice(0, 500), total: rows.length });
+  res.json({ success: true, transactions: rows.slice(0, 1000), total: rows.length });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -4377,7 +4763,8 @@ function broadcastEscrowOrderUpdate(order: ServerEscrowOrder) {
   }
 }
 
-app.get('/api/escrow/orders', (req: Request, res: Response) => {
+app.get('/api/escrow/orders', async (req: Request, res: Response) => {
+  await ensureInitialSupabaseSync();
   const viewerPhone = String(req.query.viewerPhone || '').trim();
   const isAdminView = String(req.query.admin || '') === 'true';
   const allOrders = Array.from(serverEscrowOrders.values()).sort(
@@ -4398,8 +4785,9 @@ app.get('/api/escrow/orders', (req: Request, res: Response) => {
   });
 });
 
-app.post('/api/escrow/create', (req: Request, res: Response) => {
+app.post('/api/escrow/create', async (req: Request, res: Response) => {
   try {
+    await ensureInitialSupabaseSync();
     const body = req.body || {};
     const {
       id,
@@ -4543,7 +4931,7 @@ app.post('/api/escrow/create', (req: Request, res: Response) => {
         availableBalance: buyerWallet.availableBalance,
         escrowLockedBalance: buyerWallet.escrowLockedBalance,
         currency: buyerWallet.currency,
-        transactions: buyerWallet.transactions,
+        transactions: getUserMergedTransactions(String(buyerPhone), undefined, 1000),
       },
     });
   } catch (err: any) {
@@ -4551,7 +4939,8 @@ app.post('/api/escrow/create', (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/escrow/approve-release', (req: Request, res: Response) => {
+app.post('/api/escrow/approve-release', async (req: Request, res: Response) => {
+  await ensureInitialSupabaseSync();
   const { orderId, actorPhone } = req.body || {};
   const order = serverEscrowOrders.get(String(orderId || ''));
   if (!order) {
@@ -4591,7 +4980,8 @@ app.post('/api/escrow/approve-release', (req: Request, res: Response) => {
   });
 });
 
-app.post('/api/escrow/claim', (req: Request, res: Response) => {
+app.post('/api/escrow/claim', async (req: Request, res: Response) => {
+  await ensureInitialSupabaseSync();
   const { orderId, pin, claimantPhone } = req.body || {};
   const order = serverEscrowOrders.get(String(orderId || ''));
   if (!order) {
@@ -4688,7 +5078,7 @@ app.post('/api/escrow/claim', (req: Request, res: Response) => {
     channel: 'wallet',
     metadata: { orderId: order.id, buyerName: order.buyerName, buyerPhone: order.buyerPhone },
   };
-  sellerWallet.transactions = [relTx, ...sellerWallet.transactions].slice(0, 100);
+  sellerWallet.transactions = sortAndDedupeLedger([relTx, ...sellerWallet.transactions], 250);
   serverWallets.set(sellerWallet.phoneKey, sellerWallet);
   saveWalletsFile();
   appendUnifiedLedgerTx(relTx);
@@ -4729,12 +5119,13 @@ app.post('/api/escrow/claim', (req: Request, res: Response) => {
       availableBalance: sellerWallet.availableBalance,
       escrowLockedBalance: sellerWallet.escrowLockedBalance,
       currency: sellerWallet.currency,
-      transactions: sellerWallet.transactions,
+      transactions: getUserMergedTransactions(sellerTarget, undefined, 1000),
     },
   });
 });
 
-app.post('/api/escrow/dispute', (req: Request, res: Response) => {
+app.post('/api/escrow/dispute', async (req: Request, res: Response) => {
+  await ensureInitialSupabaseSync();
   const { orderId, reason, actorName } = req.body || {};
   const order = serverEscrowOrders.get(String(orderId || ''));
   if (!order) {
@@ -5548,7 +5939,7 @@ app.post('/api/tasks/create', async (req: Request, res: Response) => {
         availableBalance: wallet.availableBalance,
         escrowLockedBalance: wallet.escrowLockedBalance,
         currency: wallet.currency,
-        transactions: wallet.transactions,
+        transactions: getUserMergedTransactions(cleanPhone, undefined, 1000),
       },
     });
   } catch (err: any) {
@@ -5896,7 +6287,7 @@ app.post('/api/tasks/:taskId/close', async (req: Request, res: Response) => {
         availableBalance: creatorWallet.availableBalance,
         escrowLockedBalance: creatorWallet.escrowLockedBalance,
         currency: creatorWallet.currency,
-        transactions: creatorWallet.transactions,
+        transactions: getUserMergedTransactions(task.creatorPhone, undefined, 1000),
       },
       message:
         refundAmt > 0
@@ -6044,7 +6435,8 @@ const ALLOWED_AGC_BILL_CATEGORIES = new Set([
 ]);
 
 // REST: Atomic Send My Bill (Pay on Behalf - Strictly AGC System Features)
-app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
+app.post('/api/wallet/pay-bill', async (req: Request, res: Response) => {
+  await ensureInitialSupabaseSync();
   const {
     billId,
     payerPhone,
@@ -6129,7 +6521,7 @@ app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
     channel: payChannel,
     metadata: { billId, requesterPhone, category, featureKey, featureRefId },
   };
-  payerWallet.transactions = [payerTx, ...payerWallet.transactions].slice(0, 100);
+  payerWallet.transactions = sortAndDedupeLedger([payerTx, ...payerWallet.transactions], 250);
 
   requesterWallet.availableBalance += numericAmt;
   requesterWallet.updatedAt = nowIso;
@@ -6153,7 +6545,7 @@ app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
     channel: payChannel,
     metadata: { billId, payerPhone, category, featureKey, featureRefId },
   };
-  requesterWallet.transactions = [reqTx, ...requesterWallet.transactions].slice(0, 100);
+  requesterWallet.transactions = sortAndDedupeLedger([reqTx, ...requesterWallet.transactions], 250);
 
   serverWallets.set(payerWallet.phoneKey, payerWallet);
   serverWallets.set(requesterWallet.phoneKey, requesterWallet);
@@ -6165,18 +6557,19 @@ app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
     payerMatch.user.walletBalanceNgn = payerWallet.availableBalance;
     usersByPhone.set(payerMatch.key, payerMatch.user);
     saveUsersFile();
+    pushAdminUserOverrideToSupabase(payerMatch.user);
   }
   if (reqMatch) {
     reqMatch.user.walletBalanceNgn = requesterWallet.availableBalance;
     usersByPhone.set(reqMatch.key, reqMatch.user);
     saveUsersFile();
-    const cleanReq = (reqMatch.user.cleanPhone || reqMatch.key).replace(/\D/g, '');
-    io.to(`phone:${cleanReq}`).emit('wallet_updated', {
-      balance: requesterWallet.availableBalance,
-      escrowLockedBalance: requesterWallet.escrowLockedBalance,
-      transactions: requesterWallet.transactions,
-      note: `${payerName || 'Someone'} paid your bill (${title || 'Bill'})!`,
-    });
+    pushAdminUserOverrideToSupabase(reqMatch.user);
+    emitWalletUpdateToPhone(
+      String(requesterPhone),
+      requesterWallet,
+      `${payerName || 'Someone'} paid your bill (${title || 'Bill'})!`,
+      ref
+    );
   }
 
   return res.json({
@@ -6187,7 +6580,7 @@ app.post('/api/wallet/pay-bill', (req: Request, res: Response) => {
       availableBalance: payerWallet.availableBalance,
       escrowLockedBalance: payerWallet.escrowLockedBalance,
       currency: payerWallet.currency,
-      transactions: payerWallet.transactions,
+      transactions: getUserMergedTransactions(String(payerPhone), undefined, 1000),
     },
   });
 });
@@ -8205,7 +8598,8 @@ app.get('/api/admin/audit/:refId', (req: Request, res: Response) => {
 const DUAL_ADMIN_THRESHOLD_NGN = 100000;
 const EXPECTED_SECONDARY_ADMIN_PIN = (process.env.ADMIN_SECONDARY_PIN || '2468').trim();
 
-app.post('/api/admin/escrow/resolve', (req: Request, res: Response) => {
+app.post('/api/admin/escrow/resolve', async (req: Request, res: Response) => {
+  await ensureInitialSupabaseSync();
   const { orderId, action, note, amountNgn, buyerName, sellerName, paystackRef, actorName, secondaryAdminName, secondaryAdminPin } = req.body || {};
   if (!orderId || !action) {
     return res.status(400).json({ error: 'orderId and action are required' });
@@ -8516,8 +8910,9 @@ app.post('/api/artisans/register', (req: Request, res: Response) => {
 });
 
 // Sponsored Ads Payment Submission & Admin Review (Approve / Reject + Refund)
-app.post('/api/ads/submit', (req: Request, res: Response) => {
+app.post('/api/ads/submit', async (req: Request, res: Response) => {
   try {
+    await ensureInitialSupabaseSync();
     const body = req.body || {};
     const adFee = Number((systemConfig as any).sponsoredAdFeeNgn ?? 2500);
     const phone = String(body.submittedByPhone || '').trim();
@@ -8548,7 +8943,7 @@ app.post('/api/ads/submit', (req: Request, res: Response) => {
           referenceId: refId,
           channel: 'wallet',
         };
-        w.transactions = [tx, ...w.transactions].slice(0, 100);
+        w.transactions = sortAndDedupeLedger([tx, ...w.transactions], 250);
         serverWallets.set(w.phoneKey, w);
         saveWalletsFile();
         appendUnifiedLedgerTx(tx);
@@ -8598,8 +8993,9 @@ app.post('/api/ads/submit', (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/admin/ads/review', (req: Request, res: Response) => {
+app.post('/api/admin/ads/review', async (req: Request, res: Response) => {
   try {
+    await ensureInitialSupabaseSync();
     const { adId, decision, reason } = req.body || {};
     if (!adId || !['approve', 'reject'].includes(decision)) {
       return res.status(400).json({ error: 'adId and decision (approve | reject) required' });
@@ -8651,7 +9047,7 @@ app.post('/api/admin/ads/review', (req: Request, res: Response) => {
         referenceId: targetAd.paymentReference || targetAd.id,
         channel: 'wallet',
       };
-      w.transactions = [tx, ...w.transactions].slice(0, 100);
+      w.transactions = sortAndDedupeLedger([tx, ...w.transactions], 250);
       serverWallets.set(w.phoneKey, w);
       saveWalletsFile();
       appendUnifiedLedgerTx(tx);
@@ -8659,14 +9055,14 @@ app.post('/api/admin/ads/review', (req: Request, res: Response) => {
         match.user.walletBalanceNgn = w.availableBalance;
         usersByPhone.set(match.key, match.user);
         saveUsersFile();
-        const cleanRec = (match.user.cleanPhone || match.key).replace(/\D/g, '');
-        io.to(`phone:${cleanRec}`).emit('wallet_updated', {
-          balance: w.availableBalance,
-          escrowLockedBalance: w.escrowLockedBalance,
-          transactions: w.transactions,
-          note: `Refunded ₦${refundAmt.toLocaleString()} for declined ad "${targetAd.brandName}"`,
-        });
+        pushAdminUserOverrideToSupabase(match.user);
       }
+      emitWalletUpdateToPhone(
+        String(targetAd.submittedByPhone),
+        w,
+        `Refunded ₦${refundAmt.toLocaleString()} for declined ad "${targetAd.brandName}"`,
+        refId
+      );
     }
 
     appendAuditEntry({
@@ -9094,6 +9490,7 @@ app.post('/api/admin/users/:phone/unban', async (req: Request, res: Response) =>
 // Admin Wallet Direct Adjuster
 app.post('/api/admin/users/:phone/adjust-wallet', async (req: Request, res: Response) => {
   try {
+    await ensureInitialSupabaseSync();
     const { phone } = req.params;
     const { newBalance, deltaNgn, note, phoneNumber, fullName, avatarUrl } = req.body || {};
     const match = await ensureUserEntry(phone, { phoneNumber, fullName, avatarUrl });
@@ -9140,7 +9537,7 @@ app.post('/api/admin/users/:phone/adjust-wallet', async (req: Request, res: Resp
           channel: 'wallet',
           metadata: { adminAdjusted: true, previousBalance: prevBal, newBalance: balance, note },
         };
-        srvWal.transactions = [adjTx, ...srvWal.transactions].slice(0, 100);
+        srvWal.transactions = sortAndDedupeLedger([adjTx, ...srvWal.transactions], 250);
         appendUnifiedLedgerTx(adjTx);
       }
       serverWallets.set(srvWal.phoneKey, srvWal);
@@ -9156,12 +9553,12 @@ app.post('/api/admin/users/:phone/adjust-wallet', async (req: Request, res: Resp
         details: `New balance: ₦${balance.toLocaleString()} (${note || 'Direct adjustment'})`,
       });
       io.emit('user_updated', user);
-      io.to(`phone:${cleanKey}`).emit('wallet_updated', {
-        balance,
-        escrowLockedBalance: srvWal.escrowLockedBalance,
-        transactions: srvWal.transactions,
-        note: note || 'Adjusted by administrator',
-      });
+      emitWalletUpdateToPhone(
+        user.phoneNumber || cleanKey,
+        srvWal,
+        note || 'Adjusted by administrator',
+        `WAL_ADM_${Date.now()}`
+      );
       return res.json({ success: true, user, balance });
     }
     res.status(404).json({ error: 'User not found' });
@@ -9558,7 +9955,8 @@ app.get('/api/outside/rsvps', (req: Request, res: Response) => {
   return res.json({ success: true, rsvps: list });
 });
 
-app.post('/api/outside/rsvp', (req: Request, res: Response) => {
+app.post('/api/outside/rsvp', async (req: Request, res: Response) => {
+  await ensureInitialSupabaseSync();
   const {
     partyId,
     userId,
@@ -9650,7 +10048,7 @@ app.post('/api/outside/rsvp', (req: Request, res: Response) => {
       channel: resolvedMethod === 'paystack' ? 'paystack' : 'wallet',
       metadata: { partyId: party.id, venueName: party.venueName, city: party.city },
     };
-    attendeeWallet.transactions = [ticketTx, ...attendeeWallet.transactions].slice(0, 100);
+    attendeeWallet.transactions = sortAndDedupeLedger([ticketTx, ...attendeeWallet.transactions], 250);
     serverWallets.set(attendeeWallet.phoneKey, attendeeWallet);
     appendUnifiedLedgerTx(ticketTx);
     updatedAttendeeWallet = attendeeWallet;
@@ -9689,7 +10087,7 @@ app.post('/api/outside/rsvp', (req: Request, res: Response) => {
         channel: resolvedMethod === 'paystack' ? 'paystack' : 'wallet',
         metadata: { partyId: party.id, buyerPhone: userPhone },
       };
-      orgWallet.transactions = [orgTx, ...orgWallet.transactions].slice(0, 100);
+      orgWallet.transactions = sortAndDedupeLedger([orgTx, ...orgWallet.transactions], 250);
       serverWallets.set(orgWallet.phoneKey, orgWallet);
       appendUnifiedLedgerTx(orgTx);
       if (orgMatch) {
@@ -9741,7 +10139,7 @@ app.post('/api/outside/rsvp', (req: Request, res: Response) => {
           availableBalance: updatedAttendeeWallet.availableBalance,
           escrowLockedBalance: updatedAttendeeWallet.escrowLockedBalance,
           currency: updatedAttendeeWallet.currency,
-          transactions: updatedAttendeeWallet.transactions,
+          transactions: getUserMergedTransactions(attendeeKey, String(userId || '') || undefined, 1000),
         }
       : undefined,
   });
@@ -11126,13 +11524,13 @@ async function startServer() {
       }
     })();
 
-    app.get('/sw.js', (_req: Request, res: Response) => {
+    app.get(['/sw.js', '/dev-sw.js'], (_req: Request, res: Response) => {
       res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.send(
         "self.addEventListener('install', () => self.skipWaiting());\n" +
         "self.addEventListener('activate', (e) => e.waitUntil((async () => {\n" +
-        "  try { const keys = await caches.keys(); await Promise.all(keys.filter(k => k.startsWith('agc-cache-')).map(k => caches.delete(k))); } catch (_) {}\n" +
+        "  try { const keys = await caches.keys(); await Promise.all(keys.filter(k => k.startsWith('agc-') || k.startsWith('workbox-') || k.startsWith('vite-pwa')).map(k => caches.delete(k))); } catch (_) {}\n" +
         "  try { await self.registration.unregister(); } catch (_) {}\n" +
         "})()));\n"
       );

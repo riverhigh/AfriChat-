@@ -76,10 +76,7 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
-          type: 'module',
-          navigateFallback: '/',
-          navigateFallbackAllowlist: [/^\/$/],
+          enabled: false,
         },
       }),
     ],

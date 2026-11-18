@@ -859,7 +859,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 w-full h-full bg-[#06020d] flex items-center justify-center p-0 sm:p-4 overflow-y-auto selection:bg-purple-500 selection:text-white">
+    <div className="fixed inset-0 z-50 w-full h-full bg-[#06020d] flex items-start sm:items-center justify-center p-0 sm:p-4 overflow-y-auto selection:bg-purple-500 selection:text-white">
       {/* Background ambient lighting */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute -top-32 -left-32 w-96 h-96 bg-purple-700/20 rounded-full blur-[120px]" />
@@ -907,7 +907,7 @@ export const WhatsAppPhoneAuth: React.FC = () => {
       )}
 
       {/* Mobile-First Web App Frame */}
-      <div className="w-full max-w-md min-h-screen sm:min-h-[700px] sm:max-h-[880px] bg-gradient-to-b from-[#180a33] via-[#0e0620] to-[#080314] text-white flex flex-col justify-between rounded-none sm:rounded-[36px] sm:border sm:border-purple-500/30 sm:shadow-2xl sm:shadow-purple-950/70 overflow-hidden relative z-10">
+      <div className="w-full max-w-md min-h-full sm:min-h-[620px] sm:max-h-[880px] sm:my-auto bg-gradient-to-b from-[#180a33] via-[#0e0620] to-[#080314] text-white flex flex-col justify-between rounded-none sm:rounded-[36px] sm:border sm:border-purple-500/30 sm:shadow-2xl sm:shadow-purple-950/70 overflow-hidden relative z-10">
         
         {/* ========================================================================= */}
         {/* MOBILE HEADER: BRAND & PROGRESS */}

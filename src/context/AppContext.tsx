@@ -670,6 +670,99 @@ function persistPartitionedMessages(msgsToSave: Record<string, ChatMessage[]>, p
   } catch (_) {}
 }
 
+function extractClientTxTs(tx: any): number {
+  if (!tx) return 0;
+  if (typeof tx.createdAt === 'string' && tx.createdAt) {
+    const t = Date.parse(tx.createdAt);
+    if (!Number.isNaN(t) && t > 0) return t;
+  }
+  const idStr = String(tx.id || '');
+  const m = idStr.match(/1[6-9]\d{11}/);
+  if (m) return Number(m[0]);
+  return 0;
+}
+
+function isSyntheticClientTx(tx: any): boolean {
+  if (!tx) return false;
+  const ref = String(tx.referenceId || tx.reference || '');
+  return ref.startsWith('TEST_');
+}
+
+export function mergeWalletTransactions(
+  incoming?: WalletTransaction[],
+  existing?: WalletTransaction[],
+  maxLen = 2000
+): WalletTransaction[] {
+  const byId = new Map<string, WalletTransaction>();
+  const addItem = (raw: WalletTransaction) => {
+    if (!raw || !raw.id || isSyntheticClientTx(raw)) return;
+    const prev = byId.get(raw.id);
+    if (!prev) {
+      byId.set(raw.id, raw);
+      return;
+    }
+    byId.set(raw.id, {
+      ...prev,
+      ...raw,
+      description: raw.description || prev.description,
+      reference: raw.reference || prev.reference,
+      referenceId: raw.referenceId || prev.referenceId,
+      createdAt: raw.createdAt || prev.createdAt,
+      balanceAfter: typeof raw.balanceAfter === 'number' ? raw.balanceAfter : prev.balanceAfter,
+      fee: typeof raw.fee === 'number' ? raw.fee : prev.fee,
+      metadata: raw.metadata || prev.metadata,
+    });
+  };
+  if (Array.isArray(existing)) existing.forEach(addItem);
+  if (Array.isArray(incoming)) incoming.forEach(addItem);
+  return Array.from(byId.values())
+    .sort((a, b) => extractClientTxTs(b) - extractClientTxTs(a))
+    .slice(0, maxLen);
+}
+
+function getPendingLedgerStorageKey(phoneNumber?: string): string {
+  const clean = phoneNumber ? normalizePhoneDigits(phoneNumber) : getSavedUserCleanPhone();
+  return clean ? `AGC_pending_ledger_txs_${clean}` : 'AGC_pending_ledger_txs';
+}
+
+function loadPendingLedgerTxs(phoneNumber?: string): WalletTransaction[] {
+  try {
+    const raw = localStorage.getItem(getPendingLedgerStorageKey(phoneNumber));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePendingLedgerTxs(phoneNumber: string | undefined, list: WalletTransaction[]) {
+  try {
+    const key = getPendingLedgerStorageKey(phoneNumber);
+    if (!list || list.length === 0) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, JSON.stringify(list.slice(0, 300)));
+    }
+  } catch (_) {}
+}
+
+function enqueuePendingLedgerTx(phoneNumber: string | undefined, tx: WalletTransaction) {
+  if (!tx?.id || isSyntheticClientTx(tx)) return;
+  const existing = loadPendingLedgerTxs(phoneNumber);
+  if (existing.some((t) => t.id === tx.id)) return;
+  savePendingLedgerTxs(phoneNumber, [tx, ...existing]);
+}
+
+function removePendingLedgerTxIds(phoneNumber: string | undefined, ids: Set<string>) {
+  if (ids.size === 0) return;
+  const existing = loadPendingLedgerTxs(phoneNumber);
+  if (existing.length === 0) return;
+  savePendingLedgerTxs(
+    phoneNumber,
+    existing.filter((t) => !ids.has(t.id))
+  );
+}
+
 function persistPartitionedWallet(walletToSave: UserWallet, phoneNumber?: string) {
   const clean = phoneNumber ? normalizePhoneDigits(phoneNumber) : getSavedUserCleanPhone();
   try {
@@ -690,7 +783,7 @@ function sanitizeLoadedWallet(parsed: any): UserWallet | null {
     availableBalance: typeof parsed.availableBalance === 'number' && Number.isFinite(parsed.availableBalance) ? parsed.availableBalance : 0,
     escrowLockedBalance: typeof parsed.escrowLockedBalance === 'number' && Number.isFinite(parsed.escrowLockedBalance) ? parsed.escrowLockedBalance : 0,
     currency: parsed.currency || 'NGN',
-    transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
+    transactions: Array.isArray(parsed.transactions) ? mergeWalletTransactions(parsed.transactions, []) : [],
   };
 }
 
@@ -1542,6 +1635,7 @@ interface AppContextType {
   toggleFollowCreator: (creatorId: string) => { success: boolean; isFollowed: boolean };
   buyShowTicket: (showId: string) => { success: boolean; ticket?: CreatorShowTicket; message: string };
   buyCreatorSong: (songId: string) => { success: boolean; song?: CreatorSong; message: string };
+  tipCreator: (creatorId: string, creatorName: string, amount: number, note?: string) => { success: boolean; message: string };
   createCreatorPost: (content: string, isLocked: boolean, mediaType?: 'image' | 'video' | 'audio_leak' | 'text', mediaUrl?: string) => void;
   createCreatorShow: (show: Omit<CreatorShowTicket, 'id' | 'totalSold' | 'isPurchasedByMe'>) => void;
   createCreatorSong: (song: Omit<CreatorSong, 'id' | 'playsCount' | 'salesCount' | 'isPurchasedByMe'>) => void;
@@ -3995,6 +4089,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
+  const tipCreator = (creatorId: string, creatorName: string, amount: number, note?: string) => {
+    const cleanAmount = Math.round(Number(amount) || 0);
+    if (cleanAmount <= 0) {
+      return { success: false, message: 'Enter a valid tip amount.' };
+    }
+    if ((walletRef.current.availableBalance || 0) < cleanAmount) {
+      return { success: false, message: 'Insufficient wallet balance. Top up your AGC Naira wallet.' };
+    }
+    const creator = creators.find((c) => c.id === creatorId);
+    const displayName = creator?.name || creatorName || 'Creator';
+    const nextBalance = Math.max(0, Number(walletRef.current.availableBalance || 0) - cleanAmount);
+    const tx = recordLedgerTransaction({
+      id: `tx_creator_tip_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
+      type: 'creator_tip',
+      title: `Tip to ${displayName}`,
+      description: note?.trim() ? `Creator Hub tip to ${displayName}: "${note.trim()}"` : `Creator Hub fan tip to ${displayName}`,
+      amount: cleanAmount,
+      fee: 0,
+      balanceAfter: nextBalance,
+      currency: 'NGN',
+      referenceId: `CTIP_${creatorId}_${Date.now()}`,
+      channel: 'wallet',
+      metadata: { creatorId, creatorName: displayName, note: note?.trim() || undefined },
+    });
+
+    setWallet((prev) => {
+      const nextWallet: UserWallet = {
+        ...prev,
+        availableBalance: Math.max(0, Number(prev.availableBalance || 0) - cleanAmount),
+        transactions: mergeWalletTransactions([tx], prev.transactions),
+      };
+      walletRef.current = nextWallet;
+      return nextWallet;
+    });
+
+    if (creator) {
+      setCreators((prev) =>
+        prev.map((c) => (c.id === creatorId ? { ...c, totalEarnings: (c.totalEarnings || 0) + cleanAmount } : c))
+      );
+    }
+
+    return {
+      success: true,
+      message: `🎉 Tipped ₦${cleanAmount.toLocaleString()} to ${displayName}!`,
+    };
+  };
+
   const createCreatorPost = (
     content: string,
     isLocked: boolean,
@@ -4131,16 +4272,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('AGC_artisan_station', JSON.stringify(newStation));
 
     if (newTx) {
-      fetch('/api/wallet/ledger', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...newTx,
-          userId: currentUser.id,
-          userPhone: currentUser.phoneNumber,
-          userName: currentUser.fullName,
-        }),
-      }).catch(() => {});
+      recordLedgerTransaction({
+        id: newTx.id,
+        type: newTx.type,
+        title: newTx.title,
+        description: newTx.description || newTx.title,
+        amount: newTx.amount,
+        fee: newTx.fee || 0,
+        balanceAfter: newTx.balanceAfter,
+        currency: newTx.currency,
+        referenceId: newTx.referenceId || newTx.reference,
+        channel: newTx.channel || 'wallet',
+      });
     }
 
     fetch('/api/artisans/register', {
@@ -4771,6 +4914,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const loadedPhoneForChatsRef = useRef<string>(getSavedUserCleanPhone());
   const isHydratingChatsRef = useRef<boolean>(false);
   const loadedPhoneForWalletRef = useRef<string>(getSavedUserCleanPhone());
+  const hasHydratedServerWalletForPhoneRef = useRef<string>('');
   const isHydratingWalletRef = useRef<boolean>(false);
   const chatBackupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoginAtRef = useRef<number>(0);
@@ -4780,6 +4924,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     (u: { id?: string; phoneNumber?: string; fullName?: string; username?: string; avatarUrl?: string }) => void
   >(() => {});
   const syncMissedMessagesRef = useRef<(specificChatId?: string) => void>(() => {});
+  const flushPendingLedgerTransactionsRef = useRef<(phoneOverride?: string) => Promise<void>>(async () => {});
 
   useEffect(() => {
     chatsRef.current = chats;
@@ -4833,8 +4978,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     persistPartitionedChats(chats, currentUser.phoneNumber);
     if (chatBackupTimerRef.current) clearTimeout(chatBackupTimerRef.current);
     chatBackupTimerRef.current = setTimeout(() => {
+      const canIncludeWallet =
+        hasHydratedServerWalletForPhoneRef.current === norm || (walletRef.current?.transactions?.length || 0) > 0;
       saveUserChatsBackupToSupabase(currentUser.phoneNumber, chatsRef.current, messagesRef.current, {
-        wallet: walletRef.current,
+        ...(canIncludeWallet ? { wallet: walletRef.current } : {}),
         userProfile: currentUserRef.current,
       }).catch(() => {});
     }, 1500);
@@ -4847,8 +4994,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     persistPartitionedMessages(messages, currentUser.phoneNumber);
     if (chatBackupTimerRef.current) clearTimeout(chatBackupTimerRef.current);
     chatBackupTimerRef.current = setTimeout(() => {
+      const canIncludeWallet =
+        hasHydratedServerWalletForPhoneRef.current === norm || (walletRef.current?.transactions?.length || 0) > 0;
       saveUserChatsBackupToSupabase(currentUser.phoneNumber, chatsRef.current, messagesRef.current, {
-        wallet: walletRef.current,
+        ...(canIncludeWallet ? { wallet: walletRef.current } : {}),
         userProfile: currentUserRef.current,
       }).catch(() => {});
     }, 1500);
@@ -4913,36 +5062,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .catch(() => {});
 
     let cancelled = false;
-    // Always hydrate authoritative wallet balance & unified ledger directly from the backend server
-    Promise.all([
-      fetch(`/api/wallet/${encodeURIComponent(phone)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`/api/wallet/transactions?phone=${encodeURIComponent(phone)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    ])
-      .then(([res, txRes]) => {
-        if (cancelled || !res?.success || !res?.wallet) return;
-        const baseTxs: WalletTransaction[] = Array.isArray(res.wallet.transactions) ? res.wallet.transactions : [];
-        const ledgerTxs: WalletTransaction[] = Array.isArray(txRes?.transactions) ? txRes.transactions : [];
-        const txMap = new Map<string, WalletTransaction>();
-        [...ledgerTxs, ...baseTxs].forEach((tx) => {
-          if (tx?.id && !txMap.has(tx.id)) txMap.set(tx.id, tx);
-        });
-        const serverWallet: UserWallet = {
-          availableBalance: Number(res.wallet.availableBalance) || 0,
-          escrowLockedBalance: Number(res.wallet.escrowLockedBalance) || 0,
-          currency: res.wallet.currency || 'NGN',
-          transactions: Array.from(txMap.values()),
-        };
-        isHydratingWalletRef.current = true;
-        suppressInitialCreditForPhoneRef.current = norm;
-        setWallet(serverWallet);
-        walletRef.current = serverWallet;
-        persistPartitionedWallet(serverWallet, phone);
-        isHydratingWalletRef.current = false;
-      })
-      .catch(() => {});
+    // First flush any queued offline ledger entries, then hydrate authoritative wallet balance & unified ledger from backend
+    const hydrateServerWallet = async () => {
+      await flushPendingLedgerTransactionsRef.current(phone).catch(() => {});
+      const [res, txRes] = await Promise.all([
+        fetch(`/api/wallet/${encodeURIComponent(phone)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        fetch(`/api/wallet/transactions?phone=${encodeURIComponent(phone)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      ]);
+      if (cancelled || !res?.success || !res?.wallet) return;
+      const baseTxs: WalletTransaction[] = Array.isArray(res.wallet.transactions) ? res.wallet.transactions : [];
+      const ledgerTxs: WalletTransaction[] = Array.isArray(txRes?.transactions) ? txRes.transactions : [];
+      const serverTxs = mergeWalletTransactions(ledgerTxs, baseTxs);
+      const mergedTxs = mergeWalletTransactions(serverTxs, walletRef.current.transactions);
+      const serverWallet: UserWallet = {
+        availableBalance: Number(res.wallet.availableBalance) || 0,
+        escrowLockedBalance: Number(res.wallet.escrowLockedBalance) || 0,
+        currency: res.wallet.currency || 'NGN',
+        transactions: mergedTxs,
+      };
+      isHydratingWalletRef.current = true;
+      suppressInitialCreditForPhoneRef.current = norm;
+      hasHydratedServerWalletForPhoneRef.current = norm;
+      setWallet(serverWallet);
+      walletRef.current = serverWallet;
+      persistPartitionedWallet(serverWallet, phone);
+      isHydratingWalletRef.current = false;
+
+      // Backfill any surviving local-only transactions (excluding synthetic refs) to server DB ledger without altering balances
+      const serverIdSet = new Set(serverTxs.map((t) => t.id));
+      const localOnly = mergedTxs.filter((t) => t?.id && !serverIdSet.has(t.id) && !isSyntheticClientTx(t));
+      for (const ltx of localOnly.slice(0, 60)) {
+        if (cancelled) break;
+        await fetch('/api/wallet/ledger', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...ltx,
+            userId: ltx.userId || currentUserRef.current?.id,
+            userPhone: ltx.userPhone || phone,
+            userName: ltx.userName || currentUserRef.current?.fullName,
+          }),
+        }).catch(() => null);
+      }
+    };
+    void hydrateServerWallet().catch(() => {});
 
     fetchUserChatsBackupFromSupabase(phone)
-      .then((remote) => {
+      .then(async (remote) => {
         if (cancelled || !remote) return;
         if (remote.chats.length > 0 || Object.keys(remote.messages).length > 0) {
           const merged = mergeChatThreadsAndMessages(
@@ -4959,6 +5125,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         // Security rule: never overwrite authoritative server wallet balances from client backup snapshots.
+        // Recover ONLY surviving historical transactions from Supabase chat backup into merged ledger & backfill DB.
+        const remoteTxs = Array.isArray(remote.accountSnapshot?.wallet?.transactions)
+          ? (remote.accountSnapshot!.wallet!.transactions as WalletTransaction[]).filter((t) => t?.id && !isSyntheticClientTx(t))
+          : [];
+        if (remoteTxs.length > 0) {
+          const existingIds = new Set((walletRef.current.transactions || []).map((t) => t.id));
+          const missingTxs = remoteTxs.filter((t) => !existingIds.has(t.id));
+          isHydratingWalletRef.current = true;
+          const healedTransactions = mergeWalletTransactions(remoteTxs, walletRef.current.transactions);
+          const healedWallet: UserWallet = {
+            ...walletRef.current,
+            transactions: healedTransactions,
+          };
+          setWallet(healedWallet);
+          walletRef.current = healedWallet;
+          persistPartitionedWallet(healedWallet, phone);
+          isHydratingWalletRef.current = false;
+
+          for (const rtx of missingTxs.slice(0, 60)) {
+            if (cancelled) break;
+            await fetch('/api/wallet/ledger', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                ...rtx,
+                userId: rtx.userId || currentUserRef.current?.id,
+                userPhone: rtx.userPhone || phone,
+                userName: rtx.userName || currentUserRef.current?.fullName,
+              }),
+            }).catch(() => null);
+          }
+        }
 
         // Restore custom profile fields from Supabase if local missed them (or remote is newer and not during fresh edit)
         const remoteProf = remote.accountSnapshot?.userProfile;
@@ -6741,6 +6939,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     persistPartitionedWallet(wallet, currentUser.phoneNumber);
     if (chatBackupTimerRef.current) clearTimeout(chatBackupTimerRef.current);
     chatBackupTimerRef.current = setTimeout(() => {
+      const canIncludeWallet =
+        hasHydratedServerWalletForPhoneRef.current === norm || (walletRef.current?.transactions?.length || 0) > 0;
+      if (!canIncludeWallet) return;
       saveUserChatsBackupToSupabase(currentUser.phoneNumber, chatsRef.current, messagesRef.current, {
         wallet: walletRef.current,
         userProfile: currentUserRef.current,
@@ -6803,6 +7004,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const flushPendingLedgerTransactions = useCallback(async (phoneOverride?: string) => {
+    const phone = phoneOverride || currentUserRef.current?.phoneNumber;
+    if (!phone) return;
+    const pending = loadPendingLedgerTxs(phone);
+    if (pending.length === 0) return;
+    const confirmed = new Set<string>();
+    for (const tx of pending) {
+      if (!tx?.id || isSyntheticClientTx(tx)) {
+        if (tx?.id) confirmed.add(tx.id);
+        continue;
+      }
+      try {
+        const resp = await fetch('/api/wallet/ledger', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...tx,
+            userId: tx.userId || currentUserRef.current?.id,
+            userPhone: tx.userPhone || phone,
+            userName: tx.userName || currentUserRef.current?.fullName,
+          }),
+        });
+        const data = await resp.json().catch(() => null);
+        if (resp.ok && data?.success) {
+          confirmed.add(tx.id);
+        }
+      } catch {
+        break;
+      }
+    }
+    if (confirmed.size > 0) {
+      removePendingLedgerTxIds(phone, confirmed);
+    }
+  }, []);
+  flushPendingLedgerTransactionsRef.current = flushPendingLedgerTransactions;
+
   const recordLedgerTransaction = (params: {
     id?: string;
     type: WalletTransaction['type'];
@@ -6819,10 +7056,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }): WalletTransaction => {
     const nowIso = new Date().toISOString();
     const ref = params.referenceId || `REF_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+    const phone = currentUserRef.current?.phoneNumber;
     const tx: WalletTransaction = {
       id: params.id || `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
       userId: currentUserRef.current?.id,
-      userPhone: currentUserRef.current?.phoneNumber,
+      userPhone: phone,
       userName: currentUserRef.current?.fullName,
       type: params.type,
       title: params.title,
@@ -6839,11 +7077,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       channel: params.channel || 'wallet',
       metadata: params.metadata,
     };
+    enqueuePendingLedgerTx(phone, tx);
     fetch('/api/wallet/ledger', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(tx),
-    }).catch(() => {});
+    })
+      .then(async (resp) => {
+        const data = await resp.json().catch(() => null);
+        if (resp.ok && data?.success) {
+          removePendingLedgerTxIds(phone, new Set([tx.id]));
+          if (data?.wallet?.transactions && Array.isArray(data.wallet.transactions)) {
+            setWallet((prev) => {
+              const mergedTxs = mergeWalletTransactions(data.wallet.transactions, prev.transactions);
+              const nextWallet = { ...prev, transactions: mergedTxs };
+              walletRef.current = nextWallet;
+              if (phone) persistPartitionedWallet(nextWallet, phone);
+              return nextWallet;
+            });
+          }
+        }
+      })
+      .catch(() => {});
     return tx;
   };
 
@@ -6851,6 +7106,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const phone = currentUserRef.current?.phoneNumber;
     if (!phone) return;
     try {
+      await flushPendingLedgerTransactions(phone).catch(() => {});
       const [resp, txResp] = await Promise.all([
         fetch(`/api/wallet/${encodeURIComponent(phone)}`),
         fetch(`/api/wallet/transactions?phone=${encodeURIComponent(phone)}`).catch(() => null),
@@ -6861,16 +7117,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (data?.success && data?.wallet) {
         const baseTxs: WalletTransaction[] = Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [];
         const ledgerTxs: WalletTransaction[] = Array.isArray(txJson?.transactions) ? txJson.transactions : [];
-        const txMap = new Map<string, WalletTransaction>();
-        [...ledgerTxs, ...baseTxs].forEach((tx) => {
-          if (tx?.id && !txMap.has(tx.id)) txMap.set(tx.id, tx);
-        });
+        const mergedTxs = mergeWalletTransactions([...ledgerTxs, ...baseTxs], walletRef.current.transactions);
         const nextWallet: UserWallet = {
           availableBalance: Number(data.wallet.availableBalance) || 0,
           escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
           currency: data.wallet.currency || 'NGN',
-          transactions: Array.from(txMap.values()),
+          transactions: mergedTxs,
         };
+        const norm = normalizePhoneDigits(phone);
+        if (norm) hasHydratedServerWalletForPhoneRef.current = norm;
         setWallet(nextWallet);
         walletRef.current = nextWallet;
         persistPartitionedWallet(nextWallet, phone);
@@ -6907,7 +7162,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           availableBalance: Number(data.wallet.availableBalance) || 0,
           escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
           currency: data.wallet.currency || 'NGN',
-          transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+          transactions: mergeWalletTransactions(
+            Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+            walletRef.current.transactions
+          ),
         };
         setWallet(verifiedWallet);
         walletRef.current = verifiedWallet;
@@ -7017,7 +7275,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           availableBalance: Number(data.wallet.availableBalance) || 0,
           escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
           currency: data.wallet.currency || 'NGN',
-          transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+          transactions: mergeWalletTransactions(
+            Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+            walletRef.current.transactions
+          ),
         };
         setWallet(nextWallet);
         walletRef.current = nextWallet;
@@ -11010,7 +11271,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ...prev,
               availableBalance: Number(data.wallet.availableBalance) ?? prev.availableBalance,
               escrowLockedBalance: Number(data.wallet.escrowLockedBalance) ?? prev.escrowLockedBalance,
-              transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : prev.transactions,
+              transactions: mergeWalletTransactions(
+                Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+                prev.transactions
+              ),
             }));
           }
         } else {
@@ -11126,7 +11390,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ...prev,
             availableBalance: Number(data.wallet.availableBalance) ?? prev.availableBalance,
             escrowLockedBalance: Number(data.wallet.escrowLockedBalance) ?? prev.escrowLockedBalance,
-            transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : prev.transactions,
+            transactions: mergeWalletTransactions(
+              Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+              prev.transactions
+            ),
           }));
         }
         const payout = Number(data.payoutAmount ?? order.subtotalAmount ?? order.totalAmount);
@@ -12772,9 +13039,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       availableBalance: Math.max(0, Number(srvWallet.availableBalance) || 0),
       escrowLockedBalance: Math.max(0, Number(srvWallet.escrowLockedBalance) || 0),
       currency: srvWallet.currency || walletRef.current.currency || 'NGN',
-      transactions: Array.isArray(srvWallet.transactions)
-        ? srvWallet.transactions
-        : walletRef.current.transactions,
+      transactions: mergeWalletTransactions(
+        Array.isArray(srvWallet.transactions) ? srvWallet.transactions : [],
+        walletRef.current.transactions
+      ),
     };
     isHydratingWalletRef.current = true;
     setWallet(nextWallet);
@@ -12829,24 +13097,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : 'X/O';
       const nextAvailable = Math.max(0, Number(currentWal.availableBalance || 0) - stake);
       const nextLocked = Math.max(0, Number(currentWal.escrowLockedBalance || 0) + stake);
-      const lockTx: WalletTransaction = {
+      const lockTx = recordLedgerTransaction({
         id: txId,
         type: 'game_wager',
         title: params.title || `${label} Bet Escrow Lock`,
+        description: `${label} match stake held in escrow (${params.gameId})`,
         amount: stake,
+        fee: 0,
+        balanceAfter: nextAvailable,
         currency: params.currency || currentWal.currency || 'NGN',
-        timestamp: nowStr,
-        createdAt: nowIso,
-        status: 'completed',
-        reference: `${params.gameType.toUpperCase()}_${params.gameId}`,
+        referenceId: `${params.gameType.toUpperCase()}_${params.gameId}`,
         channel: 'wallet',
         metadata: { gameBetEscrow: true, gameId: params.gameId, gameType: params.gameType, role: params.role },
-      };
+      });
       const nextWallet: UserWallet = {
         ...currentWal,
         availableBalance: nextAvailable,
         escrowLockedBalance: nextLocked,
-        transactions: [lockTx, ...(currentWal.transactions || []).filter((t) => t.id !== txId)].slice(0, 100),
+        transactions: mergeWalletTransactions([lockTx], currentWal.transactions),
       };
       isHydratingWalletRef.current = true;
       setWallet(nextWallet);
@@ -13001,12 +13269,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       }
 
+      if (tx) {
+        recordLedgerTransaction({
+          id: tx.id,
+          type: tx.type,
+          title: tx.title,
+          description: tx.description || tx.title,
+          amount: tx.amount,
+          fee: tx.fee || 0,
+          balanceAfter: Math.max(0, nextAvailable),
+          currency: tx.currency,
+          referenceId: tx.referenceId || tx.reference,
+          channel: tx.channel || 'wallet',
+          metadata: { gameId: params.gameId, gameType: params.gameType, status: params.status },
+        });
+      }
       const nextWallet: UserWallet = {
         ...currentWal,
         availableBalance: Math.max(0, nextAvailable),
         escrowLockedBalance: nextLocked,
         transactions: tx
-          ? [tx, ...(currentWal.transactions || []).filter((t) => t.id !== tx!.id)].slice(0, 100)
+          ? mergeWalletTransactions([{ ...tx, balanceAfter: Math.max(0, nextAvailable) }], currentWal.transactions)
           : currentWal.transactions,
       };
       isHydratingWalletRef.current = true;
@@ -16525,7 +16808,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             availableBalance: Number(data.wallet.availableBalance) || 0,
             escrowLockedBalance: Number(data.wallet.escrowLockedBalance) || 0,
             currency: data.wallet.currency || 'NGN',
-            transactions: Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+            transactions: mergeWalletTransactions(
+              Array.isArray(data.wallet.transactions) ? data.wallet.transactions : [],
+              walletRef.current.transactions
+            ),
           };
           setWallet(nextWallet);
           walletRef.current = nextWallet;
@@ -16653,18 +16939,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `tx_${Date.now()}`,
       type: 'transfer_out',
       title: badgeTitle,
+      description: `Verification badge upgrade (${badge})`,
       amount: cost,
+      fee: 0,
+      balanceAfter: Math.max(0, wallet.availableBalance - cost),
       currency: 'NGN',
-      timestamp: 'Just now',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      createdAt: new Date().toISOString(),
       status: 'completed',
       reference: `VERIFY_${badge.toUpperCase()}_${Date.now()}`,
+      referenceId: `VERIFY_${badge.toUpperCase()}_${Date.now()}`,
       channel: 'wallet',
     };
 
     setWallet((prev) => ({
       ...prev,
       availableBalance: prev.availableBalance - cost,
-      transactions: [newTx, ...prev.transactions],
+      transactions: mergeWalletTransactions([newTx], prev.transactions),
     }));
 
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -16677,7 +16968,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(updatedUser);
     persistPartitionedUserProfile(updatedUser);
 
-    // Sync badge upgrade + wallet debit authoritatively with server
+    // Sync badge upgrade + wallet debit authoritatively with server (fall back to ledger sync if server endpoint fails)
     if (currentUser.phoneNumber) {
       fetch('/api/wallet/upgrade-badge', {
         method: 'POST',
@@ -16688,9 +16979,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .then((data) => {
           if (data?.success && data?.wallet) {
             applyAuthoritativeServerWallet(data.wallet, currentUser.phoneNumber);
+          } else {
+            recordLedgerTransaction({
+              id: newTx.id,
+              type: newTx.type,
+              title: newTx.title,
+              description: newTx.description,
+              amount: newTx.amount,
+              fee: 0,
+              balanceAfter: newTx.balanceAfter,
+              currency: 'NGN',
+              referenceId: newTx.referenceId,
+              channel: 'wallet',
+            });
           }
         })
-        .catch(() => {});
+        .catch(() => {
+          recordLedgerTransaction({
+            id: newTx.id,
+            type: newTx.type,
+            title: newTx.title,
+            description: newTx.description,
+            amount: newTx.amount,
+            fee: 0,
+            balanceAfter: newTx.balanceAfter,
+            currency: 'NGN',
+            referenceId: newTx.referenceId,
+            channel: 'wallet',
+          });
+        });
     }
 
     return {
@@ -17028,6 +17345,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Load local partitioned chats & wallet BEFORE flipping isAuthenticated so auto-save never writes empty defaults
     isHydratingChatsRef.current = true;
     isHydratingWalletRef.current = true;
+    hasHydratedServerWalletForPhoneRef.current = '';
     const localChatState = loadPartitionedUserChatsAndMessages(phoneNumber);
     const localWalletState = loadPartitionedWallet(phoneNumber);
     loadedPhoneForChatsRef.current = normPhone || cleanPhone;
@@ -17283,6 +17601,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isAuthenticatedRef.current = false;
     loadedPhoneForChatsRef.current = '';
     loadedPhoneForWalletRef.current = '';
+    hasHydratedServerWalletForPhoneRef.current = '';
     kickedGroupIdsRef.current.clear();
     setIsAuthenticated(false);
     safeLocalStorage.setItem('AGC_is_authenticated', 'false');
@@ -20167,6 +20486,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       void syncGroupsFromServer();
       void syncMissedMessagesFromServer(activeChatIdRef.current || undefined);
+      void flushPendingLedgerTransactionsRef.current(latestUser?.phoneNumber);
     };
 
     if (socket.connected) {
@@ -21294,6 +21614,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             at: Date.now(),
           };
           setWallet((w) => ({ ...w, availableBalance: payload.newBalance }));
+          void refreshWalletFromServer();
           try {
             const walletTsKey = getUserStorageKey('AGC_last_admin_wallet_ts', currentUser.phoneNumber);
             localStorage.setItem(walletTsKey, String(Date.now()));
@@ -21339,7 +21660,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ? payload.escrowLockedBalance
               : prev.escrowLockedBalance,
           currency: payload.currency || prev.currency || 'NGN',
-          transactions: Array.isArray(payload.transactions) ? payload.transactions : prev.transactions,
+          transactions: mergeWalletTransactions(
+            Array.isArray(payload.transactions) ? payload.transactions : [],
+            prev.transactions
+          ),
         };
         walletRef.current = nextWallet;
         persistPartitionedWallet(nextWallet, phone);
@@ -22014,6 +22338,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 at: Date.now(),
               };
               setWallet((prev) => ({ ...prev, availableBalance: msg.newBalance }));
+              void refreshWalletFromServer();
             }
           }
           setAdminUsers((prev) =>
@@ -22530,6 +22855,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }),
     ]);
     if (apiData?.user) broadcastUserUpdateEverywhere(apiData.user);
+    if (isTargetCurrentUser) {
+      void refreshWalletFromServer();
+    }
   };
 
   const kickUserSession = async (phoneOrId: string) => {
@@ -22560,31 +22888,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? {
               ...o,
               status: (action === 'release_to_seller' ? 'funds_released' : 'disputed') as import('../types').EscrowStatus,
-              updatedAt: 'Just now',
+              updatedAt: new Date().toISOString(),
             }
           : o
       )
     );
 
+    const resolveTx: WalletTransaction = {
+      id: `tx_adm_esc_${order.id}_${Date.now()}`,
+      type: action === 'release_to_seller' ? 'escrow_release' : 'refund',
+      amount: order.totalAmount,
+      fee: 0,
+      currency: order.currency,
+      title: action === 'release_to_seller'
+        ? `Admin Escrow Force-Release: ${order.product.title} (Ref: ${order.id})`
+        : `Admin Escrow Refund: ${order.product.title} (Ref: ${order.id} - ${note})`,
+      description: note || `Admin resolution (${action}) for order #${order.id}`,
+      channel: 'wallet',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      createdAt: new Date().toISOString(),
+      status: 'completed',
+      reference: `ADM_ESC_${order.id}`,
+      referenceId: order.id,
+    };
+
     setWallet((prev) => ({
       ...prev,
       escrowLockedBalance: Math.max(0, prev.escrowLockedBalance - order.totalAmount),
-      transactions: [
-        {
-          id: `tx_${Date.now()}`,
-          type: action === 'release_to_seller' ? 'escrow_release' : 'topup',
-          amount: order.totalAmount,
-          currency: order.currency,
-          title: action === 'release_to_seller'
-            ? `Admin Escrow Force-Release: ${order.product.title} (Ref: ${order.id})`
-            : `Admin Escrow Refund: ${order.product.title} (Ref: ${order.id} - ${note})`,
-          channel: 'wallet',
-          timestamp: 'Just now',
-          status: 'completed',
-        },
-        ...prev.transactions,
-      ],
+      transactions: mergeWalletTransactions([resolveTx], prev.transactions),
     }));
+
+    fetch('/api/admin/escrow/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId, action, note }),
+    })
+      .then((r) => r.json().catch(() => null))
+      .then((data) => {
+        if (data?.success && data.order) {
+          setEscrowOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...data.order } : o)));
+        }
+        void refreshWalletFromServer();
+      })
+      .catch(() => {
+        recordLedgerTransaction({
+          id: resolveTx.id,
+          type: resolveTx.type,
+          title: resolveTx.title,
+          description: resolveTx.description,
+          amount: resolveTx.amount,
+          fee: 0,
+          currency: resolveTx.currency,
+          referenceId: resolveTx.referenceId,
+          channel: 'wallet',
+        });
+      });
 
     return {
       success: true,
@@ -23055,6 +23413,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleFollowCreator,
         buyShowTicket,
         buyCreatorSong,
+        tipCreator,
         createCreatorPost,
         createCreatorShow,
         createCreatorSong,

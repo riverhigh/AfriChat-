@@ -111,18 +111,21 @@
               tasks.push(
                 caches.keys().then(function (keys) {
                   return Promise.all(keys.map(function (k) { return caches.delete(k); }));
-                })
+                }).catch(function () {})
               );
             }
             if ('serviceWorker' in navigator && navigator.serviceWorker.getRegistrations) {
               tasks.push(
                 navigator.serviceWorker.getRegistrations().then(function (regs) {
                   return Promise.all(regs.map(function (r) { return r.unregister(); }));
-                })
+                }).catch(function () {})
               );
             }
           } catch (_) {}
-          return Promise.all(tasks);
+          return Promise.race([
+            Promise.all(tasks),
+            new Promise(function (resolve) { setTimeout(resolve, 1500); })
+          ]);
         }
         function renderBootFallback(msg) {
           if (handled || !isPreMount()) return;
@@ -157,9 +160,11 @@
         window.addEventListener('error', function (ev) {
           if (isPreMount()) {
             var target = ev && ev.target;
-            // Ignore non-critical external script/image errors (e.g. third-party scripts offline)
-            if (target && target.tagName === 'SCRIPT' && target.src && target.src.indexOf(window.location.origin) !== 0) {
-              return;
+            // Ignore resource errors on stylesheets, images, media, and external third-party scripts
+            if (target && target !== window && target.tagName) {
+              var tag = String(target.tagName).toUpperCase();
+              if (tag !== 'SCRIPT') return;
+              if (target.src && target.src.indexOf(window.location.origin) !== 0) return;
             }
             renderBootFallback(ev && ev.message ? ev.message : 'Startup error');
           }

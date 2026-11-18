@@ -87,6 +87,7 @@ export const CreatorModal: React.FC = () => {
     buyShowTicket,
     buyCreatorSong,
     buyCreatorFile,
+    tipCreator,
     bookCreatorVipSession,
     createCreatorShow,
     createCreatorSong,
@@ -363,12 +364,11 @@ export const CreatorModal: React.FC = () => {
 
   const handleSendTip = () => {
     if (!activeTipDrop) return;
-    if ((wallet.availableBalance || 0) < tipAmount) {
-      toast('Insufficient wallet balance. Top up your AGC Naira wallet.');
-      return;
+    const res = tipCreator(activeTipDrop.creatorId, activeTipDrop.creatorName, tipAmount, tipNote);
+    toast(res.message);
+    if (res.success) {
+      setActiveTipDrop(null);
     }
-    toast(`🎉 Tipped ₦${tipAmount.toLocaleString()} to ${activeTipDrop.creatorName}!`);
-    setActiveTipDrop(null);
   };
 
   const handlePublishDrop = (e: React.FormEvent) => {
