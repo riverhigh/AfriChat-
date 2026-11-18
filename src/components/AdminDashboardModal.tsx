@@ -75,7 +75,19 @@ import {
   upsertSupabaseAdminUserOverride,
   upsertSupabaseAdminStoreOverride,
   upsertSupabaseAdminArtisanOverride,
+  getAdminApiKey,
+  setAdminApiKey,
+  getAdminHeaders,
 } from '../services/supabaseAdminSync';
+
+const adminFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const headers = new Headers(init?.headers || {});
+  const adminKey = getAdminApiKey();
+  if (adminKey && !headers.has('x-admin-key')) {
+    headers.set('x-admin-key', adminKey);
+  }
+  return fetch(input, { ...init, headers });
+};
 import { isSyntheticTestUser } from '../utils/testAccountFilter';
 
 type AdminSection = 'overview' | 'finance' | 'stores' | 'users' | 'professionals' | 'outside' | 'comms' | 'ads' | 'ai_datacenter' | 'security';
@@ -438,7 +450,7 @@ export const AdminDashboardModal: React.FC = () => {
   const fetchHealthProbe = async () => {
     setHealthChecking(true);
     try {
-      const res = await fetch('/api/admin/health');
+      const res = await adminFetch('/api/admin/health');
       if (res.ok) {
         const data = await res.json();
         if (data?.subsystems) setHealthData(data.subsystems);
@@ -653,7 +665,7 @@ export const AdminDashboardModal: React.FC = () => {
   const fetchAdminTasks = async () => {
     setAdminTasksLoading(true);
     try {
-      const res = await fetch('/api/tasks?admin=true');
+      const res = await adminFetch('/api/tasks?admin=true');
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data?.tasks)) setAdminTasks(data.tasks);
@@ -673,7 +685,7 @@ export const AdminDashboardModal: React.FC = () => {
 
   useEffect(() => {
     if (!isAdminModalOpen) return;
-    fetch('/api/escrow/orders?admin=true')
+    adminFetch('/api/escrow/orders?admin=true')
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data?.orders)) setServerEscrows(data.orders);
@@ -701,7 +713,7 @@ export const AdminDashboardModal: React.FC = () => {
     }
     const q = selectedCustomer.phoneNumber || selectedCustomer.id || selectedCustomer.fullName || '';
     if (!q) return;
-    fetch(`/api/admin/wallet-transactions?q=${encodeURIComponent(q)}&type=all`)
+    adminFetch(`/api/admin/wallet-transactions?q=${encodeURIComponent(q)}&type=all`)
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data?.transactions)) {
@@ -1333,7 +1345,7 @@ export const AdminDashboardModal: React.FC = () => {
     secondaryAdminName?: string,
     secondaryAdminPin?: string
   ) => {
-    const res = await fetch('/api/admin/escrow/resolve', {
+    const res = await adminFetch('/api/admin/escrow/resolve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1394,7 +1406,7 @@ export const AdminDashboardModal: React.FC = () => {
       if (p.kind === 'escrow') {
         await executeEscrowServerResolve(p.order, p.action, p.note, secondaryName, secondaryPin);
       } else if (p.kind === 'payout') {
-        const res = await fetch('/api/admin/escrow/resolve', {
+        const res = await adminFetch('/api/admin/escrow/resolve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1709,7 +1721,7 @@ export const AdminDashboardModal: React.FC = () => {
   const handlePurgeExpiredStatuses = async () => {
     setPurgingStatuses(true);
     try {
-      const res = await fetch('/api/admin/statuses/purge-expired', { method: 'POST' });
+      const res = await adminFetch('/api/admin/statuses/purge-expired', { method: 'POST' });
       const data = await res.json().catch(() => null);
       if (res.ok && data?.success) {
         notify(`Purged ${data.purgedCount || 0} expired 24h stories live!`);
@@ -1749,7 +1761,7 @@ export const AdminDashboardModal: React.FC = () => {
   const handleDeleteStore = async (store: LiveStoreRecord) => {
     if (!window.confirm(`Permanently delete merchant store "${store.storeName}"?`)) return;
     try {
-      const res = await fetch(`/api/admin/stores/${encodeURIComponent(store.id)}`, { method: 'DELETE' });
+      const res = await adminFetch(`/api/admin/stores/${encodeURIComponent(store.id)}`, { method: 'DELETE' });
       if (res.ok) {
         notify(`Deleted store "${store.storeName}"`);
         emitAdminGlobalBroadcast('admin_store_updated', { id: store.id, deleted: true });
@@ -1765,7 +1777,7 @@ export const AdminDashboardModal: React.FC = () => {
   const handleDeleteArtisan = async (artisan: LiveArtisanRecord) => {
     if (!window.confirm(`Permanently delete artisan hub "${artisan.stationName}"?`)) return;
     try {
-      const res = await fetch(`/api/admin/artisans/${encodeURIComponent(artisan.id)}`, { method: 'DELETE' });
+      const res = await adminFetch(`/api/admin/artisans/${encodeURIComponent(artisan.id)}`, { method: 'DELETE' });
       if (res.ok) {
         notify(`Deleted artisan hub "${artisan.stationName}"`);
         emitAdminGlobalBroadcast('admin_artisan_updated', { id: artisan.id, deleted: true });
@@ -1831,7 +1843,7 @@ export const AdminDashboardModal: React.FC = () => {
     e.preventDefault();
     if (!blockIpInput.trim()) return;
     try {
-      const res = await fetch('/api/admin/security/block-ip', {
+      const res = await adminFetch('/api/admin/security/block-ip', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1854,7 +1866,7 @@ export const AdminDashboardModal: React.FC = () => {
 
   const handleUnblockIp = async (ip: string) => {
     try {
-      const res = await fetch(`/api/admin/security/block-ip/${encodeURIComponent(ip)}`, { method: 'DELETE' });
+      const res = await adminFetch(`/api/admin/security/block-ip/${encodeURIComponent(ip)}`, { method: 'DELETE' });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.blockedIps)) setBlockedIps(data.blockedIps);
@@ -1894,7 +1906,7 @@ export const AdminDashboardModal: React.FC = () => {
   const handleReviewSponsoredAd = async (adId: string, decision: 'approve' | 'reject') => {
     setAdReviewBusyId(adId);
     try {
-      const res = await fetch('/api/admin/ads/review', {
+      const res = await adminFetch('/api/admin/ads/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3683,7 +3695,7 @@ export const AdminDashboardModal: React.FC = () => {
                                         onClick={async () => {
                                           setTaskReviewBusyId(sub.id);
                                           try {
-                                            const res = await fetch('/api/admin/tasks/review', {
+                                            const res = await adminFetch('/api/admin/tasks/review', {
                                               method: 'POST',
                                               headers: { 'Content-Type': 'application/json' },
                                               body: JSON.stringify({
@@ -3718,7 +3730,7 @@ export const AdminDashboardModal: React.FC = () => {
                                         onClick={async () => {
                                           setTaskReviewBusyId(sub.id);
                                           try {
-                                            const res = await fetch('/api/admin/tasks/review', {
+                                            const res = await adminFetch('/api/admin/tasks/review', {
                                               method: 'POST',
                                               headers: { 'Content-Type': 'application/json' },
                                               body: JSON.stringify({
@@ -3816,7 +3828,7 @@ export const AdminDashboardModal: React.FC = () => {
                                       type="button"
                                       onClick={async () => {
                                         try {
-                                          const res = await fetch(`/api/tasks/${encodeURIComponent(c.id)}/close`, {
+                                          const res = await adminFetch(`/api/tasks/${encodeURIComponent(c.id)}/close`, {
                                             method: 'POST',
                                             headers: { 'Content-Type': 'application/json' },
                                             body: JSON.stringify({

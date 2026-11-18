@@ -5054,7 +5054,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const hydrateServerWallet = async () => {
       await flushPendingLedgerTransactionsRef.current(phone).catch(() => {});
       const [res, txRes] = await Promise.all([
-        fetch(`/api/wallet/${encodeURIComponent(phone)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        fetch(`/api/wallet/${encodeURIComponent(phone)}`, {
+          headers: { 'x-session-token': safeLocalStorage.getItem('AGC_session_token') || '' },
+        }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
         fetch(`/api/wallet/transactions?phone=${encodeURIComponent(phone)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       ]);
       if (cancelled || !res?.success || !res?.wallet) return;
@@ -7096,7 +7098,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       await flushPendingLedgerTransactions(phone).catch(() => {});
       const [resp, txResp] = await Promise.all([
-        fetch(`/api/wallet/${encodeURIComponent(phone)}`),
+        fetch(`/api/wallet/${encodeURIComponent(phone)}`, {
+          headers: { 'x-session-token': safeLocalStorage.getItem('AGC_session_token') || '' },
+        }),
         fetch(`/api/wallet/transactions?phone=${encodeURIComponent(phone)}`).catch(() => null),
       ]);
       if (!resp.ok) return;
@@ -7248,10 +7252,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Sign in required to withdraw funds.' };
     }
     try {
+      const currentSessionToken = safeLocalStorage.getItem('AGC_session_token') || '';
       const resp = await fetch('/api/wallet/withdraw', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneNumber: phone, amount, bankName, bankCode, accountNumber, accountName }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-session-token': currentSessionToken,
+        },
+        body: JSON.stringify({
+          phoneNumber: phone,
+          amount,
+          bankName,
+          bankCode,
+          accountNumber,
+          accountName,
+          sessionToken: currentSessionToken,
+        }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data?.success) {
@@ -7293,10 +7309,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Sign in required to transfer funds.' };
     }
     try {
+      const currentSessionToken = safeLocalStorage.getItem('AGC_session_token') || '';
       const resp = await fetch('/api/wallet/transfer', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ senderPhone, recipientPhone, amount, note, title }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-session-token': currentSessionToken,
+        },
+        body: JSON.stringify({
+          senderPhone,
+          recipientPhone,
+          amount,
+          note,
+          title,
+          sessionToken: currentSessionToken,
+        }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data?.success) {

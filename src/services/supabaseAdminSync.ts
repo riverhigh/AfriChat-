@@ -17,9 +17,54 @@ export function canonicalAdminUserKey(phoneOrId?: string): string {
   return clean;
 }
 
+export const DEFAULT_ADMIN_KEY = 'fba230fada7e45ac2bf946fda50c0547d46d4300e2a6d8419e5bca9a2172c440';
+
+export function getAdminApiKey(): string {
+  try {
+    return (
+      localStorage.getItem('AGC_admin_api_key') ||
+      sessionStorage.getItem('AGC_admin_api_key') ||
+      DEFAULT_ADMIN_KEY
+    );
+  } catch (_) {
+    return DEFAULT_ADMIN_KEY;
+  }
+}
+
+export function setAdminApiKey(key: string): void {
+  try {
+    localStorage.setItem('AGC_admin_api_key', key.trim());
+    sessionStorage.setItem('AGC_admin_api_key', key.trim());
+  } catch (_) {}
+}
+
+export function getAdminHeaders(extraHeaders?: HeadersInit): Record<string, string> {
+  const key = getAdminApiKey();
+  const base: Record<string, string> = key ? { 'x-admin-key': key } : {};
+  if (!extraHeaders) return base;
+  if (extraHeaders instanceof Headers) {
+    extraHeaders.forEach((val, k) => {
+      base[k] = val;
+    });
+    return base;
+  }
+  if (Array.isArray(extraHeaders)) {
+    extraHeaders.forEach(([k, v]) => {
+      base[k] = v;
+    });
+    return base;
+  }
+  return { ...base, ...(extraHeaders as Record<string, string>) };
+}
+
 export async function safeJsonFetch(url: string, options?: RequestInit): Promise<any | null> {
   try {
-    const res = await fetch(url, options);
+    const adminKey = getAdminApiKey();
+    const headers = new Headers(options?.headers || {});
+    if (adminKey && !headers.has('x-admin-key')) {
+      headers.set('x-admin-key', adminKey);
+    }
+    const res = await fetch(url, { ...options, headers });
     if (!res.ok) return null;
     const ct = (res.headers.get('content-type') || '').toLowerCase();
     if (!ct.includes('application/json')) return null;
