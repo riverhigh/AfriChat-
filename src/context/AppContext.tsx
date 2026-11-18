@@ -254,6 +254,24 @@ export const normalizePhoneDigits = (raw?: string): string => {
   return d;
 };
 
+export const normalizePhoneInternational = (raw?: string): string => {
+  if (!raw) return '';
+  const trimmed = String(raw).trim();
+  if (!trimmed) return '';
+  const cleaned = trimmed.replace(/[\s\-()]/g, '');
+  if (cleaned.startsWith('+')) {
+    const plusDigits = cleaned.slice(1).replace(/\D/g, '');
+    return plusDigits ? `+${plusDigits}` : '';
+  }
+  const digits = cleaned.replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('0') && digits.length === 11) return `+234${digits.slice(1)}`;
+  if (digits.startsWith('234') && digits.length >= 13) return `+${digits}`;
+  if (digits.length === 10 && /^[789]/.test(digits)) return `+234${digits}`;
+  if (digits.length >= 11) return `+${digits}`;
+  return `+234${digits}`;
+};
+
 export const phonesMatch = (p1?: string, p2?: string): boolean => {
   if (!p1 || !p2) return false;
   if (p1 === '+234 BOT AI' || p2 === '+234 BOT AI') {
@@ -769,6 +787,37 @@ function loadPartitionedUserProfile(phoneNumber?: string): Partial<UserProfile> 
   return null;
 }
 
+function loadPartitionedBlockedUsers(phoneNumber?: string): string[] {
+  const candidates = getCandidatePhoneKeys(phoneNumber || '');
+  for (const keySuffix of candidates) {
+    try {
+      const raw = safeLocalStorage.getItem(`AGC_blocked_users_${keySuffix}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed.map(String);
+      }
+    } catch (_) {}
+  }
+  try {
+    const legacy = safeLocalStorage.getItem('AGC_blocked_users');
+    if (legacy) {
+      const parsed = JSON.parse(legacy);
+      if (Array.isArray(parsed)) return parsed.map(String);
+    }
+  } catch (_) {}
+  return [];
+}
+
+function persistPartitionedBlockedUsers(list: string[], phoneNumber?: string) {
+  const deduped = Array.from(new Set((list || []).map((x) => String(x || '').trim()).filter(Boolean)));
+  const serialized = JSON.stringify(deduped);
+  try {
+    const userKey = getUserStorageKey('AGC_blocked_users', phoneNumber);
+    safeLocalStorage.setItem(userKey, serialized);
+    safeLocalStorage.setItem('AGC_blocked_users', serialized);
+  } catch (_) {}
+}
+
 function recoverPersistedUserProfile(): UserProfile | null {
   try {
     const saved = safeLocalStorage.getItem('AGC_user_profile_v2');
@@ -945,7 +994,8 @@ interface AppContextType {
   reactToMessage: (chatId: string, messageId: string, emoji: string) => void;
   sendImageMessage: (chatId: string, imageUrl: string, caption?: string, oneTimeView?: boolean) => void;
   blockedUserIds: string[];
-  toggleBlockUser: (idOrPhone: string) => boolean;
+  toggleBlockUser: (idOrPhone: string, peerPhone?: string) => boolean;
+  isUserBlockedByMe: (idOrPhone?: string, peerPhone?: string) => boolean;
   CURRENCY_SYMBOLS: Record<CurrencyCode, string>;
   CURRENCY_RATES: Record<CurrencyCode, number>;
   openCommunityChat: (community: TownCommunity) => void;
@@ -1282,6 +1332,15 @@ interface AppContextType {
   setIsContactsModalOpen: (val: boolean) => void;
   syncDeviceContacts: () => void;
   startChatWithContact: (contact: DeviceContact) => void;
+  openDirectChat: (target: {
+    phone?: string;
+    userId?: string;
+    name?: string;
+    avatar?: string;
+    location?: string;
+    verifiedStore?: boolean;
+    product?: Product;
+  }) => string;
   startAiChat: () => void;
   inviteBotToGroup: (groupId: string, makeAdmin?: boolean) => void;
   addNewDeviceContact: (
@@ -4818,6 +4877,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     isHydratingChatsRef.current = true;
     kickedGroupIdsRef.current = loadKickedGroupIds(phone);
+    const localBlocked = loadPartitionedBlockedUsers(phone);
+    setBlockedUserIds(localBlocked);
+    blockedUserIdsRef.current = localBlocked;
     const localData = loadPartitionedUserChatsAndMessages(phone);
     const filteredLocalChats = localData.chats.filter((c) => !kickedGroupIdsRef.current.has(c.id));
     setChats(filteredLocalChats);
@@ -4835,6 +4897,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     void syncGroupsFromServerRef.current?.();
     syncLiveCommunitiesRef.current?.();
+    void syncMissedMessagesRef.current?.(activeChatIdRef.current || undefined);
+
+    fetch(`/api/users/blocks?phone=${encodeURIComponent(phone)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((res) => {
+        if (!res?.success || !Array.isArray(res.blockedPhones)) return;
+        setBlockedUserIds((prev) => {
+          const merged = Array.from(new Set([...prev, ...res.blockedPhones.map(String)]));
+          blockedUserIdsRef.current = merged;
+          persistPartitionedBlockedUsers(merged, phone);
+          return merged;
+        });
+      })
+      .catch(() => {});
 
     let cancelled = false;
     // Always hydrate authoritative wallet balance & unified ledger directly from the backend server
@@ -4922,6 +4998,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             persistPartitionedUserProfile(mergedUser);
             return mergedUser;
           });
+        }
+        if (!cancelled) {
+          void syncMissedMessagesRef.current?.(activeChatIdRef.current || undefined);
         }
       })
       .catch(() => {});
@@ -8237,32 +8316,86 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     },
     [sendCallControlSignal, sendSupabaseBroadcastOnce]
   );
-  // Blocked users list
-  const [blockedUserIds, setBlockedUserIds] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('AGC_blocked_users');
-      if (saved) return JSON.parse(saved);
-    } catch (_) {}
-    return [];
-  });
+  // Blocked users list (strictly partitioned per logged-in user + synced with server)
+  const [blockedUserIds, setBlockedUserIds] = useState<string[]>(() =>
+    loadPartitionedBlockedUsers(getSavedUserCleanPhone())
+  );
+  const blockedUserIdsRef = useRef<string[]>(blockedUserIds);
+  blockedUserIdsRef.current = blockedUserIds;
 
-  const toggleBlockUser = (idOrPhone: string): boolean => {
-    let isBlocked = false;
+  const isUserBlockedByMe = useCallback(
+    (idOrPhone?: string, peerPhone?: string): boolean => {
+      const list = blockedUserIdsRef.current;
+      if (!list || list.length === 0) return false;
+      const candidates = [idOrPhone, peerPhone].filter(Boolean).map((v) => String(v).trim());
+      if (idOrPhone && String(idOrPhone).startsWith('dm_') && !String(idOrPhone).includes('self')) {
+        const myPhone = currentUserRef.current?.phoneNumber || '';
+        const parts = String(idOrPhone).replace('dm_', '').split('_').filter(Boolean);
+        const other = parts.find((p) => !myPhone || !phonesMatch(p, myPhone));
+        if (other) candidates.push(other);
+      }
+      for (const candidate of candidates) {
+        if (list.includes(candidate)) return true;
+        const candDigits = candidate.replace(/\D/g, '');
+        if (candDigits.length >= 7) {
+          if (list.some((b) => phonesMatch(b, candDigits))) return true;
+        }
+      }
+      return false;
+    },
+    [blockedUserIds]
+  );
+
+  const toggleBlockUser = (idOrPhone: string, peerPhone?: string): boolean => {
+    const myPhone = currentUserRef.current?.phoneNumber || '';
+    const resolvedPeerPhone = (() => {
+      if (peerPhone && peerPhone.replace(/\D/g, '').length >= 7) return peerPhone;
+      if (idOrPhone.startsWith('dm_') && !idOrPhone.includes('self')) {
+        const parts = idOrPhone.replace('dm_', '').split('_').filter(Boolean);
+        const other = parts.find((p) => !myPhone || !phonesMatch(p, myPhone));
+        if (other) return `+${other}`;
+      }
+      if (idOrPhone.replace(/\D/g, '').length >= 7 && !idOrPhone.startsWith('group_') && !idOrPhone.startsWith('channel_')) {
+        return idOrPhone;
+      }
+      const chatMatch = chatsRef.current.find((c) => c.id === idOrPhone);
+      return chatMatch?.phone || (chatMatch as any)?.phoneNumber || '';
+    })();
+
+    const currentlyBlocked = isUserBlockedByMe(idOrPhone, resolvedPeerPhone);
+    const nextBlocked = !currentlyBlocked;
+    const normPeerDigits = normalizePhoneDigits(resolvedPeerPhone);
+
     setBlockedUserIds((prev) => {
       let updated: string[];
-      if (prev.includes(idOrPhone)) {
-        updated = prev.filter((id) => id !== idOrPhone);
-        isBlocked = false;
+      if (!nextBlocked) {
+        updated = prev.filter((item) => {
+          if (item === idOrPhone) return false;
+          if (resolvedPeerPhone && (item === resolvedPeerPhone || phonesMatch(item, resolvedPeerPhone))) return false;
+          return true;
+        });
       } else {
-        updated = [...prev, idOrPhone];
-        isBlocked = true;
+        const additions = [idOrPhone, resolvedPeerPhone, normPeerDigits].filter(Boolean);
+        updated = Array.from(new Set([...prev, ...additions]));
       }
-      try {
-        localStorage.setItem('AGC_blocked_users', JSON.stringify(updated));
-      } catch (_) {}
+      blockedUserIdsRef.current = updated;
+      persistPartitionedBlockedUsers(updated, myPhone);
       return updated;
     });
-    return isBlocked;
+
+    if (myPhone && resolvedPeerPhone) {
+      fetch('/api/users/block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          blockerPhone: myPhone,
+          targetPhone: resolvedPeerPhone,
+          blocked: nextBlocked,
+        }),
+      }).catch(() => {});
+    }
+
+    return nextBlocked;
   };
 
   const broadcastGroupSnapshot = useCallback((updatedChat: ChatThread) => {
@@ -9808,6 +9941,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const contactsNow = deviceContactsRef.current;
     const currentChat = overrideChat || chatsNow.find((c) => c.id === chatId);
     const myCleanPhone = userNow.phoneNumber?.replace(/\D/g, '') || '';
+    const isGroupOrChannel = Boolean(
+      currentChat?.isGroup ||
+        currentChat?.isChannel ||
+        chatId.startsWith('group_') ||
+        chatId.startsWith('channel_') ||
+        chatId.startsWith('town_comm_')
+    );
     let targetCleanPhone = (currentChat?.phone || (currentChat as any)?.phoneNumber || '')?.replace(/\D/g, '');
 
     if (!targetCleanPhone && chatId.startsWith('dm_') && !chatId.includes('self')) {
@@ -9816,10 +9956,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (!targetCleanPhone && currentChat?.id) {
-      const contactMatch = contactsNow.find((ct) => ct.id === currentChat.id || ct.name === currentChat.name);
+      const contactMatch = contactsNow.find(
+        (ct) =>
+          ct.id === currentChat.id ||
+          (currentChat.name &&
+            currentChat.name !== 'Direct Chat' &&
+            currentChat.name !== 'AGC User' &&
+            ct.name === currentChat.name)
+      );
       if (contactMatch?.normalizedPhoneNumber || contactMatch?.rawPhoneNumber) {
         targetCleanPhone = (contactMatch.normalizedPhoneNumber || contactMatch.rawPhoneNumber || '').replace(/\D/g, '');
       }
+    }
+
+    if (!targetCleanPhone && !isGroupOrChannel) {
+      const dirUser = adminUsersRef.current.find((u) => u.id === chatId || u.id === currentChat?.id);
+      if (dirUser?.phoneNumber) {
+        targetCleanPhone = dirUser.phoneNumber.replace(/\D/g, '');
+      }
+    }
+
+    // Do not deliver 1-on-1 DMs if current user blocked this recipient
+    if (!isGroupOrChannel && !chatId.includes('self') && isUserBlockedByMe(chatId, targetCleanPhone)) {
+      return;
     }
 
     const memberPhones = currentChat?.memberPhones || [];
@@ -9836,7 +9995,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           membersCount: currentChat.membersCount,
           members: currentChat.members,
           memberPhones: currentChat.memberPhones,
-          phone: currentChat.phone || (currentChat as any).phoneNumber,
+          phone: currentChat.phone || (currentChat as any).phoneNumber || (targetCleanPhone ? `+${targetCleanPhone}` : undefined),
         }
       : undefined;
     const isDeviceOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
@@ -9844,10 +10003,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Encrypt message text with WebCrypto AES-GCM 256-bit for wire transport
     const secret = getConversationSecret(chatId, myCleanPhone, targetCleanPhone);
     let wireMessage = msg;
+    if (!wireMessage.senderPhone && userNow.phoneNumber) {
+      wireMessage = { ...wireMessage, senderPhone: userNow.phoneNumber };
+    }
     if (msg.text && typeof msg.text === 'string' && !msg.text.startsWith('AGC_E2EE:')) {
       try {
         const cipherText = await encryptChatMessage(msg.text, secret);
-        wireMessage = { ...msg, text: cipherText, isEncrypted: true };
+        wireMessage = { ...wireMessage, text: cipherText, isEncrypted: true };
       } catch (_) {}
     }
 
@@ -9860,7 +10022,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         senderId: userNow.id,
         targetPhone: targetCleanPhone,
         memberPhones,
-        isGroup: Boolean(currentChat?.isGroup),
+        isGroup: isGroupOrChannel,
         chat: wireChat,
       });
       bc.close();
@@ -9886,10 +10048,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         body: JSON.stringify({
           chatId,
           message: wireMessage,
+          senderPhone: userNow.phoneNumber,
           targetPhone: targetCleanPhone,
           memberPhones,
           chat: wireChat,
-          isGroup: Boolean(currentChat?.isGroup || currentChat?.isChannel),
+          isGroup: isGroupOrChannel,
           senderSocketId: getSocket()?.id,
         }),
         keepalive: true,
@@ -9972,6 +10135,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const sendImageMessage = async (chatId: string, imageUrl: string, caption?: string, oneTimeView?: boolean) => {
     const _targetChatImg = chatsRef.current.find((c) => c.id === chatId);
     if (isUserAdminBlockedFromSending(_targetChatImg, currentUserRef.current)) return;
+    if (!_targetChatImg?.isGroup && !_targetChatImg?.isChannel && !chatId.includes('self') && isUserBlockedByMe(chatId, _targetChatImg?.phone || (_targetChatImg as any)?.phoneNumber)) return;
 
     // Strongly compress any data URL image so Supabase storage & Realtime stay tiny
     let finalImageUrl = imageUrl;
@@ -10128,9 +10292,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ) => {
     if (!text.trim()) return;
 
-    // Block non-admins from sending in channels or announce-only groups
+    // Block non-admins from sending in channels or announce-only groups, and block DMs to blocked contacts
     const _targetChatSend = chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
     if (isUserAdminBlockedFromSending(_targetChatSend, currentUserRef.current)) {
+      return;
+    }
+    if (!_targetChatSend?.isGroup && !_targetChatSend?.isChannel && !chatId.includes('self') && isUserBlockedByMe(chatId, _targetChatSend?.phone || (_targetChatSend as any)?.phoneNumber)) {
       return;
     }
 
@@ -10502,6 +10669,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ) => {
     const targetChat = chatsRef.current.find((c) => c.id === chatId) || chats.find((c) => c.id === chatId);
     if (isUserAdminBlockedFromSending(targetChat, currentUserRef.current)) return;
+    if (!targetChat?.isGroup && !targetChat?.isChannel && !chatId.includes('self') && isUserBlockedByMe(chatId, targetChat?.phone || (targetChat as any)?.phoneNumber)) return;
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24h TTL
     const useOneTime = Boolean(oneTimeView);
     const ghostMs = parseGhostDurationMs(targetChat?.disappearingTimer);
@@ -10628,6 +10796,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!chatId || !Number.isFinite(locationData.latitude) || !Number.isFinite(locationData.longitude)) return;
     const targetChat = chatsRef.current.find((c) => c.id === chatId);
     if (isUserAdminBlockedFromSending(targetChat, currentUserRef.current)) return;
+    if (!targetChat?.isGroup && !targetChat?.isChannel && !chatId.includes('self') && isUserBlockedByMe(chatId, targetChat?.phone || (targetChat as any)?.phoneNumber)) return;
 
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     const label = locationData.addressName?.trim() || `${locationData.latitude.toFixed(4)}, ${locationData.longitude.toFixed(4)}`;
@@ -11079,34 +11248,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const openChatWithProduct = (chatId: string, product: Product) => {
-    setActiveTab('chats');
-    const nowMs = Date.now();
-    setChats((prev) => {
-      if (prev.some((c) => c.id === chatId)) return prev;
-      const newThread: ChatThread = {
-        id: chatId,
-        name: product.sellerName,
-        avatar: product.imageUrl,
-        verifiedStore: true,
-        location: product.category,
-        unreadCount: 0,
-        lastMessage: `Product: ${product.title}`,
-        lastMessageTime: 'Just now',
-        lastMessageAtMs: nowMs,
-        catalog: [product],
-        isOnline: true,
-        storeCategory: product.category,
-      };
-      return sortChatsByRecency([newThread, ...prev]);
+    const resolvedChatId = openDirectChat({
+      phone: product.sellerPhone,
+      userId: product.sellerId || chatId,
+      name: product.sellerName,
+      avatar: product.imageUrl,
+      location: product.category,
+      verifiedStore: true,
+      product,
     });
-    setActiveChatId(chatId);
-    sendProductCard(chatId, product);
+    sendProductCard(resolvedChatId, product);
   };
 
   // 1. Meme & Sticker Studio Handler
   const sendMemeSticker = (chatId: string, meme: MemeSticker) => {
     const targetChat = chatsRef.current.find((c) => c.id === chatId);
     if (isUserAdminBlockedFromSending(targetChat, currentUserRef.current)) return;
+    if (!targetChat?.isGroup && !targetChat?.isChannel && !chatId.includes('self') && isUserBlockedByMe(chatId, targetChat?.phone || (targetChat as any)?.phoneNumber)) return;
     const nowMs = Date.now();
     const newMsg: ChatMessage = {
       id: `msg_meme_${nowMs}`,
@@ -16875,6 +17033,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loadedPhoneForChatsRef.current = normPhone || cleanPhone;
     loadedPhoneForWalletRef.current = normPhone || cleanPhone;
     kickedGroupIdsRef.current = loadKickedGroupIds(phoneNumber);
+    const loginBlocked = loadPartitionedBlockedUsers(phoneNumber);
+    setBlockedUserIds(loginBlocked);
+    blockedUserIdsRef.current = loginBlocked;
     const filteredLoginChats = localChatState.chats.filter((c) => !kickedGroupIdsRef.current.has(c.id));
     setChats(filteredLoginChats);
     setMessages(localChatState.messages);
@@ -17128,6 +17289,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveChatId(null);
     setChats([]);
     setMessages({});
+    setBlockedUserIds([]);
+    blockedUserIdsRef.current = [];
     setTownCommunities([]);
     setGroupInvites([]);
     setActiveGroupInvitePopup(null);
@@ -17287,14 +17450,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     customAvatar?: string,
     options?: { sendRequest?: boolean }
   ) => {
-    const cleaned = phone.replace(/[\s-]/g, '');
-    const normalized = cleaned.startsWith('0')
-      ? `+234${cleaned.slice(1)}`
-      : cleaned.startsWith('+')
-      ? cleaned
-      : cleaned.startsWith('234') && cleaned.length >= 13
-      ? `+${cleaned}`
-      : `+234${cleaned}`;
+    const normalized = normalizePhoneInternational(phone) || phone.trim();
     const avatar = customAvatar || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>";
     const newContact: DeviceContact = {
       id: `cnt_${Date.now()}`,
@@ -17369,8 +17525,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .filter((c) => !isSyntheticTestUser({ name: c.name, phone: c.phone }))
       .map((c, i) => {
       const raw = c.phone.trim();
-      const cleaned = raw.replace(/[\s-]/g, '');
-      const normalized = cleaned.startsWith('0') ? `+234${cleaned.slice(1)}` : cleaned.startsWith('+') ? cleaned : `+234${cleaned}`;
+      const normalized = normalizePhoneInternational(raw) || raw;
       return {
         id: `cnt_imp_${Date.now()}_${i}`,
         name: c.name.trim() || `Contact ${normalized.slice(-4)}`,
@@ -17451,86 +17606,196 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return registeredCount;
   };
 
-  const startChatWithContact = (contact: DeviceContact) => {
-    const myPhone = currentUser.phoneNumber || '';
-    const otherPhone = contact.normalizedPhoneNumber || contact.rawPhoneNumber || '';
-    const isSelf = contact.id === 'self' || phonesMatch(myPhone, otherPhone);
-    const deterministicId = isSelf
-      ? `dm_self_${normalizePhoneDigits(myPhone)}`
-      : myPhone && otherPhone
-      ? getDirectChatId(myPhone, otherPhone)
-      : '';
+  const openDirectChat = useCallback(
+    (target: {
+      phone?: string;
+      userId?: string;
+      name?: string;
+      avatar?: string;
+      location?: string;
+      verifiedStore?: boolean;
+      product?: Product;
+    }): string => {
+      const userNow = currentUserRef.current;
+      const myPhone = userNow.phoneNumber || '';
+      const normMy = normalizePhoneDigits(myPhone);
 
-    let existingChat = chats.find(
-      (c) =>
-        (deterministicId && c.id === deterministicId) ||
-        (isSelf && (c.id === `dm_self_${normalizePhoneDigits(myPhone)}` || c.name.includes('(Message yourself)'))) ||
-        (!isSelf && otherPhone && c.phone && phonesMatch(c.phone, otherPhone)) ||
-        (!isSelf && c.name.toLowerCase() === contact.name.toLowerCase())
-    );
+      const dirById = target.userId
+        ? adminUsersRef.current.find((u) => u.id === target.userId)
+        : undefined;
+      const contactById = target.userId
+        ? deviceContactsRef.current.find(
+            (c) => c.id === target.userId || c.registeredUser?.id === target.userId
+          )
+        : undefined;
+      const chatById = target.userId
+        ? chatsRef.current.find((c) => c.id === target.userId)
+        : undefined;
 
-    const targetChatId = deterministicId || existingChat?.id || `chat_${Date.now()}`;
+      const rawOtherPhone =
+        target.phone ||
+        dirById?.phoneNumber ||
+        contactById?.normalizedPhoneNumber ||
+        contactById?.rawPhoneNumber ||
+        chatById?.phone ||
+        (chatById as any)?.phoneNumber ||
+        '';
+      const normalizedOtherPhone = rawOtherPhone
+        ? normalizePhoneInternational(rawOtherPhone) || rawOtherPhone
+        : '';
 
-    if (!existingChat) {
-      const newThread: ChatThread = {
-        id: targetChatId,
-        name: contact.name,
-        avatar:
-          contact.avatar ||
-          "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23180a33'/><circle cx='50' cy='38' r='18' fill='%23a855f7'/><path d='M16 88c0-18.778 15.222-34 34-34s34 15.222 34 34' fill='%23a855f7'/></svg>",
-        verifiedStore: false,
-        location: 'Contact Book',
-        unreadCount: 0,
-        lastMessage: 'Tap to start conversation',
-        lastMessageTime: 'Just now',
-        catalog: [],
-        isOnline: true,
-        phone: contact.normalizedPhoneNumber || contact.rawPhoneNumber,
-      };
+      const dirByPhone = normalizedOtherPhone
+        ? adminUsersRef.current.find((u) => u.phoneNumber && phonesMatch(u.phoneNumber, normalizedOtherPhone))
+        : undefined;
+      const contactByPhone = normalizedOtherPhone
+        ? deviceContactsRef.current.find(
+            (c) =>
+              phonesMatch(c.normalizedPhoneNumber, normalizedOtherPhone) ||
+              phonesMatch(c.rawPhoneNumber, normalizedOtherPhone)
+          )
+        : undefined;
+
+      const isSelf =
+        target.userId === 'self' ||
+        Boolean(myPhone && normalizedOtherPhone && phonesMatch(myPhone, normalizedOtherPhone));
+
+      const deterministicId = isSelf
+        ? `dm_self_${normMy}`
+        : myPhone && normalizedOtherPhone
+        ? getDirectChatId(myPhone, normalizedOtherPhone)
+        : '';
+
+      const currentChats = chatsRef.current;
+      const existingChat = currentChats.find(
+        (c) =>
+          (deterministicId && c.id === deterministicId) ||
+          (isSelf && (c.id === `dm_self_${normMy}` || c.name.includes('(Message yourself)'))) ||
+          (!isSelf &&
+            normalizedOtherPhone &&
+            (c.phone || (c as any).phoneNumber) &&
+            phonesMatch(c.phone || (c as any).phoneNumber, normalizedOtherPhone)) ||
+          (!deterministicId && target.userId && c.id === target.userId)
+      );
+
+      const targetChatId =
+        deterministicId || existingChat?.id || target.userId || `chat_${Date.now()}`;
+
+      const bestName = isSelf
+        ? `${userNow.fullName || 'You'} (Message yourself)`
+        : target.name &&
+          target.name !== 'AGC User' &&
+          target.name !== 'Direct Chat' &&
+          target.name !== 'AGC Contact'
+        ? target.name
+        : dirByPhone?.fullName ||
+          dirById?.fullName ||
+          contactByPhone?.name ||
+          existingChat?.name ||
+          target.name ||
+          normalizedOtherPhone ||
+          'AGC User';
+
+      const bestAvatar =
+        (isSelf ? userNow.avatarUrl : undefined) ||
+        (target.avatar && !isPlaceholderAvatar(target.avatar) ? target.avatar : undefined) ||
+        dirByPhone?.avatarUrl ||
+        dirById?.avatarUrl ||
+        contactByPhone?.avatar ||
+        existingChat?.avatar ||
+        DEFAULT_AVATAR_SVG;
+
+      const peerPhoneFormatted = isSelf ? myPhone : normalizedOtherPhone;
+
       setChats((prev) => {
-        const updated = [newThread, ...prev];
-        try {
-          const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
-          localStorage.setItem(userKey, JSON.stringify(updated));
-        } catch (_) {}
+        const idx = prev.findIndex(
+          (c) =>
+            c.id === targetChatId ||
+            (existingChat && c.id === existingChat.id) ||
+            (!isSelf &&
+              normalizedOtherPhone &&
+              (c.phone || (c as any).phoneNumber) &&
+              phonesMatch(c.phone || (c as any).phoneNumber, normalizedOtherPhone))
+        );
+        let updated: ChatThread[];
+        if (idx >= 0) {
+          const cur = prev[idx];
+          const isCurNameGeneric =
+            !cur.name || cur.name === 'Direct Chat' || cur.name === 'AGC User' || cur.name === 'AGC Contact';
+          const mergedCatalog = target.product
+            ? [target.product, ...(cur.catalog || []).filter((p) => p.id !== target.product!.id)]
+            : cur.catalog;
+          const patched: ChatThread = {
+            ...cur,
+            id: targetChatId,
+            name: isCurNameGeneric ? bestName : cur.name,
+            avatar: isPlaceholderAvatar(cur.avatar) ? bestAvatar : cur.avatar,
+            phone: cur.phone || peerPhoneFormatted,
+            phoneNumber: (cur as any).phoneNumber || peerPhoneFormatted,
+            ...(mergedCatalog ? { catalog: mergedCatalog } : {}),
+          };
+          updated = [patched, ...prev.filter((_, i) => i !== idx)];
+        } else {
+          const newThread: ChatThread = {
+            id: targetChatId,
+            name: bestName,
+            avatar: bestAvatar,
+            verifiedStore: Boolean(target.verifiedStore),
+            location: target.location || (isSelf ? 'Notes to Self' : 'Direct Chat'),
+            unreadCount: 0,
+            lastMessage: target.product ? `Product: ${target.product.title}` : 'Tap to start conversation',
+            lastMessageTime: 'Just now',
+            lastMessageAtMs: Date.now(),
+            catalog: target.product ? [target.product] : [],
+            isOnline: true,
+            phone: peerPhoneFormatted,
+            phoneNumber: peerPhoneFormatted,
+            ...(target.product ? { storeCategory: target.product.category } : {}),
+          };
+          updated = sortChatsByRecency([newThread, ...prev]);
+        }
+        chatsRef.current = updated;
+        persistPartitionedChats(updated, myPhone);
         return updated;
       });
-      existingChat = newThread;
-    } else if (existingChat.id !== targetChatId) {
-      const updated = { ...existingChat, id: targetChatId };
-      setChats((prev) => {
-        const updatedList = prev.map((c) => (c.id === existingChat!.id ? updated : c));
-        try {
-          const userKey = getUserStorageKey('AGC_chats_v2', currentUser.phoneNumber);
-          localStorage.setItem(userKey, JSON.stringify(updatedList));
-        } catch (_) {}
-        return updatedList;
-      });
-      existingChat = updated;
-    }
 
-    setActiveTab('chats');
-    setActiveChatId(existingChat.id);
-    setIsContactsModalOpen(false);
+      joinChatRoom(targetChatId);
+      setActiveTab('chats');
+      setActiveChatId(targetChatId);
 
-    // Persist bilateral chat to Supabase so BOTH sides can see each other's messages
-    if (isSupabaseConfigured && targetChatId) {
-      const myUserId = currentUser.id || myPhone;
-      const otherUserId = contact.registeredUser?.id || otherPhone;
-
-      supabase
-        .from('chats')
-        .upsert({ id: targetChatId, type: 'direct', created_at: new Date().toISOString() }, { onConflict: 'id' })
-        .then(({ error }) => { if (error) console.warn('[AGC] Supabase chat upsert:', error.message); });
-
-      // Insert both participant rows (bilateral — the key fix for one-sided QR chats)
-      [myUserId, otherUserId].filter(Boolean).forEach((uid) => {
+      if (isSupabaseConfigured && targetChatId && !isSelf) {
+        const myUserId = userNow.id || myPhone;
+        const otherUserId = target.userId || dirByPhone?.id || normalizedOtherPhone;
         supabase
-          .from('chat_participants')
-          .upsert({ chat_id: targetChatId, user_id: uid }, { onConflict: 'chat_id,user_id' })
-          .then(({ error }) => { if (error) console.warn('[AGC] Participant upsert:', error.message); });
-      });
-    }
+          .from('chats')
+          .upsert({ id: targetChatId, type: 'direct', created_at: new Date().toISOString() }, { onConflict: 'id' })
+          .then(({ error }) => {
+            if (error) console.warn('[AGC] Supabase chat upsert:', error.message);
+          });
+        [myUserId, otherUserId].filter(Boolean).forEach((uid) => {
+          supabase
+            .from('chat_participants')
+            .upsert({ chat_id: targetChatId, user_id: uid }, { onConflict: 'chat_id,user_id' })
+            .then(({ error }) => {
+              if (error) console.warn('[AGC] Participant upsert:', error.message);
+            });
+        });
+      }
+
+      return targetChatId;
+    },
+    []
+  );
+
+  const startChatWithContact = (contact: DeviceContact) => {
+    const otherPhone = contact.normalizedPhoneNumber || contact.rawPhoneNumber || '';
+    openDirectChat({
+      phone: otherPhone,
+      userId: contact.id === 'self' ? 'self' : contact.registeredUser?.id,
+      name: contact.name,
+      avatar: contact.avatar,
+      location: 'Contact Book',
+    });
+    setIsContactsModalOpen(false);
   };
 
   const startAiChat = () => {
@@ -19424,6 +19689,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             resolvedChatId = getDirectChatId(myCleanPhone, otherCleanPhone);
           }
         }
+      } else if (!isGroupChat) {
+        otherCleanPhone = isFromMe ? (targetPhone || '').replace(/\D/g, '') : senderCleanPhone;
+        if (myCleanPhone && otherCleanPhone && !isSelfChat) {
+          resolvedChatId = getDirectChatId(myCleanPhone, otherCleanPhone);
+        }
+      }
+
+      // Enforce recipient block list BEFORE decryption, persistence, thread creation, or notification
+      if (!isFromMe && !isGroupChat && !isSelfChat) {
+        const senderIdentity = senderCleanPhone || otherCleanPhone;
+        if (isUserBlockedByMe(resolvedChatId, senderIdentity) || isUserBlockedByMe(chatId, senderIdentity)) {
+          return;
+        }
       }
 
       // Decrypt message text if encrypted with E2EE (try normalized + legacy phone secrets)
@@ -19446,13 +19724,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      // 3. Filter duplicates by message ID (merge live polls / ajo cards / X/O game states)
-      let isDuplicateMessage = false;
+      // 3. Synchronously check duplicates BEFORE setMessages updater to avoid async React 19 races
+      const existingListSync = messagesRef.current[resolvedChatId] || messagesRef.current[chatId] || [];
+      const existingIdxSync = existingListSync.findIndex((m) => m.id === message.id);
+      const isUpdatableExisting =
+        existingIdxSync >= 0 &&
+        ((message.status === 'read' && existingListSync[existingIdxSync].status !== 'read') ||
+          message.type === 'financial_poll' ||
+          message.type === 'ajo_update' ||
+          message.type === 'game_xo' ||
+          message.type === 'game_whot' ||
+          message.type === 'game_ludo' ||
+          message.type === 'game_poker' ||
+          message.type === 'bill_request');
+
+      if (existingIdxSync >= 0 && !isUpdatableExisting) {
+        return;
+      }
+
       setMessages((prev) => {
         const list = prev[resolvedChatId] || prev[chatId] || [];
         const existingIdx = list.findIndex((m) => m.id === message.id);
         if (existingIdx >= 0) {
-          isDuplicateMessage = true;
           const existingMsg = list[existingIdx];
           const shouldUpgradeRead = message.status === 'read' && existingMsg.status !== 'read';
           if (
@@ -19565,7 +19858,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return updated;
       });
 
-      if (isDuplicateMessage) return;
+      if (existingIdxSync >= 0) return;
 
       if (
         !isFromMe &&
@@ -19586,7 +19879,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (c) =>
             c.id === resolvedChatId ||
             c.id === chatId ||
-            (!isGroupChat && otherCleanPhone && c.phone && phonesMatch(c.phone, otherCleanPhone))
+            (!isGroupChat && otherCleanPhone && (c.phone || (c as any).phoneNumber) && phonesMatch(c.phone || (c as any).phoneNumber, otherCleanPhone))
         );
 
         const msgText = message.oneTimeView
@@ -19604,6 +19897,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   ? `📊 Poll: ${message.quickPoll.question}`
                   : '📎 Attachment'));
 
+        const peerPhoneDigits = otherCleanPhone || senderCleanPhone;
+        const resolvedPeerPhone = isSelfChat
+          ? userNow.phoneNumber
+          : (message.senderPhone || (peerPhoneDigits ? `+${peerPhoneDigits}` : ''));
+        const dirMatch = !isGroupChat && peerPhoneDigits
+          ? adminUsersRef.current.find((u) => u.phoneNumber && phonesMatch(u.phoneNumber, peerPhoneDigits))
+          : undefined;
+
         if (index >= 0) {
           const updated = [...prev];
           const matched = { ...updated[index] };
@@ -19616,6 +19917,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setActiveChatId(resolvedChatId);
           }
           matched.id = resolvedChatId;
+          if (!matched.phone && resolvedPeerPhone) {
+            matched.phone = resolvedPeerPhone;
+            (matched as any).phoneNumber = resolvedPeerPhone;
+          }
+          if (
+            !isGroupChat &&
+            !isFromMe &&
+            (!matched.name || matched.name === 'Direct Chat' || matched.name === 'AGC Contact' || matched.name === 'AGC User')
+          ) {
+            const upgradedName = dirMatch?.fullName || dirMatch?.username || message.senderName;
+            if (upgradedName) matched.name = upgradedName;
+          }
           if (isNewerMsg) {
             matched.lastMessage = msgText;
             matched.lastMessageTime = message.timestamp;
@@ -19658,14 +19971,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           const activeNow = activeChatIdRef.current;
           const incomingTs = createdAtMs || Date.now();
-          const dirMatch = !isGroupChat && otherCleanPhone
-            ? adminUsersRef.current.find((u) => u.phoneNumber && phonesMatch(u.phoneNumber, otherCleanPhone))
-            : undefined;
           const resolvedPeerName = isGroupChat
             ? (chat?.name || (isChannelChat ? 'Broadcast Channel' : 'Group Chat'))
             : isSelfChat
             ? `${userNow.fullName || 'You'} (Message yourself)`
-            : (dirMatch?.fullName || dirMatch?.username || message.senderName || 'AGC Contact');
+            : (dirMatch?.fullName || dirMatch?.username || message.senderName || resolvedPeerPhone || 'AGC Contact');
           const newThread: ChatThread = {
             id: resolvedChatId,
             name: resolvedPeerName,
@@ -19695,7 +20005,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             membersCount: chat?.membersCount || computeClientMembersCount(chat?.members, chat?.memberPhones),
             members: chat?.members || [],
             memberPhones: chat?.memberPhones || [],
-            phone: isSelfChat ? userNow.phoneNumber : (message.senderPhone || ''),
+            phone: resolvedPeerPhone,
+            phoneNumber: resolvedPeerPhone,
           };
           const finalUpdated = sortChatsByRecency([newThread, ...prev]);
           persistPartitionedChats(finalUpdated, userNow.phoneNumber);
@@ -19834,10 +20145,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const latestUser = currentUserRef.current;
       const latestCleanPhone = latestUser.phoneNumber?.replace(/\D/g, '') || myCleanPhone;
       const latestNorm = normalizePhoneDigits(latestCleanPhone);
+      const sessTok = safeLocalStorage.getItem('AGC_session_token') || undefined;
       if (latestCleanPhone) {
-        socket.emit('register_phone', latestCleanPhone);
+        socket.emit('register_phone', { phone: latestCleanPhone, sessionToken: sessTok });
         if (latestNorm !== latestCleanPhone) {
-          socket.emit('register_phone', latestNorm);
+          socket.emit('register_phone', { phone: latestNorm, sessionToken: sessTok });
         }
         socket.emit('user_online', {
           userId: latestUser.id,
@@ -22382,6 +22694,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sendImageMessage,
         blockedUserIds,
         toggleBlockUser,
+        isUserBlockedByMe,
         CURRENCY_SYMBOLS,
         CURRENCY_RATES,
         openCommunityChat,
@@ -22575,6 +22888,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsContactsModalOpen,
         syncDeviceContacts,
         startChatWithContact,
+        openDirectChat,
         startAiChat,
         inviteBotToGroup,
         addNewDeviceContact,

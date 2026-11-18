@@ -94,8 +94,8 @@ export const CreatorModal: React.FC = () => {
     wallet,
     currentUser,
     startCall,
-    setActiveTab,
-    setActiveChatId,
+    openDirectChat,
+    adminUsers,
     chats,
   } = useApp();
 
@@ -328,15 +328,29 @@ export const CreatorModal: React.FC = () => {
   };
 
   const handleChatCreator = (drop: CreatorDrop) => {
-    let target = chats.find(
-      (c) =>
-        c.name.toLowerCase().includes(drop.creatorName.toLowerCase()) ||
-        drop.creatorName.toLowerCase().includes(c.name.toLowerCase())
+    const creatorRecord = creators.find((c) => c.id === drop.creatorId);
+    const matchedUser = adminUsers.find(
+      (u) =>
+        u.id === drop.creatorId ||
+        u.fullName?.toLowerCase() === drop.creatorName.toLowerCase() ||
+        (u.username && `@${u.username.toLowerCase()}` === drop.creatorHandle.toLowerCase())
     );
-    if (!target && chats.length > 0) target = chats[0];
+    const existingDm = chats.find(
+      (c) =>
+        !c.isGroup &&
+        !c.isChannel &&
+        (c.id === drop.creatorId ||
+          c.name.toLowerCase() === drop.creatorName.toLowerCase() ||
+          c.name.toLowerCase().includes(drop.creatorName.toLowerCase()))
+    );
+    openDirectChat({
+      phone: matchedUser?.phoneNumber || (creatorRecord as any)?.phone || existingDm?.phone,
+      userId: matchedUser?.id || existingDm?.id || drop.creatorId,
+      name: drop.creatorName || creatorRecord?.name,
+      avatar: drop.creatorAvatar || creatorRecord?.avatar,
+      location: 'Creator Hub',
+    });
     setIsCreatorModalOpen(false);
-    setActiveTab('chats');
-    if (target) setActiveChatId(target.id);
   };
 
   const handleShareDrop = (drop: CreatorDrop) => {

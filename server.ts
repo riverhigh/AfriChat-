@@ -508,6 +508,7 @@ interface RegisteredUser {
   suspendedAt?: string;
   suspendedUntil?: string;
   suspensionReason?: string;
+  blockedPhones?: string[];
 }
 
 function expireUserSuspensionIfElapsed(user: RegisteredUser, mapKey?: string): boolean {
@@ -1321,6 +1322,7 @@ interface StoredChatRelayEntry {
   senderPhone?: string;
   targetPhone?: string;
   memberPhones?: string[];
+  suppressedForPhones?: string[];
   chat?: any;
   isGroup?: boolean;
   createdAtMs: number;
@@ -1331,6 +1333,15 @@ const storedMessagesById = new Map<string, StoredChatRelayEntry>();
 const MAX_STORED_MESSAGES = 2500;
 const MESSAGE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 let messagesSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function isPhoneBlockedServer(blockerPhone?: string, senderPhone?: string): boolean {
+  if (!blockerPhone || !senderPhone) return false;
+  if (phonesMatchServer(blockerPhone, senderPhone)) return false;
+  const entry = findUserEntry(blockerPhone);
+  const blockedList = entry?.user?.blockedPhones;
+  if (!Array.isArray(blockedList) || blockedList.length === 0) return false;
+  return blockedList.some((bp) => Boolean(bp) && phonesMatchServer(String(bp), senderPhone));
+}
 
 function scheduleSaveMessagesFile() {
   if (messagesSaveTimer) return;
@@ -1343,7 +1354,7 @@ function scheduleSaveMessagesFile() {
     } catch (e) {
       console.warn('Notice saving messages buffer:', e);
     }
-  }, 600);
+  }, 150);
 }
 
 function recordStoredMessage(entry: Omit<StoredChatRelayEntry, 'createdAtMs'> & { createdAtMs?: number }) {
@@ -1355,6 +1366,12 @@ function recordStoredMessage(entry: Omit<StoredChatRelayEntry, 'createdAtMs'> & 
     existing.message = { ...existing.message, ...entry.message };
     existing.createdAtMs = Math.max(existing.createdAtMs, createdAtMs);
     if (entry.chat) existing.chat = entry.chat;
+    if (Array.isArray(entry.suppressedForPhones) && entry.suppressedForPhones.length > 0) {
+      existing.suppressedForPhones = dedupePhonesServer([
+        ...(existing.suppressedForPhones || []),
+        ...entry.suppressedForPhones,
+      ]);
+    }
     scheduleSaveMessagesFile();
     return;
   }
@@ -1365,6 +1382,7 @@ function recordStoredMessage(entry: Omit<StoredChatRelayEntry, 'createdAtMs'> & 
     senderPhone: entry.senderPhone,
     targetPhone: entry.targetPhone,
     memberPhones: entry.memberPhones,
+    suppressedForPhones: entry.suppressedForPhones,
     chat: entry.chat,
     isGroup: entry.isGroup,
     createdAtMs,
@@ -1410,28 +1428,42 @@ function markStoredMessagesRead(
   }
 }
 
-function doesStoredMessageMatchPhone(entry: StoredChatRelayEntry, phoneVariantsSet: Set<string>): boolean {
+function doesStoredMessageMatchPhone(entry: StoredChatRelayEntry, phoneVariantsSet: Set<string>, viewerRawPhone?: string): boolean {
   if (!entry || phoneVariantsSet.size === 0) return false;
+  if (
+    Array.isArray(entry.suppressedForPhones) &&
+    entry.suppressedForPhones.length > 0 &&
+    isPhoneVariantsInListServer(entry.suppressedForPhones, phoneVariantsSet)
+  ) {
+    return false;
+  }
   const auth = isPhoneCurrentlyAuthorizedForGroupChat(entry.chatId, phoneVariantsSet);
   if (auth === false) return false;
   const checkPhone = (raw?: string) => {
     if (!raw) return false;
     return getPhoneVariants(raw).some((v) => phoneVariantsSet.has(v));
   };
+  let matched = false;
   if (checkPhone(entry.targetPhone) || checkPhone(entry.senderPhone) || checkPhone(entry.message?.senderPhone)) {
-    return true;
-  }
-  if (Array.isArray(entry.memberPhones) && entry.memberPhones.some((p) => checkPhone(p))) {
-    return true;
-  }
-  if (Array.isArray(entry.chat?.memberPhones) && entry.chat.memberPhones.some((p: string) => checkPhone(p))) {
-    return true;
-  }
-  if (entry.chatId.startsWith('dm_')) {
+    matched = true;
+  } else if (Array.isArray(entry.memberPhones) && entry.memberPhones.some((p) => checkPhone(p))) {
+    matched = true;
+  } else if (Array.isArray(entry.chat?.memberPhones) && entry.chat.memberPhones.some((p: string) => checkPhone(p))) {
+    matched = true;
+  } else if (entry.chatId.startsWith('dm_')) {
     const parts = entry.chatId.replace('dm_', '').split('_').filter(Boolean);
-    if (parts.some((p) => checkPhone(p))) return true;
+    if (parts.some((p) => checkPhone(p))) matched = true;
   }
-  return false;
+  if (!matched) return false;
+
+  // Enforce current user's block list on 1-on-1 DMs
+  if (!entry.isGroup && viewerRawPhone) {
+    const msgSenderPhone = entry.senderPhone || entry.message?.senderPhone || '';
+    if (msgSenderPhone && !checkPhone(msgSenderPhone) && isPhoneBlockedServer(viewerRawPhone, msgSenderPhone)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 try {
@@ -2112,9 +2144,11 @@ app.post('/api/users/register', (req: Request, res: Response) => {
     });
   }
 
-  const incomingName = typeof (username || fullName) === 'string' ? String(username || fullName).trim() : '';
+  const incomingFullNameRaw = typeof fullName === 'string' ? fullName.trim() : '';
+  const incomingUsernameRaw = typeof username === 'string' ? username.trim() : '';
+  const incomingName = incomingFullNameRaw || incomingUsernameRaw;
   const isIncomingGeneric = !incomingName || incomingName === 'AGC User' || incomingName === 'User' || incomingName === 'Registered User';
-  const existingName = existingCheck?.username || existingCheck?.fullName || '';
+  const existingName = existingCheck?.fullName || existingCheck?.username || '';
   const isExistingGeneric = !existingName || existingName === 'AGC User' || existingName === 'User' || existingName === 'Registered User';
   const existingUpdatedTs = existingCheck?.updatedAt ? Date.parse(existingCheck.updatedAt) || 0 : 0;
   const incomingUpdatedTs = updatedAt ? Date.parse(String(updatedAt)) || 0 : 0;
@@ -2122,14 +2156,16 @@ app.post('/api/users/register', (req: Request, res: Response) => {
   let resolvedFullName = existingCheck?.fullName || 'AGC User';
   let resolvedUsername = existingCheck?.username;
   if (!isIncomingGeneric) {
-    // Allow updating existing name if existing is generic OR incoming has a newer/current profile sync (when skipSessionKick is true it's syncProfileToAllRegistries)
     if (isExistingGeneric || incomingUpdatedTs >= existingUpdatedTs || (skipSessionKick && incomingName !== existingName && !existingUpdatedTs)) {
       resolvedFullName = incomingName;
-      resolvedUsername = username ? normalizeUsernameHandle(String(username)) : (existingCheck?.username || incomingName);
     }
   } else if (!isExistingGeneric) {
     resolvedFullName = existingCheck!.fullName;
-    resolvedUsername = existingCheck!.username;
+  }
+  if (incomingUsernameRaw && incomingUsernameRaw !== 'AGC User' && incomingUsernameRaw !== 'User') {
+    resolvedUsername = normalizeUsernameHandle(incomingUsernameRaw);
+  } else if (!resolvedUsername && !isIncomingGeneric) {
+    resolvedUsername = normalizeUsernameHandle(incomingName);
   }
 
   const resolvedAvatar =
@@ -6566,27 +6602,180 @@ ${knowledgeBlock || 'Use built-in AGC Super-App platform knowledge.'}`;
   }
 });
 
-// REST: User lookup by phone number
-app.get('/api/users/lookup', (req: Request, res: Response) => {
-  const rawQuery = (req.query.phone as string || '');
-  const query = rawQuery.replace(/\D/g, '');
-  if (!query) {
-    return res.status(400).json({ found: false, error: 'Phone query required' });
+// REST: User lookup by phone number OR username/handle (synced with Supabase registry)
+app.get('/api/users/lookup', async (req: Request, res: Response) => {
+  const rawPhone = String(req.query.phone || '').trim();
+  const rawQuery = String(req.query.query || req.query.q || rawPhone).trim();
+  const digits = rawQuery.replace(/\D/g, '');
+  const handle = normalizeUsernameHandle(rawQuery);
+  if (!digits && !handle) {
+    return res.status(400).json({ found: false, error: 'Phone or username query required' });
   }
-  let foundUser: RegisteredUser | undefined = usersByPhone.get(query);
-  if (!foundUser) {
-    for (const [phone, u] of usersByPhone.entries()) {
-      if (phone.endsWith(query) || query.endsWith(phone)) {
-        foundUser = u;
-        break;
+
+  const findLocalMatch = (): RegisteredUser | undefined => {
+    if (digits.length >= 7) {
+      const entry = findUserEntry(digits);
+      if (entry?.user && !isSyntheticTestAccount(entry.user)) return entry.user;
+    }
+    if (handle.length >= 2) {
+      for (const u of usersByPhone.values()) {
+        if (isSyntheticTestAccount(u)) continue;
+        const uHandle = normalizeUsernameHandle(u.username || '');
+        const fHandle = normalizeUsernameHandle(u.fullName || '');
+        if ((uHandle && uHandle === handle) || (fHandle && fHandle === handle)) {
+          return u;
+        }
       }
     }
+    return undefined;
+  };
+
+  let foundUser = findLocalMatch();
+  if (!foundUser) {
+    await syncUsersFromSupabase().catch(() => {});
+    foundUser = findLocalMatch();
   }
+
+  if (!foundUser && SUPABASE_URL && SUPABASE_ANON_KEY) {
+    try {
+      const last9 = digits.length >= 9 ? digits.slice(-9) : digits;
+      const filterClause =
+        digits.length >= 7
+          ? `or=(phone_digits.eq.${encodeURIComponent(last9)},phone_digits.eq.${encodeURIComponent(digits)},full_phone.eq.${encodeURIComponent('+' + digits)})`
+          : `or=(username.ilike.${encodeURIComponent(handle)},username.ilike.${encodeURIComponent('@' + handle)})`;
+      const sbRes = await fetch(`${SUPABASE_URL}/rest/v1/agc_phone_registry?select=*&${filterClause}&limit=1`, {
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (sbRes.ok) {
+        const rows = await sbRes.json();
+        const r = Array.isArray(rows) ? rows[0] : null;
+        if (r && !isSyntheticTestAccount(r)) {
+          const clean = String(r.full_phone || r.phone_digits || '').replace(/\D/g, '');
+          if (clean) {
+            foundUser = {
+              id: r.id || `usr_${clean}`,
+              fullName: r.username || 'AGC User',
+              username: normalizeUsernameHandle(r.username || ''),
+              phoneNumber: r.full_phone || `+${clean}`,
+              cleanPhone: clean,
+              avatarUrl: r.avatar_url || undefined,
+              about: r.about || 'Available · Using AGC',
+              registeredAt: r.created_at || new Date().toISOString(),
+              role: 'user',
+              status: 'active',
+            };
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   if (foundUser && !isSyntheticTestAccount(foundUser)) {
     res.json({ found: true, user: foundUser });
   } else {
     res.json({ found: false });
   }
+});
+
+// REST: Global AGC User Search (by name, @username, or phone — allows messaging without saving contact first)
+app.get('/api/users/search', async (req: Request, res: Response) => {
+  const q = String(req.query.q || req.query.query || '').trim();
+  const excludePhone = String(req.query.excludePhone || '').trim();
+  if (!q || q.length < 2) {
+    return res.json({ success: true, users: [] });
+  }
+  await syncUsersFromSupabase().catch(() => {});
+  const qLower = q.toLowerCase();
+  const qHandle = normalizeUsernameHandle(q);
+  const qDigits = q.replace(/\D/g, '');
+  const qVariants = qDigits ? getPhoneVariants(qDigits) : [];
+
+  const results: Array<Partial<RegisteredUser>> = [];
+  const seenKeys = new Set<string>();
+
+  for (const u of usersByPhone.values()) {
+    if (isSyntheticTestAccount(u)) continue;
+    if (u.status === 'banned') continue;
+    const phone = u.phoneNumber || u.cleanPhone || '';
+    if (excludePhone && phone && phonesMatchServer(excludePhone, phone)) continue;
+
+    const uName = (u.fullName || '').toLowerCase();
+    const uHandle = normalizeUsernameHandle(u.username || '');
+    const uClean = (u.cleanPhone || u.phoneNumber || '').replace(/\D/g, '');
+    const uVariants = uClean ? getPhoneVariants(uClean) : [];
+
+    const nameMatch = uName.includes(qLower);
+    const handleMatch = Boolean(qHandle && (uHandle.includes(qHandle) || uHandle === qHandle));
+    const phoneMatch = Boolean(
+      qDigits.length >= 4 &&
+        (uClean.includes(qDigits) || (qVariants.length > 0 && uVariants.some((v) => qVariants.includes(v))))
+    );
+
+    if (nameMatch || handleMatch || phoneMatch) {
+      const dedupeKey = uClean.length >= 9 ? uClean.slice(-9) : (u.id || phone);
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+      results.push({
+        id: u.id,
+        fullName: u.fullName,
+        username: u.username,
+        phoneNumber: u.phoneNumber,
+        cleanPhone: u.cleanPhone,
+        avatarUrl: u.avatarUrl,
+        about: u.about,
+        verificationBadge: u.verificationBadge ?? null,
+        isOnline: u.isOnline,
+        lastSeen: u.lastSeen,
+      });
+      if (results.length >= 25) break;
+    }
+  }
+
+  return res.json({ success: true, users: results });
+});
+
+// REST: Block / Unblock user (persisted on user record and enforced across live & offline message delivery)
+app.get('/api/users/blocks', (req: Request, res: Response) => {
+  const phone = String(req.query.phone || '').trim();
+  if (!phone) return res.status(400).json({ success: false, blockedPhones: [] });
+  const entry = findUserEntry(phone);
+  return res.json({
+    success: true,
+    blockedPhones: Array.isArray(entry?.user?.blockedPhones) ? entry!.user.blockedPhones : [],
+  });
+});
+
+app.post('/api/users/block', (req: Request, res: Response) => {
+  const { blockerPhone, targetPhone, blocked } = req.body || {};
+  const cleanBlocker = String(blockerPhone || '').replace(/\D/g, '');
+  const cleanTarget = String(targetPhone || '').replace(/\D/g, '');
+  if (!cleanBlocker || !cleanTarget) {
+    return res.status(400).json({ success: false, error: 'blockerPhone and targetPhone are required' });
+  }
+  const existing = findUserEntry(String(blockerPhone));
+  const storeKey = existing?.key || cleanBlocker;
+  const userRecord: RegisteredUser = existing?.user || {
+    id: `usr_${cleanBlocker}`,
+    fullName: 'AGC User',
+    phoneNumber: String(blockerPhone),
+    cleanPhone: cleanBlocker,
+    registeredAt: new Date().toISOString(),
+    role: 'user',
+    status: 'active',
+  };
+  const currentBlocked = Array.isArray(userRecord.blockedPhones) ? userRecord.blockedPhones : [];
+  const shouldBlock = Boolean(blocked);
+  const nextBlocked = shouldBlock
+    ? dedupePhonesServer([...currentBlocked, String(targetPhone)])
+    : currentBlocked.filter((p) => !phonesMatchServer(p, String(targetPhone)));
+
+  userRecord.blockedPhones = nextBlocked;
+  userRecord.updatedAt = new Date().toISOString();
+  usersByPhone.set(storeKey, userRecord);
+  saveUsersFile();
+
+  return res.json({ success: true, blocked: shouldBlock, blockedPhones: nextBlocked });
 });
 
 // REST: List all registered users (synced live with Supabase registry)
@@ -7248,11 +7437,11 @@ app.delete('/api/statuses/:id', (req: Request, res: Response) => {
 // ── REST: Store-and-Forward Reliable Message Relay & Missed Message Sync ─────
 app.post('/api/messages/send', (req: Request, res: Response) => {
   try {
-    const { chatId, message, targetPhone, memberPhones, chat, isGroup, senderSocketId } = req.body || {};
+    const { chatId, message, targetPhone, memberPhones, chat, isGroup, senderSocketId, senderPhone: bodySenderPhone } = req.body || {};
     if (!chatId || !message || !message.id) {
       return res.status(400).json({ success: false, error: 'chatId and message required' });
     }
-    const senderPhone = String(message.senderPhone || '').replace(/\D/g, '');
+    const senderPhone = String(message.senderPhone || bodySenderPhone || '').replace(/\D/g, '');
 
     // Authoritative server check: block kicked/non-member users and non-admins in channels/announce mode
     if (senderPhone && message.sender !== 'system' && message.sender !== 'ai') {
@@ -7273,7 +7462,20 @@ app.post('/api/messages/send', (req: Request, res: Response) => {
       finalTarget = parts.find((p) => !senderVariants.has(p) && !phonesMatchServer(p, senderPhone)) || '';
     }
 
-    const groupFlag = Boolean(isGroup || String(chatId).startsWith('group_') || String(chatId).startsWith('channel_') || chat?.isGroup || chat?.isChannel);
+    const groupFlag = Boolean(isGroup || String(chatId).startsWith('group_') || String(chatId).startsWith('channel_') || String(chatId).startsWith('town_comm_') || chat?.isGroup || chat?.isChannel);
+
+    // Block enforcement for 1-on-1 direct messages (unless it's a self-chat)
+    const isSelfDm = String(chatId).includes('self') || (senderPhone && finalTarget && phonesMatchServer(senderPhone, finalTarget));
+    const suppressedForPhones: string[] = [];
+    if (!groupFlag && !isSelfDm && senderPhone && finalTarget) {
+      if (isPhoneBlockedServer(senderPhone, finalTarget)) {
+        return res.status(403).json({ success: false, blocked: true, error: 'You blocked this contact. Unblock to send messages.' });
+      }
+      if (isPhoneBlockedServer(finalTarget, senderPhone)) {
+        suppressedForPhones.push(finalTarget);
+      }
+    }
+
     const serverPriv = privateGroupsMap.get(String(chatId));
     const serverComm = String(chatId).startsWith('town_comm_') ? communitiesMap.get(String(chatId).replace('town_comm_', '')) : undefined;
     const authRecord = serverPriv || serverComm;
@@ -7294,10 +7496,11 @@ app.post('/api/messages/send', (req: Request, res: Response) => {
     recordStoredMessage({
       id: String(message.id),
       chatId: String(chatId),
-      message,
+      message: senderPhone && !message.senderPhone ? { ...message, senderPhone } : message,
       senderPhone,
       targetPhone: finalTarget || undefined,
       memberPhones: authoritativePhones.length > 0 ? authoritativePhones : undefined,
+      suppressedForPhones: suppressedForPhones.length > 0 ? suppressedForPhones : undefined,
       chat: wireChatWithAuth,
       isGroup: groupFlag,
     });
@@ -7314,13 +7517,20 @@ app.post('/api/messages/send', (req: Request, res: Response) => {
         if (kickedPhonesList.length > 0 && targetSock?._agcPhone && isPhoneInListServer(kickedPhonesList, targetSock._agcPhone)) {
           continue;
         }
+        if (
+          suppressedForPhones.length > 0 &&
+          targetSock?._agcPhone &&
+          suppressedForPhones.some((sp) => phonesMatchServer(sp, targetSock._agcPhone))
+        ) {
+          continue;
+        }
         deliveredSockets.add(sid);
         io.to(sid).emit('new_message', outPayload);
       }
     };
 
     emitOnce(`chat:${chatId}`);
-    if (finalTarget) {
+    if (finalTarget && suppressedForPhones.length === 0) {
       getPhoneVariants(finalTarget).forEach((v) => emitOnce(`phone:${v}`));
     }
     if (senderPhone && !String(chatId).includes('self')) {
@@ -7331,7 +7541,12 @@ app.post('/api/messages/send', (req: Request, res: Response) => {
       getPhoneVariants(p).forEach((v) => emitOnce(`phone:${v}`));
     });
 
-    return res.json({ success: true, id: message.id, relayedSockets: Math.max(0, deliveredSockets.size - (senderSocketId ? 1 : 0)) });
+    return res.json({
+      success: true,
+      id: message.id,
+      relayedSockets: Math.max(0, deliveredSockets.size - (senderSocketId ? 1 : 0)),
+      ...(suppressedForPhones.length > 0 ? { blockedByRecipient: true } : {}),
+    });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err?.message || 'Failed to store message' });
   }
@@ -7343,7 +7558,7 @@ app.get('/api/messages/sync', (req: Request, res: Response) => {
   const sinceMs = Number(req.query.sinceMs) || (Date.now() - 3 * 24 * 60 * 60 * 1000);
   const variantsSet = new Set(getPhoneVariants(rawPhone));
   const matched = storedMessagesList
-    .filter((entry) => entry.createdAtMs > sinceMs && doesStoredMessageMatchPhone(entry, variantsSet))
+    .filter((entry) => entry.createdAtMs > sinceMs && doesStoredMessageMatchPhone(entry, variantsSet, rawPhone))
     .slice(-300);
   return res.json({ success: true, messages: matched, serverTimeMs: Date.now() });
 });
@@ -7353,14 +7568,33 @@ app.get('/api/messages/chat/:chatId', (req: Request, res: Response) => {
   const sinceMs = Number(req.query.sinceMs) || 0;
   const viewerPhone = String(req.query.phone || '').trim();
   if (!chatId) return res.json({ success: true, messages: [] });
-  if (viewerPhone) {
-    const auth = isPhoneCurrentlyAuthorizedForGroupChat(chatId, new Set(getPhoneVariants(viewerPhone)));
+  const viewerVariants = viewerPhone ? new Set(getPhoneVariants(viewerPhone)) : null;
+  if (viewerPhone && viewerVariants) {
+    const auth = isPhoneCurrentlyAuthorizedForGroupChat(chatId, viewerVariants);
     if (auth === false) {
       return res.json({ success: true, messages: [], removed: true, serverTimeMs: Date.now() });
     }
   }
   const list = storedMessagesList
-    .filter((entry) => entry.chatId === chatId && entry.createdAtMs > sinceMs)
+    .filter((entry) => {
+      if (entry.chatId !== chatId || entry.createdAtMs <= sinceMs) return false;
+      if (viewerPhone && viewerVariants) {
+        if (
+          Array.isArray(entry.suppressedForPhones) &&
+          entry.suppressedForPhones.length > 0 &&
+          isPhoneVariantsInListServer(entry.suppressedForPhones, viewerVariants)
+        ) {
+          return false;
+        }
+        if (!entry.isGroup) {
+          const msgSender = entry.senderPhone || entry.message?.senderPhone || '';
+          if (msgSender && !phonesMatchServer(msgSender, viewerPhone) && isPhoneBlockedServer(viewerPhone, msgSender)) {
+            return false;
+          }
+        }
+      }
+      return true;
+    })
     .slice(-150);
   return res.json({ success: true, messages: list, serverTimeMs: Date.now() });
 });
@@ -10111,7 +10345,20 @@ io.on('connection', (socket: Socket) => {
       finalTarget = parts.find((p: string) => !senderVariants.has(p) && !phonesMatchServer(p, senderPhone)) || '';
     }
 
-    const isGroup = Boolean(chatId.startsWith('group_') || chatId.startsWith('channel_') || chat?.isGroup || chat?.isChannel);
+    const isGroup = Boolean(chatId.startsWith('group_') || chatId.startsWith('channel_') || chatId.startsWith('town_comm_') || chat?.isGroup || chat?.isChannel);
+
+    // Block enforcement for 1-on-1 DMs
+    const isSelfDm = String(chatId).includes('self') || (senderPhone && finalTarget && phonesMatchServer(senderPhone, finalTarget));
+    const suppressedForPhones: string[] = [];
+    if (!isGroup && !isSelfDm && senderPhone && finalTarget) {
+      if (isPhoneBlockedServer(senderPhone, finalTarget)) {
+        return;
+      }
+      if (isPhoneBlockedServer(finalTarget, senderPhone)) {
+        suppressedForPhones.push(finalTarget);
+      }
+    }
+
     const serverPriv = privateGroupsMap.get(String(chatId));
     const serverComm = String(chatId).startsWith('town_comm_') ? communitiesMap.get(String(chatId).replace('town_comm_', '')) : undefined;
     const authRecord = serverPriv || serverComm;
@@ -10134,10 +10381,11 @@ io.on('connection', (socket: Socket) => {
     recordStoredMessage({
       id: String(message.id || `msg_${Date.now()}`),
       chatId,
-      message,
+      message: senderPhone && !message.senderPhone ? { ...message, senderPhone } : message,
       senderPhone,
       targetPhone: finalTarget || undefined,
       memberPhones: authoritativePhones.length > 0 ? authoritativePhones : undefined,
+      suppressedForPhones: suppressedForPhones.length > 0 ? suppressedForPhones : undefined,
       chat: wireChatWithAuth,
       isGroup,
     });
@@ -10154,6 +10402,13 @@ io.on('connection', (socket: Socket) => {
         if (kickedPhonesList.length > 0 && targetSock?._agcPhone && isPhoneInListServer(kickedPhonesList, targetSock._agcPhone)) {
           continue;
         }
+        if (
+          suppressedForPhones.length > 0 &&
+          targetSock?._agcPhone &&
+          suppressedForPhones.some((sp) => phonesMatchServer(sp, targetSock._agcPhone))
+        ) {
+          continue;
+        }
         if (skipSenderCheck && senderPhone) {
           if (targetSock?._agcPhone && phonesMatchServer(targetSock._agcPhone, senderPhone) && !chatId.includes('self')) {
             continue;
@@ -10166,7 +10421,7 @@ io.on('connection', (socket: Socket) => {
 
     emitOnceToRoom(`chat:${chatId}`);
 
-    if (finalTarget) {
+    if (finalTarget && suppressedForPhones.length === 0) {
       getPhoneVariants(finalTarget).forEach((v) => {
         emitOnceToRoom(`phone:${v}`);
       });

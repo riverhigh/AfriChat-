@@ -19,7 +19,7 @@ import {
   Bot,
   ShieldCheck,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, normalizePhoneInternational, phonesMatch } from '../context/AppContext';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { DeviceContact } from '../types';
 import { isSyntheticTestUser } from '../utils/testAccountFilter';
@@ -32,6 +32,7 @@ export const ContactsModal: React.FC = () => {
     setIsContactsModalOpen,
     deviceContacts,
     startChatWithContact,
+    openDirectChat,
     addNewDeviceContact,
     importDeviceContacts,
     startCall,
@@ -227,6 +228,102 @@ export const ContactsModal: React.FC = () => {
     isSelf?: boolean;
   } | null>(null);
 
+  const [directoryResults, setDirectoryResults] = useState<
+    Array<{ id: string; fullName: string; username?: string; phoneNumber: string; avatarUrl?: string; about?: string; isOnline?: boolean }>
+  >([]);
+  const [isSearchingDirectory, setIsSearchingDirectory] = useState(false);
+
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!isContactsModalOpen || q.length < 2) {
+      setDirectoryResults([]);
+      setIsSearchingDirectory(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsSearchingDirectory(true);
+    const timer = setTimeout(async () => {
+      const results: Array<{
+        id: string;
+        fullName: string;
+        username?: string;
+        phoneNumber: string;
+        avatarUrl?: string;
+        about?: string;
+        isOnline?: boolean;
+      }> = [];
+      const seenPhones: string[] = [];
+
+      const pushResult = (u: any) => {
+        if (!u || isSyntheticTestUser(u)) return;
+        const rawPhone = u.phoneNumber || u.phone || u.full_phone || '';
+        const normPhone = normalizePhoneInternational(rawPhone) || rawPhone;
+        if (!normPhone) return;
+        if (currentUser.phoneNumber && phonesMatch(normPhone, currentUser.phoneNumber)) return;
+        if (seenPhones.some((p) => phonesMatch(p, normPhone))) return;
+        seenPhones.push(normPhone);
+        results.push({
+          id: u.id || `dir_${normPhone}`,
+          fullName: u.fullName || u.name || u.username || normPhone,
+          username: u.username,
+          phoneNumber: normPhone,
+          avatarUrl: u.avatarUrl || u.avatar_url,
+          about: u.about,
+          isOnline: Boolean(u.isOnline),
+        });
+      };
+
+      try {
+        const res = await fetch(
+          `/api/users/search?q=${encodeURIComponent(q)}&excludePhone=${encodeURIComponent(currentUser.phoneNumber || '')}`
+        );
+        if (res.ok) {
+          const json = await res.json();
+          if (Array.isArray(json.users)) {
+            json.users.forEach(pushResult);
+          }
+        }
+      } catch (_) {}
+
+      if (!cancelled && isSupabaseConfigured && results.length < 10) {
+        try {
+          const digits = q.replace(/\D/g, '');
+          const cleanUser = q.replace(/^@/, '');
+          const filters = [`username.ilike.%${cleanUser}%`];
+          if (digits.length >= 4) {
+            filters.push(`phone_digits.ilike.%${digits}%`, `full_phone.ilike.%${digits}%`);
+          }
+          const { data } = await supabase
+            .from('agc_phone_registry')
+            .select('full_phone, phone_digits, username, avatar_url')
+            .or(filters.join(','))
+            .limit(12);
+          if (Array.isArray(data)) {
+            data.forEach((row) =>
+              pushResult({
+                fullName: row.username || 'AGC User',
+                username: row.username,
+                phoneNumber: row.full_phone,
+                avatarUrl: row.avatar_url,
+              })
+            );
+          }
+        } catch (_) {}
+      }
+
+      if (!cancelled) {
+        setDirectoryResults(results);
+        setIsSearchingDirectory(false);
+      }
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, isContactsModalOpen, currentUser.phoneNumber]);
+
   if (!isContactsModalOpen) return null;
 
   const registeredList = deviceContacts.filter((c) => c.isRegisteredOnAGC && !isSyntheticTestUser(c));
@@ -245,14 +342,17 @@ export const ContactsModal: React.FC = () => {
     return true;
   });
 
-  const normalizePhone = (raw: string) => {
-    const cleaned = raw.replace(/[\s\-().+]/g, '');
-    if (cleaned.startsWith('0')) return '+234' + cleaned.slice(1);
-    if (cleaned.startsWith('234')) return '+' + cleaned;
-    if (cleaned.length === 10 && /^[789]/.test(cleaned)) return '+234' + cleaned;
-    if (cleaned.startsWith('+')) return cleaned;
-    return '+' + cleaned;
-  };
+  const nonSavedDirectoryResults = directoryResults.filter(
+    (du) =>
+      !deviceContacts.some(
+        (dc) =>
+          dc.isRegisteredOnAGC &&
+          (phonesMatch(dc.normalizedPhoneNumber, du.phoneNumber) ||
+            phonesMatch(dc.rawPhoneNumber, du.phoneNumber))
+      )
+  );
+
+  const normalizePhone = (raw: string) => normalizePhoneInternational(raw) || raw.trim();
 
   const handleCheckPhone = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -261,18 +361,25 @@ export const ContactsModal: React.FC = () => {
 
     setIsChecking(true);
     setCheckResult(null);
-    const normalized = normalizePhone(clean);
+    const hasDigits = clean.replace(/\D/g, '').length >= 6;
+    const normalized = hasDigits ? normalizePhone(clean) : clean;
     let foundName = '';
     let foundAvatar = '';
+    let resolvedPhone = hasDigits ? normalized : '';
 
-    // Check if user entered their own number -> Message Yourself
+    // Check if user entered their own number or own @username -> Message Yourself
     const myClean = (currentUser.phoneNumber || '').replace(/\D/g, '');
     const enteredClean = clean.replace(/\D/g, '');
     const enteredLast9 = enteredClean.length >= 9 ? enteredClean.slice(-9) : enteredClean;
+    const cleanHandle = clean.replace(/^@/, '').toLowerCase();
+    const isSelfHandle = Boolean(
+      currentUser.username && cleanHandle && currentUser.username.toLowerCase() === cleanHandle
+    );
     const isSelfNumber = Boolean(
-      myClean &&
+      isSelfHandle ||
+      (myClean &&
       enteredClean &&
-      (myClean === enteredClean || (enteredClean.length >= 7 && (myClean.endsWith(enteredClean) || enteredClean.endsWith(myClean))))
+      (myClean === enteredClean || (enteredClean.length >= 7 && (myClean.endsWith(enteredClean) || enteredClean.endsWith(myClean)))))
     );
 
     if (isSelfNumber) {
@@ -287,26 +394,56 @@ export const ContactsModal: React.FC = () => {
       return;
     }
 
-    // 1. Check Supabase agc_phone_registry FIRST (cross-device source of truth)
-    if (isSupabaseConfigured) {
+    // 1. Check live Gateway server lookup FIRST (supports phone OR @username OR name)
+    try {
+      const endpoints = [
+        `/api/users/lookup?query=${encodeURIComponent(clean)}`,
+        ...(hasDigits
+          ? [
+              `/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
+              `/api/users/lookup?phone=${encodeURIComponent(enteredClean)}`,
+            ]
+          : []),
+      ];
+      for (const ep of endpoints) {
+        try {
+          const res = await fetch(ep);
+          if (res.ok) {
+            const json = await res.json();
+            if (json.found && json.user) {
+              foundName = json.user.fullName || json.user.name || json.user.username || 'AGC User';
+              foundAvatar = json.user.avatarUrl || '';
+              if (json.user.phoneNumber) resolvedPhone = json.user.phoneNumber;
+              break;
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    // 2. Check Supabase agc_phone_registry (cross-device source of truth)
+    if (!foundName && isSupabaseConfigured) {
       try {
+        const orFilter = hasDigits
+          ? `phone_digits.eq.${enteredLast9},phone_digits.eq.${enteredClean},full_phone.eq.${normalized},full_phone.eq.${clean},full_phone.eq.+${enteredClean},username.ilike.${cleanHandle}`
+          : `username.ilike.${cleanHandle}`;
         const { data: reg } = await supabase
           .from('agc_phone_registry')
           .select('username, avatar_url, full_phone, phone_digits')
-          .or(`phone_digits.eq.${enteredLast9},phone_digits.eq.${enteredClean},full_phone.eq.${normalized},full_phone.eq.${clean},full_phone.eq.+${enteredClean}`)
+          .or(orFilter)
           .limit(1)
           .maybeSingle();
 
         if (reg) {
           foundName = reg.username || 'AGC User';
           foundAvatar = reg.avatar_url || ICON_AVATAR;
+          if (reg.full_phone) resolvedPhone = reg.full_phone;
         }
       } catch (err) {
         console.warn('Supabase agc_phone_registry check notice:', err);
       }
 
-      // Direct fallback by phone_digits
-      if (!foundName) {
+      if (!foundName && hasDigits) {
         try {
           const { data: direct } = await supabase
             .from('agc_phone_registry')
@@ -317,36 +454,14 @@ export const ContactsModal: React.FC = () => {
           if (direct) {
             foundName = direct.username || 'AGC User';
             foundAvatar = direct.avatar_url || ICON_AVATAR;
+            if (direct.full_phone) resolvedPhone = direct.full_phone;
           }
         } catch (_) {}
       }
     }
 
-    // 2. Check live Gateway server / Vite endpoint registry
-    if (!foundName) {
-      try {
-        const endpoints = [
-          `/api/users/lookup?phone=${encodeURIComponent(normalized)}`,
-          `/api/users/lookup?phone=${encodeURIComponent(enteredClean)}`,
-        ];
-        for (const ep of endpoints) {
-          try {
-            const res = await fetch(ep);
-            if (res.ok) {
-              const json = await res.json();
-              if (json.found && json.user) {
-                foundName = json.user.fullName || json.user.name;
-                foundAvatar = json.user.avatarUrl;
-                break;
-              }
-            }
-          } catch (_) {}
-        }
-      } catch (_) {}
-    }
-
     // 3. Check local persistent registered phones registry (all created users)
-    if (!foundName) {
+    if (!foundName && hasDigits) {
       try {
         const raw = localStorage.getItem('AGC_registered_phones');
         if (raw) {
@@ -356,6 +471,7 @@ export const ContactsModal: React.FC = () => {
             if (kd === enteredClean || (enteredLast9.length >= 7 && kd.endsWith(enteredLast9))) {
               foundName = val.fullName || val.username || 'AGC User';
               foundAvatar = val.avatarUrl;
+              resolvedPhone = val.phoneNumber || normalized;
               break;
             }
           }
@@ -363,7 +479,7 @@ export const ContactsModal: React.FC = () => {
       } catch (_) {}
     }
 
-    // 3. Check all registered users array in local storage
+    // 4. Check all registered users array in local storage
     if (!foundName) {
       try {
         const raw = localStorage.getItem('AGC_all_registered_users');
@@ -371,9 +487,12 @@ export const ContactsModal: React.FC = () => {
           const users: any[] = JSON.parse(raw);
           for (const u of users) {
             const up = (u.phoneNumber || '').replace(/\D/g, '');
-            if (up === enteredClean || (enteredLast9.length >= 7 && up.endsWith(enteredLast9))) {
-              foundName = u.fullName || 'AGC User';
+            const matchesHandle = Boolean(u.username && cleanHandle && u.username.toLowerCase() === cleanHandle);
+            const matchesPhone = Boolean(hasDigits && (up === enteredClean || (enteredLast9.length >= 7 && up.endsWith(enteredLast9))));
+            if (matchesHandle || matchesPhone) {
+              foundName = u.fullName || u.username || 'AGC User';
               foundAvatar = u.avatarUrl;
+              if (u.phoneNumber) resolvedPhone = u.phoneNumber;
               break;
             }
           }
@@ -381,34 +500,24 @@ export const ContactsModal: React.FC = () => {
       } catch (_) {}
     }
 
-    // 4. Check active or last user profile
-    if (!foundName) {
-      try {
-        const raw = localStorage.getItem('AGC_user_profile_v2');
-        if (raw) {
-          const u = JSON.parse(raw);
-          const up = (u.phoneNumber || '').replace(/\D/g, '');
-          if (up && (up === enteredClean || (enteredLast9.length >= 7 && up.endsWith(enteredLast9)))) {
-            foundName = u.fullName || 'AGC User';
-            foundAvatar = u.avatarUrl;
-          }
-        }
-      } catch (_) {}
-    }
-
-    // 5. Check in Supabase if configured
+    // 5. Check in Supabase profiles if configured
     if (!foundName && isSupabaseConfigured) {
       try {
         const { data } = await supabase
           .from('profiles')
           .select('full_name, phone_number, avatar_url')
-          .or(`phone_number.eq.${normalized},phone_number.eq.${clean},phone_number.ilike.%${enteredLast9}%`)
+          .or(
+            hasDigits
+              ? `phone_number.eq.${normalized},phone_number.eq.${clean},phone_number.ilike.%${enteredLast9}%`
+              : `full_name.ilike.%${cleanHandle}%`
+          )
           .limit(1)
           .maybeSingle();
 
         if (data && data.phone_number) {
           foundName = data.full_name || 'AGC User';
           foundAvatar = data.avatar_url || ICON_AVATAR;
+          resolvedPhone = data.phone_number;
         }
       } catch (err) {
         console.warn('Supabase profile check notice:', err);
@@ -419,29 +528,52 @@ export const ContactsModal: React.FC = () => {
     if (!foundName) {
       const localMatch = deviceContacts.find((c) => {
         const cp = (c.normalizedPhoneNumber || c.rawPhoneNumber || '').replace(/\D/g, '');
-        return cp === enteredClean || (enteredLast9.length >= 7 && cp.endsWith(enteredLast9));
+        return (
+          (hasDigits && (cp === enteredClean || (enteredLast9.length >= 7 && cp.endsWith(enteredLast9)))) ||
+          (cleanHandle && c.name.toLowerCase() === cleanHandle)
+        );
       });
       if (localMatch && localMatch.isRegisteredOnAGC) {
         foundName = localMatch.name;
         foundAvatar = localMatch.avatar || ICON_AVATAR;
+        resolvedPhone = localMatch.normalizedPhoneNumber || localMatch.rawPhoneNumber;
       }
     }
 
     setIsChecking(false);
 
-    if (foundName) {
+    if (foundName && resolvedPhone) {
       setCheckResult({
         status: 'found',
         name: foundName,
-        phone: normalized,
+        phone: resolvedPhone,
         avatar: foundAvatar || ICON_AVATAR,
       });
     } else {
       setCheckResult({
         status: 'not_found',
-        phone: normalized,
+        phone: resolvedPhone || normalized,
       });
     }
+  };
+
+  const handleMessageFoundDirectly = () => {
+    if (!checkResult || checkResult.status !== 'found') return;
+    const isSelf = checkResult.isSelf;
+    const name = isSelf
+      ? `${currentUser.fullName || 'You'} (Message yourself)`
+      : (checkResult.name || 'AGC User');
+    openDirectChat({
+      phone: checkResult.phone,
+      userId: isSelf ? 'self' : undefined,
+      name,
+      avatar: checkResult.avatar,
+      location: 'Direct Message',
+    });
+    setNewPhone('');
+    setCheckResult(null);
+    setShowAddContactForm(false);
+    setIsContactsModalOpen(false);
   };
 
   const handleAddFoundUser = () => {
@@ -819,7 +951,7 @@ export const ContactsModal: React.FC = () => {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by name or African phone number..."
+              placeholder="Search name, @username, or phone number..."
               className="w-full pl-9 pr-3 py-2 bg-slate-100 dark:bg-[#1c1033] rounded-xl text-xs text-slate-900 dark:text-slate-100 placeholder-purple-300/40 focus:outline-none focus:ring-1 focus:ring-purple-500"
             />
           </div>
@@ -860,7 +992,7 @@ export const ContactsModal: React.FC = () => {
               className="text-xs font-bold text-purple-600 dark:text-purple-400 flex items-center gap-1 hover:underline"
             >
               <UserPlus className="w-3.5 h-3.5" />
-              <span>Add Number</span>
+              <span>Find / Add</span>
             </button>
           </div>
         </div>
@@ -1065,22 +1197,22 @@ export const ContactsModal: React.FC = () => {
           </div>
         )}
 
-        {/* Add Contact Flow - ONLY ASKS FOR PHONE NUMBER */}
+        {/* Find / Add Contact Flow - Phone Number or @Username */}
         {showAddContactForm && (
           <div className="p-4 bg-purple-50/70 dark:bg-[#180a33] border-b border-purple-200 dark:border-purple-800/40 space-y-3 shrink-0 animate-in slide-in-from-top-2">
             <div>
               <h4 className="text-xs font-bold text-slate-900 dark:text-purple-200">
-                Add Contact by Phone Number
+                Message Anyone by Phone or @Username
               </h4>
               <p className="text-[11px] text-slate-500 dark:text-purple-300/60 mt-0.5">
-                AGC verifies instantly if this number is an active user.
+                Start messaging any AGC user immediately — no friend request or saved contact required.
               </p>
             </div>
 
             <form onSubmit={handleCheckPhone} className="flex gap-2">
               <input
-                type="tel"
-                placeholder="e.g. 0803 123 4567 or +234..."
+                type="text"
+                placeholder="e.g. 0803 123 4567, +234..., or @username"
                 value={newPhone}
                 onChange={(e) => {
                   setNewPhone(e.target.value);
@@ -1096,7 +1228,7 @@ export const ContactsModal: React.FC = () => {
                 className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl text-xs font-bold disabled:opacity-50 flex items-center gap-1.5 shadow-md active:scale-95 transition-transform"
               >
                 {isChecking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-                <span>Check</span>
+                <span>Find</span>
               </button>
             </form>
 
@@ -1126,18 +1258,28 @@ export const ContactsModal: React.FC = () => {
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={handleAddFoundUser}
-                    className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center justify-center gap-1.5"
+                    onClick={handleMessageFoundDirectly}
+                    className="flex-1 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center justify-center gap-1.5"
                   >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Add to Contacts & Chat</span>
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span>Message Now</span>
                   </button>
+                  {!checkResult.isSelf && (
+                    <button
+                      type="button"
+                      onClick={handleAddFoundUser}
+                      className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center justify-center gap-1"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span>Save</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => { setShowAddContactForm(false); setCheckResult(null); setNewPhone(''); }}
-                    className="px-3 py-2 bg-slate-200 dark:bg-purple-900/30 text-slate-700 dark:text-purple-300 rounded-xl text-xs"
+                    className="px-2.5 py-2 bg-slate-200 dark:bg-purple-900/30 text-slate-700 dark:text-purple-300 rounded-xl text-xs"
                   >
-                    Cancel
+                    Close
                   </button>
                 </div>
               </div>
@@ -1401,7 +1543,62 @@ export const ContactsModal: React.FC = () => {
             </div>
           ))}
 
-          {filteredContacts.length === 0 && (
+          {/* Global AGC User Search Results (Non-Contacts can always be messaged) */}
+          {searchQuery.trim().length >= 2 && (isSearchingDirectory || nonSavedDirectoryResults.length > 0) && (
+            <div className="p-3 bg-indigo-500/5 dark:bg-indigo-950/25 border-b border-purple-500/20 space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
+                <span className="flex items-center gap-1.5">
+                  <Search className="w-3.5 h-3.5" />
+                  <span>AGC People Directory (Message Directly)</span>
+                </span>
+                {isSearchingDirectory && <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400" />}
+              </div>
+              {nonSavedDirectoryResults.map((du) => (
+                <div
+                  key={`dir_${du.phoneNumber}`}
+                  className="p-2.5 bg-white dark:bg-[#1a0d30] rounded-xl border border-purple-500/20 flex items-center justify-between gap-2"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-9 h-9 rounded-full overflow-hidden border border-purple-500/30 shrink-0">
+                      <img src={du.avatarUrl || ICON_AVATAR} alt={du.fullName} className="w-full h-full object-cover" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-xs text-slate-900 dark:text-white truncate">{du.fullName}</span>
+                        {du.username && (
+                          <span className="text-[10px] font-mono text-purple-400 truncate">@{du.username}</span>
+                        )}
+                      </div>
+                      <div className="text-[10px] font-mono text-slate-500 dark:text-purple-300/60 truncate">
+                        {du.phoneNumber}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        openDirectChat({
+                          phone: du.phoneNumber,
+                          userId: du.id,
+                          name: du.fullName,
+                          avatar: du.avatarUrl,
+                          location: 'AGC Directory',
+                        });
+                        setIsContactsModalOpen(false);
+                      }}
+                      className="px-2.5 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-xs active:scale-95 transition-transform"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>Message</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {filteredContacts.length === 0 && nonSavedDirectoryResults.length === 0 && !isSearchingDirectory && (
             <div className="p-8 text-center text-xs text-slate-400 dark:text-purple-300/40">
               No contacts found matching &ldquo;{searchQuery}&rdquo;.
             </div>

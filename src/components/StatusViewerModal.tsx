@@ -26,7 +26,7 @@ export const StatusViewerModal: React.FC = () => {
     deleteStatus,
     addStatus,
     sendMessage,
-    setActiveChatId,
+    openDirectChat,
     handleAdClick,
     setActiveTab,
   } = useApp();
@@ -184,12 +184,19 @@ export const StatusViewerModal: React.FC = () => {
     e.preventDefault();
     if (!replyText.trim()) return;
 
-    if (status.userId) {
+    if (status.userPhone || status.userId) {
+      const targetChatId = openDirectChat({
+        phone: status.userPhone,
+        userId: status.userId,
+        name: status.userName,
+        avatar: status.userAvatar,
+        location: 'Status Reply',
+      });
       sendMessage(
-        status.userId,
-        `Replied to status: "${status.caption}": ${replyText}`
+        targetChatId,
+        `Replied to status: "${status.caption}": ${replyText.trim()}`
       );
-      setActiveChatId(status.userId);
+      setReplyText('');
       setActiveViewingStatus(null);
     }
   };

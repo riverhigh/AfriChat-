@@ -186,6 +186,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     clearChatMentions,
     setIsQuickPollModalOpen,
     voteOnQuickPoll,
+    isUserBlockedByMe,
+    toggleBlockUser,
   } = useApp();
 
   const [isDisplayModalOpen, setIsDisplayModalOpen] = useState(false);
@@ -530,6 +532,13 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const isGroupAdmin = Boolean(currentChat?.isGroup && isUserChatAdmin(currentChat, currentUser));
   const isChannelAdmin = Boolean(currentChat?.isChannel && isUserChatAdmin(currentChat, currentUser));
   const isChannelMember = Boolean(currentChat?.isChannel && !isChannelAdmin);
+  const isPeerBlocked = Boolean(
+    currentChat &&
+      !currentChat.isGroup &&
+      !currentChat.isChannel &&
+      !currentChat.id.includes('self') &&
+      isUserBlockedByMe(currentChat.id, currentChat.phone || (currentChat as any).phoneNumber)
+  );
 
   const myPhoneRaw = currentUser.phoneNumber || currentUser.id || '';
   const myVoterKey = normPhone(myPhoneRaw) || currentUser.id || 'local_user';
@@ -4082,8 +4091,25 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
         </div>
       )}
 
-      {/* Input Bar / Channel Read-only Banner */}
-      {(isChannelMember || (currentChat?.announceMode && !isGroupAdmin)) ? (
+      {/* Input Bar / Blocked / Channel Read-only Banner */}
+      {isPeerBlocked && currentChat ? (
+        <div className="px-4 py-3 bg-rose-950/30 dark:bg-rose-950/40 shrink-0 flex items-center justify-between gap-3 border-t border-rose-500/25">
+          <span className="text-xs text-rose-600 dark:text-rose-200 font-medium">
+            🚫 You blocked this contact. Unblock to send or receive messages.
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              toggleBlockUser(currentChat.id, currentChat.phone || (currentChat as any).phoneNumber);
+              setToastNotice(`Unblocked ${currentChat.name}`);
+              setTimeout(() => setToastNotice(null), 2400);
+            }}
+            className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shrink-0 transition-colors"
+          >
+            Unblock
+          </button>
+        </div>
+      ) : (isChannelMember || (currentChat?.announceMode && !isGroupAdmin)) ? (
         <div className="px-4 py-3 bg-slate-100 dark:bg-neutral-900 shrink-0 flex items-center justify-center border-t border-slate-200 dark:border-neutral-800">
           <span className="text-xs text-slate-400 dark:text-slate-500">
             {currentChat?.isChannel

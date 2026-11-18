@@ -483,7 +483,7 @@ const NewListingForm: React.FC<{
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export const PetShopModal: React.FC<PetShopModalProps> = ({ isOpen, onClose }) => {
-  const { currentUser, setActiveChatId, setActiveTab } = useApp();
+  const { currentUser, openDirectChat } = useApp();
 
   // Tab state
   const [activeTab, setLocalActiveTab] = useState<ActiveTab>('forum');
@@ -549,11 +549,14 @@ export const PetShopModal: React.FC<PetShopModalProps> = ({ isOpen, onClose }) =
   const handleContactSeller = useCallback(
     (listing: PetListing) => {
       if (!listing.sellerPhone) return;
-      setActiveChatId(listing.sellerPhone);
-      setActiveTab('chats');
+      openDirectChat({
+        phone: listing.sellerPhone,
+        name: listing.sellerName,
+        location: listing.location || 'Pet Shop',
+      });
       onClose();
     },
-    [setActiveChatId, setActiveTab, onClose]
+    [openDirectChat, onClose]
   );
 
   // ── Filtered Data ─────────────────────────────────────────────────────────

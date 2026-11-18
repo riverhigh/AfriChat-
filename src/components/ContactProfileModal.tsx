@@ -74,6 +74,8 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
     leaveGroup,
     blockedUserIds,
     toggleBlockUser,
+    isUserBlockedByMe,
+    openDirectChat,
     flagEntityAsScam,
     CURRENCY_SYMBOLS,
     currency,
@@ -114,8 +116,8 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
   const isGroupOrChannel = isGroup || isChannel;
   const isSelfAdmin = !isGroupOrChannel || isUserChatAdmin(chat, currentUser);
   const entityType = isChannel ? 'Channel' : isGroup ? 'Group' : 'Contact';
-  const contactPhone = chat.phone || (isGroupOrChannel ? undefined : '+234 901 087 2172');
-  const isBlocked = blockedUserIds.includes(chat.id) || (Boolean(chat.phone) && blockedUserIds.includes(chat.phone!));
+  const contactPhone = chat.phone || (chat as any).phoneNumber || undefined;
+  const isBlocked = isUserBlockedByMe(chat.id, contactPhone);
   const isMuted = Boolean(chat.isMuted);
   const isLocked = Boolean(chat.isLocked);
   const isFavourite = Boolean(chat.isFavourite);
@@ -318,7 +320,7 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
 
   // 8. Block / Unblock user
   const handleToggleBlock = () => {
-    const nextBlocked = toggleBlockUser(chat.id);
+    const nextBlocked = toggleBlockUser(chat.id, contactPhone);
     showToast(nextBlocked ? `🚫 Blocked ${chat.name}` : `Unblocked ${chat.name}`);
   };
 
@@ -1025,47 +1027,69 @@ export const ContactProfileModal: React.FC<ContactProfileModalProps> = ({
                             </div>
                           </div>
 
-                          {isSelfAdmin && !isCreatorMember && (
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              {!c.isBot && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    toggleMemberAdmin(chat.id, c.name, c.normalizedPhoneNumber || undefined);
-                                    showToast(
-                                      isMemberAdmin
-                                        ? `Removed admin permissions from ${c.name}`
-                                        : `Granted ${c.name} admin permissions`
-                                    );
-                                  }}
-                                  className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition-colors ${
-                                    isMemberAdmin
-                                      ? 'text-amber-400 border-amber-800/60 bg-amber-950/40 hover:bg-amber-900/60'
-                                      : 'text-purple-300 border-purple-800/60 bg-purple-950/40 hover:bg-purple-900/60'
-                                  }`}
-                                  title={isMemberAdmin ? 'Dismiss as admin' : 'Give admin permissions'}
-                                >
-                                  {isMemberAdmin ? 'Dismiss' : 'Make Admin'}
-                                </button>
-                              )}
-
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {!c.isBot && c.normalizedPhoneNumber && (
                               <button
                                 type="button"
                                 onClick={() => {
-                                  removeMemberFromGroup(
-                                    chat.id,
-                                    c.name,
-                                    c.isBot ? undefined : c.normalizedPhoneNumber || undefined
-                                  );
-                                  showToast(`Removed ${c.name} from ${entityType.toLowerCase()}`);
+                                  onClose();
+                                  openDirectChat({
+                                    phone: c.normalizedPhoneNumber,
+                                    name: c.name,
+                                    avatar: c.avatar,
+                                    location: chat.name,
+                                  });
                                 }}
-                                className="text-[10px] font-bold text-rose-400 hover:text-rose-300 px-2 py-1 rounded-lg border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 transition-colors"
-                                title={`Remove from ${entityType.toLowerCase()}`}
+                                className="text-[10px] font-bold text-purple-200 border border-purple-700/60 bg-purple-900/40 hover:bg-purple-800/60 px-2 py-1 rounded-lg transition-colors flex items-center gap-1"
+                                title={`Message ${c.name}`}
                               >
-                                Remove
+                                <MessageSquare className="w-3 h-3" />
+                                <span>Message</span>
                               </button>
-                            </div>
-                          )}
+                            )}
+
+                            {isSelfAdmin && !isCreatorMember && (
+                              <>
+                                {!c.isBot && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      toggleMemberAdmin(chat.id, c.name, c.normalizedPhoneNumber || undefined);
+                                      showToast(
+                                        isMemberAdmin
+                                          ? `Removed admin permissions from ${c.name}`
+                                          : `Granted ${c.name} admin permissions`
+                                      );
+                                    }}
+                                    className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition-colors ${
+                                      isMemberAdmin
+                                        ? 'text-amber-400 border-amber-800/60 bg-amber-950/40 hover:bg-amber-900/60'
+                                        : 'text-purple-300 border-purple-800/60 bg-purple-950/40 hover:bg-purple-900/60'
+                                    }`}
+                                    title={isMemberAdmin ? 'Dismiss as admin' : 'Give admin permissions'}
+                                  >
+                                    {isMemberAdmin ? 'Dismiss' : 'Make Admin'}
+                                  </button>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    removeMemberFromGroup(
+                                      chat.id,
+                                      c.name,
+                                      c.isBot ? undefined : c.normalizedPhoneNumber || undefined
+                                    );
+                                    showToast(`Removed ${c.name} from ${entityType.toLowerCase()}`);
+                                  }}
+                                  className="text-[10px] font-bold text-rose-400 hover:text-rose-300 px-2 py-1 rounded-lg border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 transition-colors"
+                                  title={`Remove from ${entityType.toLowerCase()}`}
+                                >
+                                  Remove
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </div>
                       );
                     })}

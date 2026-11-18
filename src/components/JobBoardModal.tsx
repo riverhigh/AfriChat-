@@ -36,9 +36,7 @@ export const JobBoardModal: React.FC = () => {
     applyForJob,
     wallet,
     formatPrice,
-    setActiveTab,
-    setActiveChatId,
-    chats,
+    openDirectChat,
     startCall,
   } = useApp();
 
@@ -119,7 +117,8 @@ export const JobBoardModal: React.FC = () => {
   const handleApply = (job: JobPosting) => {
     const res = applyForJob(job);
     if (!res.success) {
-      alert(res.message);
+      setAppliedJobToast(res.message);
+      setTimeout(() => setAppliedJobToast(null), 3000);
       return;
     }
 
@@ -129,27 +128,24 @@ export const JobBoardModal: React.FC = () => {
       localStorage.setItem('AGC_applied_jobs', JSON.stringify(updatedApplied));
     } catch {}
 
-    // Find or target employer chat
-    let targetChat = chats.find(
-      (c) => c.phone === job.contactPhone || c.name.toLowerCase().includes(job.company.toLowerCase())
-    );
-    if (!targetChat && chats.length > 0) {
-      targetChat = chats[0];
-    }
-
     setAppliedJobToast(res.message);
     setTimeout(() => {
       setAppliedJobToast(null);
       setIsJobBoardModalOpen(false);
-      setActiveTab('chats');
-      if (targetChat) setActiveChatId(targetChat.id);
-    }, 1600);
+      openDirectChat({
+        phone: job.contactPhone,
+        userId: job.employerId,
+        name: job.company,
+        location: job.location || 'Job Board',
+      });
+    }, 1200);
   };
 
   const handleCreateJob = (e: React.FormEvent) => {
     e.preventDefault();
     if (!postTitle.trim() || !postCompany.trim() || !postDesc.trim()) {
-      alert('Please fill out all required fields');
+      setAppliedJobToast('Please fill out all required fields');
+      setTimeout(() => setAppliedJobToast(null), 3000);
       return;
     }
 
@@ -173,14 +169,16 @@ export const JobBoardModal: React.FC = () => {
     });
 
     if (result.success) {
-      alert(result.message);
+      setAppliedJobToast(result.message || 'Job posted successfully!');
+      setTimeout(() => setAppliedJobToast(null), 3000);
       setShowPostModal(false);
       setPostTitle('');
       setPostCompany('');
       setPostDesc('');
       setPostRequirements('');
     } else {
-      alert(result.message);
+      setAppliedJobToast(result.message || 'Unable to post job');
+      setTimeout(() => setAppliedJobToast(null), 3000);
     }
   };
 
@@ -188,7 +186,8 @@ export const JobBoardModal: React.FC = () => {
     const text = `🔥 Job Opportunity on AfriChat: "${job.title}" at ${job.company} (${job.salaryRange}). Location: ${job.location}. Apply on AGC: https://africhat.app/jobs/${job.id}`;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text);
-      alert('Job link copied! Share with your network or WhatsApp groups.');
+      setAppliedJobToast('Job link copied! Share with your network or groups.');
+      setTimeout(() => setAppliedJobToast(null), 3000);
     }
   };
 
