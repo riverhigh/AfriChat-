@@ -50,6 +50,7 @@ export const ChatList: React.FC = () => {
     startAiChat,
     adminUsers,
     currentUser,
+    readReceiptsEnabled,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -666,7 +667,7 @@ export const ChatList: React.FC = () => {
 
                   <div className="flex items-center justify-between mt-1">
                     <p className="text-xs text-slate-500 dark:text-slate-400 truncate flex items-center gap-1">
-                      {!chat.unreadCount && (
+                      {!chat.unreadCount && readReceiptsEnabled && (
                         <CheckCheck className="w-3.5 h-3.5 text-purple-500 shrink-0" />
                       )}
                       {chat.isScamFlagged && (

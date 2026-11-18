@@ -35,6 +35,7 @@ import {
   Upload,
   RotateCcw,
   Check,
+  CheckCheck,
   Sliders,
   Sparkles,
   Share2,
@@ -105,6 +106,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setIsAuthModalOpen,
     hideBalanceOnNav,
     toggleHideBalance,
+    readReceiptsEnabled,
+    toggleReadReceipts,
     setIsSendBillModalOpen,
     setIsPayrollModalOpen,
     setIsScanQrModalOpen,
@@ -1123,6 +1126,50 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <span
                   className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
                     isDarkMode ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Read Receipts Toggle */}
+            <div className="flex items-center justify-between px-4 py-3.5">
+              <div className="flex items-center gap-4 pr-3">
+                <CheckCheck
+                  className={`w-5 h-5 shrink-0 ${
+                    readReceiptsEnabled ? 'text-sky-500' : 'text-slate-400'
+                  }`}
+                />
+                <div>
+                  <div className="text-sm font-medium flex items-center gap-2">
+                    <span>Read Receipts</span>
+                    <span
+                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                        readReceiptsEnabled
+                          ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                          : 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                      }`}
+                    >
+                      {readReceiptsEnabled ? 'ON' : 'OFF'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    Display &ldquo;Seen&rdquo; indicators on sent messages and notify senders when you read chats
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={readReceiptsEnabled}
+                aria-label="Toggle read receipts"
+                onClick={toggleReadReceipts}
+                className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${
+                  readReceiptsEnabled ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-700'
+                }`}
+              >
+                <span
+                  className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                    readReceiptsEnabled ? 'translate-x-5' : 'translate-x-0'
                   }`}
                 />
               </button>

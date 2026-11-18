@@ -117,6 +117,22 @@ export interface UserWallet {
   balance?: number;
 }
 
+export interface LiveBankOption {
+  name: string;
+  code: string;
+  slug?: string;
+  type?: string;
+}
+
+export interface ResolvedBankAccount {
+  accountNumber: string;
+  accountName: string;
+  bankName: string;
+  bankCode: string;
+  bankId?: number;
+  verifiedBy: 'paystack_live' | 'flutterwave_live';
+}
+
 export type CreditAlertCategory =
   | 'escrow'
   | 'game_win'
@@ -696,6 +712,8 @@ export interface ChatMessage {
   metadata?: Record<string, any>;
   timestamp: string;
   status: 'sent' | 'delivered' | 'read';
+  readAt?: string;
+  readBy?: string[];
   replyTo?: {
     id?: string;
     sender: string;

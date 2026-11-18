@@ -10,8 +10,12 @@ import {
   CreditCard,
   RotateCcw,
   Receipt,
+  Loader2,
+  AlertCircle,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { ResolvedBankAccount } from '../types';
 import { openPaystackPopup } from '../services/paystack';
 
 export const WalletModal: React.FC = () => {
@@ -23,6 +27,8 @@ export const WalletModal: React.FC = () => {
     refreshWalletFromServer,
     topUpWallet,
     withdrawWallet,
+    fetchLiveBanks,
+    resolveBankAccount,
     formatPrice,
     currentUser,
     currency,
@@ -36,22 +42,76 @@ export const WalletModal: React.FC = () => {
   const topUpOptions = [10000, 25000, 50000, 100000].map((v) => Math.round(v * rate));
   const [topUpAmount, setTopUpAmount] = useState<number>(() => Math.round(25000 * rate));
   const [withdrawAmount, setWithdrawAmount] = useState<number>(10000);
-  const [selectedBank, setSelectedBank] = useState('GTBank Nigeria');
-  const [accountNumber, setAccountNumber] = useState('0123456789');
-  const [accountName, setAccountName] = useState(currentUser.fullName || '');
-  const [withdrawPin, setWithdrawPin] = useState('');
+  const [accountNumber, setAccountNumber] = useState('');
+  const [liveBanksCount, setLiveBanksCount] = useState<number>(0);
+  const [liveBanksSource, setLiveBanksSource] = useState<string>('');
+  const [isResolvingAccount, setIsResolvingAccount] = useState(false);
+  const [resolvedMatches, setResolvedMatches] = useState<ResolvedBankAccount[]>([]);
+  const [selectedResolvedIndex, setSelectedResolvedIndex] = useState(0);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+  const [candidateBankHints, setCandidateBankHints] = useState<Array<{ name: string; code: string }>>([]);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Always pull true wallet balance & ledger transactions from server when opening WalletModal
+  // Always pull true wallet balance & ledger transactions + live Nigerian banks index when opening WalletModal
   useEffect(() => {
     if (isWalletModalOpen) {
       refreshWalletFromServer();
-      if (currentUser.fullName && !accountName) {
-        setAccountName(currentUser.fullName);
-      }
+      fetchLiveBanks().then((res) => {
+        if (res.success && res.count > 0) {
+          setLiveBanksCount(res.count);
+          setLiveBanksSource(res.source);
+        }
+      });
     }
-  }, [isWalletModalOpen]);
+  }, [isWalletModalOpen, fetchLiveBanks]);
+
+  // Automatically resolve destination bank & account full name as soon as 10 digits are entered
+  useEffect(() => {
+    const clean = accountNumber.replace(/\D/g, '');
+    if (clean.length < 10) {
+      setIsResolvingAccount(false);
+      setResolvedMatches([]);
+      setSelectedResolvedIndex(0);
+      setResolveError(null);
+      setCandidateBankHints([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsResolvingAccount(true);
+    setResolveError(null);
+    setResolvedMatches([]);
+    setSelectedResolvedIndex(0);
+    setCandidateBankHints([]);
+
+    const timer = setTimeout(async () => {
+      const res = await resolveBankAccount(clean, controller.signal);
+      if (controller.signal.aborted) return;
+      setIsResolvingAccount(false);
+      if (res.banksTotal && res.banksTotal > 0) {
+        setLiveBanksCount(res.banksTotal);
+      }
+      if (res.success && res.matches && res.matches.length > 0) {
+        setResolvedMatches(res.matches);
+        setSelectedResolvedIndex(0);
+        setResolveError(null);
+      } else {
+        setResolvedMatches([]);
+        if (res.candidateBanks && res.candidateBanks.length > 0) {
+          setCandidateBankHints(res.candidateBanks);
+        }
+        if (res.message) {
+          setResolveError(res.message);
+        }
+      }
+    }, 280);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [accountNumber, resolveBankAccount]);
 
   if (!isWalletModalOpen) return null;
 
@@ -112,20 +172,30 @@ export const WalletModal: React.FC = () => {
     });
   };
 
+  const activeResolvedAccount = resolvedMatches[selectedResolvedIndex] || resolvedMatches[0] || null;
+
   const handleWithdrawSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (withdrawAmount <= 0) return;
+    if (withdrawAmount <= 0 || !activeResolvedAccount) return;
 
     setIsProcessing(true);
     setFeedback(null);
-    const res = await withdrawWallet(withdrawAmount, selectedBank, accountNumber, accountName);
+    const res = await withdrawWallet(
+      withdrawAmount,
+      activeResolvedAccount.bankName,
+      activeResolvedAccount.accountNumber,
+      activeResolvedAccount.accountName,
+      activeResolvedAccount.bankCode
+    );
     setIsProcessing(false);
     if (res.success) {
       setFeedback({
         type: 'success',
         text: res.message,
       });
+      setAccountNumber('');
+      setResolvedMatches([]);
       setWalletTab('overview');
     } else {
       setFeedback({
@@ -605,13 +675,23 @@ export const WalletModal: React.FC = () => {
             </form>
           )}
 
-          {/* Withdraw View */}
+          {/* Withdraw View (Account Number Only -> Auto Bank & Full Name Lookup) */}
           {walletTab === 'withdraw' && (
             <form onSubmit={handleWithdrawSubmit} className="space-y-3.5">
               <div className="p-3 bg-amber-50/70 dark:bg-amber-950/30 rounded-2xl border border-amber-200 dark:border-amber-800/50 text-xs text-amber-900 dark:text-amber-200">
-                <div className="font-bold mb-0.5">Direct Bank Payout</div>
+                <div className="flex items-center justify-between gap-2 mb-0.5">
+                  <span className="font-bold flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                    <span>Instant Auto-Detect Bank Payout</span>
+                  </span>
+                  {liveBanksCount > 0 && (
+                    <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                      {liveBanksCount} live banks{liveBanksSource === 'paystack_live_api' ? ' · Paystack' : ''}
+                    </span>
+                  )}
+                </div>
                 <p className="text-[11px] text-amber-800 dark:text-amber-300">
-                  Withdraw available wallet funds directly into your Nigerian or African bank account.
+                  Just enter your 10-digit account number — the system automatically finds your bank and pulls your full account name.
                 </p>
               </div>
 
@@ -622,58 +702,118 @@ export const WalletModal: React.FC = () => {
                 <input
                   type="number"
                   value={withdrawAmount}
-                  onChange={(e) => setWithdrawAmount(Number(e.target.value))}
+                  onChange={(e) => setWithdrawAmount(Math.max(0, Number(e.target.value)))}
+                  min={100}
                   max={wallet.availableBalance}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Destination Bank
+                  10-Digit Account Number
                 </label>
-                <select
-                  value={selectedBank}
-                  onChange={(e) => setSelectedBank(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none"
-                >
-                  <option>GTBank Nigeria</option>
-                  <option>Access Bank</option>
-                  <option>Zenith Bank</option>
-                  <option>FirstBank</option>
-                  <option>Kuda Microfinance</option>
-                  <option>OPay Digital Bank</option>
-                  <option>M-Pesa Kenya (Safaricom)</option>
-                  <option>MTN MoMo Ghana</option>
-                </select>
+                <div className="relative">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={10}
+                    placeholder="Enter 10-digit account number (e.g. 0123456789)"
+                    value={accountNumber}
+                    onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                    required
+                    className="w-full px-3 py-2.5 pr-16 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-mono tracking-wider text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono text-slate-400">
+                    {accountNumber.length}/10
+                  </span>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Account Number
-                  </label>
-                  <input
-                    type="text"
-                    value={accountNumber}
-                    onChange={(e) => setAccountNumber(e.target.value)}
-                    required
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono"
-                  />
+              {/* Live Account Lookup Status */}
+              {isResolvingAccount && (
+                <div className="p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/60 flex items-center gap-2.5 text-xs text-indigo-700 dark:text-indigo-300">
+                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                  <div>
+                    <div className="font-semibold">Searching live banks automatically...</div>
+                    <div className="text-[11px] opacity-80">
+                      Matching NUBAN &amp; pulling verified full name for {accountNumber}
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Account Name
-                  </label>
-                  <input
-                    type="text"
-                    value={accountName}
-                    onChange={(e) => setAccountName(e.target.value)}
-                    required
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
-                  />
+              )}
+
+              {!isResolvingAccount && activeResolvedAccount && (
+                <div className="p-3.5 rounded-2xl bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/70 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                          Account Holder Full Name
+                        </div>
+                        <div className="text-sm font-extrabold text-slate-900 dark:text-white break-words">
+                          {activeResolvedAccount.accountName}
+                        </div>
+                        <div className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                          <span className="font-semibold text-indigo-600 dark:text-indigo-300">
+                            {activeResolvedAccount.bankName}
+                          </span>
+                          <span className="text-slate-400">·</span>
+                          <span className="font-mono">{activeResolvedAccount.accountNumber}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {resolvedMatches.length > 1 && (
+                    <div className="pt-2 border-t border-emerald-200/70 dark:border-emerald-800/50 space-y-1.5">
+                      <div className="text-[10px] font-semibold text-emerald-800 dark:text-emerald-300">
+                        {resolvedMatches.length} matching accounts found — select yours:
+                      </div>
+                      <div className="space-y-1">
+                        {resolvedMatches.map((m, idx) => (
+                          <button
+                            key={`${m.bankCode}-${idx}`}
+                            type="button"
+                            onClick={() => setSelectedResolvedIndex(idx)}
+                            className={`w-full text-left px-2.5 py-2 rounded-xl text-xs border transition-colors flex items-center justify-between gap-2 ${
+                              idx === selectedResolvedIndex
+                                ? 'bg-white dark:bg-[#1a1732] border-emerald-500 text-slate-900 dark:text-white font-semibold shadow-2xs'
+                                : 'bg-white/50 dark:bg-black/20 border-transparent text-slate-600 dark:text-slate-300 hover:border-emerald-400/50'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate font-semibold">{m.accountName}</div>
+                              <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                {m.bankName} ({m.bankCode})
+                              </div>
+                            </div>
+                            {idx === selectedResolvedIndex && (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
+
+              {!isResolvingAccount && resolveError && accountNumber.length === 10 && (
+                <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/60 text-xs text-rose-700 dark:text-rose-300 space-y-1.5">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{resolveError}</span>
+                  </div>
+                  {candidateBankHints.length > 0 && (
+                    <div className="pl-6 text-[11px] text-slate-600 dark:text-slate-400">
+                      NUBAN checksum candidates: {candidateBankHints.slice(0, 6).map((b) => b.name).join(', ')}
+                      {candidateBankHints.length > 6 ? '…' : ''}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="pt-2 flex gap-2">
                 <button
@@ -686,10 +826,20 @@ export const WalletModal: React.FC = () => {
 
                 <button
                   type="submit"
-                  disabled={isProcessing || withdrawAmount > wallet.availableBalance}
+                  disabled={
+                    isProcessing ||
+                    isResolvingAccount ||
+                    !activeResolvedAccount ||
+                    withdrawAmount <= 0 ||
+                    withdrawAmount > wallet.availableBalance
+                  }
                   className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 shadow-md disabled:opacity-50"
                 >
-                  {isProcessing ? 'Processing Payout...' : `Withdraw ₦${withdrawAmount.toLocaleString()}`}
+                  {isProcessing
+                    ? 'Processing Payout...'
+                    : activeResolvedAccount
+                    ? `Withdraw ₦${withdrawAmount.toLocaleString()} to ${activeResolvedAccount.accountName.split(' ')[0]}`
+                    : `Withdraw ₦${withdrawAmount.toLocaleString()}`}
                 </button>
               </div>
             </form>

@@ -117,6 +117,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     language,
     startCall,
     chatWallpaper,
+    readReceiptsEnabled,
     // Super-app features
     isScreenshotBlockerActive,
     toggleScreenshotBlocker,
@@ -3756,10 +3757,24 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   </button>
                   <span>{msg.timestamp}</span>
                   {isUser && (
-                    <span title={msg.status === 'read' ? 'Read' : msg.status === 'delivered' ? 'Delivered' : 'Sent'}>
-                      {msg.status === 'read' ? (
-                        <CheckCheck className="w-3.5 h-3.5 text-white" />
-                      ) : msg.status === 'delivered' ? (
+                    <span
+                      className="inline-flex items-center gap-1"
+                      title={
+                        readReceiptsEnabled && msg.status === 'read'
+                          ? `Seen${msg.readAt ? ` at ${msg.readAt}` : ''}`
+                          : msg.status === 'delivered' || msg.status === 'read'
+                          ? 'Delivered'
+                          : 'Sent'
+                      }
+                    >
+                      {readReceiptsEnabled && msg.status === 'read' ? (
+                        <>
+                          <CheckCheck className="w-3.5 h-3.5 text-sky-300" />
+                          <span className="text-[9px] font-bold tracking-tight text-sky-200">
+                            Seen
+                          </span>
+                        </>
+                      ) : msg.status === 'delivered' || msg.status === 'read' ? (
                         <CheckCheck className="w-3.5 h-3.5 text-purple-200/80" />
                       ) : (
                         <Check className="w-3.5 h-3.5 text-purple-200/80" />

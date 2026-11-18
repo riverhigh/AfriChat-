@@ -109,8 +109,17 @@
         }
       ],
       "updatedAt": "2026-11-17T22:06:22.079Z"
+    },
+    "banks": {
+      "phoneKey": "banks",
+      "phoneNumber": "banks",
+      "availableBalance": 0,
+      "escrowLockedBalance": 0,
+      "currency": "NGN",
+      "transactions": [],
+      "updatedAt": "1970-01-01T00:00:00.000Z"
     }
   },
   "usedReferences": [],
-  "updatedAt": "2026-11-18T06:57:03.745Z"
+  "updatedAt": "2026-11-18T07:20:34.483Z"
 }

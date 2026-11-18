@@ -11,6 +11,7 @@ import {
   emitMessageReaction,
   emitChatMetaUpdate,
   emitQuickPollUpdate,
+  emitMessagesRead,
   emitGroupInvite,
   emitGroupInviteResponse,
   emitPhoneCallSignal,
@@ -980,14 +981,45 @@ interface AppContextType {
     amount: number,
     bankName: string,
     accountNumber: string,
-    accountName: string
+    accountName: string,
+    bankCode?: string
   ) => Promise<{ success: boolean; message: string }>;
+  fetchLiveBanks: () => Promise<{ success: boolean; count: number; source: string; banks: Array<{ name: string; code: string }> }>;
+  resolveBankAccount: (
+    accountNumber: string,
+    signal?: AbortSignal
+  ) => Promise<{
+    success: boolean;
+    requiresSecretKey?: boolean;
+    banksTotal?: number;
+    banksScanned?: number;
+    primaryAccount?: {
+      accountNumber: string;
+      accountName: string;
+      bankName: string;
+      bankCode: string;
+      bankId?: number;
+      verifiedBy: 'paystack_live' | 'flutterwave_live';
+    };
+    matches?: Array<{
+      accountNumber: string;
+      accountName: string;
+      bankName: string;
+      bankCode: string;
+      bankId?: number;
+      verifiedBy: 'paystack_live' | 'flutterwave_live';
+    }>;
+    candidateBanks?: Array<{ name: string; code: string }>;
+    message?: string;
+  }>;
   updateUsername: (
     newUsername: string,
     newAbout?: string
   ) => Promise<{ success: boolean; error?: string; username?: string }>;
   hideBalanceOnNav: boolean;
   toggleHideBalance: () => void;
+  readReceiptsEnabled: boolean;
+  toggleReadReceipts: () => void;
   activeCheckoutProduct: Product | null;
   openCheckout: (prod: Product) => void;
   closeCheckout: () => void;
@@ -4342,6 +4374,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const activeChatIdRef = useRef<string | null>(activeChatId);
   activeChatIdRef.current = activeChatId;
   const notifiedMessageIdsRef = useRef<Set<string>>(new Set());
+  const emitReadReceiptForChatRef = useRef<(chatId: string, explicitMessageIds?: string[]) => void>(() => {});
+
+  // Read receipts preference (enabled by default; persisted per user phone)
+  const [readReceiptsEnabled, setReadReceiptsEnabled] = useState<boolean>(() => {
+    try {
+      const savedPhone = getSavedUserCleanPhone();
+      const key = savedPhone ? getUserStorageKey('AGC_read_receipts_v1', savedPhone) : 'AGC_read_receipts_v1';
+      const val = safeLocalStorage.getItem(key) ?? safeLocalStorage.getItem('AGC_read_receipts_v1');
+      return val !== 'false';
+    } catch (_) {
+      return true;
+    }
+  });
+  const readReceiptsEnabledRef = useRef<boolean>(readReceiptsEnabled);
+  readReceiptsEnabledRef.current = readReceiptsEnabled;
 
   // Automatically mark chat as read when opened (clears badge instantly)
   useEffect(() => {
@@ -4361,7 +4408,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return prev;
     });
-  }, [activeChatId]);
+    emitReadReceiptForChatRef.current(activeChatId);
+  }, [activeChatId, readReceiptsEnabled]);
   const [chats, setChats] = useState<ChatThread[]>(() => {
     const savedPhone = getSavedUserCleanPhone();
     if (!savedPhone) return [];
@@ -6813,12 +6861,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Fetch live banks index (cached from Paystack Bank API)
+  const fetchLiveBanks = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/wallet/banks');
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data?.success) {
+        return {
+          success: true,
+          count: Number(data.count || data.banks?.length || 0),
+          source: String(data.source || 'paystack_live_api'),
+          banks: Array.isArray(data.banks) ? data.banks : [],
+        };
+      }
+    } catch (_) {}
+    return { success: false, count: 0, source: 'offline', banks: [] };
+  }, []);
+
+  // Automatically resolve destination bank & account holder full name from 10-digit account number
+  const resolveBankAccount = useCallback(async (accountNumber: string, signal?: AbortSignal) => {
+    const cleanAcct = String(accountNumber || '').replace(/\D/g, '');
+    if (!/^\d{10}$/.test(cleanAcct)) {
+      return { success: false, message: 'Enter a valid 10-digit account number.' };
+    }
+    try {
+      const resp = await fetch('/api/wallet/resolve-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountNumber: cleanAcct }),
+        signal,
+      });
+      const data = await resp.json().catch(() => ({}));
+      return {
+        success: Boolean(resp.ok && data?.success),
+        requiresSecretKey: Boolean(data?.requiresSecretKey),
+        banksTotal: typeof data?.banksTotal === 'number' ? data.banksTotal : undefined,
+        banksScanned: typeof data?.banksScanned === 'number' ? data.banksScanned : undefined,
+        primaryAccount: data?.primaryAccount,
+        matches: Array.isArray(data?.matches) ? data.matches : undefined,
+        candidateBanks: Array.isArray(data?.candidateBanks) ? data.candidateBanks : undefined,
+        message: data?.message,
+      };
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        return { success: false, message: '' };
+      }
+      return { success: false, message: err?.message || 'Unable to resolve bank account right now.' };
+    }
+  }, []);
+
   // Wallet Withdrawal to Bank (Authoritative Server Balance Check & Debit)
   const withdrawWallet = async (
     amount: number,
     bankName: string,
     accountNumber: string,
-    accountName: string
+    accountName: string,
+    bankCode?: string
   ) => {
     const phone = currentUserRef.current?.phoneNumber;
     if (!phone) {
@@ -6828,7 +6926,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const resp = await fetch('/api/wallet/withdraw', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneNumber: phone, amount, bankName, accountNumber, accountName }),
+        body: JSON.stringify({ phoneNumber: phone, amount, bankName, bankCode, accountNumber, accountName }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data?.success) {
@@ -6948,6 +7046,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
   };
+
+  const toggleReadReceipts = useCallback(() => {
+    setReadReceiptsEnabled((prev) => {
+      const next = !prev;
+      readReceiptsEnabledRef.current = next;
+      try {
+        const phone = currentUserRef.current?.phoneNumber;
+        if (phone) {
+          safeLocalStorage.setItem(getUserStorageKey('AGC_read_receipts_v1', phone), String(next));
+        }
+        safeLocalStorage.setItem('AGC_read_receipts_v1', String(next));
+      } catch (_) {}
+      return next;
+    });
+  }, []);
 
   // Multi-Transport Live Status Broadcaster (BroadcastChannel + Socket.io + REST + Supabase Realtime + DB)
   const publishStatusLive = (newStatus: UserStatus) => {
@@ -9451,6 +9564,185 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (_) {}
   }, []);
 
+  const applyRemoteReadReceipt = useCallback(
+    (payload: {
+      chatId: string;
+      messageIds?: string[];
+      readerPhone?: string;
+      readerName?: string;
+      readAt?: string;
+    }) => {
+      const { chatId, messageIds, readerPhone, readAt } = payload || {};
+      if (!chatId) return;
+      const userNow = currentUserRef.current;
+      const myCleanPhone = userNow.phoneNumber?.replace(/\D/g, '') || '';
+      const cleanReader = (readerPhone || '').replace(/\D/g, '');
+      const isSelfReceipt =
+        Boolean(cleanReader && myCleanPhone && phonesMatch(cleanReader, myCleanPhone));
+      if (isSelfReceipt && !chatId.startsWith('dm_self_')) {
+        return;
+      }
+
+      const candidateChatIds = new Set<string>([chatId]);
+      if (chatId.startsWith('dm_') && !chatId.includes('self') && myCleanPhone && cleanReader) {
+        candidateChatIds.add(getDirectChatId(myCleanPhone, cleanReader));
+      }
+      if (cleanReader && myCleanPhone) {
+        const directFromReader = getDirectChatId(myCleanPhone, cleanReader);
+        if (directFromReader) candidateChatIds.add(directFromReader);
+      }
+
+      const targetIdsSet =
+        Array.isArray(messageIds) && messageIds.length > 0 ? new Set(messageIds.map(String)) : null;
+      const effectiveReadAt =
+        readAt || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      setMessages((prev) => {
+        let anyUpdated = false;
+        const nextMap = { ...prev };
+
+        candidateChatIds.forEach((cid) => {
+          const list = prev[cid];
+          if (!Array.isArray(list) || list.length === 0) return;
+
+          let listUpdated = false;
+          const updatedList = list.map((m) => {
+            if (m.sender !== 'user') return m;
+            if (targetIdsSet && !targetIdsSet.has(String(m.id))) return m;
+            const existingReadBy = Array.isArray(m.readBy) ? m.readBy : [];
+            const alreadyRecordedReader = cleanReader ? existingReadBy.some((r) => phonesMatch(r, cleanReader)) : true;
+            if (m.status === 'read' && alreadyRecordedReader) return m;
+            listUpdated = true;
+            return {
+              ...m,
+              status: 'read' as const,
+              readAt: m.readAt || effectiveReadAt,
+              readBy: cleanReader
+                ? Array.from(new Set([...existingReadBy, cleanReader]))
+                : m.readBy,
+            };
+          });
+
+          if (listUpdated) {
+            anyUpdated = true;
+            nextMap[cid] = updatedList;
+          }
+        });
+
+        if (!anyUpdated) return prev;
+        persistPartitionedMessages(nextMap, userNow.phoneNumber);
+        return nextMap;
+      });
+    },
+    []
+  );
+
+  const emitReadReceiptForChat = useCallback(
+    (chatId: string, explicitMessageIds?: string[]) => {
+      if (!chatId || !readReceiptsEnabledRef.current) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (!isAuthenticatedRef.current || isHydratingChatsRef.current) return;
+
+      const userNow = currentUserRef.current;
+      const myCleanPhone = userNow.phoneNumber?.replace(/\D/g, '') || '';
+      if (!myCleanPhone) return;
+
+      const currentChat = chatsRef.current.find((c) => c.id === chatId);
+      if (chatId === AFRIBOT_ID || currentChat?.isBot) return;
+
+      const threadMsgs = messagesRef.current?.[chatId] || [];
+      const unreadIncomingIds = threadMsgs
+        .filter((m) => {
+          if (chatId.startsWith('dm_self_')) {
+            return m.sender === 'user' && m.status !== 'read';
+          }
+          return m.sender !== 'user' && m.sender !== 'system' && m.status !== 'read';
+        })
+        .map((m) => m.id);
+
+      const messageIdsToMark = Array.from(
+        new Set([...unreadIncomingIds, ...(explicitMessageIds || [])].filter(Boolean))
+      );
+      if (messageIdsToMark.length === 0) return;
+
+      const readAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const idSet = new Set(messageIdsToMark);
+
+      // Mark locally so we don't emit duplicate receipts for the same messages
+      setMessages((prev) => {
+        const list = prev[chatId];
+        if (!Array.isArray(list)) return prev;
+        let touched = false;
+        const nextList = list.map((m) => {
+          if (!idSet.has(m.id) || m.status === 'read') return m;
+          touched = true;
+          return { ...m, status: 'read' as const, readAt: m.readAt || readAt };
+        });
+        if (!touched) return prev;
+        const updated = { ...prev, [chatId]: nextList };
+        persistPartitionedMessages(updated, userNow.phoneNumber);
+        return updated;
+      });
+
+      if (chatId.startsWith('dm_self_')) return;
+
+      let targetCleanPhone = (currentChat?.phone || (currentChat as any)?.phoneNumber || '').replace(/\D/g, '');
+      if (!targetCleanPhone && chatId.startsWith('dm_')) {
+        const parts = chatId.replace('dm_', '').split('_').filter(Boolean);
+        targetCleanPhone = parts.find((p) => !phonesMatch(p, myCleanPhone)) || parts[0] || '';
+      }
+      const memberPhones = (currentChat?.memberPhones || []).filter((p) => !phonesMatch(p, myCleanPhone));
+
+      const payload = {
+        chatId,
+        messageIds: messageIdsToMark,
+        readerPhone: userNow.phoneNumber,
+        readerName: userNow.fullName || 'AGC User',
+        readAt,
+        targetPhone: targetCleanPhone || undefined,
+        memberPhones: memberPhones.length > 0 ? memberPhones : undefined,
+      };
+
+      // 1. BroadcastChannel (same browser multi-tab sync)
+      try {
+        const bc = new BroadcastChannel('AGC_chats_sync');
+        bc.postMessage({ type: 'messages_read', ...payload });
+        bc.close();
+      } catch (_) {}
+
+      // 2. Socket.io live read receipt + server store update
+      emitMessagesRead({
+        chatId,
+        messageIds: messageIdsToMark,
+        readerPhone: userNow.phoneNumber,
+        readerName: userNow.fullName || 'AGC User',
+        readAt,
+        targetPhone: targetCleanPhone || undefined,
+        memberPhones: memberPhones.length > 0 ? memberPhones : undefined,
+      });
+
+      // 3. Supabase Realtime fallback
+      if (isSupabaseConfigured) {
+        sendSupabaseBroadcastSafe(`chat_${chatId}`, 'messages_read', payload);
+        if (targetCleanPhone) {
+          const targets = new Set([targetCleanPhone, normalizePhoneDigits(targetCleanPhone)].filter(Boolean));
+          targets.forEach((t) => sendSupabaseBroadcastSafe(`inbox_${t}`, 'messages_read', payload));
+        }
+        memberPhones.forEach((p) => {
+          const cp = p.replace(/\D/g, '');
+          if (cp && !phonesMatch(cp, myCleanPhone)) {
+            const normCp = normalizePhoneDigits(cp);
+            new Set([cp, normCp].filter(Boolean)).forEach((t) => {
+              sendSupabaseBroadcastSafe(`inbox_${t}`, 'messages_read', payload);
+            });
+          }
+        });
+      }
+    },
+    [sendSupabaseBroadcastSafe]
+  );
+  emitReadReceiptForChatRef.current = emitReadReceiptForChat;
+
   const reactToMessage = (chatId: string, messageId: string, emoji: string) => {
     const myName = currentUser.fullName || 'You';
     setMessages((prev) => {
@@ -9843,7 +10135,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
-    const initialStatus: 'sent' | 'delivered' = isOnline ? 'delivered' : 'sent';
+    const isSelfNoteChat = chatId.startsWith('dm_self_');
+    const initialStatus: 'sent' | 'delivered' | 'read' =
+      isSelfNoteChat && readReceiptsEnabledRef.current
+        ? 'read'
+        : isOnline
+        ? 'delivered'
+        : 'sent';
     const useOneTime = Boolean(oneTimeView);
     const ghostMs = parseGhostDurationMs(_targetChatSend?.disappearingTimer);
     const mentions = extractMentionsFromText(text);
@@ -9872,6 +10170,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'text',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: initialStatus,
+      ...(initialStatus === 'read'
+        ? { readAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+        : {}),
     };
 
     // 1. Update local state and persist partitioned per user
@@ -9995,9 +10296,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
 
           setMessages((prev) => {
+            const prevList = prev[chatId] || [];
+            const markedList = readReceiptsEnabledRef.current
+              ? prevList.map((m) =>
+                  m.sender === 'user' && m.status !== 'read'
+                    ? { ...m, status: 'read' as const, readAt: m.readAt || botResponseMsg.timestamp }
+                    : m
+                )
+              : prevList;
             const updated = {
               ...prev,
-              [chatId]: [...(prev[chatId] || []), botResponseMsg],
+              [chatId]: [...markedList, botResponseMsg],
             };
             persistPartitionedMessages(updated, currentUser.phoneNumber);
             return updated;
@@ -16567,6 +16876,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setWallet(localWalletState);
     walletRef.current = localWalletState;
     setSecuritySettings(loadPartitionedSecuritySettings(phoneNumber));
+    try {
+      const rrKey = getUserStorageKey('AGC_read_receipts_v1', phoneNumber);
+      const rrVal = safeLocalStorage.getItem(rrKey) ?? safeLocalStorage.getItem('AGC_read_receipts_v1');
+      const nextRr = rrVal !== 'false';
+      setReadReceiptsEnabled(nextRr);
+      readReceiptsEnabledRef.current = nextRr;
+    } catch (_) {}
 
     setCurrentUser(updatedUser);
     currentUserRef.current = updatedUser;
@@ -19129,7 +19445,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const existingIdx = list.findIndex((m) => m.id === message.id);
         if (existingIdx >= 0) {
           isDuplicateMessage = true;
+          const existingMsg = list[existingIdx];
+          const shouldUpgradeRead = message.status === 'read' && existingMsg.status !== 'read';
           if (
+            shouldUpgradeRead ||
             message.type === 'financial_poll' ||
             message.type === 'ajo_update' ||
             message.type === 'game_xo' ||
@@ -19179,6 +19498,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
               return {
                 ...m,
+                status: message.status === 'read' ? ('read' as const) : m.status,
+                readAt: message.readAt ?? m.readAt,
+                readBy: message.readBy ?? m.readBy,
                 financialPoll: nextPoll,
                 ajoGroup: message.ajoGroup ?? m.ajoGroup,
                 xoGame: nextXo,
@@ -19198,13 +19520,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return prev;
         }
 
-            const receivedMsg: ChatMessage = {
+        const isViewingChatNow =
+          (currentActiveChatId === resolvedChatId || currentActiveChatId === chatId) &&
+          (typeof document === 'undefined' || document.visibilityState === 'visible');
+
+        const receivedMsg: ChatMessage = {
           ...message,
           text: plainText,
           isEncrypted: wasEncrypted,
           chatId: resolvedChatId,
           sender: isSelfChat ? 'user' : (isFromMe ? 'user' : 'other'),
-          status: 'delivered',
+          status:
+            isViewingChatNow && !isFromMe && readReceiptsEnabledRef.current
+              ? 'read'
+              : message.status === 'read'
+              ? 'read'
+              : 'delivered',
+          ...(isViewingChatNow && !isFromMe && readReceiptsEnabledRef.current
+            ? { readAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+            : {}),
           ...((currentActiveChatId === resolvedChatId || currentActiveChatId === chatId) && (message.isGhost || message.disappearingDurationMs) && !message.expiresAt
             ? {
                 viewedAt: Date.now(),
@@ -19224,6 +19558,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (isDuplicateMessage) return;
+
+      if (
+        !isFromMe &&
+        (currentActiveChatId === resolvedChatId || currentActiveChatId === chatId) &&
+        readReceiptsEnabledRef.current &&
+        (typeof document === 'undefined' || document.visibilityState === 'visible')
+      ) {
+        emitReadReceiptForChatRef.current(resolvedChatId, [message.id]);
+      }
 
       const mentionedMe =
         !isFromMe &&
@@ -19519,6 +19862,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         void syncGroupsFromServer();
         syncLiveCommunitiesRef.current?.();
         void syncMissedMessagesFromServer(activeChatIdRef.current || undefined);
+        if (activeChatIdRef.current) {
+          emitReadReceiptForChatRef.current(activeChatIdRef.current);
+        }
       }
     };
     window.addEventListener('focus', handleInboxFocusOrVis);
@@ -19587,6 +19933,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     window.addEventListener('online', handleOnlineFlushOutbox);
 
     socket.on('new_message', handleIncomingMessage);
+    socket.on('messages_read', applyRemoteReadReceipt);
     socket.on('message_reaction', applyRemoteMessageReaction);
     socket.on('chat_meta_update', handleChatMetaUpdateSocket);
     socket.on('quick_poll_update', handleQuickPollUpdateSocket);
@@ -19855,6 +20202,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       bc = new BroadcastChannel('AGC_chats_sync');
       bc.onmessage = (e) => {
         const latestUser = currentUserRef.current;
+        if (e.data && e.data.type === 'messages_read' && e.data.chatId) {
+          applyRemoteReadReceipt(e.data);
+          return;
+        }
         if (e.data && e.data.type === 'message_reaction' && e.data.chatId && e.data.messageId) {
           applyRemoteMessageReaction(e.data);
           return;
@@ -19954,6 +20305,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             handleIncomingMessage(payload);
           }
         })
+        .on('broadcast', { event: 'messages_read' }, ({ payload }: any) => {
+          if (payload?.chatId) {
+            applyRemoteReadReceipt(payload);
+          }
+        })
         .on('broadcast', { event: 'message_reaction' }, ({ payload }: any) => {
           if (payload?.chatId && payload?.messageId) {
             applyRemoteMessageReaction(payload);
@@ -20038,6 +20394,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .on('broadcast', { event: 'new_message' }, ({ payload }: any) => {
             if (payload && payload.message) {
               handleIncomingMessage(payload);
+            }
+          })
+          .on('broadcast', { event: 'messages_read' }, ({ payload }: any) => {
+            if (payload?.chatId) {
+              applyRemoteReadReceipt(payload);
             }
           })
           .on('broadcast', { event: 'message_reaction' }, ({ payload }: any) => {
@@ -20141,6 +20502,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socket.off('connect', registerRoomsOnConnect);
       socket.off('account_banned', handleAccountBanned);
       socket.off('new_message', handleIncomingMessage);
+      socket.off('messages_read', applyRemoteReadReceipt);
       socket.off('message_reaction', applyRemoteMessageReaction);
       socket.off('chat_meta_update', handleChatMetaUpdateSocket);
       socket.off('quick_poll_update', handleQuickPollUpdateSocket);
@@ -20165,7 +20527,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (sbInboxNorm) sbInboxNorm.unsubscribe();
       if (sbTownFeed) sbTownFeed.unsubscribe();
     };
-  }, [currentUser.id, currentUser.phoneNumber, isAuthenticated, handleIncomingMessage, syncMissedMessagesFromServer, applyXoGameUpdate, applyWhotGameUpdate, applyLudoGameUpdate, applyPokerGameUpdate, applyBillRequestUpdate, applyRemoteMessageReaction]);
+  }, [currentUser.id, currentUser.phoneNumber, isAuthenticated, handleIncomingMessage, syncMissedMessagesFromServer, applyXoGameUpdate, applyWhotGameUpdate, applyLudoGameUpdate, applyPokerGameUpdate, applyBillRequestUpdate, applyRemoteMessageReaction, applyRemoteReadReceipt]);
 
   const syncCurrentUserFromRecord = useCallback((me?: AdminUserRecord) => {
     const cur = currentUserRef.current;
@@ -22062,9 +22424,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshWalletFromServer,
         topUpWallet,
         withdrawWallet,
+        fetchLiveBanks,
+        resolveBankAccount,
         updateUsername,
         hideBalanceOnNav,
         toggleHideBalance,
+        readReceiptsEnabled,
+        toggleReadReceipts,
         activeCheckoutProduct,
         openCheckout,
         closeCheckout,

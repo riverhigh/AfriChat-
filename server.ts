@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import cors from 'cors';
@@ -1373,6 +1373,38 @@ function recordStoredMessage(entry: Omit<StoredChatRelayEntry, 'createdAtMs'> & 
     removed.forEach((r) => storedMessagesById.delete(r.id));
   }
   scheduleSaveMessagesFile();
+}
+
+function markStoredMessagesRead(
+  chatId: string,
+  messageIds: string[],
+  readerPhone?: string,
+  readAt?: string
+) {
+  if (!chatId || !Array.isArray(messageIds) || messageIds.length === 0) return;
+  let changed = false;
+  const cleanReader = (readerPhone || '').replace(/\D/g, '');
+  const nowStr = readAt || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  for (const id of messageIds) {
+    const entry = storedMessagesById.get(String(id));
+    if (!entry) continue;
+    const msgSender = (entry.senderPhone || entry.message?.senderPhone || '').replace(/\D/g, '');
+    if (cleanReader && msgSender && getPhoneVariants(msgSender).some((v) => getPhoneVariants(cleanReader).includes(v))) {
+      continue;
+    }
+    entry.message = {
+      ...entry.message,
+      status: 'read',
+      readAt: entry.message?.readAt || nowStr,
+      readBy: cleanReader
+        ? Array.from(new Set([...(Array.isArray(entry.message?.readBy) ? entry.message.readBy : []), cleanReader]))
+        : entry.message?.readBy,
+    };
+    changed = true;
+  }
+  if (changed) {
+    scheduleSaveMessagesFile();
+  }
 }
 
 function doesStoredMessageMatchPhone(entry: StoredChatRelayEntry, phoneVariantsSet: Set<string>): boolean {
@@ -2885,8 +2917,9 @@ function creditAuthoritativeWallet(params: {
 }
 
 // REST: Read authoritative server wallet state (never trusts browser balance)
-app.get('/api/wallet/:phone', async (req: Request, res: Response) => {
+app.get('/api/wallet/:phone', async (req: Request, res: Response, next: NextFunction) => {
   const rawPhone = decodeURIComponent(req.params.phone || '');
+  if (rawPhone === 'banks' || rawPhone === 'transactions') return next();
   if (!rawPhone) return res.status(400).json({ error: 'Phone number required' });
   await ensureInitialSupabaseSync();
   const wallet = getOrCreateServerWallet(rawPhone);
@@ -3002,13 +3035,347 @@ app.post('/api/wallet/verify-paystack', async (req: Request, res: Response) => {
   }
 });
 
+interface LiveBankRecord {
+  id?: number;
+  name: string;
+  code: string;
+  slug?: string;
+  type?: string;
+  active?: boolean;
+}
+
+const FALLBACK_CBN_BANKS: LiveBankRecord[] = [
+  { name: 'Guaranty Trust Bank', code: '058', slug: 'guaranty-trust-bank' },
+  { name: 'Access Bank', code: '044', slug: 'access-bank' },
+  { name: 'Zenith Bank', code: '057', slug: 'zenith-bank' },
+  { name: 'First Bank of Nigeria', code: '011', slug: 'first-bank-of-nigeria' },
+  { name: 'United Bank For Africa', code: '033', slug: 'united-bank-for-africa' },
+  { name: 'OPay Digital Services Limited (OPay)', code: '999992', slug: 'paycom' },
+  { name: 'PalmPay', code: '999991', slug: 'palmpay' },
+  { name: 'Moniepoint MFB', code: '50515', slug: 'moniepoint-mfb-ng' },
+  { name: 'Kuda Bank', code: '50211', slug: 'kuda-bank' },
+  { name: 'Fidelity Bank', code: '070', slug: 'fidelity-bank' },
+  { name: 'Stanbic IBTC Bank', code: '221', slug: 'stanbic-ibtc-bank' },
+  { name: 'Wema Bank', code: '035', slug: 'wema-bank' },
+  { name: 'Sterling Bank', code: '232', slug: 'sterling-bank' },
+  { name: 'First City Monument Bank', code: '214', slug: 'first-city-monument-bank' },
+  { name: 'Union Bank of Nigeria', code: '032', slug: 'union-bank-of-nigeria' },
+  { name: 'Ecobank Nigeria', code: '050', slug: 'ecobank-nigeria' },
+  { name: 'Polaris Bank', code: '076', slug: 'polaris-bank' },
+  { name: 'Providus Bank', code: '101', slug: 'providus-bank' },
+  { name: 'Keystone Bank', code: '082', slug: 'keystone-bank' },
+  { name: 'Access Bank (Diamond)', code: '063', slug: 'access-bank-diamond' },
+  { name: 'Unity Bank', code: '215', slug: 'unity-bank' },
+  { name: 'Jaiz Bank', code: '301', slug: 'jaiz-bank' },
+  { name: 'TAJ Bank', code: '302', slug: 'taj-bank' },
+  { name: 'Titan Bank', code: '102', slug: 'titan-bank' },
+  { name: 'ALAT by WEMAMFB', code: '035A', slug: 'alat-by-wema' },
+];
+
+let cachedLiveBanks: LiveBankRecord[] = [];
+let cachedLiveBanksSource: 'paystack_live_api' | 'fallback' = 'fallback';
+let cachedLiveBanksAt = 0;
+const LIVE_BANKS_TTL_MS = 6 * 60 * 60 * 1000;
+
+async function getLiveNigerianBanks(): Promise<{ banks: LiveBankRecord[]; source: 'paystack_live_api' | 'fallback' }> {
+  if (cachedLiveBanks.length > 0 && Date.now() - cachedLiveBanksAt < LIVE_BANKS_TTL_MS) {
+    return { banks: cachedLiveBanks, source: cachedLiveBanksSource };
+  }
+  const secret = (process.env.PAYSTACK_SECRET_KEY || '').trim();
+  const headers: Record<string, string> = {};
+  if (secret) headers.Authorization = `Bearer ${secret}`;
+  try {
+    const resp = await fetch('https://api.paystack.co/bank?country=nigeria&perPage=500', {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(7000),
+    });
+    const json: any = await resp.json().catch(() => ({}));
+    if (resp.ok && json?.status && Array.isArray(json?.data) && json.data.length > 0) {
+      const seenCodes = new Set<string>();
+      const deduped: LiveBankRecord[] = [];
+      for (const b of json.data) {
+        const code = String(b?.code || '').trim();
+        const name = String(b?.name || '').trim();
+        if (!code || !name || b?.active === false || seenCodes.has(code)) continue;
+        seenCodes.add(code);
+        deduped.push({
+          id: typeof b?.id === 'number' ? b.id : undefined,
+          name,
+          code,
+          slug: b?.slug,
+          type: b?.type,
+          active: b?.active !== false,
+        });
+      }
+      if (deduped.length > 0) {
+        cachedLiveBanks = deduped;
+        cachedLiveBanksSource = 'paystack_live_api';
+        cachedLiveBanksAt = Date.now();
+        return { banks: cachedLiveBanks, source: cachedLiveBanksSource };
+      }
+    }
+  } catch (_) {}
+
+  if (cachedLiveBanks.length > 0) {
+    return { banks: cachedLiveBanks, source: cachedLiveBanksSource };
+  }
+  return { banks: FALLBACK_CBN_BANKS, source: 'fallback' };
+}
+
+const NUBAN_WEIGHTS_15 = [3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3];
+
+function matchesNubanChecksum(accountNumber: string, bankCode: string): boolean {
+  if (!/^\d{10}$/.test(accountNumber)) return false;
+  const codeDigits = String(bankCode || '').replace(/\D/g, '');
+  if (!codeDigits) return false;
+  const acct9 = accountNumber.slice(0, 9);
+  const checkDigit = Number(accountNumber[9]);
+
+  const candidates6: string[] = [];
+  if (codeDigits.length === 3) {
+    candidates6.push(`000${codeDigits}`);
+  } else if (codeDigits.length === 5) {
+    candidates6.push(`9${codeDigits}`);
+    candidates6.push(`0${codeDigits}`);
+  } else if (codeDigits.length === 6) {
+    candidates6.push(codeDigits);
+    if (codeDigits.startsWith('0')) {
+      candidates6.push(`9${codeDigits.slice(1)}`);
+    }
+  } else if (codeDigits.length < 6) {
+    candidates6.push(codeDigits.padStart(6, '0'));
+  } else {
+    candidates6.push(codeDigits.slice(-6));
+  }
+
+  for (const code6 of candidates6) {
+    const seq = `${code6}${acct9}`;
+    if (seq.length !== 15) continue;
+    let sum = 0;
+    for (let i = 0; i < 15; i++) {
+      sum += Number(seq[i]) * NUBAN_WEIGHTS_15[i];
+    }
+    const expected = (10 - (sum % 10)) % 10;
+    if (expected === checkDigit) return true;
+  }
+  return false;
+}
+
+const COMMERCIAL_PRIORITY_CODES = [
+  '058', '044', '057', '011', '033', '999992', '999991', '50515', '50211',
+  '070', '221', '035', '232', '214', '032', '050', '076', '101', '082',
+  '063', '215', '068', '301', '302', '102', '103', '035A', '100004', '100002', '120001',
+];
+
+const WALLET_PRIORITY_CODES = [
+  '999992', '999991', '50515', '50211', '100004', '120001', '120003', '120004',
+  '058', '044', '057', '011', '033', '070', '221', '035', '232', '214',
+  '032', '050', '076', '101', '082', '063', '215', '068', '301', '302', '102', '100002',
+];
+
+function getPrioritizedCandidateBanks(accountNumber: string, allBanks: LiveBankRecord[]): LiveBankRecord[] {
+  const looksLikePhoneWallet = /^[789][01]\d{8}$/.test(accountNumber);
+  const priorityList = looksLikePhoneWallet ? WALLET_PRIORITY_CODES : COMMERCIAL_PRIORITY_CODES;
+  const priorityRank = new Map(priorityList.map((c, idx) => [c, idx]));
+
+  const fintechWalletSet = new Set(['999992', '999991', '50515', '50211', '100004', '120001', '120003', '120004']);
+  const candidates = allBanks.filter((b) => {
+    if (looksLikePhoneWallet && fintechWalletSet.has(b.code)) return true;
+    return matchesNubanChecksum(accountNumber, b.code);
+  });
+
+  candidates.sort((a, b) => {
+    const ra = priorityRank.has(a.code) ? priorityRank.get(a.code)! : 9999;
+    const rb = priorityRank.has(b.code) ? priorityRank.get(b.code)! : 9999;
+    if (ra !== rb) return ra - rb;
+    return a.name.localeCompare(b.name);
+  });
+
+  return candidates;
+}
+
+// REST: Fetch live Nigerian banks directory (cached from Paystack Bank API)
+app.get('/api/wallet/banks', async (_req: Request, res: Response) => {
+  const { banks, source } = await getLiveNigerianBanks();
+  return res.json({
+    success: true,
+    source,
+    count: banks.length,
+    banks: banks.map((b) => ({ name: b.name, code: b.code, slug: b.slug, type: b.type })),
+  });
+});
+
+// REST: Automatically detect destination bank & resolve account holder's full name from 10-digit account number alone
+app.post('/api/wallet/resolve-account', async (req: Request, res: Response) => {
+  try {
+    const rawAccount = String(req.body?.accountNumber || '').replace(/\D/g, '');
+    if (!/^\d{10}$/.test(rawAccount)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter a valid 10-digit bank account number.',
+      });
+    }
+
+    const { banks: allBanks, source: banksSource } = await getLiveNigerianBanks();
+    const candidates = getPrioritizedCandidateBanks(rawAccount, allBanks);
+    const paystackSecret = (process.env.PAYSTACK_SECRET_KEY || '').trim();
+    const flutterwaveSecret = (process.env.FLUTTERWAVE_SECRET_KEY || '').trim();
+
+    if (!paystackSecret && !flutterwaveSecret) {
+      return res.status(424).json({
+        success: false,
+        requiresSecretKey: true,
+        accountNumber: rawAccount,
+        banksTotal: allBanks.length,
+        banksSource,
+        candidateBanks: candidates.slice(0, 12).map((b) => ({ name: b.name, code: b.code })),
+        message: `Connected to ${allBanks.length} live banks (${candidates.length} NUBAN matches). Add PAYSTACK_SECRET_KEY on the server to pull the account holder's full name automatically.`,
+      });
+    }
+
+    const probePool = candidates.slice(0, 40);
+    const matches: Array<{
+      accountNumber: string;
+      accountName: string;
+      bankName: string;
+      bankCode: string;
+      bankId?: number;
+      verifiedBy: 'paystack_live' | 'flutterwave_live';
+    }> = [];
+
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < probePool.length; i += BATCH_SIZE) {
+      const batch = probePool.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map(async (bank) => {
+          try {
+            if (paystackSecret) {
+              const r = await fetch(
+                `https://api.paystack.co/bank/resolve?account_number=${encodeURIComponent(rawAccount)}&bank_code=${encodeURIComponent(bank.code)}`,
+                {
+                  method: 'GET',
+                  headers: { Authorization: `Bearer ${paystackSecret}` },
+                  signal: AbortSignal.timeout(4000),
+                }
+              );
+              const j: any = await r.json().catch(() => ({}));
+              if (r.ok && j?.status && j?.data?.account_name) {
+                return {
+                  accountNumber: String(j.data.account_number || rawAccount),
+                  accountName: String(j.data.account_name).trim(),
+                  bankName: bank.name,
+                  bankCode: bank.code,
+                  bankId: typeof j.data.bank_id === 'number' ? j.data.bank_id : bank.id,
+                  verifiedBy: 'paystack_live' as const,
+                };
+              }
+            } else if (flutterwaveSecret) {
+              const r = await fetch('https://api.flutterwave.com/v3/accounts/resolve', {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${flutterwaveSecret}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ account_number: rawAccount, account_bank: bank.code }),
+                signal: AbortSignal.timeout(4000),
+              });
+              const j: any = await r.json().catch(() => ({}));
+              if (r.ok && j?.status === 'success' && j?.data?.account_name) {
+                return {
+                  accountNumber: String(j.data.account_number || rawAccount),
+                  accountName: String(j.data.account_name).trim(),
+                  bankName: bank.name,
+                  bankCode: bank.code,
+                  verifiedBy: 'flutterwave_live' as const,
+                };
+              }
+            }
+          } catch (_) {}
+          return null;
+        })
+      );
+
+      for (const hit of batchResults) {
+        if (hit && !matches.some((m) => m.bankCode === hit.bankCode)) {
+          matches.push(hit);
+        }
+      }
+
+      // Stop after Batch 1 or once priority commercial & digital banks have been scanned and match(es) exist
+      if (matches.length > 0 && i >= BATCH_SIZE) {
+        break;
+      }
+    }
+
+    if (matches.length === 0) {
+      return res.status(404).json({
+        success: false,
+        accountNumber: rawAccount,
+        banksTotal: allBanks.length,
+        banksScanned: probePool.length,
+        message: 'Could not find a matching bank account for this 10-digit number. Check the digits and try again.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      accountNumber: rawAccount,
+      banksTotal: allBanks.length,
+      banksScanned: probePool.length,
+      banksSource,
+      primaryAccount: matches[0],
+      matches,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Unable to verify bank account number automatically.',
+    });
+  }
+});
+
 // REST: Server-validated withdrawal (never trusts browser balance state)
-app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
-  const { phoneNumber, amount, bankName, accountNumber, accountName } = req.body || {};
+app.post('/api/wallet/withdraw', async (req: Request, res: Response) => {
+  const { phoneNumber, amount, bankName, bankCode, accountNumber, accountName } = req.body || {};
   const numericAmt = Number(amount);
+  const cleanAccount = String(accountNumber || '').replace(/\D/g, '');
   if (!phoneNumber || !Number.isFinite(numericAmt) || numericAmt <= 0) {
     return res.status(400).json({ success: false, message: 'Valid phone number and positive amount required.' });
   }
+  if (!/^\d{10}$/.test(cleanAccount) || !String(accountName || '').trim() || !String(bankName || '').trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Verified 10-digit account number, resolved bank, and account holder name are required.',
+    });
+  }
+
+  let verifiedAccountName = String(accountName).trim();
+  const verifiedBankName = String(bankName).trim();
+
+  // If PAYSTACK_SECRET_KEY & bankCode are available, double-verify account holder name server-side before debiting
+  const paystackSecret = (process.env.PAYSTACK_SECRET_KEY || '').trim();
+  if (paystackSecret && bankCode) {
+    try {
+      const verifyResp = await fetch(
+        `https://api.paystack.co/bank/resolve?account_number=${encodeURIComponent(cleanAccount)}&bank_code=${encodeURIComponent(String(bankCode))}`,
+        {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${paystackSecret}` },
+          signal: AbortSignal.timeout(6000),
+        }
+      );
+      const verifyJson: any = await verifyResp.json().catch(() => ({}));
+      if (!verifyResp.ok || !verifyJson?.status || !verifyJson?.data?.account_name) {
+        return res.status(400).json({
+          success: false,
+          message: 'Account could not be re-verified with live bank registry before payout.',
+        });
+      }
+      verifiedAccountName = String(verifyJson.data.account_name).trim();
+    } catch (_) {}
+  }
+
   const wallet = getOrCreateServerWallet(String(phoneNumber));
   if (numericAmt > wallet.availableBalance) {
     return res.status(400).json({
@@ -3028,8 +3395,8 @@ app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
     userPhone: match?.user.phoneNumber || wallet.phoneNumber,
     userName: match?.user.fullName || 'AGC User',
     type: 'withdrawal',
-    title: `Payout to ${String(bankName || 'Bank')} (${String(accountNumber || '0000').slice(-4)})`,
-    description: `Withdrawal to ${String(bankName || 'Bank')} - ${String(accountName || 'Account')}`,
+    title: `Payout to ${verifiedBankName} (${cleanAccount.slice(-4)})`,
+    description: `Withdrawal to ${verifiedBankName} - ${verifiedAccountName}`,
     amount: numericAmt,
     fee: 0,
     balanceAfter: wallet.availableBalance,
@@ -3040,6 +3407,12 @@ app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
     reference: ref,
     referenceId: ref,
     channel: 'bank_transfer',
+    metadata: {
+      bankName: verifiedBankName,
+      bankCode: bankCode ? String(bankCode) : undefined,
+      accountNumber: cleanAccount,
+      accountName: verifiedAccountName,
+    },
   };
   wallet.transactions = [tx, ...wallet.transactions].slice(0, 100);
   serverWallets.set(wallet.phoneKey, wallet);
@@ -3057,7 +3430,7 @@ app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
   return res.json({
     success: true,
     reference: ref,
-    message: `Withdrawal of ₦${numericAmt.toLocaleString()} to ${String(accountName || 'recipient')} processed.`,
+    message: `Withdrawal of ₦${numericAmt.toLocaleString()} to ${verifiedAccountName} (${verifiedBankName}) processed.`,
     wallet: {
       availableBalance: wallet.availableBalance,
       escrowLockedBalance: wallet.escrowLockedBalance,
@@ -9920,6 +10293,12 @@ io.on('connection', (socket: Socket) => {
   socket.on('quick_poll_update', (payload: { chatId?: string; messageId?: string; quickPoll?: any; memberPhones?: string[]; targetPhone?: string }) => {
     if (!payload?.chatId || !payload?.quickPoll) return;
     emitChatScopedEvent('quick_poll_update', payload.chatId, payload, payload.memberPhones, payload.targetPhone);
+  });
+
+  socket.on('messages_read', (payload: { chatId?: string; messageIds?: string[]; readerPhone?: string; readerName?: string; readAt?: string; targetPhone?: string; memberPhones?: string[] }) => {
+    if (!payload?.chatId || !Array.isArray(payload.messageIds) || payload.messageIds.length === 0) return;
+    markStoredMessagesRead(payload.chatId, payload.messageIds, payload.readerPhone, payload.readAt);
+    emitChatScopedEvent('messages_read', payload.chatId, payload, payload.memberPhones, payload.targetPhone);
   });
 
   // 2b. Live 24h Status (Stories) Handlers

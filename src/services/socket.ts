@@ -153,6 +153,20 @@ export const emitQuickPollUpdate = (payload: {
   s.emit('quick_poll_update', payload);
 };
 
+export const emitMessagesRead = (payload: {
+  chatId: string;
+  messageIds: string[];
+  readerPhone: string;
+  readerName?: string;
+  readAt: string;
+  targetPhone?: string;
+  memberPhones?: string[];
+}) => {
+  const s = getSocket();
+  if (!s || !payload?.chatId || !Array.isArray(payload.messageIds) || payload.messageIds.length === 0) return;
+  s.emit('messages_read', payload);
+};
+
 export const emitCreateGroup = (chat: any, memberPhones: string[]) => {
   const s = getSocket();
   s?.emit('create_group', { chat, memberPhones });
