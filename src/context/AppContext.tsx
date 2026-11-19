@@ -1065,6 +1065,20 @@ export interface ActiveCallState {
   hasConnected?: boolean;
 }
 
+export interface MissedCallNotice {
+  id: string;
+  roomId: string;
+  chatId: string;
+  callType: 'voice' | 'video';
+  callerName: string;
+  callerPhone: string;
+  callerAvatar?: string;
+  isGroupCall?: boolean;
+  groupName?: string;
+  reason: string;
+  timestamp: string;
+}
+
 interface AppContextType {
   language: LanguageCode;
   setLanguage: (lang: LanguageCode) => void;
@@ -1265,6 +1279,10 @@ interface AppContextType {
   } | null;
   acceptIncomingCall: (options?: { anonymous?: boolean }) => void;
   declineIncomingCall: () => void;
+  missedCallNotice: MissedCallNotice | null;
+  dismissMissedCallNotice: () => void;
+  unreadMissedCallsCount: number;
+  clearUnreadMissedCalls: () => void;
   // 1. Meme & Sticker Studio
   isMemeStudioOpen: boolean;
   setIsMemeStudioOpen: (val: boolean) => void;
@@ -2474,6 +2492,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [lowDataMode]);
 
   const [activeTab, setActiveTab] = useState<'status' | 'calls' | 'town' | 'chats' | 'settings' | 'market'>('status');
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
 
   // Display & Appearance
   const [fontSize, setFontSizeState] = useState<AppFontSize>(() => {
@@ -4753,12 +4773,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [calls, setCalls] = useState<CallLogItem[]>(() => {
     try {
-      const saved = localStorage.getItem('AGC_calls_v2');
+      const savedPhone = getSavedUserCleanPhone();
+      const userKey = savedPhone ? `AGC_calls_v2_${savedPhone}` : 'AGC_calls_v2';
+      const saved = localStorage.getItem(userKey) || localStorage.getItem('AGC_calls_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && !parsed.some((c: CallLogItem) => c.phone === '+234 803 123 4567' || c.name === 'Mama Chidinma Textiles')) {
           return parsed;
         } else {
+          localStorage.removeItem(userKey);
           localStorage.removeItem('AGC_calls_v2');
         }
       }
@@ -4767,6 +4790,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return [];
   });
+  const [unreadMissedCallsCount, setUnreadMissedCallsCount] = useState<number>(0);
+  const clearUnreadMissedCalls = useCallback(() => {
+    setUnreadMissedCallsCount(0);
+  }, []);
+  useEffect(() => {
+    if (activeTab === 'calls') {
+      setUnreadMissedCallsCount(0);
+    }
+  }, [activeTab]);
   const [statuses, setStatuses] = useState<UserStatus[]>(() => {
     try {
       const saved = localStorage.getItem('AGC_statuses_v2');
@@ -4842,6 +4874,81 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     chatId?: string;
     timestamp?: number;
   } | null>(null);
+  const [missedCallNotice, setMissedCallNotice] = useState<MissedCallNotice | null>(null);
+  const missedCallNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dismissMissedCallNotice = useCallback(() => {
+    if (missedCallNoticeTimerRef.current) {
+      clearTimeout(missedCallNoticeTimerRef.current);
+      missedCallNoticeTimerRef.current = null;
+    }
+    setMissedCallNotice(null);
+  }, []);
+  const notifyReceiverMissedCall = useCallback(
+    (params: {
+      roomId: string;
+      chatId: string;
+      callType: 'voice' | 'video';
+      callerName: string;
+      callerPhone: string;
+      callerAvatar?: string;
+      isGroupCall?: boolean;
+      groupName?: string;
+      reason?: string;
+      timestamp?: string;
+    }) => {
+      if (!params.roomId) return;
+      const dedupeKey = `msg_call_${params.roomId}`;
+      if (notifiedMessageIdsRef.current.has(dedupeKey)) return;
+      notifiedMessageIdsRef.current.add(dedupeKey);
+      if (notifiedMessageIdsRef.current.size > 300) {
+        const firstKey = notifiedMessageIdsRef.current.values().next().value;
+        if (firstKey) notifiedMessageIdsRef.current.delete(firstKey);
+      }
+
+      const isVideo = params.callType === 'video';
+      const displayName =
+        params.isGroupCall && params.groupName
+          ? `${params.callerName || 'Someone'} (${params.groupName})`
+          : params.callerName || params.callerPhone || 'AGC User';
+      const reasonText = params.reason || 'No answer';
+
+      showLocalNotification(
+        isVideo ? '📹 Missed Video Call' : '📞 Missed Voice Call',
+        `Missed ${isVideo ? 'video' : 'voice'} call from ${displayName} (${reasonText})`,
+        params.callerAvatar || '/icon-192.png'
+      );
+
+      if (activeTabRef.current !== 'calls') {
+        setUnreadMissedCallsCount((c) => c + 1);
+      }
+
+      if (missedCallNoticeTimerRef.current) {
+        clearTimeout(missedCallNoticeTimerRef.current);
+        missedCallNoticeTimerRef.current = null;
+      }
+      setMissedCallNotice({
+        id: dedupeKey,
+        roomId: params.roomId,
+        chatId: params.chatId,
+        callType: params.callType,
+        callerName: params.callerName || params.callerPhone || 'AGC User',
+        callerPhone: params.callerPhone || '',
+        callerAvatar: params.callerAvatar,
+        isGroupCall: Boolean(params.isGroupCall),
+        groupName: params.groupName,
+        reason: reasonText,
+        timestamp: params.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      });
+      missedCallNoticeTimerRef.current = setTimeout(() => {
+        missedCallNoticeTimerRef.current = null;
+        setMissedCallNotice(null);
+      }, 12_000);
+    },
+    []
+  );
+  const notifyReceiverMissedCallRef = useRef(notifyReceiverMissedCall);
+  notifyReceiverMissedCallRef.current = notifyReceiverMissedCall;
+
   const activeCallRef = useRef<ActiveCallState | null>(null);
   const incomingCallRef = useRef<typeof incomingCall>(null);
   const callRingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -7947,6 +8054,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deviceContactsRef = useRef(deviceContacts);
   deviceContactsRef.current = deviceContacts;
 
+  useEffect(() => {
+    try {
+      const clean = currentUser?.phoneNumber ? normalizePhoneDigits(currentUser.phoneNumber) : '';
+      const userKey = clean ? `AGC_calls_v2_${clean}` : 'AGC_calls_v2';
+      localStorage.setItem(userKey, JSON.stringify(calls.slice(0, 150)));
+    } catch (_) {}
+  }, [calls, currentUser.phoneNumber]);
+
   const propagateUserProfileUpdate = useCallback(
     (u: { id?: string; phoneNumber?: string; fullName?: string; username?: string; avatarUrl?: string }) => {
       const phone = u?.phoneNumber;
@@ -8346,8 +8461,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : (params.callerName || peerPhoneForThread || 'Direct Chat');
       const peerAvatarForThread = !isMeCaller && params.callerAvatar ? params.callerAvatar : DEFAULT_AVATAR_SVG;
       const nowMs = Date.now();
+      const isViewingChatNow =
+        activeChatIdRef.current === resolvedChatId &&
+        (typeof document === 'undefined' || document.visibilityState === 'visible');
 
       setChats((prev) => {
+        const existingThread = prev.find((c) => c.id === resolvedChatId);
+        const nextUnread =
+          !isMeCaller && !isViewingChatNow
+            ? (existingThread?.unreadCount || 0) + 1
+            : (existingThread?.unreadCount || 0);
         const updated = bumpChatThreadToTop(
           prev,
           resolvedChatId,
@@ -8355,6 +8478,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             lastMessage: previewLabel,
             lastMessageTime: timeStr,
             lastMessageAtMs: nowMs,
+            unreadCount: nextUnread,
           },
           () => ({
             id: resolvedChatId,
@@ -8362,7 +8486,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             avatar: peerAvatarForThread,
             verifiedStore: false,
             location: params.isGroupCall ? 'Community Group' : 'Direct Chat',
-            unreadCount: isMeCaller ? 0 : 1,
+            unreadCount: !isMeCaller && !isViewingChatNow ? 1 : 0,
             lastMessage: previewLabel,
             lastMessageTime: timeStr,
             lastMessageAtMs: nowMs,
@@ -8373,9 +8497,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             phoneNumber: peerPhoneForThread,
           })
         );
+        chatsRef.current = updated;
         persistPartitionedChats(updated, myPhone);
         return updated;
       });
+
+      if (!isMeCaller && params.status !== 'declined') {
+        notifyReceiverMissedCallRef.current({
+          roomId: params.roomId,
+          chatId: resolvedChatId,
+          callType: params.callType,
+          callerName: params.callerName || 'AGC User',
+          callerPhone: params.callerPhone || '',
+          callerAvatar: params.callerAvatar,
+          isGroupCall: Boolean(params.isGroupCall),
+          groupName: params.groupName,
+          reason: params.reason || (params.status === 'no_answer' ? 'No answer' : 'Missed'),
+          timestamp: timeStr,
+        });
+      }
 
       if (params.shouldBroadcast) {
         broadcastLiveMessageRef.current(resolvedChatId, callMsg).catch(() => {});
@@ -8487,6 +8627,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             startedAt:
               payload?.startedAt ||
               (missedInc.timestamp ? new Date(Number(missedInc.timestamp)).toISOString() : endedIso),
+            endedAt: endedIso,
+            reason: isNoAnswer ? 'No answer' : 'Cancelled before answer',
+            shouldBroadcast: false,
+          });
+        }
+      } else if (
+        eventName === 'call_ended' &&
+        payload?.roomId &&
+        payload?.isHostCancel &&
+        !recordedMissedCallRoomsRef.current.has(payload.roomId)
+      ) {
+        const myPhoneNow = currentUserRef.current?.phoneNumber || '';
+        const callerPhone = payload.callerPhone || payload.endedBy || '';
+        const isNotFromMe = Boolean(callerPhone && (!myPhoneNow || !phonesMatch(callerPhone, myPhoneNow)));
+        if (isNotFromMe) {
+          const endedIso = new Date().toISOString();
+          const isNoAnswer = payload?.reason === 'no_answer';
+          const callType: 'voice' | 'video' = payload?.callType === 'video' ? 'video' : 'voice';
+          const callerName = payload?.callerName || callerPhone || 'AGC User';
+          const missedItem: CallLogItem = {
+            id: `call_room_${payload.roomId}`,
+            name: payload?.isGroupCall && payload?.groupName ? payload.groupName : callerName,
+            phone: callerPhone,
+            avatar: payload?.callerAvatar || DEFAULT_AVATAR_SVG,
+            type: callType,
+            direction: 'missed',
+            time: 'Just now',
+          };
+          setCalls((prev) => (prev.some((c) => c.id === missedItem.id) ? prev : [missedItem, ...prev]));
+
+          recordMissedCallInChat({
+            roomId: payload.roomId,
+            callType,
+            status: isNoAnswer ? 'no_answer' : 'missed',
+            callerName,
+            callerPhone,
+            callerAvatar: payload?.callerAvatar,
+            calleeName: currentUserRef.current?.fullName || 'You',
+            calleePhone: myPhoneNow,
+            targetChatId: payload?.chatId,
+            isGroupCall: Boolean(payload?.isGroupCall),
+            groupName: payload?.groupName,
+            startedAt: payload?.startedAt || endedIso,
             endedAt: endedIso,
             reason: isNoAnswer ? 'No answer' : 'Cancelled before answer',
             shouldBroadcast: false,
@@ -9090,7 +9273,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return updated;
           });
           const nowMs = Date.now();
+          let overrideChatForBroadcast: ChatThread | undefined = chatsRef.current.find((c) => c.id === resolvedChatId);
           setChats((prev) => {
+            const existing = prev.find((c) => c.id === resolvedChatId);
             const updated = bumpChatThreadToTop(
               prev,
               resolvedChatId,
@@ -9112,17 +9297,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 phoneNumber: primaryTarget,
               })
             );
+            overrideChatForBroadcast = existing
+              ? { ...existing, lastMessage: previewLabel, lastMessageTime: timeStr, lastMessageAtMs: nowMs }
+              : updated[0];
+            chatsRef.current = updated;
             persistPartitionedChats(updated, myPhone);
             return updated;
           });
-          broadcastLiveMessageRef.current(resolvedChatId, callMsg).catch(() => {});
+          broadcastLiveMessageRef.current(resolvedChatId, callMsg, overrideChatForBroadcast).catch(() => {});
         }
       }
     }
 
+    const meForEnd = currentUserRef.current;
     const endPayload = {
       roomId: current.roomId,
-      endedBy: currentUserRef.current?.phoneNumber || '',
+      endedBy: meForEnd?.phoneNumber || '',
+      callerName: meForEnd?.fullName || 'AGC User',
+      callerPhone: meForEnd?.phoneNumber || '',
+      callerAvatar: meForEnd?.avatarUrl,
+      callType: current.type,
+      chatId: current.chatId,
+      groupName: current.groupName,
+      calleeName: current.name,
+      calleePhone: targets[0] || '',
       isHostCancel: Boolean(current.isInitiator),
       isGroupCall: Boolean(current.isGroupCall),
       reason: isUnansweredOutgoing ? missStatus : undefined,
@@ -21346,6 +21544,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ...prev,
           [resolvedChatId]: [...list, receivedMsg],
         };
+        messagesRef.current = updated;
         try {
           const userKey = getUserStorageKey('AGC_messages_v2', userNow.phoneNumber);
           localStorage.setItem(userKey, JSON.stringify(updated));
@@ -21511,7 +21710,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       });
 
+      if (message.type === 'call_log' && message.callDetails && !isFromMe) {
+        const cd = message.callDetails;
+        if (cd.roomId) {
+          recordedMissedCallRoomsRef.current.add(cd.roomId);
+        }
+        const callLogId = cd.roomId ? `call_room_${cd.roomId}` : `call_${message.id}`;
+        setCalls((prev) => {
+          if (prev.some((c) => c.id === callLogId)) return prev;
+          const missedEntry: CallLogItem = {
+            id: callLogId,
+            name: cd.isGroupCall && cd.groupName ? cd.groupName : (cd.callerName || message.senderName || 'AGC User'),
+            phone: cd.callerPhone || message.senderPhone || '',
+            avatar: cd.callerAvatar || message.senderAvatar || DEFAULT_AVATAR_SVG,
+            type: cd.callType || 'voice',
+            direction: 'missed',
+            time: message.timestamp || 'Just now',
+          };
+          return [missedEntry, ...prev];
+        });
+        if (cd.status !== 'declined') {
+          notifyReceiverMissedCallRef.current({
+            roomId: cd.roomId || message.id,
+            chatId: resolvedChatId,
+            callType: cd.callType || 'voice',
+            callerName: cd.callerName || message.senderName || 'AGC User',
+            callerPhone: cd.callerPhone || message.senderPhone || '',
+            callerAvatar: cd.callerAvatar || message.senderAvatar,
+            isGroupCall: Boolean(cd.isGroupCall),
+            groupName: cd.groupName,
+            reason: cd.reason || (cd.status === 'no_answer' ? 'No answer' : 'Missed'),
+            timestamp: message.timestamp,
+          });
+        }
+      }
+
       if (
+        message.type !== 'call_log' &&
         currentActiveChatId !== resolvedChatId &&
         currentActiveChatId !== chatId &&
         !isFromMe &&
@@ -21524,9 +21759,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         showLocalNotification(
           `💬 ${message.senderName || 'AGC User'}`,
-          message.type === 'call_log' && message.callDetails
-            ? (message.callDetails.callType === 'video' ? '📹 Missed video call' : '📞 Missed voice call')
-            : message.type === 'location'
+          message.type === 'location'
             ? `📍 ${message.locationData?.addressName || 'Shared a pin location'}`
             : (plainText || (message.type === 'image' ? '📷 Sent a photo' : 'Sent you an attachment')),
           message.senderAvatar || '/icon-192.png'
@@ -24334,6 +24567,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         incomingCall,
         acceptIncomingCall,
         declineIncomingCall,
+        missedCallNotice,
+        dismissMissedCallNotice,
+        unreadMissedCallsCount,
+        clearUnreadMissedCalls,
         // 1. Meme & Sticker Studio
         isMemeStudioOpen,
         setIsMemeStudioOpen,

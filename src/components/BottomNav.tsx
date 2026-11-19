@@ -12,6 +12,7 @@ export const BottomNav: React.FC = () => {
     currentUser,
     audioSpaces,
     isFeatureEnabled,
+    unreadMissedCallsCount,
   } = useApp();
 
   const totalUnread = chats.reduce((acc, c) => acc + c.unreadCount, 0);
@@ -65,7 +66,14 @@ export const BottomNav: React.FC = () => {
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
-            <Phone className="w-5 h-5" />
+            <div className="relative">
+              <Phone className="w-5 h-5" />
+              {unreadMissedCallsCount > 0 && (
+                <span className="absolute -top-1.5 -right-2 bg-rose-600 text-white text-[10px] font-bold rounded-full min-w-4 h-4 px-1 flex items-center justify-center shadow-xs">
+                  {unreadMissedCallsCount}
+                </span>
+              )}
+            </div>
             <span className="text-[10px] mt-1 font-medium tracking-tight">
               {t('calls')}
             </span>

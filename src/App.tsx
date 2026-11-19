@@ -1,5 +1,5 @@
 import React, { useState, Suspense } from 'react';
-import { ShieldCheck, AlertTriangle, LogIn } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, LogIn, PhoneMissed, VideoOff, Phone, Video, X } from 'lucide-react';
 import { AppProvider, useApp } from './context/AppContext';
 import { CallErrorBoundary } from './components/CallErrorBoundary';
 import { ChatErrorBoundary } from './components/ChatErrorBoundary';
@@ -95,6 +95,9 @@ const AppContent: React.FC = () => {
     isKickedOut,
     endCall,
     declineIncomingCall,
+    startCall,
+    missedCallNotice,
+    dismissMissedCallNotice,
     isFeatureEnabled,
     isBanned,
     banInfo,
@@ -384,6 +387,89 @@ const AppContent: React.FC = () => {
             <CallErrorBoundary onReset={declineIncomingCall}>
               <IncomingCallModal />
             </CallErrorBoundary>
+          )}
+          {missedCallNotice && !incomingCall && !activeCall && (
+            <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[75] w-[calc(100%-24px)] max-w-sm rounded-2xl bg-slate-900/95 dark:bg-[#160b29]/95 text-white border border-rose-500/40 shadow-2xl shadow-rose-950/50 backdrop-blur-md p-3 animate-in slide-in-from-top-3 duration-200">
+              <div className="flex items-start gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 flex items-center justify-center shrink-0">
+                  {missedCallNotice.callType === 'video' ? (
+                    <VideoOff className="w-5 h-5" />
+                  ) : (
+                    <PhoneMissed className="w-5 h-5" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-extrabold text-rose-300 truncate">
+                      {missedCallNotice.callType === 'video' ? 'Missed Video Call' : 'Missed Voice Call'}
+                    </span>
+                    <span className="text-[10px] font-mono text-white/50 shrink-0">
+                      {missedCallNotice.timestamp}
+                    </span>
+                  </div>
+                  <p className="text-sm font-bold text-white truncate">
+                    {missedCallNotice.isGroupCall && missedCallNotice.groupName
+                      ? `${missedCallNotice.callerName} · ${missedCallNotice.groupName}`
+                      : missedCallNotice.callerName}
+                  </p>
+                  <p className="text-[11px] text-white/65 truncate">
+                    {missedCallNotice.reason}
+                  </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    {missedCallNotice.chatId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTab('chats');
+                          setActiveChatId(missedCallNotice.chatId);
+                          dismissMissedCallNotice();
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-[11px] font-bold transition-colors"
+                      >
+                        View in Chat
+                      </button>
+                    )}
+                    {isFeatureEnabled('calls') && (missedCallNotice.callerPhone || missedCallNotice.chatId) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const notice = missedCallNotice;
+                          dismissMissedCallNotice();
+                          startCall(
+                            notice.isGroupCall && notice.groupName ? notice.groupName : notice.callerName,
+                            notice.callerPhone,
+                            notice.callerAvatar,
+                            notice.callType,
+                            undefined,
+                            true,
+                            {
+                              isGroupCall: Boolean(notice.isGroupCall),
+                              chatId: notice.chatId || undefined,
+                            }
+                          );
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold inline-flex items-center gap-1 transition-colors"
+                      >
+                        {missedCallNotice.callType === 'video' ? (
+                          <Video className="w-3 h-3" />
+                        ) : (
+                          <Phone className="w-3 h-3" />
+                        )}
+                        <span>Call Back</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={dismissMissedCallNotice}
+                  className="p-1 text-white/50 hover:text-white rounded-lg"
+                  aria-label="Dismiss missed call notice"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
           )}
           {activeContactRequestPopup && <IncomingContactRequestModal />}
           {activeGroupInvitePopup && <IncomingGroupInviteModal />}

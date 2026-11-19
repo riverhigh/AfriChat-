@@ -1131,7 +1131,7 @@ export function useWebRTC({
       setConnectionState('ended');
       cleanup(350);
       onCallEndedRef.current?.();
-    }, 45000);
+    }, 46500);
     return () => clearTimeout(ringTimeout);
   }, [cleanup, connectionState, isInitiator, playEndTone, sendSignal]);
 
