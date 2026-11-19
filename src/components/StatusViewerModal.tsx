@@ -11,9 +11,13 @@ import {
   Trash2,
   ExternalLink,
   Megaphone,
+  Play,
+  Image as ImageIcon,
+  Video,
 } from 'lucide-react';
 import { useApp, isStatusExpiredClient } from '../context/AppContext';
 import type { StatusReplyPreview } from '../types';
+import { compressChatMediaImage, captureVideoThumbnail } from '../utils/imageUtils';
 
 const FALLBACK_AVATAR =
   "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%232e1065'/><circle cx='50' cy='38' r='16' fill='%23a855f7'/><path d='M20 86c0-16.5 13.5-30 30-30s30 13.5 30 30' fill='%23a855f7'/></svg>";
@@ -34,6 +38,8 @@ export const StatusViewerModal: React.FC = () => {
 
   const [showViewersSheet, setShowViewersSheet] = useState(false);
   const [replyText, setReplyText] = useState('');
+  const [isReplyFocused, setIsReplyFocused] = useState(false);
+  const [isSendingReply, setIsSendingReply] = useState(false);
   const [reshared, setReshared] = useState(false);
   const [reshareNotice, setReshareNotice] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -123,7 +129,7 @@ export const StatusViewerModal: React.FC = () => {
   const currentStory = userStories[currentIndex] || activeViewingStatus;
 
   useEffect(() => {
-    if (!activeViewingStatus || showViewersSheet) return;
+    if (!activeViewingStatus || showViewersSheet || isReplyFocused || isSendingReply || replyText.trim().length > 0) return;
     if (currentStory?.statusType === 'video' || Boolean(currentStory?.videoUrl)) return;
 
     const timer = setTimeout(() => {
@@ -135,7 +141,7 @@ export const StatusViewerModal: React.FC = () => {
     }, 6500);
 
     return () => clearTimeout(timer);
-  }, [currentIndex, userStories.length, activeViewingStatus, showViewersSheet, currentStory?.id]);
+  }, [currentIndex, userStories.length, activeViewingStatus, showViewersSheet, isReplyFocused, isSendingReply, replyText, currentStory?.id]);
 
   if (!activeViewingStatus || userStories.length === 0 || !currentStory) return null;
 
@@ -181,47 +187,87 @@ export const StatusViewerModal: React.FC = () => {
     }, 3000);
   };
 
-  const handleSendReply = (e: React.FormEvent) => {
+  const handleSendReply = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanReply = replyText.trim();
-    if (!cleanReply) return;
+    if (!cleanReply || isSendingReply) return;
 
     if (status.userPhone || status.userId) {
-      const targetChatId = openDirectChat({
-        phone: status.userPhone,
-        userId: status.userId,
-        name: status.userName,
-        avatar: status.userAvatar,
-        location: 'Status Reply',
-      });
+      setIsSendingReply(true);
+      try {
+        const targetChatId = openDirectChat({
+          phone: status.userPhone,
+          userId: status.userId,
+          name: status.userName,
+          avatar: status.userAvatar,
+          location: 'Status Reply',
+        });
 
-      const statusPreview: StatusReplyPreview = {
-        statusId: status.id,
-        userName: status.userName || 'User',
-        userPhone: status.userPhone,
-        userAvatar: status.userAvatar,
-        statusType: status.statusType || (status.videoUrl ? 'video' : status.mediaUrl ? 'image' : 'thought'),
-        mediaUrl: status.mediaUrl,
-        videoUrl: status.videoUrl,
-        thoughtBg: status.thoughtBg,
-        caption: status.caption || '',
-        createdAt: status.createdAt,
-      };
+        const isVideoStory = Boolean(status.videoUrl || status.statusType === 'video');
+        const isThoughtStory =
+          !isVideoStory &&
+          (status.statusType === 'thought' || (!status.mediaUrl && !status.videoUrl));
 
-      sendMessage(
-        targetChatId,
-        cleanReply,
-        {
-          id: status.id,
-          sender: status.userName || 'Status',
-          text: status.caption || (status.statusType === 'thought' ? 'Thought update' : 'Photo/Video status'),
-          statusReply: statusPreview,
-        },
-        false,
-        statusPreview
-      );
-      setReplyText('');
-      setActiveViewingStatus(null);
+        const resolvedStatusType: StatusReplyPreview['statusType'] = isThoughtStory
+          ? 'thought'
+          : isVideoStory
+          ? 'video'
+          : status.isSponsored || status.statusType === 'sponsored'
+          ? 'sponsored'
+          : 'image';
+
+        let previewMediaUrl = status.mediaUrl;
+        if (previewMediaUrl && previewMediaUrl.startsWith('data:image') && previewMediaUrl.length > 72000) {
+          previewMediaUrl = await compressChatMediaImage(previewMediaUrl).catch(() => previewMediaUrl);
+        }
+
+        if (isVideoStory && !previewMediaUrl && status.videoUrl) {
+          const captured = await captureVideoThumbnail(status.videoUrl).catch(() => '');
+          if (captured) previewMediaUrl = captured;
+        }
+
+        const safeVideoUrl =
+          status.videoUrl && (!status.videoUrl.startsWith('data:') || status.videoUrl.length <= 1_200_000)
+            ? status.videoUrl
+            : undefined;
+
+        const statusPreview: StatusReplyPreview = {
+          statusId: status.id,
+          userName: status.userName || 'User',
+          userPhone: status.userPhone,
+          userAvatar: status.userAvatar,
+          statusType: resolvedStatusType,
+          mediaUrl: previewMediaUrl,
+          videoUrl: safeVideoUrl,
+          thoughtBg: status.thoughtBg,
+          caption: status.caption || '',
+          createdAt: status.createdAt,
+        };
+
+        sendMessage(
+          targetChatId,
+          cleanReply,
+          {
+            id: status.id,
+            sender: status.userName || 'Status',
+            text:
+              status.caption ||
+              (resolvedStatusType === 'thought'
+                ? 'Thought update'
+                : resolvedStatusType === 'video'
+                ? 'Video status'
+                : 'Photo status'),
+            statusReply: statusPreview,
+          },
+          false,
+          statusPreview
+        );
+        setReplyText('');
+        setIsReplyFocused(false);
+        setActiveViewingStatus(null);
+      } finally {
+        setIsSendingReply(false);
+      }
     }
   };
 
@@ -441,43 +487,117 @@ export const StatusViewerModal: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-2">
-            <form onSubmit={handleSendReply} className="flex-1 flex items-center bg-white/15 backdrop-blur-md rounded-full px-4 py-2 border border-white/20">
-              <input
-                type="text"
-                value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
-                placeholder={`Reply to ${status.userName}...`}
-                className="w-full bg-transparent text-sm text-white placeholder-white/60 focus:outline-none"
-              />
-              <button type="submit" className="text-white hover:text-indigo-400 ml-2">
-                <Send className="w-4 h-4" />
-              </button>
-            </form>
+          <div className="space-y-2">
+            {(isReplyFocused || replyText.trim().length > 0) && (
+              <div className="flex items-center gap-2.5 p-2 rounded-2xl bg-white/10 backdrop-blur-md border border-white/15 text-white animate-in fade-in slide-in-from-bottom-1 duration-150">
+                {status.statusType === 'thought' || (!status.mediaUrl && !status.videoUrl) ? (
+                  <div
+                    className={`w-10 h-10 shrink-0 rounded-xl bg-gradient-to-br ${
+                      status.thoughtBg || 'from-indigo-600 via-purple-600 to-pink-600'
+                    } flex items-center justify-center text-[10px] font-bold px-1 text-center leading-tight border border-white/20`}
+                  >
+                    Aa
+                  </div>
+                ) : status.videoUrl || status.statusType === 'video' ? (
+                  <div className="relative w-10 h-10 shrink-0 rounded-xl overflow-hidden bg-black/70 border border-white/20 flex items-center justify-center">
+                    {status.mediaUrl ? (
+                      <img
+                        src={status.mediaUrl}
+                        alt={status.caption || 'Video status'}
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : status.videoUrl ? (
+                      <video
+                        src={status.videoUrl}
+                        muted
+                        playsInline
+                        preload="metadata"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Video className="w-4 h-4 text-white/80" />
+                    )}
+                    <div className="absolute inset-0 bg-black/35 flex items-center justify-center">
+                      <Play className="w-3.5 h-3.5 fill-white text-white" />
+                    </div>
+                  </div>
+                ) : status.mediaUrl ? (
+                  <div className="w-10 h-10 shrink-0 rounded-xl overflow-hidden bg-black/50 border border-white/20">
+                    <img
+                      src={status.mediaUrl}
+                      alt={status.caption || 'Photo status'}
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                ) : (
+                  <div className="w-10 h-10 shrink-0 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center">
+                    <ImageIcon className="w-4 h-4 text-white/80" />
+                  </div>
+                )}
 
-            <button
-              type="button"
-              onClick={handleReshare}
-              className={`w-11 h-11 rounded-full flex items-center justify-center transition-all active:scale-125 ${
-                reshared
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/50'
-                  : 'bg-white/15 backdrop-blur-md text-white hover:bg-emerald-600/80 border border-white/20'
-              }`}
-              title="Reshare this update to your 24h status"
-            >
-              {reshared ? <Check className="w-5 h-5 text-white" /> : <Repeat className="w-5 h-5" />}
-            </button>
-            <button
-              onClick={handleLike}
-              className={`w-11 h-11 rounded-full flex items-center justify-center transition-transform active:scale-125 ${
-                status.hasLikedByMe
-                  ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/50'
-                  : 'bg-white/15 backdrop-blur-md text-white hover:bg-white/25 border border-white/20'
-              }`}
-              title="Like this 24h status"
-            >
-              <Heart className={`w-5 h-5 ${status.hasLikedByMe ? 'fill-white' : ''}`} />
-            </button>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                    <span className="truncate">Replying to {status.userName}</span>
+                  </div>
+                  <p className="text-xs text-white/90 truncate">
+                    {status.caption ||
+                      (status.videoUrl || status.statusType === 'video'
+                        ? 'Video status'
+                        : status.statusType === 'thought'
+                        ? 'Thought update'
+                        : 'Photo status')}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <form onSubmit={handleSendReply} className="flex-1 flex items-center bg-white/15 backdrop-blur-md rounded-full px-4 py-2 border border-white/20">
+                <input
+                  type="text"
+                  value={replyText}
+                  onFocus={() => setIsReplyFocused(true)}
+                  onBlur={() => setIsReplyFocused(false)}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  placeholder={`Reply to ${status.userName}...`}
+                  className="w-full bg-transparent text-sm text-white placeholder-white/60 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={isSendingReply || !replyText.trim()}
+                  className="text-white hover:text-indigo-400 disabled:opacity-40 ml-2"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </form>
+
+              <button
+                type="button"
+                onClick={handleReshare}
+                className={`w-11 h-11 rounded-full flex items-center justify-center transition-all active:scale-125 ${
+                  reshared
+                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/50'
+                    : 'bg-white/15 backdrop-blur-md text-white hover:bg-emerald-600/80 border border-white/20'
+                }`}
+                title="Reshare this update to your 24h status"
+              >
+                {reshared ? <Check className="w-5 h-5 text-white" /> : <Repeat className="w-5 h-5" />}
+              </button>
+              <button
+                onClick={handleLike}
+                className={`w-11 h-11 rounded-full flex items-center justify-center transition-transform active:scale-125 ${
+                  status.hasLikedByMe
+                    ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/50'
+                    : 'bg-white/15 backdrop-blur-md text-white hover:bg-white/25 border border-white/20'
+                }`}
+                title="Like this 24h status"
+              >
+                <Heart className={`w-5 h-5 ${status.hasLikedByMe ? 'fill-white' : ''}`} />
+              </button>
+            </div>
           </div>
         )}
       </div>

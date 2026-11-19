@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { useApp, phonesMatch, isStatusExpiredClient } from '../context/AppContext';
 import { UserStatus } from '../types';
-import { compressChatMediaImage } from '../utils/imageUtils';
+import { compressChatMediaImage, captureVideoThumbnail } from '../utils/imageUtils';
 
 const OutsideModal = React.lazy(() =>
   import('./OutsideModal').then((m) => ({ default: m.OutsideModal }))
@@ -117,6 +117,7 @@ export const StatusView: React.FC = () => {
   const [isViewedExpanded, setIsViewedExpanded] = useState(true);
 
   const [deviceMediaPreview, setDeviceMediaPreview] = useState<string>('');
+  const [deviceVideoThumbnail, setDeviceVideoThumbnail] = useState<string>('');
   const [mediaCaption, setMediaCaption] = useState('');
   const [thoughtText, setThoughtText] = useState('');
   const [selectedTheme, setSelectedTheme] = useState(THOUGHT_THEMES[0]);
@@ -263,6 +264,12 @@ export const StatusView: React.FC = () => {
         setStatusError('Video exceeds 20MB limit. Choose a shorter clip.');
         return;
       }
+      setDeviceVideoThumbnail('');
+      captureVideoThumbnail(file)
+        .then((thumb) => {
+          if (thumb) setDeviceVideoThumbnail(thumb);
+        })
+        .catch(() => {});
       const reader = new FileReader();
       reader.onload = (event) => {
         if (typeof event.target?.result === 'string') {
@@ -271,12 +278,23 @@ export const StatusView: React.FC = () => {
       };
       reader.readAsDataURL(file);
     } else {
+      setDeviceVideoThumbnail('');
       try {
         const compressed = await compressChatMediaImage(file);
-        setDeviceMediaPreview(compressed);
+        if (compressed) {
+          setDeviceMediaPreview(compressed);
+          return;
+        }
       } catch (err) {
         console.warn('Status photo compression notice:', err);
       }
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (typeof event.target?.result === 'string') {
+          setDeviceMediaPreview(event.target.result);
+        }
+      };
+      reader.readAsDataURL(file);
     }
   };
 
@@ -288,19 +306,25 @@ export const StatusView: React.FC = () => {
     }
     addDeviceMediaStatus(mediaCaption.trim() || 'Photo Status', deviceMediaPreview, 'image');
     setDeviceMediaPreview('');
+    setDeviceVideoThumbnail('');
     setMediaCaption('');
     setStatusError(null);
     setModalMode('none');
   };
 
-  const handlePostDeviceVideo = (e: React.FormEvent) => {
+  const handlePostDeviceVideo = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!deviceMediaPreview) {
       setStatusError('Please select a video clip.');
       return;
     }
-    addDeviceVideoStatus(mediaCaption.trim() || 'Video Status', deviceMediaPreview);
+    let thumb = deviceVideoThumbnail;
+    if (!thumb) {
+      thumb = await captureVideoThumbnail(deviceMediaPreview).catch(() => '');
+    }
+    addDeviceVideoStatus(mediaCaption.trim() || 'Video Status', deviceMediaPreview, thumb || undefined);
     setDeviceMediaPreview('');
+    setDeviceVideoThumbnail('');
     setMediaCaption('');
     setStatusError(null);
     setModalMode('none');

@@ -7887,7 +7887,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isMe: true,
       statusType: 'video',
       videoUrl,
-      mediaUrl: thumbnail || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=500&auto=format&fit=crop&q=80',
+      mediaUrl: thumbnail || undefined,
       caption: caption || 'Video Status 🎥',
       createdAt: 'Just now',
       createdAtISO: new Date(nowMs).toISOString(),

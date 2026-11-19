@@ -235,6 +235,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     url: string;
     caption?: string;
     isOneTime?: boolean;
+    isVideo?: boolean;
     msgId?: string;
   } | null>(null);
   const [lightboxZoom, setLightboxZoom] = useState<number>(1);
@@ -2288,25 +2289,65 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     } : null);
 
                     if (sr) {
-                      const isThought = sr.statusType === 'thought' || (!sr.mediaUrl && !sr.videoUrl && Boolean(sr.thoughtBg || sr.caption));
-                      const isVideo = sr.statusType === 'video' || Boolean(sr.videoUrl);
+                      const cleanPhone9 = (p?: string) => {
+                        const d = (p || '').replace(/\D/g, '');
+                        return d.length >= 9 ? d.slice(-9) : d;
+                      };
+                      const srPhone9 = cleanPhone9(sr.userPhone);
+                      const liveMatchedStatus =
+                        (sr.statusId ? statuses.find((s) => s.id === sr.statusId) : undefined) ||
+                        statuses.find((s) => {
+                          if (s.isSponsored) return false;
+                          const sPhone9 = cleanPhone9(s.userPhone);
+                          const phoneHit = Boolean(srPhone9 && sPhone9 && srPhone9 === sPhone9);
+                          const nameHit = Boolean(
+                            sr.userName &&
+                              sr.userName !== 'User' &&
+                              s.userName &&
+                              sr.userName.toLowerCase() === s.userName.toLowerCase()
+                          );
+                          if (!phoneHit && !nameHit) return false;
+                          if (sr.caption && s.caption) return s.caption === sr.caption;
+                          return true;
+                        });
+
+                      const resolvedMediaUrl = sr.mediaUrl || liveMatchedStatus?.mediaUrl;
+                      const resolvedVideoUrl = sr.videoUrl || liveMatchedStatus?.videoUrl;
+                      const resolvedThoughtBg = sr.thoughtBg || liveMatchedStatus?.thoughtBg;
+                      const resolvedCaption = sr.caption || liveMatchedStatus?.caption || '';
+
+                      const rawType = sr.statusType || liveMatchedStatus?.statusType;
+                      const isVideo = rawType === 'video' || Boolean(resolvedVideoUrl);
+                      const isExplicitMedia = rawType === 'image' || rawType === 'media' || rawType === 'sponsored' || Boolean(resolvedMediaUrl);
+                      const isGenericMediaCaption = /^(photo status|video status|photo\/video status|photo update)(\s*[📸🎥📷📹])?$/i.test(resolvedCaption.trim());
+                      const isThought =
+                        !isVideo &&
+                        !resolvedMediaUrl &&
+                        (rawType === 'thought' || (!isExplicitMedia && !isGenericMediaCaption && Boolean(resolvedThoughtBg || resolvedCaption)));
 
                       const handleOpenStatus = (e: React.MouseEvent) => {
                         e.stopPropagation();
-                        if (sr.statusId) {
-                          const liveStatus = statuses.find((s) => s.id === sr.statusId);
-                          if (liveStatus) {
-                            setActiveViewingStatus(liveStatus);
-                            return;
-                          }
+                        if (liveMatchedStatus) {
+                          setActiveViewingStatus(liveMatchedStatus);
+                          return;
                         }
-                        if (sr.mediaUrl) {
+                        if (resolvedVideoUrl) {
                           setLightboxImg({
-                            url: sr.mediaUrl,
-                            caption: sr.caption ? `Status: ${sr.caption}` : 'Status preview',
+                            url: resolvedVideoUrl,
+                            caption: resolvedCaption ? `Status: ${resolvedCaption}` : 'Video status preview',
+                            isVideo: true,
+                          });
+                          return;
+                        }
+                        if (resolvedMediaUrl) {
+                          setLightboxImg({
+                            url: resolvedMediaUrl,
+                            caption: resolvedCaption ? `Status: ${resolvedCaption}` : 'Status preview',
                           });
                         }
                       };
+
+                      const hasCustomCaption = Boolean(resolvedCaption && !isGenericMediaCaption);
 
                       return (
                         <div
@@ -2335,53 +2376,105 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                             )}
                           </div>
 
-                          {/* Static Visual Preview */}
+                          {/* Visual Status Preview: Text / Thought, Video, or Image */}
                           {isThought ? (
-                            <div className={`p-3.5 bg-gradient-to-br ${sr.thoughtBg || 'from-indigo-600 via-purple-600 to-pink-600'} text-white shadow-inner flex flex-col justify-center min-h-[64px]`}>
+                            <div className={`p-3.5 bg-gradient-to-br ${resolvedThoughtBg || 'from-indigo-600 via-purple-600 to-pink-600'} text-white shadow-inner flex flex-col justify-center min-h-[64px]`}>
                               <p className="text-xs sm:text-sm font-bold leading-relaxed line-clamp-3 text-center drop-shadow-sm font-display">
-                                &ldquo;{sr.caption || 'Thought update'}&rdquo;
+                                &ldquo;{resolvedCaption || 'Thought update'}&rdquo;
                               </p>
                             </div>
-                          ) : (
-                            <div className="flex items-center gap-3 p-2.5">
-                              {sr.mediaUrl ? (
-                                <div className="relative w-14 h-14 shrink-0 rounded-xl overflow-hidden bg-black/40 border border-white/15 shadow-sm">
-                                  <img
-                                    src={sr.mediaUrl}
-                                    alt={sr.caption || 'Status preview'}
-                                    className="w-full h-full object-cover group-hover/status:scale-105 transition-transform duration-200"
-                                    referrerPolicy="no-referrer"
-                                  />
-                                  {isVideo && (
-                                    <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-[1px]">
-                                      <div className="w-6 h-6 rounded-full bg-black/60 flex items-center justify-center text-white">
-                                        <Play className="w-3 h-3 fill-white ml-0.5" />
-                                      </div>
-                                    </div>
+                          ) : isVideo ? (
+                            <div>
+                              {resolvedVideoUrl || resolvedMediaUrl ? (
+                                <div className="relative w-full h-36 sm:h-40 bg-black overflow-hidden">
+                                  {resolvedVideoUrl ? (
+                                    <video
+                                      src={resolvedVideoUrl}
+                                      poster={resolvedMediaUrl}
+                                      muted
+                                      playsInline
+                                      preload="metadata"
+                                      className="w-full h-full object-cover"
+                                    />
+                                  ) : (
+                                    <img
+                                      src={resolvedMediaUrl}
+                                      alt={resolvedCaption || 'Video status preview'}
+                                      className="w-full h-full object-cover group-hover/status:scale-105 transition-transform duration-200"
+                                      referrerPolicy="no-referrer"
+                                    />
                                   )}
+                                  <div className="absolute inset-0 bg-black/25 flex items-center justify-center">
+                                    <div className="w-10 h-10 rounded-full bg-black/65 backdrop-blur-xs border border-white/30 flex items-center justify-center text-white shadow-lg group-hover/status:scale-110 transition-transform">
+                                      <Play className="w-4 h-4 fill-white ml-0.5" />
+                                    </div>
+                                  </div>
+                                  <span className="absolute top-2 left-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-black/65 backdrop-blur-xs text-[9px] font-bold uppercase tracking-wider text-white border border-white/15">
+                                    <Video className="w-2.5 h-2.5" />
+                                    <span>Video</span>
+                                  </span>
                                 </div>
-                              ) : sr.videoUrl ? (
-                                <div className="relative w-14 h-14 shrink-0 rounded-xl overflow-hidden bg-black/70 border border-white/15 flex items-center justify-center">
-                                  <div className="w-6 h-6 rounded-full bg-purple-600/80 flex items-center justify-center text-white">
-                                    <Play className="w-3 h-3 fill-white ml-0.5" />
+                              ) : (
+                                <div className="flex items-center gap-3 p-2.5">
+                                  <div className="relative w-12 h-12 shrink-0 rounded-xl overflow-hidden bg-black/60 border border-white/15 flex items-center justify-center text-white">
+                                    <Play className="w-5 h-5 fill-white ml-0.5" />
+                                  </div>
+                                  <div className="flex-1 min-w-0 pr-1">
+                                    <p className="text-xs font-semibold line-clamp-2 leading-snug opacity-95">
+                                      {resolvedCaption || 'Video status'}
+                                    </p>
+                                    <span className="text-[10px] opacity-65 block mt-0.5">
+                                      Tap to view update
+                                    </span>
                                   </div>
                                 </div>
-                              ) : null}
-
-                              <div className="flex-1 min-w-0 pr-1">
-                                {sr.caption ? (
-                                  <p className="text-xs font-medium line-clamp-2 leading-snug opacity-95">
-                                    {sr.caption}
-                                  </p>
-                                ) : (
-                                  <span className="text-xs italic opacity-75">
-                                    {isVideo ? '📹 Video status' : '📷 Photo status'}
+                              )}
+                              {(hasCustomCaption || resolvedVideoUrl || resolvedMediaUrl) && (
+                                <div className="px-3 py-1.5 flex items-center justify-between gap-2 text-[11px]">
+                                  <span className="truncate font-medium opacity-90">
+                                    {hasCustomCaption ? resolvedCaption : 'Video status'}
                                   </span>
-                                )}
-                                <span className="text-[10px] opacity-60 block mt-1">
-                                  Tap to view update
-                                </span>
-                              </div>
+                                  <span className="text-[10px] opacity-60 shrink-0">Tap to view</span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div>
+                              {resolvedMediaUrl ? (
+                                <>
+                                  <div className="relative w-full max-h-44 overflow-hidden bg-black/25">
+                                    <img
+                                      src={resolvedMediaUrl}
+                                      alt={resolvedCaption || 'Photo status preview'}
+                                      className="w-full max-h-44 object-cover group-hover/status:scale-[1.02] transition-transform duration-200"
+                                      referrerPolicy="no-referrer"
+                                    />
+                                    <span className="absolute top-2 left-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-xs text-[9px] font-bold uppercase tracking-wider text-white border border-white/15">
+                                      <Camera className="w-2.5 h-2.5" />
+                                      <span>Photo</span>
+                                    </span>
+                                  </div>
+                                  {hasCustomCaption && (
+                                    <div className="px-3 py-1.5 text-xs font-medium leading-snug opacity-95 line-clamp-2">
+                                      {resolvedCaption}
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <div className="flex items-center gap-3 p-2.5">
+                                  <div className="w-12 h-12 shrink-0 rounded-xl bg-black/20 dark:bg-white/10 border border-white/15 flex items-center justify-center">
+                                    <Image className="w-5 h-5 opacity-80" />
+                                  </div>
+                                  <div className="flex-1 min-w-0 pr-1">
+                                    <p className="text-xs font-semibold line-clamp-2 leading-snug opacity-95">
+                                      {resolvedCaption || 'Photo status'}
+                                    </p>
+                                    <span className="text-[10px] opacity-65 block mt-0.5">
+                                      Tap to view update
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -4358,6 +4451,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   <span className="w-4 h-4 rounded-full border border-white flex items-center justify-center text-[10px] font-bold shrink-0">1</span>
                   <span className="truncate">1-Time View · Disappears after closing</span>
                 </span>
+              ) : lightboxImg.isVideo ? (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 backdrop-blur-md text-white text-xs font-bold border border-white/10">
+                  <Video className="w-3.5 h-3.5 text-purple-300" />
+                  <span>Status Video</span>
+                </span>
               ) : (
                 <div className="flex items-center gap-1 bg-white/10 backdrop-blur-md rounded-full px-2 py-1 border border-white/10">
                   <button
@@ -4406,7 +4504,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
-              {!lightboxImg.isOneTime && (
+              {!lightboxImg.isOneTime && !lightboxImg.isVideo && (
                 <button
                   type="button"
                   onClick={() => handleSaveImageToDevice(lightboxImg.url)}
@@ -4522,17 +4620,28 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
               lightboxDragRef.current = null;
             }}
           >
-            <img
-              src={lightboxImg.url}
-              alt={lightboxImg.caption || 'Enlarged photo'}
-              draggable={false}
-              style={{
-                transform: `translate3d(${lightboxPan.x}px, ${lightboxPan.y}px, 0) scale(${lightboxZoom})`,
-                transition: lightboxDragRef.current?.active || lightboxPinchRef.current ? 'none' : 'transform 140ms ease-out',
-                cursor: lightboxZoom > 1 ? 'grab' : 'zoom-in',
-              }}
-              className="max-h-[80vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl select-none"
-            />
+            {lightboxImg.isVideo ? (
+              <video
+                src={lightboxImg.url}
+                controls
+                autoPlay
+                playsInline
+                onClick={(e) => e.stopPropagation()}
+                className="max-h-[80vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
+              />
+            ) : (
+              <img
+                src={lightboxImg.url}
+                alt={lightboxImg.caption || 'Enlarged photo'}
+                draggable={false}
+                style={{
+                  transform: `translate3d(${lightboxPan.x}px, ${lightboxPan.y}px, 0) scale(${lightboxZoom})`,
+                  transition: lightboxDragRef.current?.active || lightboxPinchRef.current ? 'none' : 'transform 140ms ease-out',
+                  cursor: lightboxZoom > 1 ? 'grab' : 'zoom-in',
+                }}
+                className="max-h-[80vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl select-none"
+              />
+            )}
           </div>
 
           {/* Bottom Caption / Hint */}
@@ -4542,9 +4651,11 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 {lightboxImg.caption}
               </div>
             )}
-            <span className="text-[11px] text-white/50">
-              {lightboxZoom > 1 ? 'Drag to pan · Double-tap to reset' : 'Pinch, scroll, or double-tap to zoom'}
-            </span>
+            {!lightboxImg.isVideo && (
+              <span className="text-[11px] text-white/50">
+                {lightboxZoom > 1 ? 'Drag to pan · Double-tap to reset' : 'Pinch, scroll, or double-tap to zoom'}
+              </span>
+            )}
           </div>
         </div>
       )}

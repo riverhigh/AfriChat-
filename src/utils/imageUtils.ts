@@ -267,3 +267,119 @@ export async function downsampleDataUrl(
     minQuality: 0.28,
   });
 }
+
+/**
+ * Extracts a compressed JPEG thumbnail frame from a video File, data URL, or remote URL.
+ * Returns empty string gracefully if extraction fails or times out.
+ */
+export async function captureVideoThumbnail(source: File | string): Promise<string> {
+  if (typeof document === 'undefined') return '';
+  if (typeof source === 'string' && !source.trim()) return '';
+
+  let objectUrl: string | null = null;
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+
+  const src =
+    typeof source === 'string'
+      ? source
+      : ((objectUrl = URL.createObjectURL(source)), objectUrl);
+
+  if (typeof source === 'string' && /^https?:\/\//i.test(source)) {
+    video.crossOrigin = 'anonymous';
+  }
+
+  try {
+    const dataUrl = await new Promise<string>((resolve) => {
+      let settled = false;
+      const finish = (result: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        video.removeEventListener('loadeddata', onLoadedData);
+        video.removeEventListener('seeked', onSeeked);
+        video.removeEventListener('error', onError);
+        try {
+          video.pause();
+          video.removeAttribute('src');
+          video.load();
+        } catch (_) {}
+        resolve(result);
+      };
+
+      const captureFrame = () => {
+        try {
+          const vw = video.videoWidth || 480;
+          const vh = video.videoHeight || 480;
+          if (!vw || !vh) {
+            finish('');
+            return;
+          }
+          const maxDim = 480;
+          let targetW = vw;
+          let targetH = vh;
+          if (vw > maxDim || vh > maxDim) {
+            if (vw >= vh) {
+              targetW = maxDim;
+              targetH = Math.max(1, Math.round((vh * maxDim) / vw));
+            } else {
+              targetH = maxDim;
+              targetW = Math.max(1, Math.round((vw * maxDim) / vh));
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            finish('');
+            return;
+          }
+          ctx.drawImage(video, 0, 0, targetW, targetH);
+          const rawUrl = encodeCanvasSmallest(canvas, 0.68);
+          finish(rawUrl);
+        } catch (_) {
+          finish('');
+        }
+      };
+
+      const onSeeked = () => captureFrame();
+      const onLoadedData = () => {
+        if (Number.isFinite(video.duration) && video.duration > 0.3) {
+          try {
+            video.currentTime = Math.min(0.25, video.duration / 4);
+            return;
+          } catch (_) {}
+        }
+        captureFrame();
+      };
+      const onError = () => finish('');
+
+      const timeoutId = setTimeout(() => {
+        if (video.readyState >= 2) {
+          captureFrame();
+        } else {
+          finish('');
+        }
+      }, 2800);
+
+      video.addEventListener('loadeddata', onLoadedData);
+      video.addEventListener('seeked', onSeeked);
+      video.addEventListener('error', onError);
+      video.src = src;
+      video.load();
+    });
+
+    if (!dataUrl) return '';
+    return await compressChatMediaImage(dataUrl);
+  } catch (_) {
+    return '';
+  } finally {
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+}
+

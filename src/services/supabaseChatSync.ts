@@ -71,6 +71,29 @@ export function sanitizeMessagesForBackup(
           audioDataUrl: '',
         };
       }
+      if (sanitized.statusReply) {
+        const nextSr = { ...sanitized.statusReply };
+        if (nextSr.videoUrl && nextSr.videoUrl.startsWith('data:') && nextSr.videoUrl.length > MAX_VOICE_LEN) {
+          nextSr.videoUrl = undefined;
+        }
+        if (nextSr.mediaUrl && nextSr.mediaUrl.startsWith('data:') && nextSr.mediaUrl.length > MAX_IMAGE_LEN) {
+          nextSr.mediaUrl = undefined;
+        }
+        sanitized.statusReply = nextSr;
+      }
+      if (sanitized.replyTo?.statusReply) {
+        const nextReplySr = { ...sanitized.replyTo.statusReply };
+        if (nextReplySr.videoUrl && nextReplySr.videoUrl.startsWith('data:') && nextReplySr.videoUrl.length > MAX_VOICE_LEN) {
+          nextReplySr.videoUrl = undefined;
+        }
+        if (nextReplySr.mediaUrl && nextReplySr.mediaUrl.startsWith('data:') && nextReplySr.mediaUrl.length > MAX_IMAGE_LEN) {
+          nextReplySr.mediaUrl = undefined;
+        }
+        sanitized.replyTo = {
+          ...sanitized.replyTo,
+          statusReply: nextReplySr,
+        };
+      }
       return sanitized;
     });
   }
@@ -144,6 +167,14 @@ export function mergeChatThreadsAndMessages(
           ...existing,
           ...m,
           imageUrl: m.imageUrl || existing.imageUrl,
+          statusReply: m.statusReply
+            ? {
+                ...(existing.statusReply || {}),
+                ...m.statusReply,
+                mediaUrl: m.statusReply.mediaUrl || existing.statusReply?.mediaUrl,
+                videoUrl: m.statusReply.videoUrl || existing.statusReply?.videoUrl,
+              }
+            : existing.statusReply,
           voiceNote: m.voiceNote
             ? {
                 ...(existing.voiceNote || {}),
