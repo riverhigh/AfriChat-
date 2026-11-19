@@ -78,6 +78,7 @@ import {
   getAdminApiKey,
   setAdminApiKey,
   getAdminHeaders,
+  fetchSupabaseAllDiscoveredUsers,
 } from '../services/supabaseAdminSync';
 
 const adminFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -442,9 +443,9 @@ export const AdminDashboardModal: React.FC = () => {
   const fetchSupabaseUsers = async () => {
     if (!isSupabaseConfigured) return;
     try {
-      const { data, error } = await supabase.from('agc_phone_registry').select('*');
-      if (!error && Array.isArray(data)) {
-        setSupabaseUsers(data);
+      const discovered = await fetchSupabaseAllDiscoveredUsers();
+      if (Array.isArray(discovered) && discovered.length > 0) {
+        setSupabaseUsers(discovered);
       }
     } catch (_) {}
   };
@@ -832,6 +833,8 @@ export const AdminDashboardModal: React.FC = () => {
           isUserOnline?.(id)
       );
 
+      const existing = map.get(key);
+
       const hasValidTimestamp = (val?: string | null) =>
         Boolean(val && (String(val).toLowerCase() === 'online' || Number.isFinite(Date.parse(String(val)))));
       const pickLastSeen = (primary?: string | null, secondary?: string | null) => {
@@ -841,17 +844,30 @@ export const AdminDashboardModal: React.FC = () => {
         return raw.updatedAt || existing?.updatedAt || undefined;
       };
 
-      const existing = map.get(key);
+      const isGenericDisplayName = (n?: string) => {
+        const s = String(n || '').trim();
+        return !s || s === 'AGC User' || s === 'User' || s === 'Registered User';
+      };
+
       if (existing) {
         const mergedWallet = authoritative
           ? raw.walletBalanceNgn ?? existing.walletBalanceNgn ?? 0
           : existing.walletBalanceNgn ?? raw.walletBalanceNgn ?? 0;
+        const incomingName = raw.fullName || raw.name || '';
+        const resolvedName =
+          !isGenericDisplayName(incomingName)
+            ? incomingName
+            : (existing.fullName || incomingName || 'Registered User');
+        const resolvedAvatar =
+          raw.avatarUrl && !String(raw.avatarUrl).includes('dicebear.com')
+            ? raw.avatarUrl
+            : (existing.avatarUrl || raw.avatarUrl);
         map.set(key, {
           ...existing,
           id: existing.id || id,
-          fullName: raw.fullName || raw.name || existing.fullName,
+          fullName: resolvedName,
           phoneNumber: phone || existing.phoneNumber,
-          avatarUrl: raw.avatarUrl || existing.avatarUrl,
+          avatarUrl: resolvedAvatar,
           role: authoritative ? raw.role || existing.role || 'user' : existing.role || raw.role || 'user',
           verificationBadge: authoritative
             ? raw.verificationBadge !== undefined
@@ -907,19 +923,27 @@ export const AdminDashboardModal: React.FC = () => {
 
     if (Array.isArray(supabaseUsers) && supabaseUsers.length > 0) {
       supabaseUsers.forEach((row: any) => {
-        const phoneStr = row.full_phone || (row.phone_digits ? `+${String(row.phone_digits).replace(/^\+/, '')}` : '');
+        const phoneStr = row.phoneNumber || row.full_phone || (row.phone_digits ? `+${String(row.phone_digits).replace(/^\+/, '')}` : '');
         const cleanDigits = (row.phone_digits || phoneStr).replace(/\D/g, '');
+        const displayName = row.fullName || row.username || 'Registered User';
+        const regDate = row.registeredAt || row.registered_at;
+        const updDate = row.updatedAt || row.updated_at;
         addUser(
           {
-            id: `usr_${cleanDigits}`,
-            fullName: row.username || 'User',
+            id: row.id || `usr_${cleanDigits}`,
+            fullName: displayName,
             phoneNumber: phoneStr,
             avatarUrl:
-              row.avatar_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || 'user')}`,
+              row.avatarUrl ||
+              row.avatar_url ||
+              `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(displayName || 'user')}`,
+            about: row.about,
             isPhoneVerified: true,
-            joinedDate: row.registered_at ? new Date(row.registered_at).toLocaleDateString() : 'Recent',
+            joinedDate: regDate ? new Date(regDate).toLocaleDateString() : 'Recent',
+            createdAt: regDate,
+            updatedAt: updDate,
             isOnline: Boolean(isUserOnline?.(cleanDigits) || isUserOnline?.(phoneStr)),
-            lastSeen: row.updated_at || row.registered_at || null,
+            lastSeen: row.lastSeen || updDate || regDate || null,
           },
           false
         );
@@ -1163,12 +1187,12 @@ export const AdminDashboardModal: React.FC = () => {
     securityEvents.filter((s) => s.severity === 'high' || s.severity === 'critical').length;
 
   const filteredUsers = mergedUsers.filter((u) => {
-    const q = userSearchQuery.toLowerCase();
+    const q = (userSearchQuery || '').toLowerCase();
     const matchesSearch =
       !q ||
-      u.fullName.toLowerCase().includes(q) ||
-      u.phoneNumber.toLowerCase().includes(q) ||
-      (u.id && u.id.toLowerCase().includes(q));
+      (u.fullName || '').toLowerCase().includes(q) ||
+      (u.phoneNumber || '').toLowerCase().includes(q) ||
+      (u.id || '').toLowerCase().includes(q);
     const matchesRole = userRoleFilter === 'all' || u.role === userRoleFilter;
     const matchesStatus =
       userStatusFilter === 'all' ||

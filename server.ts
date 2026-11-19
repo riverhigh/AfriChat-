@@ -783,6 +783,7 @@ const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').
 const ADMIN_SYS_CONFIG_KEY = '__agc_sys_config__';
 const ADMIN_SYS_CMS_KEY = '__agc_sys_cms__';
 const ADMIN_SYS_USERS_KEY = '__agc_sys_users__';
+const ADMIN_SYS_USER_DIRECTORY_KEY = '__agc_sys_user_directory__';
 const ADMIN_SYS_STORES_KEY = '__agc_sys_stores__';
 const ADMIN_SYS_AI_KEY = '__agc_sys_ai_datacenter__';
 const ADMIN_SYS_PROFS_KEY = '__agc_sys_professionals__';
@@ -1124,6 +1125,104 @@ function findUserEntry(phoneOrId: string): { key: string; user: RegisteredUser }
 
 let lastSupabaseUsersSyncAt = 0;
 let supabaseUsersSyncPromise: Promise<void> | null = null;
+const unregisteredPhoneRpcCache = new Map<string, number>();
+let pushUserDirTimer: ReturnType<typeof setTimeout> | null = null;
+
+function normalizeCandidatePhoneServer(raw?: string): string {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length < 7) return '';
+  if (digits.startsWith('234') && digits.length >= 13) return `+${digits}`;
+  if (digits.startsWith('0') && digits.length === 11) return `+234${digits.slice(1)}`;
+  if (digits.length === 9) return `+234${digits}`;
+  return `+${digits}`;
+}
+
+function getDeduplicatedRealUsers(): RegisteredUser[] {
+  const dedup = new Map<string, RegisteredUser>();
+  for (const u of usersByPhone.values()) {
+    if (!u || isSyntheticTestAccount(u)) continue;
+    const key = canonicalAdminPhoneKey(u.phoneNumber || u.cleanPhone || u.id) || u.id;
+    if (!key) continue;
+    const prev = dedup.get(key);
+    if (!prev) {
+      dedup.set(key, u);
+      continue;
+    }
+    const prevGeneric = !prev.fullName || prev.fullName === 'AGC User' || prev.fullName === 'User' || prev.fullName === 'Registered User';
+    const curGeneric = !u.fullName || u.fullName === 'AGC User' || u.fullName === 'User' || u.fullName === 'Registered User';
+    dedup.set(key, {
+      ...prev,
+      ...u,
+      id: prev.id || u.id,
+      phoneNumber: prev.phoneNumber || u.phoneNumber,
+      cleanPhone: prev.cleanPhone || u.cleanPhone,
+      fullName: !curGeneric ? u.fullName : (!prevGeneric ? prev.fullName : (u.fullName || prev.fullName)),
+      username: u.username || prev.username,
+      avatarUrl:
+        u.avatarUrl && !String(u.avatarUrl).includes('dicebear.com')
+          ? u.avatarUrl
+          : (prev.avatarUrl || u.avatarUrl),
+      walletBalanceNgn: Math.max(Number(prev.walletBalanceNgn || 0), Number(u.walletBalanceNgn || 0)),
+      registeredAt: prev.registeredAt || u.registeredAt,
+      isOnline: Boolean(prev.isOnline || u.isOnline),
+      lastSeen: (prev.isOnline || u.isOnline) ? 'online' : (u.lastSeen || prev.lastSeen),
+    });
+  }
+  return Array.from(dedup.values());
+}
+
+async function pushUserDirectoryToSupabase(): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+  try {
+    const existingSlice = (await fetchSupabaseAdminSlice(ADMIN_SYS_USER_DIRECTORY_KEY)) || {};
+    const prevUsers = existingSlice.users && typeof existingSlice.users === 'object' ? { ...existingSlice.users } : {};
+    const nowIso = new Date().toISOString();
+    let anyChanged = false;
+    for (const u of getDeduplicatedRealUsers()) {
+      const k = canonicalAdminPhoneKey(u.phoneNumber || u.cleanPhone || u.id);
+      if (!k || k.length < 7) continue;
+      const prev = prevUsers[k] || {};
+      const safeAvatar =
+        u.avatarUrl && (!String(u.avatarUrl).startsWith('data:') || String(u.avatarUrl).length <= 24000)
+          ? u.avatarUrl
+          : prev.avatarUrl;
+      const nextEntry = {
+        id: prev.id || u.id,
+        phoneNumber: u.phoneNumber || prev.phoneNumber,
+        fullName: u.fullName || prev.fullName || 'Registered User',
+        username: u.username || prev.username || u.fullName,
+        ...(safeAvatar ? { avatarUrl: safeAvatar } : {}),
+        ...(u.about || prev.about ? { about: u.about || prev.about } : {}),
+        registeredAt: prev.registeredAt || u.registeredAt || nowIso,
+        updatedAt: u.updatedAt || prev.updatedAt || nowIso,
+      };
+      if (
+        prev.fullName !== nextEntry.fullName ||
+        prev.phoneNumber !== nextEntry.phoneNumber ||
+        prev.avatarUrl !== nextEntry.avatarUrl ||
+        !prevUsers[k]
+      ) {
+        anyChanged = true;
+      }
+      prevUsers[k] = nextEntry;
+    }
+    if (!anyChanged && Object.keys(prevUsers).length === Object.keys(existingSlice.users || {}).length) {
+      return;
+    }
+    await upsertSupabaseAdminSlice(ADMIN_SYS_USER_DIRECTORY_KEY, 'AGC_USER_DIRECTORY', {
+      users: prevUsers,
+      updatedAt: nowIso,
+    });
+  } catch (_) {}
+}
+
+function schedulePushUserDirectoryToSupabase(): void {
+  if (pushUserDirTimer) clearTimeout(pushUserDirTimer);
+  pushUserDirTimer = setTimeout(() => {
+    pushUserDirTimer = null;
+    pushUserDirectoryToSupabase().catch(() => {});
+  }, 2500);
+}
 
 async function syncUsersFromSupabase(force = false): Promise<void> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
@@ -1133,55 +1232,89 @@ async function syncUsersFromSupabase(force = false): Promise<void> {
 
   supabaseUsersSyncPromise = (async () => {
     try {
-      const fetchRegistry = (url: string, key: string) =>
-        fetch(`${url}/rest/v1/agc_phone_registry?select=*`, {
+      const baseUrl = SUPABASE_URL;
+      const readKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+      const sbGet = (pathAndQuery: string, key: string) =>
+        fetch(`${baseUrl}/rest/v1/${pathAndQuery}`, {
           headers: {
             apikey: key,
             Authorization: `Bearer ${key}`,
           },
-          signal: AbortSignal.timeout(5000),
-        });
+          signal: AbortSignal.timeout(6000),
+        }).catch(() => null);
 
-      let res = await fetchRegistry(SUPABASE_URL, SUPABASE_ANON_KEY);
-      if (!res.ok && (SUPABASE_URL !== DEFAULT_SUPABASE_URL || SUPABASE_ANON_KEY !== DEFAULT_SUPABASE_ANON_KEY)) {
-        res = await fetchRegistry(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_ANON_KEY);
-      }
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        console.warn(`Notice: Supabase user sync returned HTTP ${res.status}: ${errText}`);
-        return;
-      }
-      const rows = await res.json();
-      if (!Array.isArray(rows)) {
-        console.warn('Notice: Supabase user sync returned non-array payload');
-        return;
-      }
+      const [regRes, profRes, dirRes, backupsRes, contactReqRes] = await Promise.all([
+        sbGet('agc_phone_registry?select=*', readKey),
+        sbGet('profiles?select=*', readKey),
+        sbGet(
+          `scam_reports?target_value=eq.${encodeURIComponent(ADMIN_SYS_USER_DIRECTORY_KEY)}&target_type=eq.phone&select=flags,updated_at`,
+          SUPABASE_ANON_KEY
+        ),
+        sbGet(
+          `scam_reports?target_value=like.${encodeURIComponent(USER_CHAT_BACKUP_PREFIX + '*')}&target_type=eq.phone&select=target_value,flags,updated_at`,
+          SUPABASE_ANON_KEY
+        ),
+        sbGet(
+          'contact_requests?select=from_phone,from_name,from_avatar,to_phone,created_at',
+          SUPABASE_ANON_KEY
+        ),
+      ]);
 
       let changed = false;
-      for (const row of rows) {
-        const rawPhone = (row.full_phone || '').trim() || (row.phone_digits ? `+234${String(row.phone_digits).replace(/^0+/, '')}` : '');
-        const clean = rawPhone.replace(/\D/g, '') || String(row.phone_digits || '').replace(/\D/g, '');
-        if (!clean || isSyntheticTestAccount({ username: row.username, full_phone: rawPhone, phone_digits: clean })) continue;
 
-        const match = findUserEntry(rawPhone) || (row.phone_digits ? findUserEntry(String(row.phone_digits)) : null);
+      const upsertDiscoveredUser = (entry: {
+        id?: string;
+        phoneNumber?: string;
+        phone_digits?: string;
+        fullName?: string;
+        username?: string;
+        avatarUrl?: string;
+        about?: string;
+        email?: string;
+        registeredAt?: string;
+        updatedAt?: string;
+        lastSeen?: string;
+      }) => {
+        const normalizedPhone = normalizeCandidatePhoneServer(entry.phoneNumber || entry.phone_digits);
+        const rawPhone = (entry.phoneNumber || '').trim() || normalizedPhone;
+        const clean = (normalizedPhone || rawPhone || entry.phone_digits || '').replace(/\D/g, '');
+        if (!clean || clean.length < 7) return;
+        const incName = String(entry.fullName || entry.username || '').trim();
+        if (isSyntheticTestAccount({ id: entry.id, username: entry.username, fullName: incName, full_phone: rawPhone, phone_digits: clean })) {
+          return;
+        }
+        const isIncGeneric = !incName || incName === 'AGC User' || incName === 'User' || incName === 'Registered User';
+
+        const match =
+          findUserEntry(rawPhone) ||
+          findUserEntry(normalizedPhone) ||
+          (entry.phone_digits ? findUserEntry(String(entry.phone_digits)) : null) ||
+          findUserEntry(clean);
+
         if (match) {
           const { key, user } = match;
           let rowChanged = false;
-          const remoteTs = row.updated_at ? Date.parse(row.updated_at) || 0 : 0;
+          const remoteTs = entry.updatedAt ? Date.parse(entry.updatedAt) || 0 : 0;
           const localTs = user.updatedAt ? Date.parse(user.updatedAt) || 0 : 0;
           const isLocalGeneric = !user.fullName || user.fullName === 'AGC User' || user.fullName === 'User' || user.fullName === 'Registered User';
-          if (row.username && row.username !== 'AGC User' && (isLocalGeneric || (remoteTs > localTs && row.username !== user.fullName))) {
-            user.fullName = row.username;
-            user.username = row.username;
-            if (row.updated_at) user.updatedAt = row.updated_at;
+          if (!isIncGeneric && (isLocalGeneric || (remoteTs > localTs && incName !== user.fullName))) {
+            user.fullName = incName;
+            user.username = entry.username || incName;
+            if (entry.updatedAt) user.updatedAt = entry.updatedAt;
             rowChanged = true;
           }
-          if (!user.avatarUrl && row.avatar_url) {
-            user.avatarUrl = row.avatar_url;
+          const hasDicebearLocal = !user.avatarUrl || String(user.avatarUrl).includes('dicebear.com');
+          const hasBetterRemoteAvatar = entry.avatarUrl && !String(entry.avatarUrl).includes('dicebear.com');
+          if ((hasDicebearLocal && hasBetterRemoteAvatar) || (!user.avatarUrl && entry.avatarUrl)) {
+            user.avatarUrl = entry.avatarUrl;
             rowChanged = true;
           }
-          if (!user.registeredAt && row.registered_at) {
-            user.registeredAt = row.registered_at;
+          if (!user.registeredAt && entry.registeredAt) {
+            user.registeredAt = entry.registeredAt;
+            rowChanged = true;
+          }
+          if (!user.lastSeen && (entry.lastSeen || entry.updatedAt || entry.registeredAt)) {
+            user.lastSeen = entry.lastSeen || entry.updatedAt || entry.registeredAt;
             rowChanged = true;
           }
           if (rowChanged) {
@@ -1189,30 +1322,214 @@ async function syncUsersFromSupabase(force = false): Promise<void> {
             changed = true;
           }
         } else {
+          const formattedPhone = rawPhone.startsWith('+') ? rawPhone : (normalizedPhone || `+${clean}`);
+          const resolvedName = incName || 'Registered User';
           const newUser: RegisteredUser = {
-            id: `usr_${row.phone_digits || clean}`,
-            fullName: row.username || 'Registered User',
-            phoneNumber: rawPhone.startsWith('+') ? rawPhone : `+${clean}`,
+            id: entry.id || `usr_${entry.phone_digits || clean}`,
+            fullName: resolvedName,
+            ...(entry.username || !isIncGeneric ? { username: entry.username || resolvedName } : {}),
+            phoneNumber: formattedPhone,
             cleanPhone: clean,
             avatarUrl:
-              row.avatar_url ||
-              `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || clean)}`,
-            about: 'Available · Using AGC',
-            registeredAt: row.registered_at || new Date().toISOString(),
+              entry.avatarUrl ||
+              `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(resolvedName || clean)}`,
+            about: entry.about || 'Available · Using AGC',
+            registeredAt: entry.registeredAt || entry.updatedAt || new Date().toISOString(),
+            updatedAt: entry.updatedAt,
             role: 'user',
             status: 'active',
             verificationBadge: null,
             walletBalanceNgn: 0,
             isOnline: false,
-            lastSeen: row.updated_at || row.registered_at || undefined,
+            lastSeen: entry.lastSeen || entry.updatedAt || entry.registeredAt || undefined,
           };
           usersByPhone.set(clean, newUser);
           changed = true;
         }
+      };
+
+      // 1) Direct agc_phone_registry rows
+      if (regRes?.ok) {
+        const regRows = await regRes.json().catch(() => null);
+        if (Array.isArray(regRows)) {
+          for (const row of regRows) {
+            upsertDiscoveredUser({
+              id: `usr_${row.phone_digits || String(row.full_phone || '').replace(/\D/g, '')}`,
+              phoneNumber: row.full_phone,
+              phone_digits: row.phone_digits,
+              fullName: row.username || 'Registered User',
+              username: row.username,
+              avatarUrl: row.avatar_url,
+              registeredAt: row.registered_at,
+              updatedAt: row.updated_at,
+            });
+          }
+        }
       }
+
+      // 2) Direct profiles rows (when readable via service role or policy)
+      if (profRes?.ok) {
+        const profRows = await profRes.json().catch(() => null);
+        if (Array.isArray(profRows)) {
+          for (const p of profRows) {
+            if (!p?.phone_number && !p?.phone) continue;
+            upsertDiscoveredUser({
+              id: p.id,
+              phoneNumber: p.phone_number || p.phone,
+              fullName: p.full_name || p.username || 'Registered User',
+              username: p.username || p.full_name,
+              avatarUrl: p.avatar_url,
+              about: p.bio,
+              registeredAt: p.created_at,
+              updatedAt: p.updated_at,
+            });
+          }
+        }
+      }
+
+      // 3) Shared user directory slice in scam_reports
+      if (dirRes?.ok) {
+        const dirRows = await dirRes.json().catch(() => null);
+        const dirUsers = Array.isArray(dirRows) ? dirRows[0]?.flags?.users : null;
+        if (dirUsers && typeof dirUsers === 'object') {
+          for (const u of Object.values<any>(dirUsers)) {
+            if (u && typeof u === 'object') upsertDiscoveredUser(u);
+          }
+        }
+      }
+
+      // Track candidate phones from backups, DM threads, contact requests, and wallets
+      const candidatePhones = new Map<string, string>();
+      const addCandidatePhone = (rawPhone?: string) => {
+        const full = normalizeCandidatePhoneServer(rawPhone);
+        const last9 = canonicalAdminPhoneKey(full);
+        if (!full || !last9 || last9 === 'banks' || last9.length < 7) return;
+        const existingMatch = findUserEntry(full) || findUserEntry(last9);
+        const isExistingGeneric =
+          existingMatch &&
+          (!existingMatch.user.fullName ||
+            existingMatch.user.fullName === 'AGC User' ||
+            existingMatch.user.fullName === 'User' ||
+            existingMatch.user.fullName === 'Registered User');
+        if (existingMatch && !isExistingGeneric) return;
+        if (!force) {
+          const cachedNegAt = unregisteredPhoneRpcCache.get(last9);
+          if (cachedNegAt && Date.now() - cachedNegAt < 300000) return;
+        }
+        if (!candidatePhones.has(last9)) {
+          candidatePhones.set(last9, full);
+        }
+      };
+
+      // 4) Per-user chat backup snapshots (__agc_sys_chats_<last9>)
+      if (backupsRes?.ok) {
+        const backupRows = await backupsRes.json().catch(() => null);
+        if (Array.isArray(backupRows)) {
+          for (const row of backupRows) {
+            const suffix = String(row.target_value || '').replace(USER_CHAT_BACKUP_PREFIX, '');
+            const snapProfile = row.flags?.accountSnapshot?.userProfile;
+            if (snapProfile && (snapProfile.phoneNumber || suffix)) {
+              upsertDiscoveredUser({
+                id: snapProfile.id,
+                phoneNumber: snapProfile.phoneNumber || normalizeCandidatePhoneServer(suffix),
+                phone_digits: suffix,
+                fullName: snapProfile.fullName || snapProfile.username || 'Registered User',
+                username: snapProfile.username || snapProfile.fullName,
+                avatarUrl: snapProfile.avatarUrl,
+                about: snapProfile.about,
+                email: snapProfile.email,
+                registeredAt: snapProfile.createdAt || row.updated_at,
+                updatedAt: row.updated_at,
+                lastSeen: row.updated_at || snapProfile.lastSeen,
+              });
+            } else if (suffix) {
+              addCandidatePhone(suffix);
+            }
+
+            if (Array.isArray(row.flags?.chats)) {
+              for (const c of row.flags.chats) {
+                if (!c || c.isGroup || c.isChannel || c.id === 'chat_afribot_ai' || String(c.id || '').startsWith('dm_self_')) {
+                  continue;
+                }
+                const peerPhone = c.phoneNumber || c.phone;
+                if (peerPhone && !String(peerPhone).includes('BOT')) {
+                  addCandidatePhone(peerPhone);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 5) contact_requests table
+      if (contactReqRes?.ok) {
+        const crRows = await contactReqRes.json().catch(() => null);
+        if (Array.isArray(crRows)) {
+          for (const cr of crRows) {
+            if (cr.from_phone) {
+              if (cr.from_name && cr.from_name !== 'AGC User' && cr.from_name !== 'Registered User') {
+                upsertDiscoveredUser({
+                  phoneNumber: cr.from_phone,
+                  fullName: cr.from_name,
+                  avatarUrl: cr.from_avatar,
+                  registeredAt: cr.created_at,
+                });
+              } else {
+                addCandidatePhone(cr.from_phone);
+              }
+            }
+            if (cr.to_phone) {
+              addCandidatePhone(cr.to_phone);
+            }
+          }
+        }
+      }
+
+      // 6) serverWallets keys (skipping 'banks') verified via check_phone_registered RPC below
+      for (const [wk, w] of serverWallets.entries()) {
+        if (wk === 'banks' || w?.phoneKey === 'banks') continue;
+        addCandidatePhone(w?.phoneNumber || wk);
+      }
+
+      // 7) Resolve remaining candidate phones via SECURITY DEFINER RPC check_phone_registered
+      if (candidatePhones.size > 0) {
+        await Promise.all(
+          Array.from(candidatePhones.entries()).map(async ([last9, fullPhone]) => {
+            try {
+              const rpcRes = await fetch(`${baseUrl}/rest/v1/rpc/check_phone_registered`, {
+                method: 'POST',
+                headers: {
+                  apikey: SUPABASE_ANON_KEY,
+                  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ p_phone: fullPhone, p_last9: last9 }),
+                signal: AbortSignal.timeout(5000),
+              }).catch(() => null);
+              if (!rpcRes || !rpcRes.ok) return;
+              const data = await rpcRes.json().catch(() => null);
+              if (data && data.registered) {
+                unregisteredPhoneRpcCache.delete(last9);
+                upsertDiscoveredUser({
+                  id: `usr_${fullPhone.replace(/\D/g, '') || last9}`,
+                  phoneNumber: fullPhone,
+                  phone_digits: last9,
+                  fullName: data.username || 'Registered User',
+                  username: data.username || undefined,
+                  avatarUrl: data.avatar_url || undefined,
+                });
+              } else if (data && data.registered === false) {
+                unregisteredPhoneRpcCache.set(last9, Date.now());
+              }
+            } catch (_) {}
+          })
+        );
+      }
+
       lastSupabaseUsersSyncAt = Date.now();
       if (changed) {
         saveUsersFile();
+        schedulePushUserDirectoryToSupabase();
       }
     } catch (e) {
       console.warn('Notice syncing users from Supabase:', e);
@@ -2295,7 +2612,10 @@ app.post('/api/users/register', (req: Request, res: Response) => {
     user.sessionToken = String(sessionToken);
   }
   usersByPhone.set(storeKey, user);
+  const regLast9 = canonicalAdminPhoneKey(cleanPhone || storeKey);
+  if (regLast9) unregisteredPhoneRpcCache.delete(regLast9);
   saveUsersFile();
+  schedulePushUserDirectoryToSupabase();
   console.log(`✅ [User Registered]: ${user.fullName} (${user.phoneNumber})`);
   io.emit(existingCheck ? 'user_updated' : 'user_registered', user);
 
@@ -7941,10 +8261,10 @@ app.get('/api/users', async (_req: Request, res: Response) => {
       if (expireUserSuspensionIfElapsed(u, k)) expiredAny = true;
     }
     if (expiredAny) saveUsersFile();
-    const cleanUsers = Array.from(usersByPhone.values()).filter((u) => !isSyntheticTestAccount(u));
+    const cleanUsers = getDeduplicatedRealUsers();
     res.json({ users: cleanUsers });
   } catch (err: any) {
-    const cleanUsers = Array.from(usersByPhone.values()).filter((u) => !isSyntheticTestAccount(u));
+    const cleanUsers = getDeduplicatedRealUsers();
     res.status(500).json({ error: err?.message || 'Failed to load users', users: cleanUsers });
   }
 });
@@ -9279,7 +9599,7 @@ app.get('/api/admin/metrics', async (_req: Request, res: Response) => {
     const completedDeliveriesCount = allOrders.filter((o: any) => o.status === 'delivered').length;
 
     const onlineList = Array.from(onlineUsers.values());
-    const registeredUsersList = Array.from(usersByPhone.values());
+    const registeredUsersList = getDeduplicatedRealUsers();
 
     const activeStatusesCount = Array.from(statusesMap.values()).filter(
       (s: any) => !s.expiresAt || new Date(s.expiresAt).getTime() > Date.now()
@@ -9292,7 +9612,7 @@ app.get('/api/admin/metrics', async (_req: Request, res: Response) => {
       serverMemoryMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
       onlineUsersCount: onlineUsers.size,
       onlineUsers: onlineList,
-      registeredUsersCount: usersByPhone.size,
+      registeredUsersCount: registeredUsersList.length,
       registeredUsers: registeredUsersList,
       communitiesCount: communitiesMap.size,
       communities: Array.from(communitiesMap.values()),
@@ -13593,7 +13913,10 @@ io.on('connection', (socket: Socket) => {
         if (!existing.role && userData.role) existing.role = userData.role;
         if (userData.deviceInfo) existing.deviceInfo = userData.deviceInfo;
         usersByPhone.set(storeKey, existing);
+        const onlLast9 = canonicalAdminPhoneKey(clean || storeKey);
+        if (onlLast9) unregisteredPhoneRpcCache.delete(onlLast9);
         saveUsersFile();
+        schedulePushUserDirectoryToSupabase();
         io.emit('user_updated', existing);
       } else {
         const createdUser: RegisteredUser = {
@@ -13612,7 +13935,10 @@ io.on('connection', (socket: Socket) => {
           deviceInfo: userData.deviceInfo,
         };
         usersByPhone.set(storeKey, createdUser);
+        const onlLast9 = canonicalAdminPhoneKey(clean || storeKey);
+        if (onlLast9) unregisteredPhoneRpcCache.delete(onlLast9);
         saveUsersFile();
+        schedulePushUserDirectoryToSupabase();
         io.emit('user_registered', createdUser);
       }
     }
@@ -13657,7 +13983,10 @@ io.on('connection', (socket: Socket) => {
       lastSeen: 'online',
     };
     usersByPhone.set(storeKey, reg);
+    const sockRegLast9 = canonicalAdminPhoneKey(clean || storeKey);
+    if (sockRegLast9) unregisteredPhoneRpcCache.delete(sockRegLast9);
     saveUsersFile();
+    schedulePushUserDirectoryToSupabase();
     io.emit(existing ? 'user_updated' : 'user_registered', reg);
   });
 

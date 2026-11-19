@@ -109,6 +109,8 @@ import {
   fetchSupabaseAdminSlice,
   saveSupabaseAdminSlice,
   upsertSupabaseAdminUserOverride,
+  upsertSupabaseDirectoryUser,
+  fetchSupabaseAllDiscoveredUsers,
 } from '../services/supabaseAdminSync';
 import {
   FeatureFlags,
@@ -17503,6 +17505,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
       }
 
+      upsertSupabaseDirectoryUser(userWithCompactAvatar).catch(() => {});
+
       try {
         const syncChannel = supabase.channel('global_user_sync');
         syncChannel.subscribe((status) => {
@@ -21927,34 +21931,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Global live sync for Admin Feature Flags, System Config, CMS, Broadcasts & Registered Users
   const refreshAdminUsers = async (): Promise<void> => {
     try {
-      const [apiRes, sbRes, sbOverrides] = await Promise.all([
+      const [apiRes, sbDiscovered, sbOverrides] = await Promise.all([
         safeJsonFetch('/api/users'),
-        isSupabaseConfigured
-          ? supabase.from('agc_phone_registry').select('*').then((r) => r, () => null)
-          : Promise.resolve(null),
+        isSupabaseConfigured ? fetchSupabaseAllDiscoveredUsers() : Promise.resolve([]),
         fetchSupabaseAdminSlice<{ overrides?: Record<string, any> }>(ADMIN_SYS_USERS_KEY),
       ]);
 
       let nextList = adminUsersRef.current.filter((u) => !isSyntheticTestUser(u));
 
-      if (sbRes && !sbRes.error && Array.isArray(sbRes.data)) {
-        const sbMapped: AdminUserRecord[] = sbRes.data
+      if (Array.isArray(sbDiscovered) && sbDiscovered.length > 0) {
+        const sbMapped: AdminUserRecord[] = sbDiscovered
           .filter((row: any) => !isSyntheticTestUser(row))
-          .map((row: any) => ({
-          id: `usr_${row.phone_digits || (row.full_phone || '').replace(/\D/g, '')}`,
-          fullName: row.username || 'Registered User',
-          phoneNumber: row.full_phone || (row.phone_digits ? `+234${String(row.phone_digits).replace(/^0+/, '')}` : ''),
-          avatarUrl: row.avatar_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(row.username || 'user')}`,
-          role: 'user',
-          verificationBadge: null,
-          isPhoneVerified: true,
-          status: 'active',
-          joinedDate: row.registered_at ? new Date(row.registered_at).toLocaleDateString() : 'Recent',
-          walletBalanceNgn: 0,
-          ordersCount: 0,
-          isOnline: false,
-          lastSeen: row.updated_at || row.registered_at || undefined,
-        }));
+          .map(mapRawToAdminUser);
         nextList = mergeAdminUsersList(nextList, sbMapped, false);
       }
 
