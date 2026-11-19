@@ -8,6 +8,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
+import * as webpush from 'web-push';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -516,6 +517,440 @@ app.get('/api/health', (_req: Request, res: Response) => {
     uptimeSeconds: Math.floor(process.uptime()),
     port: PORT,
   });
+});
+
+// ── WEB PUSH (VAPID) LOCK-SCREEN CALL & MESSAGE NOTIFICATIONS ────────────────
+const VAPID_KEYS_FILE = path.join(__dirname, 'data_vapid_keys.json');
+const PUSH_SUBS_FILE = path.join(__dirname, 'data_push_subscriptions.json');
+
+interface StoredPushSubscription {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  expirationTime?: number | null;
+  phoneNumber: string;
+  cleanPhone: string;
+  phoneVariants: string[];
+  userId?: string;
+  userAgent?: string;
+  updatedAt: string;
+}
+
+let vapidKeys: { publicKey: string; privateKey: string; subject: string } = {
+  publicKey: (process.env.VAPID_PUBLIC_KEY || '').trim(),
+  privateKey: (process.env.VAPID_PRIVATE_KEY || '').trim(),
+  subject: (process.env.VAPID_SUBJECT || '').trim() || 'mailto:notifications@africhat.app',
+};
+
+try {
+  if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
+    if (fs.existsSync(VAPID_KEYS_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(VAPID_KEYS_FILE, 'utf8'));
+      if (saved?.publicKey && saved?.privateKey) {
+        vapidKeys.publicKey = saved.publicKey;
+        vapidKeys.privateKey = saved.privateKey;
+        if (saved.subject) vapidKeys.subject = saved.subject;
+      }
+    }
+  }
+  if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
+    const generated = webpush.generateVAPIDKeys();
+    vapidKeys.publicKey = generated.publicKey;
+    vapidKeys.privateKey = generated.privateKey;
+    fs.writeFileSync(VAPID_KEYS_FILE, JSON.stringify(vapidKeys, null, 2), 'utf8');
+  }
+  webpush.setVapidDetails(vapidKeys.subject, vapidKeys.publicKey, vapidKeys.privateKey);
+  console.log('🔔 Web Push VAPID engine configured');
+} catch (err) {
+  console.warn('Notice initializing Web Push VAPID keys:', err);
+}
+
+const pushSubscriptionsMap = new Map<string, StoredPushSubscription>();
+try {
+  if (fs.existsSync(PUSH_SUBS_FILE)) {
+    const rawSubs = JSON.parse(fs.readFileSync(PUSH_SUBS_FILE, 'utf8'));
+    if (Array.isArray(rawSubs)) {
+      rawSubs.forEach((s: any) => {
+        if (s?.endpoint && s?.keys?.p256dh && s?.keys?.auth) {
+          pushSubscriptionsMap.set(s.endpoint, s);
+        }
+      });
+    }
+  }
+} catch (err) {
+  console.warn('Notice loading push subscriptions:', err);
+}
+
+function savePushSubscriptionsFile() {
+  try {
+    fs.writeFileSync(
+      PUSH_SUBS_FILE,
+      JSON.stringify(Array.from(pushSubscriptionsMap.values()), null, 2),
+      'utf8'
+    );
+  } catch (err) {
+    console.warn('Notice saving push subscriptions:', err);
+  }
+}
+
+const recentPushDedupeMap = new Map<string, number>();
+function markPushEventOnce(dedupeKey: string, ttlMs = 120_000): boolean {
+  const now = Date.now();
+  if (recentPushDedupeMap.size > 600) {
+    for (const [k, exp] of recentPushDedupeMap.entries()) {
+      if (exp < now) recentPushDedupeMap.delete(k);
+    }
+  }
+  const existing = recentPushDedupeMap.get(dedupeKey);
+  if (existing && existing > now) return false;
+  recentPushDedupeMap.set(dedupeKey, now + ttlMs);
+  return true;
+}
+
+function getPushSubscriptionsForPhones(phones: string[]): StoredPushSubscription[] {
+  const targetVariants = new Set<string>();
+  phones.forEach((p) => {
+    getPhoneVariants(p).forEach((v) => targetVariants.add(v));
+  });
+  if (targetVariants.size === 0) return [];
+
+  const matched = new Map<string, StoredPushSubscription>();
+  for (const sub of pushSubscriptionsMap.values()) {
+    const subMatches =
+      (sub.cleanPhone && targetVariants.has(sub.cleanPhone)) ||
+      (Array.isArray(sub.phoneVariants) && sub.phoneVariants.some((v) => targetVariants.has(v)));
+    if (subMatches) {
+      matched.set(sub.endpoint, sub);
+    }
+  }
+  return Array.from(matched.values());
+}
+
+function hasActiveSocketForPhone(phone: string): boolean {
+  if (!phone) return false;
+  const variants = getPhoneVariants(phone);
+  for (const v of variants) {
+    const room = io.sockets.adapter.rooms.get(`phone:${v}`);
+    if (room && room.size > 0) return true;
+  }
+  return false;
+}
+
+async function dispatchWebPushToPhones(
+  targetPhones: string[],
+  payload: Record<string, any>,
+  options?: { ttl?: number; urgency?: 'very-low' | 'low' | 'normal' | 'high'; topic?: string }
+): Promise<number> {
+  if (!vapidKeys.publicKey || !vapidKeys.privateKey) return 0;
+  const subs = getPushSubscriptionsForPhones(targetPhones);
+  if (subs.length === 0) return 0;
+
+  const serialized = JSON.stringify(payload);
+  let sentCount = 0;
+  let removedAny = false;
+
+  await Promise.all(
+    subs.map(async (sub) => {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: sub.keys,
+            expirationTime: sub.expirationTime ?? null,
+          },
+          serialized,
+          {
+            TTL: options?.ttl ?? 60,
+            urgency: options?.urgency ?? 'high',
+            ...(options?.topic ? { topic: options.topic } : {}),
+          }
+        );
+        sentCount += 1;
+      } catch (err: any) {
+        const status = err?.statusCode;
+        if (status === 404 || status === 410) {
+          pushSubscriptionsMap.delete(sub.endpoint);
+          removedAny = true;
+        }
+      }
+    })
+  );
+
+  if (removedAny) {
+    savePushSubscriptionsFile();
+  }
+  return sentCount;
+}
+
+function dispatchCallPushNotification(
+  targetPhones: string[],
+  eventName: string,
+  data: any
+) {
+  if (!Array.isArray(targetPhones) || targetPhones.length === 0 || !data) return;
+  const roomId = String(data.roomId || '');
+  if (!roomId) return;
+
+  const callType = data.type === 'video' || data.callType === 'video' ? 'video' : 'voice';
+  const isVideo = callType === 'video';
+  const callerName = String(data.callerName || 'AGC User');
+  const callerPhone = String(data.callerPhone || '');
+  const isGroupCall = Boolean(data.isGroupCall);
+  const groupName = data.groupName ? String(data.groupName) : '';
+  const chatId = data.chatId ? String(data.chatId) : '';
+
+  if (eventName === 'incoming_call') {
+    targetPhones.forEach((phone) => {
+      const variants = getPhoneVariants(phone);
+      const primary = variants[0] || phone.replace(/\D/g, '');
+      if (!primary || !markPushEventOnce(`push_inc:${roomId}:${primary}`, 90_000)) return;
+
+      const params = new URLSearchParams();
+      params.set('call', roomId);
+      params.set('type', callType);
+      params.set('accept', '1');
+      if (callerName) params.set('callerName', callerName);
+      if (callerPhone) params.set('callerPhone', callerPhone);
+      if (chatId) params.set('chatId', chatId);
+      if (isGroupCall) {
+        params.set('group', '1');
+        if (groupName) params.set('groupName', groupName);
+      }
+      const deepLinkUrl = `/?${params.toString()}`;
+
+      dispatchWebPushToPhones(
+        [phone],
+        {
+          type: 'incoming_call',
+          roomId,
+          callType,
+          title: `Incoming AGC ${isVideo ? 'Video' : 'Voice'} Call`,
+          body: isGroupCall
+            ? `${callerName} invited you to ${groupName || 'a group call'} — Tap to answer`
+            : `${callerName} is calling — Tap to answer`,
+          icon: '/icon-192.png',
+          badge: '/icon-192.png',
+          tag: `call_${roomId}`,
+          renotify: true,
+          requireInteraction: true,
+          url: deepLinkUrl,
+          data: {
+            type: 'incoming_call',
+            url: deepLinkUrl,
+            roomId,
+            callType,
+            callerName,
+            callerPhone,
+            chatId,
+            targetPhone: phone,
+            isGroupCall,
+            groupName,
+          },
+          actions: [
+            { action: 'answer', title: 'Answer' },
+            { action: 'decline', title: 'Decline' },
+          ],
+        },
+        { ttl: 45, urgency: 'high', topic: `call_${roomId.slice(-24)}` }
+      ).catch(() => {});
+    });
+    return;
+  }
+
+  if (eventName === 'call_ended') {
+    const isMissedOutcome = Boolean(data.isHostCancel || data.reason === 'no_answer' || data.reason === 'missed');
+    targetPhones.forEach((phone) => {
+      const variants = getPhoneVariants(phone);
+      const primary = variants[0] || phone.replace(/\D/g, '');
+      if (!primary) return;
+
+      if (isMissedOutcome) {
+        if (!markPushEventOnce(`push_miss:${roomId}:${primary}`, 300_000)) return;
+        const missedUrl = chatId ? `/?tab=chats&chatId=${encodeURIComponent(chatId)}` : '/?tab=calls';
+        const displayName = isGroupCall && groupName ? `${callerName} (${groupName})` : callerName;
+        const reasonLabel = data.reason === 'no_answer' ? 'No answer' : 'Cancelled before answer';
+        dispatchWebPushToPhones(
+          [phone],
+          {
+            type: 'missed_call',
+            roomId,
+            callType,
+            title: isVideo ? 'Missed Video Call' : 'Missed Voice Call',
+            body: `Missed ${isVideo ? 'video' : 'voice'} call from ${displayName} (${reasonLabel})`,
+            icon: '/icon-192.png',
+            badge: '/icon-192.png',
+            tag: `call_${roomId}`,
+            renotify: true,
+            requireInteraction: false,
+            url: missedUrl,
+            data: {
+              type: 'missed_call',
+              url: missedUrl,
+              roomId,
+              callType,
+              callerName,
+              callerPhone,
+              chatId,
+              isGroupCall,
+              groupName,
+            },
+            actions: [
+              { action: 'open', title: 'View Call' },
+              { action: 'close', title: 'Dismiss' },
+            ],
+          },
+          { ttl: 3600, urgency: 'high', topic: `call_${roomId.slice(-24)}` }
+        ).catch(() => {});
+      } else {
+        dispatchWebPushToPhones(
+          [phone],
+          {
+            type: 'call_cancelled',
+            roomId,
+            tag: `call_${roomId}`,
+          },
+          { ttl: 30, urgency: 'high' }
+        ).catch(() => {});
+      }
+    });
+    return;
+  }
+
+  if (eventName === 'call_declined') {
+    targetPhones.forEach((phone) => {
+      dispatchWebPushToPhones(
+        [phone],
+        {
+          type: 'call_cancelled',
+          roomId,
+          tag: `call_${roomId}`,
+        },
+        { ttl: 30, urgency: 'normal' }
+      ).catch(() => {});
+    });
+  }
+}
+
+app.get('/api/push/vapid-public-key', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    publicKey: vapidKeys.publicKey || '',
+    enabled: Boolean(vapidKeys.publicKey && vapidKeys.privateKey),
+  });
+});
+
+app.post('/api/push/subscribe', (req: Request, res: Response) => {
+  try {
+    const { subscription, phoneNumber, userId } = req.body || {};
+    if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+      return res.status(400).json({ success: false, error: 'Valid PushSubscription object required' });
+    }
+    const cleanPhone = String(phoneNumber || '').replace(/\D/g, '');
+    if (!cleanPhone) {
+      return res.status(400).json({ success: false, error: 'phoneNumber required' });
+    }
+    const entry: StoredPushSubscription = {
+      endpoint: String(subscription.endpoint),
+      keys: {
+        p256dh: String(subscription.keys.p256dh),
+        auth: String(subscription.keys.auth),
+      },
+      expirationTime: subscription.expirationTime ?? null,
+      phoneNumber: String(phoneNumber),
+      cleanPhone,
+      phoneVariants: getPhoneVariants(cleanPhone),
+      userId: userId ? String(userId) : undefined,
+      userAgent: String(req.headers['user-agent'] || '').slice(0, 180),
+      updatedAt: new Date().toISOString(),
+    };
+    pushSubscriptionsMap.set(entry.endpoint, entry);
+    savePushSubscriptionsFile();
+    return res.json({ success: true, totalSubscriptions: pushSubscriptionsMap.size });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Subscription failed' });
+  }
+});
+
+app.post('/api/push/unsubscribe', (req: Request, res: Response) => {
+  const { endpoint } = req.body || {};
+  if (endpoint && pushSubscriptionsMap.delete(String(endpoint))) {
+    savePushSubscriptionsFile();
+  }
+  res.json({ success: true });
+});
+
+app.post('/api/push/notify', (req: Request, res: Response) => {
+  try {
+    const { targetPhones, event, data } = req.body || {};
+    if (!Array.isArray(targetPhones) || !event || !data) {
+      return res.status(400).json({ success: false, error: 'targetPhones, event, and data required' });
+    }
+    dispatchCallPushNotification(targetPhones, String(event), data);
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Push notify error' });
+  }
+});
+
+app.post('/api/push/test', async (req: Request, res: Response) => {
+  try {
+    const { phoneNumber, userName } = req.body || {};
+    if (!phoneNumber) {
+      return res.status(400).json({ success: false, error: 'phoneNumber required' });
+    }
+    const sent = await dispatchWebPushToPhones(
+      [String(phoneNumber)],
+      {
+        type: 'general',
+        title: 'AGC Lock-Screen Alerts Active',
+        body: `Hi ${userName || 'there'} — incoming voice/video calls and messages will alert your device here.`,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        tag: `agc_test_${Date.now()}`,
+        url: '/?tab=calls',
+        data: { url: '/?tab=calls', type: 'general' },
+      },
+      { ttl: 60, urgency: 'high' }
+    );
+    return res.json({
+      success: sent > 0,
+      sent,
+      ...(sent === 0 ? { error: 'No active push subscription found for this device yet.' } : {}),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Test push failed' });
+  }
+});
+
+app.post('/api/push/call-action', (req: Request, res: Response) => {
+  try {
+    const { action, roomId, callerPhone, callerName, callType, chatId, targetPhone, receiverName, isGroupCall } = req.body || {};
+    if (!roomId || action !== 'decline') {
+      return res.status(400).json({ success: false, error: 'Unsupported action' });
+    }
+    if (callerPhone) {
+      const declinePayload = {
+        roomId: String(roomId),
+        declinedBy: String(targetPhone || ''),
+        declinedByName: String(receiverName || ''),
+        isGroupCall: Boolean(isGroupCall),
+      };
+      getPhoneVariants(String(callerPhone)).forEach((v) => {
+        io.to(`phone:${v}`).emit('call_declined', declinePayload);
+      });
+    }
+    if (targetPhone) {
+      dispatchCallPushNotification([String(targetPhone)], 'call_declined', {
+        roomId: String(roomId),
+        callType: callType || 'voice',
+        callerName,
+        callerPhone,
+        chatId,
+      });
+    }
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Call action failed' });
+  }
 });
 
 // Helper to normalize and produce matching phone variants (handles 080... vs 23480... vs last 9 digits)
@@ -9045,6 +9480,49 @@ app.post('/api/messages/send', (req: Request, res: Response) => {
       getPhoneVariants(p).forEach((v) => emitOnce(`phone:${v}`));
     });
 
+    // Lock-screen Web Push fallback when recipient is offline or for missed call_log cards
+    const pushTargets = Array.from(
+      new Set([
+        ...(finalTarget && suppressedForPhones.length === 0 ? [finalTarget] : []),
+        ...authoritativePhones.filter((p) => !senderPhone || !phonesMatchServer(p, senderPhone)),
+      ])
+    ).filter((p) => !senderPhone || !phonesMatchServer(p, senderPhone));
+
+    if (pushTargets.length > 0 && message?.type !== 'call_log') {
+      const offlineTargets = pushTargets.filter((p) => !hasActiveSocketForPhone(p));
+      if (offlineTargets.length > 0 && markPushEventOnce(`push_msg:${message.id}`, 300_000)) {
+        const senderLabel = message.senderName || chat?.name || 'AGC Message';
+        const preview = message.text ? String(message.text).slice(0, 120) : 'Sent you a message';
+        const msgUrl = `/?tab=chats&chatId=${encodeURIComponent(String(chatId))}`;
+        dispatchWebPushToPhones(
+          offlineTargets,
+          {
+            type: 'message',
+            title: groupFlag && chat?.name ? `${senderLabel} · ${chat.name}` : senderLabel,
+            body: preview,
+            icon: '/icon-192.png',
+            badge: '/icon-192.png',
+            tag: `chat_${chatId}`,
+            url: msgUrl,
+            data: { type: 'message', url: msgUrl, chatId: String(chatId) },
+          },
+          { ttl: 3600, urgency: 'normal' }
+        ).catch(() => {});
+      }
+    } else if (pushTargets.length > 0 && message?.type === 'call_log' && message?.callDetails?.roomId) {
+      dispatchCallPushNotification(pushTargets, 'call_ended', {
+        roomId: message.callDetails.roomId,
+        callType: message.callDetails.callType,
+        callerName: message.callDetails.callerName || message.senderName,
+        callerPhone: message.callDetails.callerPhone || senderPhone,
+        chatId: String(chatId),
+        isGroupCall: Boolean(message.callDetails.isGroupCall || groupFlag),
+        groupName: message.callDetails.groupName || chat?.name,
+        isHostCancel: true,
+        reason: message.callDetails.status === 'no_answer' ? 'no_answer' : 'missed',
+      });
+    }
+
     return res.json({
       success: true,
       id: message.id,
@@ -14318,6 +14796,48 @@ io.on('connection', (socket: Socket) => {
         });
       });
     }
+
+    const pushTargets = Array.from(
+      new Set([
+        ...(finalTarget && suppressedForPhones.length === 0 ? [finalTarget] : []),
+        ...authoritativePhones.filter((p) => !senderPhone || !phonesMatchServer(p, senderPhone)),
+      ])
+    ).filter((p) => !senderPhone || !phonesMatchServer(p, senderPhone));
+
+    if (pushTargets.length > 0 && message?.type !== 'call_log') {
+      const offlineTargets = pushTargets.filter((p) => !hasActiveSocketForPhone(p));
+      if (offlineTargets.length > 0 && message?.id && markPushEventOnce(`push_msg:${message.id}`, 300_000)) {
+        const senderLabel = message.senderName || chat?.name || 'AGC Message';
+        const preview = message.text ? String(message.text).slice(0, 120) : 'Sent you a message';
+        const msgUrl = `/?tab=chats&chatId=${encodeURIComponent(String(chatId))}`;
+        dispatchWebPushToPhones(
+          offlineTargets,
+          {
+            type: 'message',
+            title: isGroup && chat?.name ? `${senderLabel} · ${chat.name}` : senderLabel,
+            body: preview,
+            icon: '/icon-192.png',
+            badge: '/icon-192.png',
+            tag: `chat_${chatId}`,
+            url: msgUrl,
+            data: { type: 'message', url: msgUrl, chatId: String(chatId) },
+          },
+          { ttl: 3600, urgency: 'normal' }
+        ).catch(() => {});
+      }
+    } else if (pushTargets.length > 0 && message?.type === 'call_log' && message?.callDetails?.roomId) {
+      dispatchCallPushNotification(pushTargets, 'call_ended', {
+        roomId: message.callDetails.roomId,
+        callType: message.callDetails.callType,
+        callerName: message.callDetails.callerName || message.senderName,
+        callerPhone: message.callDetails.callerPhone || senderPhone,
+        chatId: String(chatId),
+        isGroupCall: Boolean(message.callDetails.isGroupCall || isGroup),
+        groupName: message.callDetails.groupName || chat?.name,
+        isHostCancel: true,
+        reason: message.callDetails.status === 'no_answer' ? 'no_answer' : 'missed',
+      });
+    }
   });
 
   // 2a-bis. Live Multiplayer Game State Relay (X/O, Whot!, Ludo, Poker, Bill Requests)
@@ -14789,13 +15309,19 @@ io.on('connection', (socket: Socket) => {
     if (Array.isArray(payload?.targetPhones)) targets.push(...payload.targetPhones);
 
     const seenVariants = new Set<string>();
+    const uniquePushTargets: string[] = [];
     for (const rawTarget of targets) {
       if (!rawTarget) continue;
       const variants = getPhoneVariants(rawTarget);
       const primary = variants[0] || rawTarget.replace(/\D/g, '');
       if (!primary || seenVariants.has(primary)) continue;
       variants.forEach((v) => seenVariants.add(v));
+      uniquePushTargets.push(rawTarget);
       emitToPhoneVariantsOnce(rawTarget, eventName, payload.data);
+    }
+
+    if (uniquePushTargets.length > 0) {
+      dispatchCallPushNotification(uniquePushTargets, eventName, payload.data);
     }
   });
 

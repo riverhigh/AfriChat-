@@ -48,6 +48,8 @@ import {
   AtSign,
   Loader2,
   AlertCircle,
+  BellRing,
+  BellOff,
 } from 'lucide-react';
 import { useApp, phonesMatch } from '../context/AppContext';
 import { CurrencyCode, LanguageCode, AppFontSize } from '../types';
@@ -130,12 +132,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     updateUsername,
     isFeatureEnabled,
     getBadgeForPhone,
+    webPushStatus,
+    enableWebPushAlerts,
+    disableWebPushAlerts,
+    sendTestWebPushAlert,
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'services' | 'stores' | 'artisan' | 'chat_bg'>('services');
   const [selectedNotificationSound, setSelectedNotificationSound] = useState<NotificationSound>(() => {
     try { return getNotificationSound(); } catch (_) { return 'chime'; }
   });
+  const [isPushBusy, setIsPushBusy] = useState(false);
+  const [pushFeedback, setPushFeedback] = useState<string | null>(null);
   const [isLegalModalOpen, setIsLegalModalOpen] = useState(false);
   const [isAccountCenterOpen, setIsAccountCenterOpen] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -1178,6 +1186,135 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   }`}
                 />
               </button>
+            </div>
+
+            {/* Lock-Screen Call & Message Alerts (Web Push API + Service Worker) */}
+            <div className="px-4 py-3.5 space-y-2.5 border-b border-slate-100 dark:border-neutral-800/80">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3.5 min-w-0">
+                  <div
+                    className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+                      webPushStatus === 'subscribed'
+                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                        : webPushStatus === 'denied'
+                        ? 'bg-rose-500/15 text-rose-500'
+                        : 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400'
+                    }`}
+                  >
+                    {webPushStatus === 'denied' ? (
+                      <BellOff className="w-4 h-4" />
+                    ) : (
+                      <BellRing className="w-4 h-4" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-slate-900 dark:text-white">
+                        Lock-Screen Call Alerts
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          webPushStatus === 'subscribed'
+                            ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                            : webPushStatus === 'denied'
+                            ? 'bg-rose-500/15 text-rose-600 dark:text-rose-300'
+                            : webPushStatus === 'ios_install_required'
+                            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                            : 'bg-slate-200 dark:bg-neutral-800 text-slate-600 dark:text-neutral-300'
+                        }`}
+                      >
+                        {webPushStatus === 'subscribed'
+                          ? 'Active'
+                          : webPushStatus === 'denied'
+                          ? 'Blocked'
+                          : webPushStatus === 'ios_install_required'
+                          ? 'Add to Home Screen'
+                          : webPushStatus === 'unsupported'
+                          ? 'Unavailable'
+                          : 'Off'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5 leading-relaxed">
+                      {webPushStatus === 'ios_install_required'
+                        ? 'On iPhone/iPad, tap Safari Share → Add to Home Screen first to receive Web Push call banners on your lock screen.'
+                        : webPushStatus === 'denied'
+                        ? 'Notifications are blocked in your browser site settings. Re-enable permission there to ring on a locked screen.'
+                        : 'Show incoming voice & video call banners with Answer / Decline actions even when AGC is backgrounded or your phone is locked.'}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isPushBusy || webPushStatus === 'unsupported' || webPushStatus === 'denied'}
+                  role="switch"
+                  aria-checked={webPushStatus === 'subscribed'}
+                  aria-label="Toggle lock-screen call alerts"
+                  onClick={async () => {
+                    setIsPushBusy(true);
+                    setPushFeedback(null);
+                    try {
+                      if (webPushStatus === 'subscribed') {
+                        await disableWebPushAlerts();
+                        setPushFeedback('Lock-screen Web Push alerts turned off for this device.');
+                      } else {
+                        const res = await enableWebPushAlerts();
+                        if (res.ok) {
+                          setPushFeedback('Lock-screen Web Push alerts enabled.');
+                        } else if (res.error) {
+                          setPushFeedback(res.error);
+                        }
+                      }
+                    } finally {
+                      setIsPushBusy(false);
+                    }
+                  }}
+                  className={`w-11 h-6 rounded-full transition-colors relative shrink-0 disabled:opacity-50 ${
+                    webPushStatus === 'subscribed' ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                      webPushStatus === 'subscribed' ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {webPushStatus === 'subscribed' && (
+                <div className="flex items-center justify-between gap-2 pl-11">
+                  <span className="text-[11px] text-slate-500 dark:text-neutral-400">
+                    Tap lock-screen call banners to jump straight into the call room.
+                  </span>
+                  <button
+                    type="button"
+                    disabled={isPushBusy}
+                    onClick={async () => {
+                      setIsPushBusy(true);
+                      setPushFeedback(null);
+                      try {
+                        const res = await sendTestWebPushAlert();
+                        setPushFeedback(
+                          res.ok
+                            ? 'Test push sent! Check your notification tray.'
+                            : res.error || 'Could not deliver test notification.'
+                        );
+                      } finally {
+                        setIsPushBusy(false);
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-700 dark:text-emerald-300 text-[11px] font-semibold shrink-0 transition-colors"
+                  >
+                    {isPushBusy ? 'Sending…' : 'Test Alert'}
+                  </button>
+                </div>
+              )}
+
+              {pushFeedback && (
+                <p className="pl-11 text-[11px] font-medium text-indigo-600 dark:text-indigo-300">
+                  {pushFeedback}
+                </p>
+              )}
             </div>
 
             {/* Notification Sound Picker (Modern Tones & Chimes) */}

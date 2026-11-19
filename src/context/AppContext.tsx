@@ -28,7 +28,17 @@ import {
 import { encryptChatMessage, decryptChatMessage, getConversationSecret, getConversationSecretFallbacks } from '../utils/cryptoUtils';
 import { safeLocalStorage, safeSessionStorage } from '../utils/safeStorage';
 import { isSyntheticTestUser } from '../utils/testAccountFilter';
-import { showLocalNotification, requestNotificationPermission } from '../services/notifications';
+import {
+  showLocalNotification,
+  requestNotificationPermission,
+  WebPushStatus,
+  SubscribeWebPushResult,
+  getWebPushStatus,
+  subscribeUserToWebPush,
+  unsubscribeUserFromWebPush,
+  sendPushCallNotifyFallback,
+  sendTestLockScreenPush,
+} from '../services/notifications';
 import {
   compressAvatarImage,
   compressChatMediaImage,
@@ -1283,6 +1293,10 @@ interface AppContextType {
   dismissMissedCallNotice: () => void;
   unreadMissedCallsCount: number;
   clearUnreadMissedCalls: () => void;
+  webPushStatus: WebPushStatus;
+  enableWebPushAlerts: () => Promise<SubscribeWebPushResult>;
+  disableWebPushAlerts: () => Promise<boolean>;
+  sendTestWebPushAlert: () => Promise<{ ok: boolean; sent?: number; error?: string }>;
   // 1. Meme & Sticker Studio
   isMemeStudioOpen: boolean;
   setIsMemeStudioOpen: (val: boolean) => void;
@@ -4956,6 +4970,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const recordedMissedCallRoomsRef = useRef<Set<string>>(new Set());
   const broadcastLiveMessageRef = useRef<(chatId: string, msg: ChatMessage, overrideChat?: ChatThread) => Promise<void>>(async () => {});
   const endCallRef = useRef<(reason?: 'user' | 'no_answer') => void>(() => {});
+  const startCallRef = useRef<AppContextType['startCall']>(() => {});
+  const acceptIncomingCallRef = useRef<AppContextType['acceptIncomingCall']>(() => {});
+  const declineIncomingCallRef = useRef<AppContextType['declineIncomingCall']>(() => {});
+  const [webPushStatus, setWebPushStatus] = useState<WebPushStatus>('default');
   const callSignalHandlersRef = useRef<{
     onIncomingCall: (payload: any) => void;
     onCallTerminated: (payload: any, eventName?: string) => void;
@@ -8279,7 +8297,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const norm = normalizePhoneDigits(targetPhone) || rawClean;
         const variants = Array.from(new Set([rawClean, norm].filter(Boolean)));
 
-        // 1. Socket.io (server uses emitToPhoneVariantsOnce)
+        // 1. Socket.io (server uses emitToPhoneVariantsOnce + automatic Web Push dispatch)
         try {
           emitPhoneCallSignal(targetPhone, payload, event);
         } catch (_) {}
@@ -8307,6 +8325,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
         }
       });
+
+      // 4. HTTP Web Push fallback if Socket.IO is disconnected so locked devices still ring
+      if (!getSocket()?.connected) {
+        sendPushCallNotifyFallback(cleanTargets, event, payload);
+      }
     },
     [sendSupabaseBroadcastOnce]
   );
@@ -9191,6 +9214,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     incomingCallRef.current = null;
     setIncomingCall(null);
   }, [sendCallControlSignal]);
+
+  startCallRef.current = startCall;
+  acceptIncomingCallRef.current = acceptIncomingCall;
+  declineIncomingCallRef.current = declineIncomingCall;
 
   const endCall = useCallback((reason: 'user' | 'no_answer' = 'user') => {
     if (callRingTimeoutRef.current) {
@@ -18396,7 +18423,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     } catch (_) {}
 
-    requestNotificationPermission().catch(() => {});
+    subscribeUserToWebPush(updatedUser.phoneNumber, updatedUser.id, true)
+      .then((res) => setWebPushStatus(res.status))
+      .catch(() => {
+        requestNotificationPermission().catch(() => {});
+      });
     setIsAuthModalOpen(false);
 
     // 2. Register with Socket.io Gateway
@@ -23419,21 +23450,124 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const pendingJoinCodeRef = useRef<string | null>(null);
+  const pendingDeepLinkCallRef = useRef<{
+    roomId: string;
+    type: 'voice' | 'video';
+    accept: boolean;
+    callerName?: string;
+    callerPhone?: string;
+    chatId?: string;
+    isGroupCall?: boolean;
+    groupName?: string;
+  } | null>(null);
+  const pendingDeepLinkChatIdRef = useRef<string | null>(null);
+
+  const dispatchDeepLinkCall = useCallback(
+    (callReq: {
+      roomId: string;
+      type: 'voice' | 'video';
+      accept: boolean;
+      callerName?: string;
+      callerPhone?: string;
+      chatId?: string;
+      isGroupCall?: boolean;
+      groupName?: string;
+    }) => {
+      if (!callReq.roomId) return;
+      if (activeCallRef.current?.roomId === callReq.roomId) return;
+
+      if (incomingCallRef.current?.roomId === callReq.roomId) {
+        if (callReq.accept) {
+          acceptIncomingCallRef.current();
+        }
+        return;
+      }
+
+      if (activeCallRef.current) return;
+
+      const displayName =
+        callReq.isGroupCall && callReq.groupName
+          ? callReq.groupName
+          : callReq.callerName || callReq.callerPhone || 'AGC Call Room';
+
+      if (callReq.accept) {
+        startCallRef.current(
+          displayName,
+          callReq.callerPhone || callReq.roomId,
+          undefined,
+          callReq.type,
+          callReq.roomId,
+          false,
+          {
+            isGroupCall: Boolean(callReq.isGroupCall),
+            participantPhones: callReq.callerPhone ? [callReq.callerPhone] : [],
+            chatId: callReq.chatId,
+          }
+        );
+      } else {
+        setIncomingCall({
+          roomId: callReq.roomId,
+          callerName: callReq.callerName || 'AGC User',
+          callerPhone: callReq.callerPhone || '',
+          type: callReq.type,
+          isGroupCall: Boolean(callReq.isGroupCall),
+          groupName: callReq.groupName,
+          participantPhones: callReq.callerPhone ? [callReq.callerPhone] : [],
+          chatId: callReq.chatId,
+          timestamp: Date.now(),
+        });
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const handleUrlChange = () => {
-      const hash = window.location.hash || '';
-      const search = (window.location.search || '').toLowerCase();
+    const processUrlString = (rawUrl?: string) => {
+      let parsedUrl: URL;
+      try {
+        parsedUrl = rawUrl ? new URL(rawUrl, window.location.origin) : new URL(window.location.href);
+      } catch {
+        return;
+      }
+      const hash = parsedUrl.hash || window.location.hash || '';
+      const search = (parsedUrl.search || '').toLowerCase();
       if (checkIsAdminUrl()) {
         setIsAdminModalOpen(true);
       }
 
-      // Handle PWA manifest shortcuts (?tab=chats|status|calls|town|market|settings&sub=artisan)
+      // Handle Call Room deep links from Web Push (?call=roomId&accept=1 or /call/roomId)
       try {
-        const sp = new URLSearchParams(window.location.search || '');
+        const sp = parsedUrl.searchParams;
+        const pathCallMatch = (parsedUrl.pathname || '').match(/\/call\/([^/?#]+)/i);
+        const callRoom = sp.get('call') || (pathCallMatch?.[1] ? decodeURIComponent(pathCallMatch[1]) : '');
+        if (callRoom && callRoom.trim()) {
+          const callReq = {
+            roomId: callRoom.trim(),
+            type: (sp.get('type') === 'voice' ? 'voice' : 'video') as 'voice' | 'video',
+            accept: sp.get('accept') === '1' || sp.get('answer') === '1',
+            callerName: sp.get('callerName') || undefined,
+            callerPhone: sp.get('callerPhone') || undefined,
+            chatId: sp.get('chatId') || undefined,
+            isGroupCall: sp.get('group') === '1',
+            groupName: sp.get('groupName') || undefined,
+          };
+          pendingDeepLinkCallRef.current = callReq;
+          window.history.replaceState(null, '', '/');
+          if (isAuthenticatedRef.current) {
+            pendingDeepLinkCallRef.current = null;
+            dispatchDeepLinkCall(callReq);
+          }
+          return;
+        }
+      } catch (_) {}
+
+      // Handle PWA manifest shortcuts & push deep links (?tab=chats&chatId=... or ?tab=...)
+      try {
+        const sp = parsedUrl.searchParams;
         const tabParam = (sp.get('tab') || '').toLowerCase();
         const subParam = (sp.get('sub') || '').toLowerCase();
+        const chatIdParam = sp.get('chatId') || '';
         if (
           tabParam === 'chats' ||
           tabParam === 'status' ||
@@ -23446,14 +23580,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (subParam === 'artisan') {
             setIsServicesModalOpen(true);
           }
-          window.history.replaceState(null, '', window.location.pathname || '/');
+          if (chatIdParam) {
+            if (isAuthenticatedRef.current) {
+              setActiveChatId(chatIdParam);
+            } else {
+              pendingDeepLinkChatIdRef.current = chatIdParam;
+            }
+          }
+          window.history.replaceState(null, '', '/');
         }
       } catch (_) {}
 
       // Handle universal AGC QR contact link: ?contact=... or #contact=... or #addcontact
       if (search.includes('contact=') || search.includes('phone=') || hash.includes('contact=') || hash.includes('phone=') || hash.includes('addcontact')) {
         try {
-          const searchParams = new URLSearchParams(window.location.search);
+          const searchParams = parsedUrl.searchParams;
           const hashString = hash.replace(/^#/, '');
           const hashParams = new URLSearchParams(hashString.includes('?') ? hashString.split('?')[1] : hashString);
 
@@ -23514,10 +23655,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       // Handle group invite link: ?join=CODE, #join=CODE, or /join/CODE
       try {
-        const urlParams = new URLSearchParams(window.location.search || '');
+        const urlParams = parsedUrl.searchParams;
         const hashStr = hash.replace(/^#/, '');
         const hashParams = new URLSearchParams(hashStr.includes('?') ? hashStr.split('?')[1] : hashStr);
-        const pathJoinMatch = (window.location.pathname || '').match(/\/(?:join|g|c)\/([^/?#]+)/i);
+        const pathJoinMatch = (parsedUrl.pathname || '').match(/\/(?:join|g|c)\/([^/?#]+)/i);
         const joinToken =
           urlParams.get('join') ||
           urlParams.get('code') ||
@@ -23539,24 +23680,112 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (_) {}
     };
 
+    const handleUrlChange = () => processUrlString();
+    const handleSwMessage = (ev: MessageEvent) => {
+      if (ev.data?.type === 'AGC_PUSH_DEEP_LINK') {
+        const d = ev.data.data || {};
+        if ((d.type === 'incoming_call' || ev.data.action === 'answer') && d.roomId) {
+          const callReq = {
+            roomId: String(d.roomId),
+            type: (d.callType === 'voice' ? 'voice' : 'video') as 'voice' | 'video',
+            accept: ev.data.action === 'answer' || d.type === 'incoming_call',
+            callerName: d.callerName,
+            callerPhone: d.callerPhone,
+            chatId: d.chatId,
+            isGroupCall: Boolean(d.isGroupCall),
+            groupName: d.groupName,
+          };
+          if (isAuthenticatedRef.current) {
+            dispatchDeepLinkCall(callReq);
+          } else {
+            pendingDeepLinkCallRef.current = callReq;
+          }
+        } else if (ev.data.url) {
+          processUrlString(ev.data.url);
+        }
+      } else if (ev.data?.type === 'AGC_CALL_ACTION' && ev.data?.action === 'decline') {
+        const targetRoomId = ev.data?.payload?.roomId;
+        if (!targetRoomId || incomingCallRef.current?.roomId === targetRoomId) {
+          declineIncomingCallRef.current();
+        }
+      }
+    };
+
     handleUrlChange();
     window.addEventListener('hashchange', handleUrlChange);
     window.addEventListener('popstate', handleUrlChange);
     window.addEventListener('focus', handleUrlChange);
+    navigator.serviceWorker?.addEventListener?.('message', handleSwMessage);
     return () => {
       window.removeEventListener('hashchange', handleUrlChange);
       window.removeEventListener('popstate', handleUrlChange);
       window.removeEventListener('focus', handleUrlChange);
+      navigator.serviceWorker?.removeEventListener?.('message', handleSwMessage);
     };
-  }, [joinGroupByCodeOrLink]);
+  }, [joinGroupByCodeOrLink, dispatchDeepLinkCall]);
 
   useEffect(() => {
-    if (isAuthenticated && pendingJoinCodeRef.current) {
+    if (!isAuthenticated) return;
+    if (pendingJoinCodeRef.current) {
       const code = pendingJoinCodeRef.current;
       pendingJoinCodeRef.current = null;
       joinGroupByCodeOrLink(code).catch(() => {});
     }
-  }, [isAuthenticated, joinGroupByCodeOrLink]);
+    if (pendingDeepLinkCallRef.current) {
+      const callReq = pendingDeepLinkCallRef.current;
+      pendingDeepLinkCallRef.current = null;
+      dispatchDeepLinkCall(callReq);
+    }
+    if (pendingDeepLinkChatIdRef.current) {
+      const cid = pendingDeepLinkChatIdRef.current;
+      pendingDeepLinkChatIdRef.current = null;
+      setActiveTab('chats');
+      setActiveChatId(cid);
+    }
+  }, [isAuthenticated, joinGroupByCodeOrLink, dispatchDeepLinkCall]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getWebPushStatus()
+      .then((status) => {
+        if (!cancelled) setWebPushStatus(status);
+      })
+      .catch(() => {});
+    if (isAuthenticated && currentUser.phoneNumber && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      subscribeUserToWebPush(currentUser.phoneNumber, currentUser.id, false)
+        .then((res) => {
+          if (!cancelled) setWebPushStatus(res.status);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, currentUser.phoneNumber, currentUser.id]);
+
+  const enableWebPushAlerts = useCallback(async (): Promise<SubscribeWebPushResult> => {
+    const res = await subscribeUserToWebPush(
+      currentUserRef.current?.phoneNumber || '',
+      currentUserRef.current?.id || '',
+      true
+    );
+    setWebPushStatus(res.status);
+    return res;
+  }, []);
+
+  const disableWebPushAlerts = useCallback(async (): Promise<boolean> => {
+    const ok = await unsubscribeUserFromWebPush(currentUserRef.current?.phoneNumber || '');
+    const next = await getWebPushStatus().catch(() => 'default' as WebPushStatus);
+    setWebPushStatus(next);
+    return ok;
+  }, []);
+
+  const sendTestWebPushAlert = useCallback(async () => {
+    return sendTestLockScreenPush(
+      currentUserRef.current?.phoneNumber || '',
+      currentUserRef.current?.fullName || 'AGC User'
+    );
+  }, []);
   const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>([]);
   const adminUsersRef = useRef<AdminUserRecord[]>([]);
   useEffect(() => { adminUsersRef.current = adminUsers; }, [adminUsers]);
@@ -24571,6 +24800,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         dismissMissedCallNotice,
         unreadMissedCallsCount,
         clearUnreadMissedCalls,
+        webPushStatus,
+        enableWebPushAlerts,
+        disableWebPushAlerts,
+        sendTestWebPushAlert,
         // 1. Meme & Sticker Studio
         isMemeStudioOpen,
         setIsMemeStudioOpen,

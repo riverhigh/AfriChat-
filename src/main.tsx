@@ -4,10 +4,20 @@ import './index.css';
 
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   if (import.meta.env.DEV) {
-    // In dev/preview mode, unregister any lingering SW (/sw.js or /dev-sw.js) and purge stale SW caches
+    // In dev/preview mode, unregister any lingering Workbox SW (/sw.js or /dev-sw.js) and purge stale SW caches
+    // while keeping standalone /sw-push.js intact for Web Push lock-screen alerts.
     navigator.serviceWorker
       .getRegistrations()
-      .then((regs) => Promise.all(regs.map((r) => r.unregister())))
+      .then((regs) =>
+        Promise.all(
+          regs
+            .filter((r) => {
+              const scriptUrl = r.active?.scriptURL || r.installing?.scriptURL || r.waiting?.scriptURL || '';
+              return !scriptUrl.includes('/sw-push.js');
+            })
+            .map((r) => r.unregister())
+        )
+      )
       .catch(() => {});
     if ('caches' in window) {
       caches
