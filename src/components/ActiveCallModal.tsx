@@ -196,6 +196,7 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
     setCallMinimized,
     upgradeCallToGroup,
     inviteToActiveCall,
+    markActiveCallConnected,
   } = useApp();
   const [copiedLink, setCopiedLink] = useState(false);
   const [isLocalMain, setIsLocalMain] = useState(false);
@@ -478,6 +479,12 @@ const ActiveCallSession: React.FC<ActiveCallSessionProps> = ({ activeCall, onEnd
 
   const connectedCount = remotePeers.filter((p) => p.connectionState === 'connected' || p.stream).length;
   const totalInvited = activeCall.participantPhones?.length || 0;
+
+  useEffect(() => {
+    if (connectionState === 'connected' || connectedCount > 0) {
+      markActiveCallConnected(resolvedRoomId);
+    }
+  }, [connectionState, connectedCount, resolvedRoomId, markActiveCallConnected]);
 
   const handleHangUp = () => {
     setIsNightLightActive(false);

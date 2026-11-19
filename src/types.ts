@@ -669,6 +669,22 @@ export interface StatusReplyPreview {
   createdAt?: string;
 }
 
+export interface CallMessageMeta {
+  roomId: string;
+  callType: 'voice' | 'video';
+  status: 'missed' | 'declined' | 'no_answer' | 'ended';
+  callerName: string;
+  callerPhone: string;
+  callerAvatar?: string;
+  calleeName?: string;
+  calleePhone?: string;
+  isGroupCall?: boolean;
+  groupName?: string;
+  startedAt: string;
+  endedAt: string;
+  reason?: string;
+}
+
 export interface ChatMessage {
   id: string;
   chatId: string;
@@ -695,7 +711,8 @@ export interface ChatMessage {
     | 'game_poker'
     | 'bill_request'
     | 'location'
-    | 'quick_poll';
+    | 'quick_poll'
+    | 'call_log';
   imageUrl?: string;
   imageLoaded?: boolean;
   mediaSizeKB?: number;
@@ -724,6 +741,7 @@ export interface ChatMessage {
   pokerGame?: PokerGameState;
   billRequest?: BillRequest;
   locationData?: LocationPinMeta;
+  callDetails?: CallMessageMeta;
   metadata?: Record<string, any>;
   timestamp: string;
   status: 'sent' | 'delivered' | 'read';

@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Phone,
   PhoneIncoming,
@@ -228,16 +228,26 @@ export const CallsView: React.FC = () => {
                   </h4>
                   <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-0.5">
                     {call.direction === 'missed' && (
-                      <PhoneMissed className="w-3.5 h-3.5 text-rose-500" />
+                      <PhoneMissed className="w-3.5 h-3.5 text-rose-500 shrink-0" />
                     )}
                     {call.direction === 'incoming' && (
-                      <PhoneIncoming className="w-3.5 h-3.5 text-emerald-500" />
+                      <PhoneIncoming className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                     )}
                     {call.direction === 'outgoing' && (
-                      <PhoneOutgoing className="w-3.5 h-3.5 text-indigo-500" />
+                      <PhoneOutgoing className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
                     )}
+                    <span className={call.direction === 'missed' ? 'text-rose-500 font-semibold' : ''}>
+                      {call.direction === 'missed'
+                        ? call.type === 'video'
+                          ? 'Missed video'
+                          : 'Missed voice'
+                        : call.type === 'video'
+                        ? 'Video'
+                        : 'Voice'}
+                    </span>
+                    <span>·</span>
                     <span>{call.time}</span>
-                    <span className="font-mono text-[10px] text-slate-400">· {call.phone}</span>
+                    <span className="font-mono text-[10px] text-slate-400 truncate">· {call.phone}</span>
                   </div>
                 </div>
               </div>

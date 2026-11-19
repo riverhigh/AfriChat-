@@ -78,6 +78,10 @@ import {
   Flag,
   ChevronDown,
   ChevronUp,
+  PhoneMissed,
+  PhoneOutgoing,
+  VideoOff,
+  Clock,
 } from 'lucide-react';
 import {
   useApp,
@@ -2468,10 +2472,17 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
 
         {(() => {
           const filtered = chatSearchQuery.trim()
-            ? currentMessages.filter((m: ChatMessage) =>
-                (m.text || '').toLowerCase().includes(chatSearchQuery.trim().toLowerCase()) ||
-                (m.senderName || '').toLowerCase().includes(chatSearchQuery.trim().toLowerCase())
-              )
+            ? currentMessages.filter((m: ChatMessage) => {
+                const q = chatSearchQuery.trim().toLowerCase();
+                return (
+                  (m.text || '').toLowerCase().includes(q) ||
+                  (m.senderName || '').toLowerCase().includes(q) ||
+                  (m.callDetails?.callerName || '').toLowerCase().includes(q) ||
+                  (m.callDetails?.calleeName || '').toLowerCase().includes(q) ||
+                  (m.callDetails?.reason || '').toLowerCase().includes(q) ||
+                  (m.callDetails?.callType || '').toLowerCase().includes(q)
+                );
+              })
             : currentMessages;
           const visibleFeed = filtered.filter((m) => !isGameMessage(m) || isLiveGameMessage(m));
           const nonGameMessages = visibleFeed.filter((m) => !isLiveGameMessage(m));
@@ -4012,6 +4023,179 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   <LocationMessageBubble msg={msg} isUser={isUser} />
                 )}
 
+                {/* Missed Call / Missed Video Call Detail Card */}
+                {msg.type === 'call_log' && msg.callDetails && (() => {
+                  const cd = msg.callDetails;
+                  const isVideoCall = cd.callType === 'video';
+                  const isCallerMe = Boolean(
+                    currentUser?.phoneNumber &&
+                      cd.callerPhone &&
+                      phonesMatch(currentUser.phoneNumber, cd.callerPhone)
+                  );
+                  const startMs = cd.startedAt ? Date.parse(cd.startedAt) : NaN;
+                  const endMs = cd.endedAt ? Date.parse(cd.endedAt) : NaN;
+                  const ringSec =
+                    Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
+                      ? Math.round((endMs - startMs) / 1000)
+                      : 0;
+                  const formattedWhen = Number.isFinite(endMs)
+                    ? (() => {
+                        const d = new Date(endMs);
+                        const isToday = d.toDateString() === new Date().toDateString();
+                        const tStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        return isToday
+                          ? `Today at ${tStr}`
+                          : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${tStr}`;
+                      })()
+                    : msg.timestamp;
+                  const titleText = isCallerMe
+                    ? cd.status === 'declined'
+                      ? `${isVideoCall ? 'Video' : 'Voice'} call declined`
+                      : `Unanswered ${isVideoCall ? 'video' : 'voice'} call`
+                    : `Missed ${isVideoCall ? 'video' : 'voice'} call`;
+                  const statusChip =
+                    cd.status === 'declined'
+                      ? 'Declined'
+                      : cd.status === 'no_answer'
+                      ? 'No answer'
+                      : cd.reason || 'Missed';
+                  const peerPhone = currentChat.phoneNumber || currentChat.phone || (isCallerMe ? cd.calleePhone : cd.callerPhone) || '';
+
+                  return (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className={`min-w-[235px] sm:min-w-[260px] rounded-xl p-2.5 border ${
+                        isUser
+                          ? 'bg-black/20 border-white/15 text-white'
+                          : 'bg-rose-50/90 dark:bg-rose-950/35 border-rose-200 dark:border-rose-900/60 text-slate-900 dark:text-slate-100'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <div
+                          className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                            isUser
+                              ? 'bg-rose-500/30 text-rose-200 border border-rose-300/30'
+                              : 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/25'
+                          }`}
+                        >
+                          {isVideoCall ? (
+                            <VideoOff className="w-4.5 h-4.5" />
+                          ) : isCallerMe ? (
+                            <PhoneOutgoing className="w-4.5 h-4.5" />
+                          ) : (
+                            <PhoneMissed className="w-4.5 h-4.5" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              className={`text-xs font-extrabold truncate ${
+                                isUser ? 'text-white' : 'text-rose-700 dark:text-rose-300'
+                              }`}
+                            >
+                              {titleText}
+                            </span>
+                            <span
+                              className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full shrink-0 ${
+                                isUser
+                                  ? 'bg-white/15 text-rose-100'
+                                  : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+                              }`}
+                            >
+                              {statusChip}
+                            </span>
+                          </div>
+                          <div
+                            className={`text-[11px] mt-0.5 truncate ${
+                              isUser ? 'text-purple-100/90' : 'text-slate-600 dark:text-slate-300'
+                            }`}
+                          >
+                            {cd.isGroupCall
+                              ? `Group call${cd.groupName ? ` · ${cd.groupName}` : ''} (${cd.callerName})`
+                              : isCallerMe
+                              ? `To ${cd.calleeName || currentChat.name || cd.calleePhone || 'Recipient'}`
+                              : `From ${cd.callerName}${cd.callerPhone ? ` · ${cd.callerPhone}` : ''}`}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div
+                        className={`mt-2 pt-2 border-t text-[10px] font-mono flex flex-wrap items-center justify-between gap-x-3 gap-y-1 ${
+                          isUser
+                            ? 'border-white/15 text-purple-100/85'
+                            : 'border-rose-200/80 dark:border-rose-900/50 text-slate-500 dark:text-slate-400'
+                        }`}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          <Clock className="w-3 h-3 shrink-0" />
+                          <span>{formattedWhen}</span>
+                        </span>
+                        <span>
+                          {isVideoCall ? 'Video Call' : 'Voice Call'}
+                          {ringSec >= 1 ? ` · Rang ${ringSec}s` : ''}
+                        </span>
+                      </div>
+
+                      {isFeatureEnabled('calls') && (
+                        <div className="mt-2 flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              startCall(
+                                currentChat.name,
+                                peerPhone,
+                                currentChat.avatar,
+                                cd.callType,
+                                undefined,
+                                true,
+                                {
+                                  isGroupCall: Boolean(currentChat.isGroup || currentChat.isChannel || cd.isGroupCall),
+                                  participantPhones: currentChat.memberPhones,
+                                  chatId: currentChat.id,
+                                }
+                              )
+                            }
+                            className={`flex-1 py-1.5 px-2.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors ${
+                              isUser
+                                ? 'bg-white/20 hover:bg-white/30 text-white'
+                                : 'bg-rose-600 hover:bg-rose-700 text-white shadow-2xs'
+                            }`}
+                          >
+                            {isVideoCall ? <Video className="w-3.5 h-3.5" /> : <Phone className="w-3.5 h-3.5" />}
+                            <span>{isCallerMe ? 'Call Again' : 'Call Back'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              startCall(
+                                currentChat.name,
+                                peerPhone,
+                                currentChat.avatar,
+                                isVideoCall ? 'voice' : 'video',
+                                undefined,
+                                true,
+                                {
+                                  isGroupCall: Boolean(currentChat.isGroup || currentChat.isChannel || cd.isGroupCall),
+                                  participantPhones: currentChat.memberPhones,
+                                  chatId: currentChat.id,
+                                }
+                              )
+                            }
+                            title={isVideoCall ? 'Try voice call instead' : 'Try video call instead'}
+                            className={`p-1.5 rounded-lg transition-colors ${
+                              isUser
+                                ? 'bg-white/15 hover:bg-white/25 text-white'
+                                : 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-700 dark:text-rose-300'
+                            }`}
+                          >
+                            {isVideoCall ? <Phone className="w-3.5 h-3.5" /> : <Video className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Reaction Badges */}
                 {msg.reactions && Object.keys(msg.reactions).length > 0 && (
                   <div className="flex gap-1 flex-wrap mt-1">
@@ -5072,6 +5256,8 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                   ? `📍 ${forwardingMessage.locationData?.addressName || 'Shared Location'}`
                   : forwardingMessage.type === 'invoice_receipt'
                   ? `🧾 Invoice #${(forwardingMessage.invoice || forwardingMessage.invoiceData)?.invoiceNumber || ''}`
+                  : forwardingMessage.type === 'call_log' && forwardingMessage.callDetails
+                  ? `${forwardingMessage.callDetails.callType === 'video' ? '📹 Missed video call' : '📞 Missed voice call'}`
                   : forwardingMessage.text || 'Message'}
               </div>
             </div>

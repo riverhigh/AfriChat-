@@ -126,6 +126,7 @@ import {
   StatusReplyPreview,
   ChatThread,
   CallLogItem,
+  CallMessageMeta,
   UserStatus,
   UserWallet,
   WalletTransaction,
@@ -1055,10 +1056,13 @@ export interface ActiveCallState {
   roomId?: string;
   isInitiator?: boolean;
   isGroupCall?: boolean;
+  groupName?: string;
   participantPhones?: string[];
   chatId?: string;
   isMinimized?: boolean;
   isAnonymous?: boolean;
+  startedAt?: string;
+  hasConnected?: boolean;
 }
 
 interface AppContextType {
@@ -1237,7 +1241,8 @@ interface AppContextType {
       isAnonymous?: boolean;
     }
   ) => void;
-  endCall: () => void;
+  endCall: (reason?: 'user' | 'no_answer') => void;
+  markActiveCallConnected: (roomId?: string) => void;
   toggleCallMute: () => void;
   toggleCallSpeaker: () => void;
   toggleCallMinimize: () => void;
@@ -1255,6 +1260,8 @@ interface AppContextType {
     isGroupCall?: boolean;
     groupName?: string;
     participantPhones?: string[];
+    chatId?: string;
+    timestamp?: number;
   } | null;
   acceptIncomingCall: (options?: { anonymous?: boolean }) => void;
   declineIncomingCall: () => void;
@@ -4832,10 +4839,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isGroupCall?: boolean;
     groupName?: string;
     participantPhones?: string[];
+    chatId?: string;
+    timestamp?: number;
   } | null>(null);
   const activeCallRef = useRef<ActiveCallState | null>(null);
   const incomingCallRef = useRef<typeof incomingCall>(null);
   const callRingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const incomingRingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recordedMissedCallRoomsRef = useRef<Set<string>>(new Set());
+  const broadcastLiveMessageRef = useRef<(chatId: string, msg: ChatMessage, overrideChat?: ChatThread) => Promise<void>>(async () => {});
+  const endCallRef = useRef<(reason?: 'user' | 'no_answer') => void>(() => {});
   const callSignalHandlersRef = useRef<{
     onIncomingCall: (payload: any) => void;
     onCallTerminated: (payload: any, eventName?: string) => void;
@@ -8220,6 +8233,155 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const myVariants = Array.from(new Set([rawCleanPhone, normCleanPhone].filter(Boolean)));
 
+    const recordMissedCallInChat = (params: {
+      roomId: string;
+      callType: 'voice' | 'video';
+      status: 'missed' | 'declined' | 'no_answer';
+      callerName: string;
+      callerPhone: string;
+      callerAvatar?: string;
+      calleeName?: string;
+      calleePhone?: string;
+      targetChatId?: string;
+      isGroupCall?: boolean;
+      groupName?: string;
+      startedAt?: string;
+      endedAt?: string;
+      reason?: string;
+      shouldBroadcast?: boolean;
+    }) => {
+      const me = currentUserRef.current;
+      const myPhone = me?.phoneNumber || '';
+      if (!params.roomId || !myPhone) return;
+
+      const isGroupTarget = Boolean(
+        params.targetChatId &&
+          (params.isGroupCall ||
+            params.targetChatId.startsWith('group_') ||
+            params.targetChatId.startsWith('channel_') ||
+            params.targetChatId.startsWith('town_comm_'))
+      );
+
+      let resolvedChatId = isGroupTarget ? (params.targetChatId || '') : '';
+      if (!resolvedChatId) {
+        const peerCandidate =
+          params.callerPhone && !phonesMatch(params.callerPhone, myPhone)
+            ? params.callerPhone
+            : (params.calleePhone && !phonesMatch(params.calleePhone, myPhone) ? params.calleePhone : '');
+        if (peerCandidate && peerCandidate.replace(/\D/g, '').length >= 7) {
+          resolvedChatId = getDirectChatId(myPhone, peerCandidate);
+        } else if (
+          params.targetChatId &&
+          !params.targetChatId.startsWith('afri_') &&
+          !params.targetChatId.startsWith('call_')
+        ) {
+          resolvedChatId = params.targetChatId;
+        }
+      }
+
+      if (!resolvedChatId) return;
+
+      const msgId = `msg_call_${params.roomId}`;
+      const existingMsgs = messagesRef.current[resolvedChatId] || [];
+      if (recordedMissedCallRoomsRef.current.has(params.roomId) || existingMsgs.some((m) => m.id === msgId)) {
+        return;
+      }
+      recordedMissedCallRoomsRef.current.add(params.roomId);
+
+      const endedAtIso = params.endedAt || new Date().toISOString();
+      const startedAtIso = params.startedAt || endedAtIso;
+      const timeStr = new Date(endedAtIso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const isVideo = params.callType === 'video';
+      const isMeCaller = Boolean(params.callerPhone && phonesMatch(myPhone, params.callerPhone));
+      const previewLabel = isVideo ? '📹 Missed video call' : '📞 Missed voice call';
+      const summaryText = isVideo
+        ? (params.status === 'declined' ? 'Missed video call (Declined)' : 'Missed video call')
+        : (params.status === 'declined' ? 'Missed voice call (Declined)' : 'Missed voice call');
+
+      const details: CallMessageMeta = {
+        roomId: params.roomId,
+        callType: params.callType,
+        status: params.status,
+        callerName: params.callerName || 'AGC User',
+        callerPhone: params.callerPhone || '',
+        callerAvatar: params.callerAvatar,
+        calleeName: params.calleeName,
+        calleePhone: params.calleePhone,
+        isGroupCall: Boolean(params.isGroupCall),
+        groupName: params.groupName,
+        startedAt: startedAtIso,
+        endedAt: endedAtIso,
+        reason: params.reason,
+      };
+
+      const callMsg: ChatMessage = {
+        id: msgId,
+        chatId: resolvedChatId,
+        sender: isMeCaller ? 'user' : 'other',
+        senderName: params.callerName || 'AGC User',
+        senderPhone: params.callerPhone || myPhone,
+        senderAvatar: params.callerAvatar,
+        text: summaryText,
+        type: 'call_log',
+        callDetails: details,
+        timestamp: timeStr,
+        status: isMeCaller ? 'delivered' : 'read',
+      };
+
+      setMessages((prev) => {
+        const curList = prev[resolvedChatId] || [];
+        if (curList.some((m) => m.id === msgId)) return prev;
+        const updated = {
+          ...prev,
+          [resolvedChatId]: [...curList, callMsg],
+        };
+        messagesRef.current = updated;
+        persistPartitionedMessages(updated, myPhone);
+        return updated;
+      });
+
+      const peerPhoneForThread = isMeCaller ? (params.calleePhone || '') : (params.callerPhone || '');
+      const peerNameForThread = isMeCaller
+        ? (params.calleeName || peerPhoneForThread || 'Direct Chat')
+        : (params.callerName || peerPhoneForThread || 'Direct Chat');
+      const peerAvatarForThread = !isMeCaller && params.callerAvatar ? params.callerAvatar : DEFAULT_AVATAR_SVG;
+      const nowMs = Date.now();
+
+      setChats((prev) => {
+        const updated = bumpChatThreadToTop(
+          prev,
+          resolvedChatId,
+          {
+            lastMessage: previewLabel,
+            lastMessageTime: timeStr,
+            lastMessageAtMs: nowMs,
+          },
+          () => ({
+            id: resolvedChatId,
+            name: params.isGroupCall && params.groupName ? params.groupName : peerNameForThread,
+            avatar: peerAvatarForThread,
+            verifiedStore: false,
+            location: params.isGroupCall ? 'Community Group' : 'Direct Chat',
+            unreadCount: isMeCaller ? 0 : 1,
+            lastMessage: previewLabel,
+            lastMessageTime: timeStr,
+            lastMessageAtMs: nowMs,
+            catalog: [],
+            isOnline: true,
+            isGroup: Boolean(params.isGroupCall),
+            phone: peerPhoneForThread,
+            phoneNumber: peerPhoneForThread,
+          })
+        );
+        persistPartitionedChats(updated, myPhone);
+        return updated;
+      });
+
+      if (params.shouldBroadcast) {
+        broadcastLiveMessageRef.current(resolvedChatId, callMsg).catch(() => {});
+      }
+    };
+
     const handleIncomingCall = (payload: any) => {
       if (!payload?.roomId) return;
       if (payload.callerPhone && currentUserRef.current?.phoneNumber && phonesMatch(payload.callerPhone, currentUserRef.current.phoneNumber)) {
@@ -8233,6 +8395,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       incomingCallRef.current = payload;
       setIncomingCall(payload);
+      if (incomingRingTimeoutRef.current) {
+        clearTimeout(incomingRingTimeoutRef.current);
+        incomingRingTimeoutRef.current = null;
+      }
+      const capturedRoomId = payload.roomId;
+      incomingRingTimeoutRef.current = setTimeout(() => {
+        incomingRingTimeoutRef.current = null;
+        const stale = incomingCallRef.current;
+        if (stale && stale.roomId === capturedRoomId) {
+          incomingCallRef.current = null;
+          setIncomingCall(null);
+          const endedIso = new Date().toISOString();
+          const missedLog: CallLogItem = {
+            id: `call_${Date.now()}`,
+            name: stale.isGroupCall && stale.groupName ? stale.groupName : stale.callerName,
+            phone: stale.callerPhone,
+            avatar: stale.callerAvatar || DEFAULT_AVATAR_SVG,
+            type: stale.type,
+            direction: 'missed',
+            time: 'Just now',
+          };
+          setCalls((prev) => [missedLog, ...prev]);
+          recordMissedCallInChat({
+            roomId: stale.roomId,
+            callType: stale.type,
+            status: 'no_answer',
+            callerName: stale.callerName,
+            callerPhone: stale.callerPhone,
+            callerAvatar: stale.callerAvatar,
+            calleeName: currentUserRef.current?.fullName || 'You',
+            calleePhone: currentUserRef.current?.phoneNumber || '',
+            targetChatId: stale.chatId,
+            isGroupCall: Boolean(stale.isGroupCall),
+            groupName: stale.groupName,
+            startedAt: stale.timestamp ? new Date(Number(stale.timestamp)).toISOString() : endedIso,
+            endedAt: endedIso,
+            reason: 'No answer',
+            shouldBroadcast: false,
+          });
+        }
+      }, 52_000);
+
       showLocalNotification(
         `📞 Incoming AGC ${payload.type === 'video' ? 'Video' : 'Voice'} Call`,
         payload.isGroupCall
@@ -8247,8 +8451,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (incomingCallRef.current) {
         if (!targetRoomId || incomingCallRef.current.roomId === targetRoomId) {
+          const missedInc = incomingCallRef.current;
+          if (incomingRingTimeoutRef.current) {
+            clearTimeout(incomingRingTimeoutRef.current);
+            incomingRingTimeoutRef.current = null;
+          }
           incomingCallRef.current = null;
           setIncomingCall(null);
+
+          const endedIso = new Date().toISOString();
+          const isNoAnswer = payload?.reason === 'no_answer';
+          const missedItem: CallLogItem = {
+            id: `call_${Date.now()}`,
+            name: missedInc.isGroupCall && missedInc.groupName ? missedInc.groupName : missedInc.callerName,
+            phone: missedInc.callerPhone,
+            avatar: missedInc.callerAvatar || DEFAULT_AVATAR_SVG,
+            type: missedInc.type,
+            direction: 'missed',
+            time: 'Just now',
+          };
+          setCalls((prev) => [missedItem, ...prev]);
+
+          recordMissedCallInChat({
+            roomId: missedInc.roomId,
+            callType: missedInc.type,
+            status: isNoAnswer ? 'no_answer' : 'missed',
+            callerName: missedInc.callerName,
+            callerPhone: missedInc.callerPhone,
+            callerAvatar: missedInc.callerAvatar,
+            calleeName: currentUserRef.current?.fullName || 'You',
+            calleePhone: currentUserRef.current?.phoneNumber || '',
+            targetChatId: missedInc.chatId,
+            isGroupCall: Boolean(missedInc.isGroupCall),
+            groupName: missedInc.groupName,
+            startedAt:
+              payload?.startedAt ||
+              (missedInc.timestamp ? new Date(Number(missedInc.timestamp)).toISOString() : endedIso),
+            endedAt: endedIso,
+            reason: isNoAnswer ? 'No answer' : 'Cancelled before answer',
+            shouldBroadcast: false,
+          });
         }
       }
 
@@ -8264,6 +8506,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (callRingTimeoutRef.current) {
               clearTimeout(callRingTimeoutRef.current);
               callRingTimeoutRef.current = null;
+            }
+            if (
+              eventName === 'call_declined' &&
+              currentActive.isInitiator &&
+              !currentActive.hasConnected &&
+              !currentActive.isGroupCall &&
+              currentActive.roomId
+            ) {
+              const me = currentUserRef.current;
+              const endedIso = new Date().toISOString();
+              recordMissedCallInChat({
+                roomId: currentActive.roomId,
+                callType: currentActive.type,
+                status: 'declined',
+                callerName: me?.fullName || 'AGC User',
+                callerPhone: me?.phoneNumber || '',
+                callerAvatar: me?.avatarUrl,
+                calleeName: currentActive.name,
+                calleePhone: currentActive.participantPhones?.[0] || currentActive.phone,
+                targetChatId: currentActive.chatId,
+                isGroupCall: Boolean(currentActive.isGroupCall),
+                groupName: currentActive.groupName,
+                startedAt: currentActive.startedAt || endedIso,
+                endedAt: endedIso,
+                reason: 'Declined',
+                shouldBroadcast: true,
+              });
             }
             activeCallRef.current = null;
             setActiveCall(null);
@@ -8402,6 +8671,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 60000);
 
     return () => {
+      if (incomingRingTimeoutRef.current) {
+        clearTimeout(incomingRingTimeoutRef.current);
+        incomingRingTimeoutRef.current = null;
+      }
       socket?.off('force_logout', triggerForceLogout);
       socket?.off('incoming_call', handleIncomingCall);
       socket?.off('call_declined', onSocketDeclined);
@@ -8503,6 +8776,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? `${uniqueTargets.length + 1} participants`
           : uniqueTargets[0] || phone || '';
 
+      const startedAtIso = new Date().toISOString();
       const nextActiveCall: ActiveCallState = {
         name,
         phone: resolvedDisplayPhone,
@@ -8514,10 +8788,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         roomId: generatedRoomId,
         isInitiator,
         isGroupCall: isGroupCall || uniqueTargets.length > 1,
+        groupName: isGroupCall ? name : undefined,
         participantPhones: uniqueTargets,
         chatId: options?.chatId,
         isMinimized: false,
         isAnonymous: Boolean(options?.isAnonymous),
+        startedAt: startedAtIso,
+        hasConnected: !isInitiator,
       };
 
       activeCallRef.current = nextActiveCall;
@@ -8532,6 +8809,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           type,
           isGroupCall: nextActiveCall.isGroupCall,
           groupName: nextActiveCall.isGroupCall ? name : undefined,
+          chatId: options?.chatId,
           participantPhones: [myPhone, ...uniqueTargets].filter(Boolean),
           timestamp: Date.now(),
         };
@@ -8553,15 +8831,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         clearTimeout(callRingTimeoutRef.current);
         callRingTimeoutRef.current = null;
       }
+
+      if (isInitiator && uniqueTargets.length > 0 && !isCallRoomSlug) {
+        callRingTimeoutRef.current = setTimeout(() => {
+          callRingTimeoutRef.current = null;
+          const activeNow = activeCallRef.current;
+          if (activeNow && activeNow.roomId === generatedRoomId && !activeNow.hasConnected) {
+            endCallRef.current('no_answer');
+          }
+        }, 45_000);
+      }
     },
     [sendCallControlSignal]
   );
 
+  const markActiveCallConnected = useCallback((roomId?: string) => {
+    if (callRingTimeoutRef.current) {
+      clearTimeout(callRingTimeoutRef.current);
+      callRingTimeoutRef.current = null;
+    }
+    const cur = activeCallRef.current;
+    if (!cur) return;
+    if (roomId && cur.roomId && cur.roomId !== roomId) return;
+    if (cur.hasConnected) return;
+    const updated = { ...cur, hasConnected: true };
+    activeCallRef.current = updated;
+    setActiveCall((prev) => {
+      if (!prev) return null;
+      if (roomId && prev.roomId && prev.roomId !== roomId) return prev;
+      return prev.hasConnected ? prev : { ...prev, hasConnected: true };
+    });
+  }, []);
+
   const acceptIncomingCall = useCallback(
     (options?: { anonymous?: boolean }) => {
+      if (incomingRingTimeoutRef.current) {
+        clearTimeout(incomingRingTimeoutRef.current);
+        incomingRingTimeoutRef.current = null;
+      }
       const inc = incomingCallRef.current;
       if (!inc) return;
-      const { callerName, callerPhone, callerAvatar, type, roomId, isGroupCall, groupName, participantPhones } = inc;
+      const { callerName, callerPhone, callerAvatar, type, roomId, isGroupCall, groupName, participantPhones, chatId } = inc;
       incomingCallRef.current = null;
       setIncomingCall(null);
       startCall(
@@ -8574,6 +8884,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         {
           isGroupCall,
           participantPhones: participantPhones || (callerPhone ? [callerPhone] : []),
+          chatId,
           isAnonymous: Boolean(options?.anonymous),
         }
       );
@@ -8582,13 +8893,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const declineIncomingCall = useCallback(() => {
+    if (incomingRingTimeoutRef.current) {
+      clearTimeout(incomingRingTimeoutRef.current);
+      incomingRingTimeoutRef.current = null;
+    }
     const inc = incomingCallRef.current;
     if (!inc) return;
+
+    const me = currentUserRef.current;
+    const myPhone = me?.phoneNumber || '';
+    const endedIso = new Date().toISOString();
 
     if (inc.callerPhone) {
       sendCallControlSignal([inc.callerPhone], 'call_declined', {
         roomId: inc.roomId,
-        declinedBy: currentUserRef.current?.phoneNumber || '',
+        declinedBy: myPhone,
+        declinedByName: me?.fullName || '',
         isGroupCall: Boolean(inc.isGroupCall),
       });
     }
@@ -8603,11 +8923,93 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       time: 'Just now',
     };
     setCalls((prev) => [missedItem, ...prev]);
+
+    // Log missed/declined call into chat thread (1-on-1 DM or cancelled incoming)
+    const isGroupTarget = Boolean(
+      inc.isGroupCall &&
+        inc.chatId &&
+        (inc.chatId.startsWith('group_') || inc.chatId.startsWith('channel_') || inc.chatId.startsWith('town_comm_'))
+    );
+    const resolvedChatId = isGroupTarget
+      ? inc.chatId!
+      : (myPhone && inc.callerPhone && inc.callerPhone.replace(/\D/g, '').length >= 7
+          ? getDirectChatId(myPhone, inc.callerPhone)
+          : (inc.chatId || ''));
+
+    if (resolvedChatId && !inc.isGroupCall && inc.roomId) {
+      const msgId = `msg_call_${inc.roomId}`;
+      if (!recordedMissedCallRoomsRef.current.has(inc.roomId)) {
+        recordedMissedCallRoomsRef.current.add(inc.roomId);
+        const timeStr = new Date(endedIso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const previewLabel = inc.type === 'video' ? '📹 Missed video call' : '📞 Missed voice call';
+        const callMsg: ChatMessage = {
+          id: msgId,
+          chatId: resolvedChatId,
+          sender: 'other',
+          senderName: inc.callerName || 'AGC User',
+          senderPhone: myPhone || inc.callerPhone,
+          senderAvatar: inc.callerAvatar,
+          text: inc.type === 'video' ? 'Missed video call (Declined)' : 'Missed voice call (Declined)',
+          type: 'call_log',
+          callDetails: {
+            roomId: inc.roomId,
+            callType: inc.type,
+            status: 'declined',
+            callerName: inc.callerName || 'AGC User',
+            callerPhone: inc.callerPhone || '',
+            callerAvatar: inc.callerAvatar,
+            calleeName: me?.fullName || 'You',
+            calleePhone: myPhone,
+            isGroupCall: false,
+            startedAt: inc.timestamp ? new Date(Number(inc.timestamp)).toISOString() : endedIso,
+            endedAt: endedIso,
+            reason: 'Declined',
+          },
+          timestamp: timeStr,
+          status: 'read',
+        };
+        setMessages((prev) => {
+          const curList = prev[resolvedChatId] || [];
+          if (curList.some((m) => m.id === msgId)) return prev;
+          const updated = { ...prev, [resolvedChatId]: [...curList, callMsg] };
+          messagesRef.current = updated;
+          persistPartitionedMessages(updated, myPhone);
+          return updated;
+        });
+        const nowMs = Date.now();
+        setChats((prev) => {
+          const updated = bumpChatThreadToTop(
+            prev,
+            resolvedChatId,
+            { lastMessage: previewLabel, lastMessageTime: timeStr, lastMessageAtMs: nowMs },
+            () => ({
+              id: resolvedChatId,
+              name: inc.callerName || inc.callerPhone || 'Direct Chat',
+              avatar: inc.callerAvatar || DEFAULT_AVATAR_SVG,
+              verifiedStore: false,
+              location: 'Direct Chat',
+              unreadCount: 0,
+              lastMessage: previewLabel,
+              lastMessageTime: timeStr,
+              lastMessageAtMs: nowMs,
+              catalog: [],
+              isOnline: true,
+              phone: inc.callerPhone || '',
+              phoneNumber: inc.callerPhone || '',
+            })
+          );
+          persistPartitionedChats(updated, myPhone);
+          return updated;
+        });
+        broadcastLiveMessageRef.current(resolvedChatId, callMsg).catch(() => {});
+      }
+    }
+
     incomingCallRef.current = null;
     setIncomingCall(null);
   }, [sendCallControlSignal]);
 
-  const endCall = useCallback(() => {
+  const endCall = useCallback((reason: 'user' | 'no_answer' = 'user') => {
     if (callRingTimeoutRef.current) {
       clearTimeout(callRingTimeoutRef.current);
       callRingTimeoutRef.current = null;
@@ -8624,11 +9026,107 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...(current.phone && current.phone.replace(/\D/g, '').length >= 7 ? [current.phone] : []),
     ];
 
+    const endedIso = new Date().toISOString();
+    const isUnansweredOutgoing = Boolean(current.isInitiator && !current.hasConnected);
+    const missStatus: 'missed' | 'no_answer' = reason === 'no_answer' ? 'no_answer' : 'missed';
+    const missReasonLabel = reason === 'no_answer' ? 'No answer' : 'Cancelled before answer';
+
+    if (isUnansweredOutgoing && current.roomId && targets.length > 0) {
+      const me = currentUserRef.current;
+      const myPhone = me?.phoneNumber || '';
+      const isGroupTarget = Boolean(
+        current.isGroupCall &&
+          current.chatId &&
+          (current.chatId.startsWith('group_') ||
+            current.chatId.startsWith('channel_') ||
+            current.chatId.startsWith('town_comm_'))
+      );
+      const primaryTarget = targets[0] || '';
+      const resolvedChatId = isGroupTarget
+        ? current.chatId!
+        : (myPhone && primaryTarget.replace(/\D/g, '').length >= 7
+            ? getDirectChatId(myPhone, primaryTarget)
+            : (current.chatId || ''));
+
+      if (resolvedChatId && !resolvedChatId.startsWith('afri_') && !resolvedChatId.startsWith('call_')) {
+        const msgId = `msg_call_${current.roomId}`;
+        if (!recordedMissedCallRoomsRef.current.has(current.roomId)) {
+          recordedMissedCallRoomsRef.current.add(current.roomId);
+          const timeStr = new Date(endedIso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const previewLabel = current.type === 'video' ? '📹 Missed video call' : '📞 Missed voice call';
+          const callMsg: ChatMessage = {
+            id: msgId,
+            chatId: resolvedChatId,
+            sender: 'user',
+            senderName: me?.fullName || 'AGC User',
+            senderPhone: myPhone,
+            senderAvatar: me?.avatarUrl,
+            text: current.type === 'video' ? 'Missed video call' : 'Missed voice call',
+            type: 'call_log',
+            callDetails: {
+              roomId: current.roomId,
+              callType: current.type,
+              status: missStatus,
+              callerName: me?.fullName || 'AGC User',
+              callerPhone: myPhone,
+              callerAvatar: me?.avatarUrl,
+              calleeName: current.name,
+              calleePhone: primaryTarget,
+              isGroupCall: Boolean(current.isGroupCall),
+              groupName: current.groupName,
+              startedAt: current.startedAt || endedIso,
+              endedAt: endedIso,
+              reason: missReasonLabel,
+            },
+            timestamp: timeStr,
+            status: 'delivered',
+          };
+          setMessages((prev) => {
+            const curList = prev[resolvedChatId] || [];
+            if (curList.some((m) => m.id === msgId)) return prev;
+            const updated = { ...prev, [resolvedChatId]: [...curList, callMsg] };
+            messagesRef.current = updated;
+            persistPartitionedMessages(updated, myPhone);
+            return updated;
+          });
+          const nowMs = Date.now();
+          setChats((prev) => {
+            const updated = bumpChatThreadToTop(
+              prev,
+              resolvedChatId,
+              { lastMessage: previewLabel, lastMessageTime: timeStr, lastMessageAtMs: nowMs },
+              () => ({
+                id: resolvedChatId,
+                name: current.name || primaryTarget || 'Direct Chat',
+                avatar: current.avatar || DEFAULT_AVATAR_SVG,
+                verifiedStore: false,
+                location: current.isGroupCall ? 'Community Group' : 'Direct Chat',
+                unreadCount: 0,
+                lastMessage: previewLabel,
+                lastMessageTime: timeStr,
+                lastMessageAtMs: nowMs,
+                catalog: [],
+                isOnline: true,
+                isGroup: Boolean(current.isGroupCall),
+                phone: primaryTarget,
+                phoneNumber: primaryTarget,
+              })
+            );
+            persistPartitionedChats(updated, myPhone);
+            return updated;
+          });
+          broadcastLiveMessageRef.current(resolvedChatId, callMsg).catch(() => {});
+        }
+      }
+    }
+
     const endPayload = {
       roomId: current.roomId,
       endedBy: currentUserRef.current?.phoneNumber || '',
       isHostCancel: Boolean(current.isInitiator),
       isGroupCall: Boolean(current.isGroupCall),
+      reason: isUnansweredOutgoing ? missStatus : undefined,
+      startedAt: current.startedAt,
     };
 
     if (targets.length > 0) {
@@ -8640,6 +9138,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
   }, [emitRoomEndSignal, sendCallControlSignal]);
+  endCallRef.current = endCall;
 
   const toggleCallMute = () => {
     setActiveCall((prev) => (prev ? { ...prev, isMuted: !prev.isMuted } : null));
@@ -10576,6 +11075,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
   };
+  broadcastLiveMessageRef.current = broadcastLiveMessage;
 
   const sendImageMessage = async (chatId: string, imageUrl: string, caption?: string, oneTimeView?: boolean) => {
     const _targetChatImg = chatsRef.current.find((c) => c.id === chatId);
@@ -11002,6 +11502,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       previewLabel = `📍 ${sourceMessage.locationData?.addressName || 'Shared Location'}`;
     } else if (fwdType === 'invoice_receipt') {
       previewLabel = `🧾 Invoice #${(sourceMessage.invoice || sourceMessage.invoiceData)?.invoiceNumber || ''}`;
+    } else if (fwdType === 'call_log' && sourceMessage.callDetails) {
+      previewLabel = sourceMessage.callDetails.callType === 'video' ? '📹 Missed video call' : '📞 Missed voice call';
     }
     const threadPreview = `↪ ${previewLabel || 'Forwarded message'}`;
 
@@ -11061,6 +11563,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         locationData: fwdType === 'location' ? sourceMessage.locationData : undefined,
         invoice: fwdType === 'invoice_receipt' ? sourceMessage.invoice : undefined,
         invoiceData: fwdType === 'invoice_receipt' ? sourceMessage.invoiceData : undefined,
+        callDetails: fwdType === 'call_log' ? sourceMessage.callDetails : undefined,
         oneTimeView: false,
         isForwarded: true,
         timestamp: timestampStr,
@@ -20876,7 +21379,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         const msgText = message.oneTimeView
           ? (message.type === 'image' ? '🔒 1-Time Photo' : message.type === 'voice' ? '🔒 1-Time Voice Note' : '🔒 1-Time Message')
-          : (message.type === 'location'
+          : (message.type === 'call_log' && message.callDetails
+              ? (message.callDetails.callType === 'video' ? '📹 Missed video call' : '📞 Missed voice call')
+              : message.type === 'location'
               ? `📍 ${message.locationData?.addressName || message.metadata?.address_name || 'Shared Pin Location'}`
               : plainText ||
                 (message.type === 'image'
@@ -21019,7 +21524,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         showLocalNotification(
           `💬 ${message.senderName || 'AGC User'}`,
-          message.type === 'location'
+          message.type === 'call_log' && message.callDetails
+            ? (message.callDetails.callType === 'video' ? '📹 Missed video call' : '📞 Missed voice call')
+            : message.type === 'location'
             ? `📍 ${message.locationData?.addressName || 'Shared a pin location'}`
             : (plainText || (message.type === 'image' ? '📷 Sent a photo' : 'Sent you an attachment')),
           message.senderAvatar || '/icon-192.png'
@@ -23817,6 +24324,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeCall,
         startCall,
         endCall,
+        markActiveCallConnected,
         toggleCallMute,
         toggleCallSpeaker,
         toggleCallMinimize,
