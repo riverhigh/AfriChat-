@@ -330,9 +330,19 @@ const SvgGraphicDie: React.FC<SvgGraphicDieProps> = ({
 
 interface LudoGameCardProps {
   game: LudoGameState;
+  fullModeOpen?: boolean;
+  onFullModeChange?: (open: boolean) => void;
+  portalOnly?: boolean;
+  disablePortal?: boolean;
 }
 
-export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
+export const LudoGameCard: React.FC<LudoGameCardProps> = ({
+  game,
+  fullModeOpen,
+  onFullModeChange,
+  portalOnly = false,
+  disablePortal = false,
+}) => {
   const {
     currentUser,
     acceptLudoChallenge,
@@ -349,7 +359,12 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
   const [insufficientFunds, setInsufficientFunds] = useState(false);
   const [requiresVerifiedBadge, setRequiresVerifiedBadge] = useState(false);
   const [dieChoice, setDieChoice] = useState<'die0' | 'die1' | 'combined'>('die0');
-  const [isFullMode, setIsFullMode] = useState(false);
+  const [internalFullMode, setInternalFullMode] = useState(false);
+  const isFullMode = fullModeOpen !== undefined ? fullModeOpen : internalFullMode;
+  const setIsFullMode = (open: boolean) => {
+    if (fullModeOpen === undefined) setInternalFullMode(open);
+    onFullModeChange?.(open);
+  };
   const [confirmForfeit, setConfirmForfeit] = useState(false);
 
   const myPhone = currentUser.phoneNumber || currentUser.id;
@@ -1399,6 +1414,7 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
 
   return (
     <>
+      {!portalOnly && (
       <div className="w-full min-w-[268px] max-w-[330px] rounded-2xl overflow-hidden border border-purple-300/60 dark:border-purple-700/50 bg-white dark:bg-neutral-900 shadow-lg text-slate-900 dark:text-white">
         {/* Header */}
         <div className="px-3.5 py-2.5 bg-gradient-to-r from-indigo-700 via-violet-700 to-amber-500 text-white flex items-center justify-between gap-2">
@@ -1447,8 +1463,10 @@ export const LudoGameCard: React.FC<LudoGameCardProps> = ({ game }) => {
 
         {renderArenaBody(false)}
       </div>
+      )}
 
-      {isFullMode &&
+      {!disablePortal &&
+        isFullMode &&
         typeof document !== 'undefined' &&
         createPortal(
           <div

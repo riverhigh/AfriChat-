@@ -66,7 +66,7 @@ import {
   isStepFinished,
 } from '../utils/ludoRules';
 import { playAnimalSound, getNotificationSound } from '../utils/soundUtils';
-import { isUnresolvedEscrowBetGameMessage } from '../utils/gameEscrowUtils';
+import { hasGameReachedTerminalState, isUnresolvedEscrowBetGameMessage } from '../utils/gameEscrowUtils';
 import {
   supabase,
   isSupabaseConfigured,
@@ -580,7 +580,11 @@ function sanitizeLoadedMessages(parsed: unknown): Record<string, ChatMessage[]> 
           const board = Array.isArray(m.xoGame.board) && m.xoGame.board.length === 9
             ? m.xoGame.board
             : Array(9).fill(null);
-          return { ...m, xoGame: { ...m.xoGame, board } };
+          const normalizedXo = { ...m.xoGame, board };
+          if ((normalizedXo.status === 'active' || normalizedXo.status === 'pending') && hasGameReachedTerminalState(normalizedXo)) {
+            normalizedXo.status = (normalizedXo.winnerPhone || normalizedXo.winnerSymbol || normalizedXo.winningLine?.length) ? 'won' : 'draw';
+          }
+          return { ...m, xoGame: normalizedXo };
         }
         if (m.type === 'game_whot' && m.whotGame) {
           const wg = m.whotGame;
@@ -593,19 +597,23 @@ function sanitizeLoadedMessages(parsed: unknown): Record<string, ChatMessage[]> 
             ? [wg.topCard]
             : [];
           const topCard = wg.topCard || discardPile[discardPile.length - 1] || { id: 'whot_fallback', shape: 'circle' as const, number: 1 };
+          const normalizedWg = {
+            ...wg,
+            challengerHand,
+            opponentHand,
+            deck,
+            discardPile,
+            topCard,
+            pendingDrawCount: wg.pendingDrawCount || 0,
+            pendingDrawType: wg.pendingDrawType ?? null,
+            reshuffleCount: wg.reshuffleCount || 0,
+          };
+          if ((normalizedWg.status === 'active' || normalizedWg.status === 'pending') && hasGameReachedTerminalState(normalizedWg)) {
+            normalizedWg.status = normalizedWg.winnerPhone ? 'won' : 'draw';
+          }
           return {
             ...m,
-            whotGame: {
-              ...wg,
-              challengerHand,
-              opponentHand,
-              deck,
-              discardPile,
-              topCard,
-              pendingDrawCount: wg.pendingDrawCount || 0,
-              pendingDrawType: wg.pendingDrawType ?? null,
-              reshuffleCount: wg.reshuffleCount || 0,
-            },
+            whotGame: normalizedWg,
           };
         }
         if (m.type === 'game_ludo' && m.ludoGame) {
@@ -617,29 +625,37 @@ function sanitizeLoadedMessages(parsed: unknown): Record<string, ChatMessage[]> 
             : lg.diceValue
             ? [lg.diceValue]
             : [];
+          const normalizedLg = {
+            ...lg,
+            challengerTokens,
+            opponentTokens,
+            diceValues,
+            consecutiveSixes: lg.consecutiveSixes || 0,
+          };
+          if ((normalizedLg.status === 'active' || normalizedLg.status === 'pending') && hasGameReachedTerminalState(normalizedLg)) {
+            normalizedLg.status = normalizedLg.winnerPhone ? 'won' : 'draw';
+          }
           return {
             ...m,
-            ludoGame: {
-              ...lg,
-              challengerTokens,
-              opponentTokens,
-              diceValues,
-              consecutiveSixes: lg.consecutiveSixes || 0,
-            },
+            ludoGame: normalizedLg,
           };
         }
         if (m.type === 'game_poker' && m.pokerGame) {
           const pg = m.pokerGame;
+          const normalizedPg = {
+            ...pg,
+            deck: Array.isArray(pg.deck) ? pg.deck : [],
+            challengerHole: Array.isArray(pg.challengerHole) ? pg.challengerHole : [],
+            opponentHole: Array.isArray(pg.opponentHole) ? pg.opponentHole : [],
+            communityCards: Array.isArray(pg.communityCards) ? pg.communityCards : [],
+            actedThisPhase: Array.isArray(pg.actedThisPhase) ? pg.actedThisPhase : [],
+          };
+          if ((normalizedPg.status === 'active' || normalizedPg.status === 'pending') && hasGameReachedTerminalState(normalizedPg)) {
+            normalizedPg.status = normalizedPg.winnerPhone ? 'won' : 'draw';
+          }
           return {
             ...m,
-            pokerGame: {
-              ...pg,
-              deck: Array.isArray(pg.deck) ? pg.deck : [],
-              challengerHole: Array.isArray(pg.challengerHole) ? pg.challengerHole : [],
-              opponentHole: Array.isArray(pg.opponentHole) ? pg.opponentHole : [],
-              communityCards: Array.isArray(pg.communityCards) ? pg.communityCards : [],
-              actedThisPhase: Array.isArray(pg.actedThisPhase) ? pg.actedThisPhase : [],
-            },
+            pokerGame: normalizedPg,
           };
         }
         return m;
@@ -13525,15 +13541,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [2, 4, 6],
   ];
 
-  const getXoStatusRank = (status?: TicTacToeGameState['status']): number => {
+  const getXoStatusRank = (status?: TicTacToeGameState['status'], gameObj?: any): number => {
     if (status === 'won' || status === 'draw' || status === 'declined' || status === 'cancelled') return 3;
+    if (gameObj && hasGameReachedTerminalState(gameObj)) return 3;
     if (status === 'active') return 2;
     return 1;
   };
 
   const shouldReplaceXoGame = (existing: TicTacToeGameState, incoming: TicTacToeGameState): boolean => {
-    const existingRank = getXoStatusRank(existing.status);
-    const incomingRank = getXoStatusRank(incoming.status);
+    const existingRank = getXoStatusRank(existing.status, existing);
+    const incomingRank = getXoStatusRank(incoming.status, incoming);
     if (incomingRank > existingRank) return true;
     if (incomingRank < existingRank) return false;
     if (existingRank === 3) return false;
@@ -13699,6 +13716,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             i === existingIdx ? { ...m, xoGame: nextXo } : m
           );
         } else {
+          if (incomingGame.status === 'cancelled' || incomingGame.status === 'declined') {
+            return prev;
+          }
           insertedNewCard = true;
           insertedCid = resolvedCid;
           const newCard: ChatMessage = {
@@ -14471,16 +14491,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const other = phonesMatch(parts[0], myPhone) ? parts[1] : parts[0];
           if (other) targetCid = getDirectChatId(myPhone, other) || targetCid;
         }
-        const resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
-        const list = prev[resolvedCid] || [];
-        const existingIdx = list.findIndex((m) => m.whotGame?.id === incomingGame.id);
+        let resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
+        let list = prev[resolvedCid] || [];
+        let existingIdx = list.findIndex((m) => m.whotGame?.id === incomingGame.id);
+
+        if (existingIdx < 0) {
+          for (const [cid, msgs] of Object.entries(prev)) {
+            const idx = msgs.findIndex((m) => m.whotGame?.id === incomingGame.id);
+            if (idx >= 0) {
+              resolvedCid = cid;
+              list = msgs;
+              existingIdx = idx;
+              break;
+            }
+          }
+        }
 
         let nextList: ChatMessage[];
         if (existingIdx >= 0) {
           const cur = list[existingIdx]?.whotGame;
           if (cur) {
-            const curRank = getXoStatusRank(cur.status);
-            const incRank = getXoStatusRank(incomingGame.status);
+            const curRank = getXoStatusRank(cur.status, cur);
+            const incRank = getXoStatusRank(incomingGame.status, incomingGame);
             if (incRank < curRank) return prev;
             if (incRank === curRank && curRank === 3) return prev;
             if (incRank === curRank && (incomingGame.moveCount || 0) < (cur.moveCount || 0)) return prev;
@@ -14488,6 +14520,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           nextList = list.map((m, i) => (i === existingIdx ? { ...m, whotGame: incomingGame } : m));
         } else {
+          if (incomingGame.status === 'cancelled' || incomingGame.status === 'declined') {
+            return prev;
+          }
           insertedNewCard = true;
           insertedCid = resolvedCid;
           const newCard: ChatMessage = {
@@ -14564,16 +14599,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const other = phonesMatch(parts[0], myPhone) ? parts[1] : parts[0];
           if (other) targetCid = getDirectChatId(myPhone, other) || targetCid;
         }
-        const resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
-        const list = prev[resolvedCid] || [];
-        const existingIdx = list.findIndex((m) => m.ludoGame?.id === incomingGame.id);
+        let resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
+        let list = prev[resolvedCid] || [];
+        let existingIdx = list.findIndex((m) => m.ludoGame?.id === incomingGame.id);
+
+        if (existingIdx < 0) {
+          for (const [cid, msgs] of Object.entries(prev)) {
+            const idx = msgs.findIndex((m) => m.ludoGame?.id === incomingGame.id);
+            if (idx >= 0) {
+              resolvedCid = cid;
+              list = msgs;
+              existingIdx = idx;
+              break;
+            }
+          }
+        }
 
         let nextList: ChatMessage[];
         if (existingIdx >= 0) {
           const cur = list[existingIdx]?.ludoGame;
           if (cur) {
-            const curRank = getXoStatusRank(cur.status);
-            const incRank = getXoStatusRank(incomingGame.status);
+            const curRank = getXoStatusRank(cur.status, cur);
+            const incRank = getXoStatusRank(incomingGame.status, incomingGame);
             if (incRank < curRank) return prev;
             if (incRank === curRank && curRank === 3) return prev;
             if (incRank === curRank && (incomingGame.moveCount || 0) < (cur.moveCount || 0)) return prev;
@@ -14581,6 +14628,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           nextList = list.map((m, i) => (i === existingIdx ? { ...m, ludoGame: incomingGame } : m));
         } else {
+          if (incomingGame.status === 'cancelled' || incomingGame.status === 'declined') {
+            return prev;
+          }
           insertedNewCard = true;
           insertedCid = resolvedCid;
           const newCard: ChatMessage = {
@@ -14657,16 +14707,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const other = phonesMatch(parts[0], myPhone) ? parts[1] : parts[0];
           if (other) targetCid = getDirectChatId(myPhone, other) || targetCid;
         }
-        const resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
-        const list = prev[resolvedCid] || [];
-        const existingIdx = list.findIndex((m) => m.pokerGame?.id === incomingGame.id);
+        let resolvedCid = prev[targetCid] ? targetCid : (prev[incomingGame.chatId] ? incomingGame.chatId : targetCid);
+        let list = prev[resolvedCid] || [];
+        let existingIdx = list.findIndex((m) => m.pokerGame?.id === incomingGame.id);
+
+        if (existingIdx < 0) {
+          for (const [cid, msgs] of Object.entries(prev)) {
+            const idx = msgs.findIndex((m) => m.pokerGame?.id === incomingGame.id);
+            if (idx >= 0) {
+              resolvedCid = cid;
+              list = msgs;
+              existingIdx = idx;
+              break;
+            }
+          }
+        }
 
         let nextList: ChatMessage[];
         if (existingIdx >= 0) {
           const cur = list[existingIdx]?.pokerGame;
           if (cur) {
-            const curRank = getXoStatusRank(cur.status);
-            const incRank = getXoStatusRank(incomingGame.status);
+            const curRank = getXoStatusRank(cur.status, cur);
+            const incRank = getXoStatusRank(incomingGame.status, incomingGame);
             if (incRank < curRank) return prev;
             if (incRank === curRank && curRank === 3) return prev;
             if (incRank === curRank && (incomingGame.moveCount || 0) < (cur.moveCount || 0)) return prev;
@@ -14674,6 +14736,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           nextList = list.map((m, i) => (i === existingIdx ? { ...m, pokerGame: incomingGame } : m));
         } else {
+          if (incomingGame.status === 'cancelled' || incomingGame.status === 'declined') {
+            return prev;
+          }
           insertedNewCard = true;
           insertedCid = resolvedCid;
           const newCard: ChatMessage = {
@@ -14994,6 +15059,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const declineWhotChallenge = async (game: WhotGameState) => {
+    if (game.status !== 'pending') {
+      applyWhotGameUpdate(game);
+      return { success: false, message: `Cannot decline a ${game.status} game.` };
+    }
     const myPhone = currentUser.phoneNumber || currentUser.id;
     const closed: WhotGameState = {
       ...game,
@@ -15819,6 +15888,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const declineLudoChallenge = async (game: LudoGameState) => {
+    if (game.status !== 'pending') {
+      applyLudoGameUpdate(game);
+      return { success: false, message: `Cannot decline a ${game.status} game.` };
+    }
     const myPhone = currentUser.phoneNumber || currentUser.id;
     const closed: LudoGameState = {
       ...game,
@@ -16394,6 +16467,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const declinePokerChallenge = async (game: PokerGameState) => {
+    if (game.status !== 'pending') {
+      applyPokerGameUpdate(game);
+      return { success: false, message: `Cannot decline a ${game.status} game.` };
+    }
     const myPhone = currentUser.phoneNumber || currentUser.id;
     const closed: PokerGameState = {
       ...game,
@@ -20698,8 +20775,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ): T | undefined => {
                 if (!inc) return cur;
                 if (!cur) return inc;
-                const curRank = getXoStatusRank(cur.status as any);
-                const incRank = getXoStatusRank(inc.status as any);
+                const curRank = getXoStatusRank(cur.status as any, cur);
+                const incRank = getXoStatusRank(inc.status as any, inc);
                 if (incRank > curRank) return inc;
                 if (incRank < curRank) return cur;
                 if (curRank === 3) return cur;

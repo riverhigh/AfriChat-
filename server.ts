@@ -1447,7 +1447,22 @@ function recordStoredMessage(entry: Omit<StoredChatRelayEntry, 'createdAtMs'> & 
   const createdAtMs = entry.createdAtMs || Date.now();
   const existing = storedMessagesById.get(id);
   if (existing) {
-    existing.message = { ...existing.message, ...entry.message };
+    const prevMsg = existing.message || {};
+    const incMsg = entry.message || {};
+    const mergedMsg: any = { ...prevMsg, ...incMsg };
+    if (prevMsg.xoGame && incMsg.xoGame && !shouldReplaceLiveGameEntry(prevMsg.xoGame, incMsg.xoGame)) {
+      mergedMsg.xoGame = prevMsg.xoGame;
+    }
+    if (prevMsg.whotGame && incMsg.whotGame && !shouldReplaceLiveGameEntry(prevMsg.whotGame, incMsg.whotGame)) {
+      mergedMsg.whotGame = prevMsg.whotGame;
+    }
+    if (prevMsg.ludoGame && incMsg.ludoGame && !shouldReplaceLiveGameEntry(prevMsg.ludoGame, incMsg.ludoGame)) {
+      mergedMsg.ludoGame = prevMsg.ludoGame;
+    }
+    if (prevMsg.pokerGame && incMsg.pokerGame && !shouldReplaceLiveGameEntry(prevMsg.pokerGame, incMsg.pokerGame)) {
+      mergedMsg.pokerGame = prevMsg.pokerGame;
+    }
+    existing.message = mergedMsg;
     existing.createdAtMs = Math.max(existing.createdAtMs, createdAtMs);
     if (entry.chat) existing.chat = entry.chat;
     if (Array.isArray(entry.suppressedForPhones) && entry.suppressedForPhones.length > 0) {
@@ -13386,8 +13401,23 @@ interface CachedLiveGameEntry {
 const liveGamesById = new Map<string, CachedLiveGameEntry>();
 const liveGamesByChat = new Map<string, Set<string>>();
 
-function getLiveGameStatusRank(status?: string): number {
+function getLiveGameStatusRank(gameOrStatus?: any): number {
+  if (!gameOrStatus) return 1;
+  const status = typeof gameOrStatus === 'string' ? gameOrStatus : gameOrStatus.status;
   if (status === 'won' || status === 'draw' || status === 'declined' || status === 'cancelled' || status === 'paid') return 3;
+  if (typeof gameOrStatus === 'object') {
+    if (
+      gameOrStatus.settledAt ||
+      gameOrStatus.winnerPhone ||
+      gameOrStatus.winnerSymbol ||
+      (Array.isArray(gameOrStatus.winningLine) && gameOrStatus.winningLine.length > 0)
+    ) {
+      return 3;
+    }
+    if (Array.isArray(gameOrStatus.board) && gameOrStatus.board.length === 9 && gameOrStatus.board.every((c: any) => c !== null)) {
+      return 3;
+    }
+  }
   if (status === 'active') return 2;
   return 1;
 }
@@ -13395,8 +13425,8 @@ function getLiveGameStatusRank(status?: string): number {
 function shouldReplaceLiveGameEntry(existing: any, incoming: any): boolean {
   if (!existing) return true;
   if (!incoming) return false;
-  const exRank = getLiveGameStatusRank(existing.status);
-  const inRank = getLiveGameStatusRank(incoming.status);
+  const exRank = getLiveGameStatusRank(existing);
+  const inRank = getLiveGameStatusRank(incoming);
   if (inRank > exRank) return true;
   if (inRank < exRank) return false;
   if (exRank === 3) return false;
@@ -13423,6 +13453,27 @@ function phonesMatchServer(p1?: string, p2?: string): boolean {
   return v1.some((v) => v2Set.has(v));
 }
 
+function syncGamePayloadToStoredMessages(event: LiveGameEventName, data: any) {
+  if (!data?.id) return;
+  const msgPropMap: Record<LiveGameEventName, { idPrefix: string; prop: string }> = {
+    xo_game_update: { idPrefix: 'msg_xo_', prop: 'xoGame' },
+    whot_game_update: { idPrefix: 'msg_whot_', prop: 'whotGame' },
+    ludo_game_update: { idPrefix: 'msg_ludo_', prop: 'ludoGame' },
+    poker_game_update: { idPrefix: 'msg_poker_', prop: 'pokerGame' },
+    bill_request_update: { idPrefix: 'msg_bill_', prop: 'billRequest' },
+  };
+  const mapping = msgPropMap[event];
+  if (!mapping) return;
+  const storedEntry = storedMessagesById.get(`${mapping.idPrefix}${data.id}`);
+  if (storedEntry && storedEntry.message) {
+    const existingPayload = (storedEntry.message as any)[mapping.prop];
+    if (!existingPayload || shouldReplaceLiveGameEntry(existingPayload, data)) {
+      storedEntry.message = { ...storedEntry.message, [mapping.prop]: data };
+      scheduleSaveMessagesFile();
+    }
+  }
+}
+
 function cacheLiveGameEntry(
   event: LiveGameEventName,
   chatId: string,
@@ -13432,6 +13483,7 @@ function cacheLiveGameEntry(
   if (!data?.id || !chatId) return;
   const existing = liveGamesById.get(data.id);
   if (existing && !shouldReplaceLiveGameEntry(existing.data, data)) {
+    syncGamePayloadToStoredMessages(event, existing.data);
     return;
   }
   const collectedPhones = new Set<string>(
@@ -13460,6 +13512,8 @@ function cacheLiveGameEntry(
     liveGamesByChat.set(chatId, chatSet);
   }
   chatSet.add(data.id);
+
+  syncGamePayloadToStoredMessages(event, data);
 
   // Cap memory cache to 1000 most recent games
   if (liveGamesById.size > 1000) {

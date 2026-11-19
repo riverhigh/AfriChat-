@@ -36,6 +36,72 @@ export function isUnresolvedEscrowBetGameMessage(msg: ChatMessage): boolean {
 }
 
 /**
+ * Returns true if the message is a challenge/match card for X/O, Whot!, Ludo, or Poker.
+ */
+export function isGameMessage(msg: ChatMessage): boolean {
+  if (!msg) return false;
+  return (
+    (msg.type === 'game_xo' && Boolean(msg.xoGame)) ||
+    (msg.type === 'game_whot' && Boolean(msg.whotGame)) ||
+    (msg.type === 'game_ludo' && Boolean(msg.ludoGame)) ||
+    (msg.type === 'game_poker' && Boolean(msg.pokerGame))
+  );
+}
+
+/**
+ * Returns true if a game state has reached any terminal state (won, draw, declined, cancelled, or settled).
+ */
+export function hasGameReachedTerminalState(game: AnyBetGameState | null | undefined): boolean {
+  if (!game) return true;
+  if (
+    game.status === 'won' ||
+    game.status === 'draw' ||
+    game.status === 'declined' ||
+    game.status === 'cancelled'
+  ) {
+    return true;
+  }
+  if (game.status !== 'active' && game.status !== 'pending') {
+    return true;
+  }
+  if (game.settledAt || game.winnerPhone) return true;
+  if (game.gameType === 'xo') {
+    const xo = game as TicTacToeGameState;
+    if (xo.winnerSymbol || (Array.isArray(xo.winningLine) && xo.winningLine.length > 0)) {
+      return true;
+    }
+    if (Array.isArray(xo.board) && xo.board.length === 9 && xo.board.every((cell) => cell !== null)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Returns true only when a chat game message is actively pending or in-progress (live).
+ * Ended, cancelled, declined, settled, and deleted games always return false.
+ */
+export function isLiveGameMessage(msg: ChatMessage): boolean {
+  if (!msg || msg.deleted) return false;
+  if (!isGameMessage(msg)) return false;
+  const game = extractGameStateFromMessage(msg);
+  if (!game) return false;
+  return !hasGameReachedTerminalState(game);
+}
+
+/**
+ * Returns true for completed/settled games (won/draw) that have ended (excludes cancelled/declined).
+ */
+export function isEndedGameMessage(msg: ChatMessage): boolean {
+  if (!msg || msg.deleted) return false;
+  if (!isGameMessage(msg)) return false;
+  const game = extractGameStateFromMessage(msg);
+  if (!game) return false;
+  if (game.status === 'cancelled' || game.status === 'declined') return false;
+  return hasGameReachedTerminalState(game);
+}
+
+/**
  * Returns all unresolved bet game messages with held escrow in a chat thread.
  */
 export function getUnresolvedEscrowBetGames(messages: ChatMessage[] = []): ChatMessage[] {

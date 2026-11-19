@@ -1,7 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { playSwooshSound, playAnimalSound, getNotificationSound } from '../utils/soundUtils';
-import { getUnresolvedEscrowBetGames } from '../utils/gameEscrowUtils';
+import {
+  extractGameStateFromMessage,
+  getUnresolvedEscrowBetGames,
+  isEndedGameMessage,
+  isGameMessage,
+  isLiveGameMessage,
+} from '../utils/gameEscrowUtils';
 import {
   ArrowLeft,
   Phone,
@@ -70,6 +76,8 @@ import {
   WifiOff,
   AtSign,
   Flag,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import {
   useApp,
@@ -78,7 +86,7 @@ import {
   isUserChatAdmin,
   computeClientMembersCount,
 } from '../context/AppContext';
-import { ChatMessage, GhostTimerSetting, Product, LanguageCode } from '../types';
+import { ChatMessage, GhostTimerSetting, Product, LanguageCode, TicTacToeGameState } from '../types';
 import { EmojiMemeDrawer } from './EmojiMemeDrawer';
 import { DisplayWallpaperModal } from './DisplayWallpaperModal';
 import { ContactProfileModal } from './ContactProfileModal';
@@ -209,16 +217,25 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
   const [xoBusyId, setXoBusyId] = useState<string | null>(null);
   const [xoErrors, setXoErrors] = useState<Record<string, { msg: string; insufficient?: boolean; requiresVerifiedBadge?: boolean }>>({});
   const [fullModeXoId, setFullModeXoId] = useState<string | null>(null);
+  const [fullModeCardId, setFullModeCardId] = useState<string | null>(null);
+  const [showEndedGamesTray, setShowEndedGamesTray] = useState(false);
   const [xoConfirmForfeitId, setXoConfirmForfeitId] = useState<string | null>(null);
+  const prevLiveGamesRef = useRef<{ chatId: string | null; statuses: Record<string, string> }>({
+    chatId: null,
+    statuses: {},
+  });
 
   useEffect(() => {
-    if (!fullModeXoId) return;
+    if (!fullModeXoId && !fullModeCardId) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setFullModeXoId(null);
+      if (e.key === 'Escape') {
+        setFullModeXoId(null);
+        setFullModeCardId(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [fullModeXoId]);
+  }, [fullModeXoId, fullModeCardId]);
   const [billBusyId, setBillBusyId] = useState<string | null>(null);
   const [billErrors, setBillErrors] = useState<Record<string, { msg: string; insufficient?: boolean }>>({});
   const [billPinPromptId, setBillPinPromptId] = useState<string | null>(null);
@@ -595,6 +612,47 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     }
   }, [currentMessages, activeChatId]);
 
+  // Notify user briefly when a live game ends or is cancelled/declined and leaves the bottom of chat
+  useEffect(() => {
+    const cid = activeChatId || null;
+    if (prevLiveGamesRef.current.chatId !== cid) {
+      const initialStatuses: Record<string, string> = {};
+      currentMessages.forEach((m) => {
+        const g = extractGameStateFromMessage(m);
+        if (g?.id && !m.deleted) {
+          initialStatuses[g.id] = isLiveGameMessage(m) ? g.status : (g.status || 'ended');
+        }
+      });
+      prevLiveGamesRef.current = { chatId: cid, statuses: initialStatuses };
+      return;
+    }
+
+    const nextStatuses: Record<string, string> = {};
+    let transitionToast: string | null = null;
+    currentMessages.forEach((m) => {
+      const g = extractGameStateFromMessage(m);
+      if (!g?.id || m.deleted) return;
+      const curState = isLiveGameMessage(m) ? g.status : (g.status === 'cancelled' || g.status === 'declined' ? g.status : 'ended');
+      nextStatuses[g.id] = curState;
+      const prevState = prevLiveGamesRef.current.statuses[g.id];
+      if ((prevState === 'pending' || prevState === 'active') && curState !== 'pending' && curState !== 'active') {
+        if (curState === 'cancelled') {
+          transitionToast = 'Challenge cancelled — removed from live chat';
+        } else if (curState === 'declined') {
+          transitionToast = 'Challenge declined — removed from live chat';
+        } else {
+          transitionToast = 'Match ended — moved to Ended Games above';
+        }
+      }
+    });
+    prevLiveGamesRef.current = { chatId: cid, statuses: nextStatuses };
+    if (transitionToast) {
+      setToastNotice(transitionToast);
+      const t = setTimeout(() => setToastNotice(null), 2800);
+      return () => clearTimeout(t);
+    }
+  }, [currentMessages, activeChatId]);
+
   // Cleanup playing audio & transient UI on unmount or chat switch
   useEffect(() => {
     setIsOneTimeViewEnabled(false);
@@ -604,6 +662,9 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
     setChatSearchQuery('');
     setShowHeaderActionsMenu(false);
     setShowGhostTimerMenu(false);
+    setFullModeXoId(null);
+    setFullModeCardId(null);
+    setShowEndedGamesTray(false);
     return () => {
       Object.values(audioRefs.current).forEach((a) => {
         try { a.pause(); a.currentTime = 0; } catch (_) {}
@@ -972,6 +1033,413 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
       ...prev,
       [msgId]: !prev[msgId],
     }));
+  };
+
+  const renderXoGameCard = (game: TicTacToeGameState, isFull: boolean) => {
+    const gCur = game.currency || 'NGN';
+    const isChallenger =
+      samePhone(myPhoneRaw, game.challengerPhone) ||
+      (Boolean(currentUser.id) && game.challengerId === currentUser.id);
+    const mySymbol: 'X' | 'O' | null = samePhone(myPhoneRaw, game.xPlayerPhone)
+      ? 'X'
+      : samePhone(myPhoneRaw, game.oPlayerPhone)
+      ? 'O'
+      : null;
+    const isMyTurn = game.status === 'active' && Boolean(mySymbol && game.currentTurn === mySymbol);
+    const turnName = game.currentTurn === 'X' ? game.xPlayerName : (game.oPlayerName || 'Player O');
+    const winSet = new Set(game.winningLine || []);
+    const xoErr = xoErrors[game.id];
+    const isBusy = xoBusyId === game.id;
+    const iWon =
+      game.status === 'won' &&
+      (samePhone(myPhoneRaw, game.winnerPhone) || (mySymbol !== null && game.winnerSymbol === mySymbol));
+    const xoConfirming = xoConfirmForfeitId === game.id && game.status === 'active';
+
+    return (
+      <div
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseUp={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        className={`select-none ${
+          isFull
+            ? 'space-y-4 w-full max-w-md mx-auto'
+            : 'space-y-3 min-w-[260px] max-w-[300px] p-1'
+        }`}
+      >
+        {/* Match Title & Mode */}
+        {!isFull && (
+          <div className="flex items-center justify-between gap-2 pb-2 border-b border-black/10 dark:border-white/10">
+            <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white min-w-0">
+              <Gamepad2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
+              <span className="truncate">X/O Challenge</span>
+              {game.isAiOpponent && (
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 text-[9px] font-extrabold shrink-0">
+                  <Bot className="w-2.5 h-2.5" />
+                  Hard AI
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="font-mono tabular-nums text-[11px] font-bold text-emerald-700 dark:text-emerald-300 whitespace-nowrap">
+                {game.mode === 'bet' ? `${formatPrice(game.betAmount, gCur)} Bet` : 'Friendly'}
+              </span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFullModeXoId(game.id);
+                }}
+                title="Open Full Mode"
+                aria-label="Open X/O in Full Mode"
+                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-700 dark:text-slate-200 transition-colors"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Players & Bet Breakdown */}
+        <div className={`space-y-1.5 ${isFull ? 'text-sm bg-white/80 dark:bg-[#1e1a36] p-3.5 rounded-2xl border border-slate-200 dark:border-white/10' : 'text-[11px]'}`}>
+          <div className="flex items-center justify-between text-slate-700 dark:text-slate-200 gap-2">
+            <span className="truncate font-semibold">
+              <span className="font-mono font-black text-indigo-600 dark:text-indigo-400">X</span> {game.xPlayerName}
+            </span>
+            <span className="text-slate-400 text-xs font-bold" aria-hidden="true">vs</span>
+            <span className="truncate font-semibold text-right">
+              {game.oPlayerName || game.opponentName || 'Waiting'}{' '}
+              <span className="font-mono font-black text-amber-600 dark:text-amber-400">O</span>
+            </span>
+          </div>
+          {game.mode === 'bet' && (
+            <div className={`flex items-center justify-between font-mono tabular-nums text-slate-500 dark:text-slate-400 ${isFull ? 'text-xs' : 'text-[10px]'}`}>
+              <span>Pot: {formatPrice(game.totalPot, gCur)} · 1% fee: {formatPrice(game.platformFee, gCur)}</span>
+              <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                Win: {formatPrice(game.winnerPayout, gCur)}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Interactive 3x3 Board */}
+        <div className={`grid grid-cols-3 rounded-2xl bg-slate-100 dark:bg-[#17142b] border border-slate-200 dark:border-white/10 ${
+          isFull ? 'gap-3 p-3.5 shadow-inner' : 'gap-2 p-2'
+        }`}>
+          {(Array.isArray(game.board) && game.board.length === 9 ? game.board : Array(9).fill(null)).map((cell, idx) => {
+            const isWinCell = winSet.has(idx);
+            const canPlayCell =
+              game.status === 'active' &&
+              isMyTurn &&
+              cell === null &&
+              !isBusy;
+
+            return (
+              <button
+                key={idx}
+                type="button"
+                disabled={!canPlayCell}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  if (!canPlayCell) return;
+                  setXoBusyId(game.id);
+                  setXoErrors((prev) => {
+                    const next = { ...prev };
+                    delete next[game.id];
+                    return next;
+                  });
+                  try {
+                    const res = await makeXoMove(game, idx);
+                    if (!res.success && res.message) {
+                      setXoErrors((prev) => ({
+                        ...prev,
+                        [game.id]: { msg: res.message! },
+                      }));
+                    }
+                  } finally {
+                    setXoBusyId(null);
+                  }
+                }}
+                aria-label={`Square ${idx + 1}${cell ? ` ${cell}` : ''}`}
+                className={`aspect-square rounded-xl flex items-center justify-center font-display font-black transition-all duration-150 ${
+                  isFull ? 'min-h-[88px] sm:min-h-[104px] text-4xl sm:text-5xl rounded-2xl' : 'min-h-[52px] text-2xl'
+                } ${
+                  isWinCell
+                    ? 'bg-emerald-500/20 border-2 border-emerald-500 text-emerald-600 dark:text-emerald-300 scale-[1.02]'
+                    : cell !== null
+                    ? 'bg-white dark:bg-[#231f3d] border border-slate-200 dark:border-white/10'
+                    : canPlayCell
+                    ? 'bg-white dark:bg-[#231f3d] border border-slate-200 dark:border-white/15 hover:border-purple-500 active:scale-95 cursor-pointer'
+                    : 'bg-white/60 dark:bg-[#1e1a33] border border-slate-200/70 dark:border-white/5 cursor-default'
+                }`}
+              >
+                {cell === 'X' ? (
+                  <span className={isWinCell ? 'text-emerald-600 dark:text-emerald-300' : 'text-indigo-600 dark:text-indigo-400'}>
+                    X
+                  </span>
+                ) : cell === 'O' ? (
+                  <span className={isWinCell ? 'text-emerald-600 dark:text-emerald-300' : 'text-amber-600 dark:text-amber-400'}>
+                    O
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Turn / Pending / Result Controls */}
+        {game.status === 'pending' && (
+          isChallenger ? (
+            <div className="flex items-center justify-between gap-2 pt-0.5">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                Waiting for opponent to accept...
+              </span>
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setXoBusyId(game.id);
+                  try {
+                    await declineXoChallenge(game);
+                  } finally {
+                    setXoBusyId(null);
+                  }
+                }}
+                className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-600 dark:text-rose-300 text-[11px] font-semibold whitespace-nowrap"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 pt-0.5">
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setXoBusyId(game.id);
+                  try {
+                    await declineXoChallenge(game);
+                  } finally {
+                    setXoBusyId(null);
+                  }
+                }}
+                className="py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 text-xs font-semibold whitespace-nowrap"
+              >
+                Decline
+              </button>
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setXoBusyId(game.id);
+                  setXoErrors((prev) => {
+                    const next = { ...prev };
+                    delete next[game.id];
+                    return next;
+                  });
+                  try {
+                    const res = await acceptXoChallenge(game);
+                    if (!res.success) {
+                      setXoErrors((prev) => ({
+                        ...prev,
+                        [game.id]: {
+                          msg: res.message || 'Could not join game.',
+                          insufficient: res.insufficientFunds,
+                          requiresVerifiedBadge: res.requiresVerifiedBadge,
+                        },
+                      }));
+                    }
+                  } finally {
+                    setXoBusyId(null);
+                  }
+                }}
+                className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold whitespace-nowrap"
+              >
+                {isBusy
+                  ? 'Joining...'
+                  : game.mode === 'bet'
+                  ? `Accept (${formatPrice(game.betAmount, gCur)})`
+                  : 'Accept & Play'}
+              </button>
+            </div>
+          )
+        )}
+
+        {game.status === 'active' && (
+          <div className="space-y-2">
+            <div className={`px-3 py-2 rounded-xl text-[11px] font-semibold flex items-center justify-between gap-2 ${
+              isMyTurn
+                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-300'
+            }`}>
+              <span>
+                {isMyTurn
+                  ? `Your turn (${mySymbol}) · Tap any open square`
+                  : `${turnName}'s turn (${game.currentTurn})`}
+              </span>
+              {mySymbol !== null && !xoConfirming && (
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setXoConfirmForfeitId(game.id);
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-600 dark:text-rose-300 text-[10px] font-bold whitespace-nowrap shrink-0 transition-colors"
+                >
+                  <Flag className="w-3 h-3" />
+                  <span>Forfeit</span>
+                </button>
+              )}
+            </div>
+
+            {xoConfirming && mySymbol !== null && (
+              <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 space-y-2">
+                <p className="text-[11px] font-semibold text-rose-700 dark:text-rose-200 leading-snug">
+                  Forfeit this X/O match? Your opponent will be declared the winner
+                  {game.mode === 'bet' ? ` and collect ${formatPrice(game.winnerPayout, gCur)}` : ''}.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setXoConfirmForfeitId(null);
+                    }}
+                    className="py-1.5 px-2.5 rounded-lg bg-white dark:bg-white/10 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-white/15 text-[11px] font-semibold"
+                  >
+                    Keep Playing
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      setXoBusyId(game.id);
+                      setXoConfirmForfeitId(null);
+                      try {
+                        const res = await forfeitXoGame(game);
+                        if (!res.success && res.message) {
+                          setXoErrors((prev) => ({
+                            ...prev,
+                            [game.id]: { msg: res.message! },
+                          }));
+                        }
+                      } finally {
+                        setXoBusyId(null);
+                      }
+                    }}
+                    className="py-1.5 px-2.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold"
+                  >
+                    Confirm Forfeit
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {(game.status === 'won' || game.status === 'draw' || game.status === 'declined' || game.status === 'cancelled') && (
+          <div className="space-y-2">
+            <div className={`p-2.5 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 ${
+              game.status === 'won'
+                ? iWon
+                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                  : 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30'
+                : 'bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-slate-200'
+            }`}>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Trophy className="w-4 h-4 shrink-0 text-amber-500" />
+                <div className="min-w-0">
+                  <div className="truncate">
+                    {game.status === 'won'
+                      ? `${game.winnerName || 'Winner'} won (${game.winnerSymbol})`
+                      : game.status === 'draw'
+                      ? 'Match Draw'
+                      : game.status === 'declined'
+                      ? 'Challenge Declined'
+                      : 'Challenge Cancelled'}
+                  </div>
+                  {game.lastActionNote && (
+                    <div className="text-[10px] opacity-80 truncate">
+                      {game.lastActionNote}
+                    </div>
+                  )}
+                </div>
+              </div>
+              {game.mode === 'bet' && (
+                <span className="font-mono tabular-nums text-[10px] shrink-0">
+                  {game.status === 'won'
+                    ? `${formatPrice(game.winnerPayout, gCur)} paid`
+                    : 'Refunded'}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isFull) setFullModeXoId(null);
+                setIsGameXoModalOpen(true);
+              }}
+              className="w-full py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition-colors"
+            >
+              Play Again
+            </button>
+          </div>
+        )}
+
+        {xoErr && (
+          <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-[11px] space-y-1.5">
+            <span>{xoErr.msg}</span>
+            {(xoErr.requiresVerifiedBadge || xoErr.insufficient) && (
+              <div className="flex flex-wrap gap-1.5">
+                {xoErr.requiresVerifiedBadge && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const upRes = upgradeVerificationBadge('blue');
+                      if (!upRes.success) {
+                        setXoErrors((prev) => ({
+                          ...prev,
+                          [game.id]: { msg: upRes.message, insufficient: true },
+                        }));
+                      } else {
+                        setXoErrors((prev) => ({
+                          ...prev,
+                          [game.id]: { msg: 'Verified Badge active! Tap Accept & Play to join.' },
+                        }));
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[10px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <BadgeCheck className="w-3 h-3" />
+                    <span>Verify (₦4k/mo)</span>
+                  </button>
+                )}
+                {xoErr.insufficient && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (isFull) setFullModeXoId(null);
+                      setIsWalletModalOpen(true);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold shrink-0 whitespace-nowrap"
+                  >
+                    Top Up
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -1934,6 +2402,70 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           </span>
         </div>
 
+        {/* Collapsible Ended Games Tray at the top (keeps bottom of chat for live games only) */}
+        {(() => {
+          const endedGames = currentMessages.filter((m) => isEndedGameMessage(m));
+          if (endedGames.length === 0) return null;
+          return (
+            <div className="my-2">
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setShowEndedGamesTray((v) => !v)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/85 dark:bg-[#1b1730]/90 hover:bg-white dark:hover:bg-[#241f3f] border border-purple-200/70 dark:border-purple-800/50 text-slate-700 dark:text-slate-200 text-[11px] font-bold shadow-xs transition-colors"
+                >
+                  <Trophy className="w-3.5 h-3.5 text-amber-500" />
+                  <span>
+                    {endedGames.length} Ended {endedGames.length === 1 ? 'Game' : 'Games'}
+                  </span>
+                  {showEndedGamesTray ? (
+                    <ChevronUp className="w-3.5 h-3.5 opacity-70" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+                  )}
+                </button>
+              </div>
+              {showEndedGamesTray && (
+                <div className="mt-2 space-y-2.5 px-1 py-2 rounded-2xl bg-white/60 dark:bg-black/25 border border-purple-200/50 dark:border-purple-900/40">
+                  {endedGames.map((em) => (
+                    <div key={`ended_${em.id}`} className="flex justify-center">
+                      {em.type === 'game_xo' && em.xoGame && (
+                        <div className="rounded-2xl px-3.5 py-2.5 bg-white dark:bg-[#2c2c2e] border border-slate-200/80 dark:border-white/10 shadow-xs">
+                          {renderXoGameCard(em.xoGame, false)}
+                        </div>
+                      )}
+                      {em.type === 'game_whot' && em.whotGame && (
+                        <WhotGameCard
+                          game={em.whotGame}
+                          fullModeOpen={fullModeCardId === em.whotGame.id}
+                          disablePortal
+                          onFullModeChange={(open) => setFullModeCardId(open ? em.whotGame!.id : null)}
+                        />
+                      )}
+                      {em.type === 'game_ludo' && em.ludoGame && (
+                        <LudoGameCard
+                          game={em.ludoGame}
+                          fullModeOpen={fullModeCardId === em.ludoGame.id}
+                          disablePortal
+                          onFullModeChange={(open) => setFullModeCardId(open ? em.ludoGame!.id : null)}
+                        />
+                      )}
+                      {em.type === 'game_poker' && em.pokerGame && (
+                        <PokerGameCard
+                          game={em.pokerGame}
+                          fullModeOpen={fullModeCardId === em.pokerGame.id}
+                          disablePortal
+                          onFullModeChange={(open) => setFullModeCardId(open ? em.pokerGame!.id : null)}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {(() => {
           const filtered = chatSearchQuery.trim()
             ? currentMessages.filter((m: ChatMessage) =>
@@ -1941,14 +2473,10 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 (m.senderName || '').toLowerCase().includes(chatSearchQuery.trim().toLowerCase())
               )
             : currentMessages;
-          const isOngoingGame = (m: ChatMessage) =>
-            (m.type === 'game_xo' && Boolean(m.xoGame) && (m.xoGame!.status === 'active' || m.xoGame!.status === 'pending')) ||
-            (m.type === 'game_whot' && Boolean(m.whotGame) && (m.whotGame!.status === 'active' || m.whotGame!.status === 'pending')) ||
-            (m.type === 'game_ludo' && Boolean(m.ludoGame) && (m.ludoGame!.status === 'active' || m.ludoGame!.status === 'pending')) ||
-            (m.type === 'game_poker' && Boolean(m.pokerGame) && (m.pokerGame!.status === 'active' || m.pokerGame!.status === 'pending'));
-          const nonOngoing = filtered.filter((m) => !isOngoingGame(m));
-          const ongoingGames = filtered.filter((m) => isOngoingGame(m));
-          return [...nonOngoing, ...ongoingGames];
+          const visibleFeed = filtered.filter((m) => !isGameMessage(m) || isLiveGameMessage(m));
+          const nonGameMessages = visibleFeed.filter((m) => !isLiveGameMessage(m));
+          const liveGames = visibleFeed.filter((m) => isLiveGameMessage(m));
+          return [...nonGameMessages, ...liveGames];
         })().map((msg: ChatMessage) => {
           const isUser = msg.sender === 'user';
           const isSystem = msg.sender === 'system';
@@ -3158,462 +3686,7 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                 })()}
 
                 {/* Live Supabase Realtime Multiplayer X/O (Tic-Tac-Toe) Card */}
-                {msg.type === 'game_xo' && msg.xoGame && (() => {
-                  const game = msg.xoGame!;
-                  const gCur = game.currency || 'NGN';
-                  const isChallenger =
-                    samePhone(myPhoneRaw, game.challengerPhone) ||
-                    (Boolean(currentUser.id) && game.challengerId === currentUser.id);
-                  const mySymbol: 'X' | 'O' | null = samePhone(myPhoneRaw, game.xPlayerPhone)
-                    ? 'X'
-                    : samePhone(myPhoneRaw, game.oPlayerPhone)
-                    ? 'O'
-                    : null;
-                  const isMyTurn = game.status === 'active' && Boolean(mySymbol && game.currentTurn === mySymbol);
-                  const turnName = game.currentTurn === 'X' ? game.xPlayerName : (game.oPlayerName || 'Player O');
-                  const winSet = new Set(game.winningLine || []);
-                  const xoErr = xoErrors[game.id];
-                  const isBusy = xoBusyId === game.id;
-                  const iWon =
-                    game.status === 'won' &&
-                    (samePhone(myPhoneRaw, game.winnerPhone) || (mySymbol !== null && game.winnerSymbol === mySymbol));
-
-                  const xoConfirming = xoConfirmForfeitId === game.id && game.status === 'active';
-
-                  const renderXoCardBody = (isFull: boolean) => (
-                    <div
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onMouseUp={(e) => e.stopPropagation()}
-                      onClick={(e) => e.stopPropagation()}
-                      className={`select-none ${
-                        isFull
-                          ? 'space-y-4 w-full max-w-md mx-auto'
-                          : 'space-y-3 min-w-[260px] max-w-[300px] p-1'
-                      }`}
-                    >
-                      {/* Match Title & Mode */}
-                      {!isFull && (
-                        <div className="flex items-center justify-between gap-2 pb-2 border-b border-black/10 dark:border-white/10">
-                          <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white min-w-0">
-                            <Gamepad2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
-                            <span className="truncate">X/O Challenge</span>
-                            {game.isAiOpponent && (
-                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 text-[9px] font-extrabold shrink-0">
-                                <Bot className="w-2.5 h-2.5" />
-                                Hard AI
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <span className="font-mono tabular-nums text-[11px] font-bold text-emerald-700 dark:text-emerald-300 whitespace-nowrap">
-                              {game.mode === 'bet' ? `${formatPrice(game.betAmount, gCur)} Bet` : 'Friendly'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFullModeXoId(game.id);
-                              }}
-                              title="Open Full Mode"
-                              aria-label="Open X/O in Full Mode"
-                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-700 dark:text-slate-200 transition-colors"
-                            >
-                              <Maximize2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Players & Bet Breakdown */}
-                      <div className={`space-y-1.5 ${isFull ? 'text-sm bg-white/80 dark:bg-[#1e1a36] p-3.5 rounded-2xl border border-slate-200 dark:border-white/10' : 'text-[11px]'}`}>
-                        <div className="flex items-center justify-between text-slate-700 dark:text-slate-200 gap-2">
-                          <span className="truncate font-semibold">
-                            <span className="font-mono font-black text-indigo-600 dark:text-indigo-400">X</span> {game.xPlayerName}
-                          </span>
-                          <span className="text-slate-400 text-xs font-bold" aria-hidden="true">vs</span>
-                          <span className="truncate font-semibold text-right">
-                            {game.oPlayerName || game.opponentName || 'Waiting'}{' '}
-                            <span className="font-mono font-black text-amber-600 dark:text-amber-400">O</span>
-                          </span>
-                        </div>
-                        {game.mode === 'bet' && (
-                          <div className={`flex items-center justify-between font-mono tabular-nums text-slate-500 dark:text-slate-400 ${isFull ? 'text-xs' : 'text-[10px]'}`}>
-                            <span>Pot: {formatPrice(game.totalPot, gCur)} · 1% fee: {formatPrice(game.platformFee, gCur)}</span>
-                            <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                              Win: {formatPrice(game.winnerPayout, gCur)}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Interactive 3x3 Board */}
-                      <div className={`grid grid-cols-3 rounded-2xl bg-slate-100 dark:bg-[#17142b] border border-slate-200 dark:border-white/10 ${
-                        isFull ? 'gap-3 p-3.5 shadow-inner' : 'gap-2 p-2'
-                      }`}>
-                        {(Array.isArray(game.board) && game.board.length === 9 ? game.board : Array(9).fill(null)).map((cell, idx) => {
-                          const isWinCell = winSet.has(idx);
-                          const canPlayCell =
-                            game.status === 'active' &&
-                            isMyTurn &&
-                            cell === null &&
-                            !isBusy;
-
-                          return (
-                            <button
-                              key={idx}
-                              type="button"
-                              disabled={!canPlayCell}
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                if (!canPlayCell) return;
-                                setXoBusyId(game.id);
-                                setXoErrors((prev) => {
-                                  const next = { ...prev };
-                                  delete next[game.id];
-                                  return next;
-                                });
-                                try {
-                                  const res = await makeXoMove(game, idx);
-                                  if (!res.success && res.message) {
-                                    setXoErrors((prev) => ({
-                                      ...prev,
-                                      [game.id]: { msg: res.message! },
-                                    }));
-                                  }
-                                } finally {
-                                  setXoBusyId(null);
-                                }
-                              }}
-                              aria-label={`Square ${idx + 1}${cell ? ` ${cell}` : ''}`}
-                              className={`aspect-square rounded-xl flex items-center justify-center font-display font-black transition-all duration-150 ${
-                                isFull ? 'min-h-[88px] sm:min-h-[104px] text-4xl sm:text-5xl rounded-2xl' : 'min-h-[52px] text-2xl'
-                              } ${
-                                isWinCell
-                                  ? 'bg-emerald-500/20 border-2 border-emerald-500 text-emerald-600 dark:text-emerald-300 scale-[1.02]'
-                                  : cell !== null
-                                  ? 'bg-white dark:bg-[#231f3d] border border-slate-200 dark:border-white/10'
-                                  : canPlayCell
-                                  ? 'bg-white dark:bg-[#231f3d] border border-slate-200 dark:border-white/15 hover:border-purple-500 active:scale-95 cursor-pointer'
-                                  : 'bg-white/60 dark:bg-[#1e1a33] border border-slate-200/70 dark:border-white/5 cursor-default'
-                              }`}
-                            >
-                              {cell === 'X' ? (
-                                <span className={isWinCell ? 'text-emerald-600 dark:text-emerald-300' : 'text-indigo-600 dark:text-indigo-400'}>
-                                  X
-                                </span>
-                              ) : cell === 'O' ? (
-                                <span className={isWinCell ? 'text-emerald-600 dark:text-emerald-300' : 'text-amber-600 dark:text-amber-400'}>
-                                  O
-                                </span>
-                              ) : null}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {/* Turn / Pending / Result Controls */}
-                      {game.status === 'pending' && (
-                        isChallenger ? (
-                          <div className="flex items-center justify-between gap-2 pt-0.5">
-                            <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                              Waiting for opponent to accept...
-                            </span>
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                setXoBusyId(game.id);
-                                try {
-                                  await declineXoChallenge(game);
-                                } finally {
-                                  setXoBusyId(null);
-                                }
-                              }}
-                              className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-600 dark:text-rose-300 text-[11px] font-semibold whitespace-nowrap"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="grid grid-cols-2 gap-2 pt-0.5">
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                setXoBusyId(game.id);
-                                try {
-                                  await declineXoChallenge(game);
-                                } finally {
-                                  setXoBusyId(null);
-                                }
-                              }}
-                              className="py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 text-xs font-semibold whitespace-nowrap"
-                            >
-                              Decline
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                setXoBusyId(game.id);
-                                setXoErrors((prev) => {
-                                  const next = { ...prev };
-                                  delete next[game.id];
-                                  return next;
-                                });
-                                try {
-                                  const res = await acceptXoChallenge(game);
-                                  if (!res.success) {
-                                    setXoErrors((prev) => ({
-                                      ...prev,
-                                      [game.id]: {
-                                        msg: res.message || 'Could not join game.',
-                                        insufficient: res.insufficientFunds,
-                                        requiresVerifiedBadge: res.requiresVerifiedBadge,
-                                      },
-                                    }));
-                                  }
-                                } finally {
-                                  setXoBusyId(null);
-                                }
-                              }}
-                              className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold whitespace-nowrap"
-                            >
-                              {isBusy
-                                ? 'Joining...'
-                                : game.mode === 'bet'
-                                ? `Accept (${formatPrice(game.betAmount, gCur)})`
-                                : 'Accept & Play'}
-                            </button>
-                          </div>
-                        )
-                      )}
-
-                      {game.status === 'active' && (
-                        <div className="space-y-2">
-                          <div className={`px-3 py-2 rounded-xl text-[11px] font-semibold flex items-center justify-between gap-2 ${
-                            isMyTurn
-                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
-                              : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-300'
-                          }`}>
-                            <span>
-                              {isMyTurn
-                                ? `Your turn (${mySymbol}) · Tap any open square`
-                                : `${turnName}'s turn (${game.currentTurn})`}
-                            </span>
-                            {mySymbol !== null && !xoConfirming && (
-                              <button
-                                type="button"
-                                disabled={isBusy}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setXoConfirmForfeitId(game.id);
-                                }}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-600 dark:text-rose-300 text-[10px] font-bold whitespace-nowrap shrink-0 transition-colors"
-                              >
-                                <Flag className="w-3 h-3" />
-                                <span>Forfeit</span>
-                              </button>
-                            )}
-                          </div>
-
-                          {xoConfirming && mySymbol !== null && (
-                            <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 space-y-2">
-                              <p className="text-[11px] font-semibold text-rose-700 dark:text-rose-200 leading-snug">
-                                Forfeit this X/O match? Your opponent will be declared the winner
-                                {game.mode === 'bet' ? ` and collect ${formatPrice(game.winnerPayout, gCur)}` : ''}.
-                              </p>
-                              <div className="grid grid-cols-2 gap-2">
-                                <button
-                                  type="button"
-                                  disabled={isBusy}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setXoConfirmForfeitId(null);
-                                  }}
-                                  className="py-1.5 px-2.5 rounded-lg bg-white dark:bg-white/10 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-white/15 text-[11px] font-semibold"
-                                >
-                                  Keep Playing
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isBusy}
-                                  onClick={async (e) => {
-                                    e.stopPropagation();
-                                    setXoBusyId(game.id);
-                                    setXoConfirmForfeitId(null);
-                                    try {
-                                      const res = await forfeitXoGame(game);
-                                      if (!res.success && res.message) {
-                                        setXoErrors((prev) => ({
-                                          ...prev,
-                                          [game.id]: { msg: res.message! },
-                                        }));
-                                      }
-                                    } finally {
-                                      setXoBusyId(null);
-                                    }
-                                  }}
-                                  className="py-1.5 px-2.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold"
-                                >
-                                  Confirm Forfeit
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {(game.status === 'won' || game.status === 'draw' || game.status === 'declined' || game.status === 'cancelled') && (
-                        <div className="space-y-2">
-                          <div className={`p-2.5 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 ${
-                            game.status === 'won'
-                              ? iWon
-                                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
-                                : 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30'
-                              : 'bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-slate-200'
-                          }`}>
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <Trophy className="w-4 h-4 shrink-0 text-amber-500" />
-                              <div className="min-w-0">
-                                <div className="truncate">
-                                  {game.status === 'won'
-                                    ? `${game.winnerName || 'Winner'} won (${game.winnerSymbol})`
-                                    : game.status === 'draw'
-                                    ? 'Match Draw'
-                                    : game.status === 'declined'
-                                    ? 'Challenge Declined'
-                                    : 'Challenge Cancelled'}
-                                </div>
-                                {game.lastActionNote && (
-                                  <div className="text-[10px] opacity-80 truncate">
-                                    {game.lastActionNote}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                            {game.mode === 'bet' && (
-                              <span className="font-mono tabular-nums text-[10px] shrink-0">
-                                {game.status === 'won'
-                                  ? `${formatPrice(game.winnerPayout, gCur)} paid`
-                                  : 'Refunded'}
-                              </span>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (isFull) setFullModeXoId(null);
-                              setIsGameXoModalOpen(true);
-                            }}
-                            className="w-full py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition-colors"
-                          >
-                            Play Again
-                          </button>
-                        </div>
-                      )}
-
-                      {xoErr && (
-                        <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-[11px] space-y-1.5">
-                          <span>{xoErr.msg}</span>
-                          {(xoErr.requiresVerifiedBadge || xoErr.insufficient) && (
-                            <div className="flex flex-wrap gap-1.5">
-                              {xoErr.requiresVerifiedBadge && (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const upRes = upgradeVerificationBadge('blue');
-                                    if (!upRes.success) {
-                                      setXoErrors((prev) => ({
-                                        ...prev,
-                                        [game.id]: { msg: upRes.message, insufficient: true },
-                                      }));
-                                    } else {
-                                      setXoErrors((prev) => ({
-                                        ...prev,
-                                        [game.id]: { msg: 'Verified Badge active! Tap Accept & Play to join.' },
-                                      }));
-                                    }
-                                  }}
-                                  className="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[10px] font-bold inline-flex items-center gap-1 whitespace-nowrap"
-                                >
-                                  <BadgeCheck className="w-3 h-3" />
-                                  <span>Verify (₦4k/mo)</span>
-                                </button>
-                              )}
-                              {xoErr.insufficient && (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (isFull) setFullModeXoId(null);
-                                    setIsWalletModalOpen(true);
-                                  }}
-                                  className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold shrink-0 whitespace-nowrap"
-                                >
-                                  Top Up
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-
-                  return (
-                    <>
-                      {renderXoCardBody(false)}
-                      {fullModeXoId === game.id &&
-                        typeof document !== 'undefined' &&
-                        createPortal(
-                          <div
-                            onClick={(e) => e.stopPropagation()}
-                            className="fixed inset-0 z-[75] flex flex-col bg-slate-50 dark:bg-[#0d0a1a] text-slate-900 dark:text-white animate-in fade-in duration-150"
-                          >
-                            {/* Full Mode Header */}
-                            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-200 dark:border-white/10 bg-white/95 dark:bg-[#141026]/95 backdrop-blur-md shrink-0">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setFullModeXoId(null);
-                                }}
-                                className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-800 dark:text-white text-xs font-bold transition-colors"
-                              >
-                                <ArrowLeft className="w-4 h-4" />
-                                <span>Back</span>
-                              </button>
-                              <div className="flex items-center gap-1.5 font-extrabold text-sm min-w-0">
-                                <Gamepad2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
-                                <span className="truncate">X/O Arena</span>
-                                {game.isAiOpponent && (
-                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 text-[10px] font-extrabold">
-                                    <Bot className="w-3 h-3" />
-                                    AI
-                                  </span>
-                                )}
-                              </div>
-                              <span className="font-mono tabular-nums text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 whitespace-nowrap">
-                                {game.mode === 'bet' ? `${formatPrice(game.betAmount, gCur)} Bet` : 'Friendly'}
-                              </span>
-                            </div>
-
-                            {/* Full Mode Arena Canvas */}
-                            <div className="flex-1 overflow-y-auto px-4 py-6 flex flex-col justify-center">
-                              {renderXoCardBody(true)}
-                            </div>
-                          </div>,
-                          document.body
-                        )}
-                    </>
-                  );
-                })()}
+                {msg.type === 'game_xo' && msg.xoGame && renderXoGameCard(msg.xoGame, false)}
 
                 {/* Live Multiplayer Whot! Card Game */}
                 {msg.type === 'game_whot' && msg.whotGame && (
@@ -3622,7 +3695,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     onMouseUp={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <WhotGameCard game={msg.whotGame} />
+                    <WhotGameCard
+                      game={msg.whotGame}
+                      fullModeOpen={fullModeCardId === msg.whotGame.id}
+                      disablePortal
+                      onFullModeChange={(open) => setFullModeCardId(open ? msg.whotGame!.id : null)}
+                    />
                   </div>
                 )}
 
@@ -3633,7 +3711,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     onMouseUp={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <LudoGameCard game={msg.ludoGame} />
+                    <LudoGameCard
+                      game={msg.ludoGame}
+                      fullModeOpen={fullModeCardId === msg.ludoGame.id}
+                      disablePortal
+                      onFullModeChange={(open) => setFullModeCardId(open ? msg.ludoGame!.id : null)}
+                    />
                   </div>
                 )}
 
@@ -3644,7 +3727,12 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
                     onMouseUp={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <PokerGameCard game={msg.pokerGame} />
+                    <PokerGameCard
+                      game={msg.pokerGame}
+                      fullModeOpen={fullModeCardId === msg.pokerGame.id}
+                      disablePortal
+                      onFullModeChange={(open) => setFullModeCardId(open ? msg.pokerGame!.id : null)}
+                    />
                   </div>
                 )}
 
@@ -5184,6 +5272,107 @@ export const ActiveChat: React.FC<ActiveChatProps> = ({ onOpenVoiceRecorder }) =
           </div>
         </div>
       )}
+
+      {/* Lifted Full Mode Game Portals (remain mounted seamlessly even after game transitions to ended/cancelled) */}
+      {(() => {
+        const fullXoMsg = fullModeXoId
+          ? currentMessages.find((m) => !m.deleted && m.type === 'game_xo' && m.xoGame?.id === fullModeXoId)
+          : undefined;
+        const fullXoGame = fullXoMsg?.xoGame;
+        const gCur = fullXoGame?.currency || 'NGN';
+        return (
+          <>
+            {fullXoGame &&
+              typeof document !== 'undefined' &&
+              createPortal(
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="fixed inset-0 z-[75] flex flex-col bg-slate-50 dark:bg-[#0d0a1a] text-slate-900 dark:text-white animate-in fade-in duration-150"
+                >
+                  <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-200 dark:border-white/10 bg-white/95 dark:bg-[#141026]/95 backdrop-blur-md shrink-0">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFullModeXoId(null);
+                      }}
+                      className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-800 dark:text-white text-xs font-bold transition-colors"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                      <span>Back</span>
+                    </button>
+                    <div className="flex items-center gap-1.5 font-extrabold text-sm min-w-0">
+                      <Gamepad2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
+                      <span className="truncate">X/O Arena</span>
+                      {fullXoGame.isAiOpponent && (
+                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 text-[10px] font-extrabold">
+                          <Bot className="w-3 h-3" />
+                          AI
+                        </span>
+                      )}
+                    </div>
+                    <span className="font-mono tabular-nums text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 whitespace-nowrap">
+                      {fullXoGame.mode === 'bet' ? `${formatPrice(fullXoGame.betAmount, gCur)} Bet` : 'Friendly'}
+                    </span>
+                  </div>
+                  <div className="flex-1 overflow-y-auto px-4 py-6 flex flex-col justify-center">
+                    {renderXoGameCard(fullXoGame, true)}
+                  </div>
+                </div>,
+                document.body
+              )}
+          </>
+        );
+      })()}
+
+      {(() => {
+        if (!fullModeCardId) return null;
+        const fullMsg = currentMessages.find(
+          (m) =>
+            !m.deleted &&
+            ((m.type === 'game_whot' && m.whotGame?.id === fullModeCardId) ||
+              (m.type === 'game_ludo' && m.ludoGame?.id === fullModeCardId) ||
+              (m.type === 'game_poker' && m.pokerGame?.id === fullModeCardId))
+        );
+        if (!fullMsg) return null;
+        if (fullMsg.type === 'game_whot' && fullMsg.whotGame) {
+          return (
+            <WhotGameCard
+              game={fullMsg.whotGame}
+              fullModeOpen={true}
+              portalOnly={true}
+              onFullModeChange={(open) => {
+                if (!open) setFullModeCardId(null);
+              }}
+            />
+          );
+        }
+        if (fullMsg.type === 'game_ludo' && fullMsg.ludoGame) {
+          return (
+            <LudoGameCard
+              game={fullMsg.ludoGame}
+              fullModeOpen={true}
+              portalOnly={true}
+              onFullModeChange={(open) => {
+                if (!open) setFullModeCardId(null);
+              }}
+            />
+          );
+        }
+        if (fullMsg.type === 'game_poker' && fullMsg.pokerGame) {
+          return (
+            <PokerGameCard
+              game={fullMsg.pokerGame}
+              fullModeOpen={true}
+              portalOnly={true}
+              onFullModeChange={(open) => {
+                if (!open) setFullModeCardId(null);
+              }}
+            />
+          );
+        }
+        return null;
+      })()}
     </div>
   );
 };

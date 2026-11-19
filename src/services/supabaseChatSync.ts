@@ -111,6 +111,51 @@ export function sanitizeProfileForBackup(profile?: Partial<UserProfile>): Partia
   };
 }
 
+function getGameSyncStatusRank(game: any): number {
+  if (!game || typeof game !== 'object') return 0;
+  const st = game.status;
+  if (st === 'won' || st === 'draw' || st === 'declined' || st === 'cancelled') return 3;
+  if (
+    game.settledAt ||
+    game.winnerPhone ||
+    game.winnerSymbol ||
+    (Array.isArray(game.winningLine) && game.winningLine.length > 0)
+  ) {
+    return 3;
+  }
+  if (Array.isArray(game.board) && game.board.length === 9 && game.board.every((c: any) => c !== null)) {
+    return 3;
+  }
+  if (st === 'active') return 2;
+  return 1;
+}
+
+function getGameSyncMoveProgress(game: any): number {
+  if (!game || typeof game !== 'object') return 0;
+  if (typeof game.moveCount === 'number') return game.moveCount;
+  if (Array.isArray(game.board)) return game.board.filter(Boolean).length;
+  return 0;
+}
+
+function pickNewerGamePayload<T>(a?: T, b?: T): T | undefined {
+  if (!b) return a;
+  if (!a) return b;
+  const rA = getGameSyncStatusRank(a);
+  const rB = getGameSyncStatusRank(b);
+  if (rB > rA) return b;
+  if (rA > rB) return a;
+  if (rA === 3) {
+    const uA = String((a as any).updatedAt || (a as any).settledAt || '');
+    const uB = String((b as any).updatedAt || (b as any).settledAt || '');
+    return uB > uA ? b : a;
+  }
+  const mA = getGameSyncMoveProgress(a);
+  const mB = getGameSyncMoveProgress(b);
+  if (mB > mA) return b;
+  if (mA > mB) return a;
+  return String((b as any).updatedAt || '') >= String((a as any).updatedAt || '') ? b : a;
+}
+
 export function mergeChatThreadsAndMessages(
   primaryChats: ChatThread[],
   primaryMsgs: Record<string, ChatMessage[]>,
@@ -166,6 +211,11 @@ export function mergeChatThreadsAndMessages(
         byId.set(m.id, {
           ...existing,
           ...m,
+          deleted: Boolean(existing.deleted || m.deleted),
+          xoGame: pickNewerGamePayload(existing.xoGame, m.xoGame),
+          whotGame: pickNewerGamePayload(existing.whotGame, m.whotGame),
+          ludoGame: pickNewerGamePayload(existing.ludoGame, m.ludoGame),
+          pokerGame: pickNewerGamePayload(existing.pokerGame, m.pokerGame),
           imageUrl: m.imageUrl || existing.imageUrl,
           statusReply: m.statusReply
             ? {

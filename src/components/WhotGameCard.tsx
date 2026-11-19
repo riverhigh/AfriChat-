@@ -128,9 +128,19 @@ const WhotPlayingCard: React.FC<{
 
 interface WhotGameCardProps {
   game: WhotGameState;
+  fullModeOpen?: boolean;
+  onFullModeChange?: (open: boolean) => void;
+  portalOnly?: boolean;
+  disablePortal?: boolean;
 }
 
-export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
+export const WhotGameCard: React.FC<WhotGameCardProps> = ({
+  game,
+  fullModeOpen,
+  onFullModeChange,
+  portalOnly = false,
+  disablePortal = false,
+}) => {
   const {
     currentUser,
     acceptWhotChallenge,
@@ -147,7 +157,12 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
   const [insufficientFunds, setInsufficientFunds] = useState(false);
   const [requiresVerifiedBadge, setRequiresVerifiedBadge] = useState(false);
   const [pendingWhotCard, setPendingWhotCard] = useState<WhotCard | null>(null);
-  const [isFullMode, setIsFullMode] = useState(false);
+  const [internalFullMode, setInternalFullMode] = useState(false);
+  const isFullMode = fullModeOpen !== undefined ? fullModeOpen : internalFullMode;
+  const setIsFullMode = (open: boolean) => {
+    if (fullModeOpen === undefined) setInternalFullMode(open);
+    onFullModeChange?.(open);
+  };
   const [confirmForfeit, setConfirmForfeit] = useState(false);
 
   const myPhone = currentUser.phoneNumber || currentUser.id;
@@ -618,6 +633,7 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
 
   return (
     <>
+      {!portalOnly && (
       <div className="w-full min-w-[260px] max-w-[330px] rounded-2xl overflow-hidden border border-purple-300/60 dark:border-purple-700/50 bg-white dark:bg-neutral-900 shadow-lg text-slate-900 dark:text-white">
         {/* Header */}
         <div className="px-3.5 py-2.5 bg-gradient-to-r from-violet-700 via-purple-700 to-fuchsia-600 text-white flex items-center justify-between gap-2">
@@ -674,8 +690,10 @@ export const WhotGameCard: React.FC<WhotGameCardProps> = ({ game }) => {
 
         {renderArenaBody(false)}
       </div>
+      )}
 
-      {isFullMode &&
+      {!disablePortal &&
+        isFullMode &&
         typeof document !== 'undefined' &&
         createPortal(
           <div
